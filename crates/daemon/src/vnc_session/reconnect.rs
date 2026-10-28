@@ -47,7 +47,12 @@ pub(super) async fn run(input: RunInput) {
                 break;
             }
             Err(Failure::Permanent(message)) => {
-                mark_failed(&shared, &runtime, &sid, message);
+                mark_failed(MarkFailedInput {
+                    shared: &shared,
+                    runtime: &runtime,
+                    session_id: &sid,
+                    message,
+                });
                 break;
             }
             Err(Failure::Network(message)) => {
@@ -56,7 +61,12 @@ pub(super) async fn run(input: RunInput) {
                 }
                 if !spec.options.reconnect.enabled || attempt >= spec.options.reconnect.max_attempts
                 {
-                    mark_disconnected(&shared, &runtime, &sid, Some(message));
+                    mark_disconnected(MarkDisconnectedInput {
+                        shared: &shared,
+                        runtime: &runtime,
+                        session_id: &sid,
+                        reason: Some(message),
+                    });
                     break;
                 }
                 let delay = spec.options.reconnect.delay_seconds(attempt);

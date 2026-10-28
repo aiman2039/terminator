@@ -37,10 +37,23 @@ fn reject(stream: &mut transport::Stream, error: anyhow::Error) -> anyhow::Error
 /// A registered attach: its runtime, subscriber stream, and initial snapshot.
 type Attached = (Arc<Mutex<Runtime>>, mpsc::Receiver<Response>, Vec<u8>);
 
+struct AttachSetupInput<'a> {
+    shared: &'a Shared,
+    session: &'a str,
+    rows: u16,
+    cols: u16,
+}
+
 /// Validate an attach, resize the terminal, and register the subscriber.
 /// The snapshot is captured under the runtime lock with the subscriber so no
 /// output is lost between them, but it is written after the lock is released.
-fn attach_setup(shared: &Shared, session: &str, rows: u16, cols: u16) -> Result<Attached> {
+fn attach_setup(input: AttachSetupInput<'_>) -> Result<Attached> {
+    let AttachSetupInput {
+        shared,
+        session,
+        rows,
+        cols,
+    } = input;
     anyhow::ensure!(
         rows > 0 && cols > 0 && rows <= 500 && cols <= 1000,
         "Invalid terminal dimensions"
@@ -139,7 +152,12 @@ fn serve_attach(
         cols,
     } = input;
     let _disconnect = Disconnect(stream.try_clone()?);
-    let (rt, rx, snapshot) = match attach_setup(shared, &session, rows, cols) {
+    let (rt, rx, snapshot) = match attach_setup(AttachSetupInput {
+        shared,
+        session: &session,
+        rows,
+        cols,
+    }) {
         Ok(setup) => setup,
         Err(error) => return Err(reject(stream, error)),
     };

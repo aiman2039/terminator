@@ -1,15 +1,19 @@
 use super::*;
-struct ApplyResolutionInput {
+struct ApplyResolutionInput<'a> {
+    shared: &'a Arc<Shared>,
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    session_id: &'a str,
     width: u16,
     height: u16,
 }
-fn apply_resolution(
-    shared: &Arc<Shared>,
-    runtime: &Arc<Mutex<VncRuntime>>,
-    session_id: &str,
-    input: ApplyResolutionInput,
-) -> bool {
-    let ApplyResolutionInput { width, height } = input;
+fn apply_resolution(input: ApplyResolutionInput<'_>) -> bool {
+    let ApplyResolutionInput {
+        shared,
+        runtime,
+        session_id,
+        width,
+        height,
+    } = input;
     {
         let mut rt = relock(runtime);
         rt.resize(width, height);
@@ -27,12 +31,19 @@ fn apply_resolution(
     }
     true
 }
-fn apply_layout(
-    shared: &Arc<Shared>,
-    runtime: &Arc<Mutex<VncRuntime>>,
-    session_id: &str,
+struct ApplyLayoutInput<'a> {
+    shared: &'a Arc<Shared>,
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    session_id: &'a str,
     layout: vnc::DesktopLayout,
-) -> bool {
+}
+fn apply_layout(input: ApplyLayoutInput<'_>) -> bool {
+    let ApplyLayoutInput {
+        shared,
+        runtime,
+        session_id,
+        layout,
+    } = input;
     {
         let mut rt = relock(runtime);
         rt.resize(layout.width, layout.height);
@@ -98,24 +109,34 @@ fn apply_cursor(runtime: &Arc<Mutex<VncRuntime>>, rect: vnc::Rect, pixels: Vec<u
     }
     true
 }
-pub(super) fn apply_vnc_event(
-    shared: &Arc<Shared>,
-    runtime: &Arc<Mutex<VncRuntime>>,
-    session_id: &str,
-    event: VncEvent,
-) -> bool {
+pub(super) struct ApplyVncEventInput<'a> {
+    pub(super) shared: &'a Arc<Shared>,
+    pub(super) runtime: &'a Arc<Mutex<VncRuntime>>,
+    pub(super) session_id: &'a str,
+    pub(super) event: VncEvent,
+}
+pub(super) fn apply_vnc_event(input: ApplyVncEventInput<'_>) -> bool {
+    let ApplyVncEventInput {
+        shared,
+        runtime,
+        session_id,
+        event,
+    } = input;
     match event {
-        VncEvent::SetResolution(screen) => apply_resolution(
+        VncEvent::SetResolution(screen) => apply_resolution(ApplyResolutionInput {
             shared,
             runtime,
             session_id,
-            ApplyResolutionInput {
-                width: screen.width,
-                height: screen.height,
-            },
-        ),
+            width: screen.width,
+            height: screen.height,
+        }),
         VncEvent::DesktopUpdate(update) => match update.layout {
-            Some(layout) => apply_layout(shared, runtime, session_id, layout),
+            Some(layout) => apply_layout(ApplyLayoutInput {
+                shared,
+                runtime,
+                session_id,
+                layout,
+            }),
             None => true,
         },
         VncEvent::RawImage(rect, bytes) => {
@@ -137,7 +158,12 @@ pub(super) fn apply_vnc_event(
             true
         }
         VncEvent::Error(err) => {
-            mark_failed(shared, runtime, session_id, err);
+            mark_failed(MarkFailedInput {
+                shared,
+                runtime,
+                session_id,
+                message: err,
+            });
             false
         }
         _ => true,

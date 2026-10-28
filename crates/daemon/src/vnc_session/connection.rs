@@ -31,7 +31,7 @@ async fn connect_client(
 ) -> Result<vnc::VncClient, Failure> {
     let control = shared.ssh_control(&spec.options.ssh);
     let connected = tokio::select! {
-        result=transport::connect(&spec.host,spec.port,&spec.options,control.as_deref())=>result,
+        result=transport::connect(transport::ConnectInput { host: &spec.host, port: spec.port, options: &spec.options, control: control.as_deref() })=>result,
         _=input_rx.recv()=>return Err(Failure::Cancelled),
     };
     let stream = connected.map_err(|e| {
@@ -100,7 +100,12 @@ async fn type_text(input: TypeTextInput<'_>) -> Result<(), Failure> {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
         while let Ok(Some(event)) = client.poll_event().await {
-            if !apply_vnc_event(shared, runtime, sid, event) {
+            if !apply_vnc_event(ApplyVncEventInput {
+                shared,
+                runtime,
+                session_id: sid,
+                event,
+            }) {
                 return Err(Failure::Permanent(
                     "VNC protocol update was rejected".into(),
                 ));
@@ -129,9 +134,9 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
         tokio::select! {
             event=client.recv_event()=>match event {
                 Ok(event)=>{
-                    if !apply_vnc_event(shared,runtime,sid,event){break Err(Failure::Permanent(relock(runtime).error.clone().unwrap_or_else(||"VNC protocol update was rejected".into())));}
+                    if !apply_vnc_event(ApplyVncEventInput { shared, runtime, session_id: sid, event }){break Err(Failure::Permanent(relock(runtime).error.clone().unwrap_or_else(||"VNC protocol update was rejected".into())));}
                     while let Ok(Some(event))=client.poll_event().await {
-                        if !apply_vnc_event(shared,runtime,sid,event){break;}
+                        if !apply_vnc_event(ApplyVncEventInput { shared, runtime, session_id: sid, event }){break;}
                     }
                 }
                 Err(e)=>break Err(Failure::Network(e.to_string())),
