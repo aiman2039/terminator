@@ -223,7 +223,12 @@ mod row_tests {
             let draw = || {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| match surface {
                     "tool" => {
-                        tool_button(ui, crate::preferences::SidebarTool::Git, "Git", false);
+                        tool_button(ToolButtonInput {
+                            ui,
+                            tool: crate::preferences::SidebarTool::Git,
+                            label: "Git",
+                            active: false,
+                        });
                     }
                     "row" => {
                         row(RowInput {
@@ -282,12 +287,20 @@ mod row_tests {
 
     #[test]
     fn terminal_bar_leading_icons_shift_the_title_right() {
-        fn title_left(
-            ctx: &egui::Context,
-            brand: Option<&str>,
-            status_icon: Option<&str>,
-            kind: Option<&str>,
-        ) -> (f32, usize) {
+        struct TitleLeftInput<'a> {
+            ctx: &'a egui::Context,
+            brand: Option<&'a str>,
+            status_icon: Option<&'a str>,
+            kind: Option<&'a str>,
+        }
+
+        fn title_left(input: TitleLeftInput<'_>) -> (f32, usize) {
+            let TitleLeftInput {
+                ctx,
+                brand,
+                status_icon,
+                kind,
+            } = input;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 terminal_bar(
                     ui,
@@ -336,11 +349,30 @@ mod row_tests {
         let ctx = egui::Context::default();
         install(&ctx);
         // Allow the image loader to finish before inspecting painted images.
-        title_left(&ctx, None, None, None);
-        let (plain, plain_meshes) = title_left(&ctx, None, None, None);
-        let (branded, branded_meshes) =
-            title_left(&ctx, Some("AgentCodex"), Some("LoaderCircle"), None);
-        let (kinded, _) = title_left(&ctx, None, None, Some("Terminal"));
+        title_left(TitleLeftInput {
+            ctx: &ctx,
+            brand: None,
+            status_icon: None,
+            kind: None,
+        });
+        let (plain, plain_meshes) = title_left(TitleLeftInput {
+            ctx: &ctx,
+            brand: None,
+            status_icon: None,
+            kind: None,
+        });
+        let (branded, branded_meshes) = title_left(TitleLeftInput {
+            ctx: &ctx,
+            brand: Some("AgentCodex"),
+            status_icon: Some("LoaderCircle"),
+            kind: None,
+        });
+        let (kinded, _) = title_left(TitleLeftInput {
+            ctx: &ctx,
+            brand: None,
+            status_icon: None,
+            kind: Some("Terminal"),
+        });
         assert!(
             branded > plain + TERMINAL_LEADING_SLOT,
             "brand + status must move the title right: {plain} vs {branded}"
@@ -721,7 +753,13 @@ mod row_tests {
     fn wrapping_path_lines(width: f32) -> i32 {
         run_at_width(width, |ui| {
             let font = FontId::proportional(12.0);
-            let response = wrapping_path(ui, PASTE_PATH, font.clone(), ui.visuals().text_color());
+            let color = ui.visuals().text_color();
+            let response = wrapping_path(WrappingPathInput {
+                ui,
+                path: PASTE_PATH,
+                font: font.clone(),
+                color,
+            });
             i32_from_f32((response.rect.height() / line_height(ui, font)).round())
         })
     }
@@ -785,8 +823,13 @@ mod row_tests {
     fn hover_path_does_not_exceed_two_rows() {
         let lines = run_at_width(440.0, |ui| {
             let font = FontId::proportional(11.0);
-            let response =
-                wrapping_path(ui, PASTE_PATH, font.clone(), ui.visuals().weak_text_color());
+            let color = ui.visuals().weak_text_color();
+            let response = wrapping_path(WrappingPathInput {
+                ui,
+                path: PASTE_PATH,
+                font: font.clone(),
+                color,
+            });
             i32_from_f32((response.rect.height() / line_height(ui, font)).round())
         });
         assert!(
@@ -885,7 +928,12 @@ mod row_tests {
                     context_menu(&response, |ui| {
                         fill = Some(ui.visuals().window_fill);
                         text = ui.visuals().override_text_color;
-                        menu_item(ui, "Copy", "Copy", "⌘C");
+                        menu_item(MenuItemInput {
+                            ui,
+                            label: "Copy",
+                            icon: "Copy",
+                            shortcut: "⌘C",
+                        });
                     });
                 },
             );

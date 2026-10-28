@@ -184,7 +184,13 @@ impl App {
 
     pub(crate) fn header_player_menu(&mut self, ui: &mut egui::Ui) -> bool {
         let mark = if self.player_active() { "✓" } else { "" };
-        let clicked = appearance::menu_item(ui, "Player", "AudioLines", mark).clicked();
+        let clicked = appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Player",
+            icon: "AudioLines",
+            shortcut: mark,
+        })
+        .clicked();
         if clicked {
             self.open_player_from_chrome();
         }

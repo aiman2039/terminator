@@ -113,14 +113,28 @@ pub(super) fn git_committed_row(
         });
     }
     appearance::context_menu(&response, |ui| {
-        if appearance::menu_item(ui, "Open file", "FileCode", ctx.open_shortcut).clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Open file",
+            icon: "FileCode",
+            shortcut: ctx.open_shortcut,
+        })
+        .clicked()
+        {
             outcome.menu.push(GitFileAction {
                 action: FileAction::Open,
                 path: file.path.clone(),
             });
             ui.close();
         }
-        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Copy path",
+            icon: "Copy",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.copy.push(file.path.display().to_string());
             ui.close();
         }

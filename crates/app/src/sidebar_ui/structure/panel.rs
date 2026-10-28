@@ -209,22 +209,22 @@ impl App {
                     .hint_text("Filter symbols…")
                     .desired_width((ui.available_width() - buttons).max(60.0)),
             );
-            if appearance::selectable_icon(
+            if appearance::selectable_icon(appearance::SelectableIconInput {
                 ui,
-                "ArrowDownWideNarrow",
-                "Sort alphabetically",
-                self.structure.alphabetical,
-            )
+                icon: "ArrowDownWideNarrow",
+                tip: "Sort alphabetically",
+                selected: self.structure.alphabetical,
+            })
             .clicked()
             {
                 self.structure.alphabetical = !self.structure.alphabetical;
             }
-            if appearance::selectable_icon(
+            if appearance::selectable_icon(appearance::SelectableIconInput {
                 ui,
-                "LocateFixed",
-                "Autoscroll from source",
-                !self.structure.autoscroll_off,
-            )
+                icon: "LocateFixed",
+                tip: "Autoscroll from source",
+                selected: !self.structure.autoscroll_off,
+            })
             .clicked()
             {
                 self.structure.autoscroll_off = !self.structure.autoscroll_off;

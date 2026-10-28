@@ -222,7 +222,12 @@ impl App {
                     terminator_core::agents::display_name(&kind).to_string()
                 };
                 let check = if current == kind { "✓" } else { "" };
-                let response = appearance::menu_item(ui, &name, "Search", check);
+                let response = appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: &name,
+                    icon: "Search",
+                    shortcut: check,
+                });
                 #[cfg(feature = "test-support")]
                 diagnostics::record(
                     ui.ctx(),

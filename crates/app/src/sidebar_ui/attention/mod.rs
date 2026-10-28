@@ -69,7 +69,13 @@ impl App {
                         (AgentsTab::Unread, "Bell", "Unread", "unread"),
                     ] {
                         let selected = self.preferences.agents_tab == tab;
-                        let response = appearance::selectable_icon(ui, icon, label, selected);
+                        let response =
+                            appearance::selectable_icon(appearance::SelectableIconInput {
+                                ui,
+                                icon,
+                                tip: label,
+                                selected,
+                            });
                         #[cfg(feature = "test-support")]
                         diagnostics::record(ui.ctx(), &format!("agent-tab:{name}"), response.rect);
                         #[cfg(not(feature = "test-support"))]

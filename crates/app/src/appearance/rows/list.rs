@@ -109,7 +109,12 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
             response.rect.bottom(),
         ),
     );
-    let text = RowText::layout(ui, rect, label, subtitle);
+    let text = RowText::layout(LayoutInput {
+        ui,
+        rect,
+        label,
+        subtitle,
+    });
     let label_center = text.top + text.label.size().y * 0.5;
     paint_row_icons(
         ui,
@@ -124,12 +129,12 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         },
     );
     text.paint(ui, rect);
-    paint_trailing(
+    paint_trailing(PaintTrailingInput {
         ui,
-        egui::pos2(response.rect.right(), label_center),
+        anchor: egui::pos2(response.rect.right(), label_center),
         trailing,
         tint,
-    );
+    });
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
 }
@@ -157,8 +162,21 @@ struct RowText {
     top: f32,
 }
 
+struct LayoutInput<'a> {
+    ui: &'a egui::Ui,
+    rect: egui::Rect,
+    label: &'a str,
+    subtitle: Option<&'a str>,
+}
+
 impl RowText {
-    fn layout(ui: &egui::Ui, rect: egui::Rect, label: &str, subtitle: Option<&str>) -> Self {
+    fn layout(input: LayoutInput<'_>) -> Self {
+        let LayoutInput {
+            ui,
+            rect,
+            label,
+            subtitle,
+        } = input;
         let single_line = |text: &str, font: FontId, color: Color32| {
             let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, rect.width());
             job.wrap.max_rows = 1;
@@ -254,9 +272,22 @@ fn paint_row_icons(ui: &mut egui::Ui, icons: RowIcons<'_>) {
     });
 }
 
+struct PaintTrailingInput<'a> {
+    ui: &'a egui::Ui,
+    anchor: egui::Pos2,
+    trailing: &'a str,
+    tint: Color32,
+}
+
 /// A `●` trailing marker is a dot; other text is right-aligned at `anchor`
 /// (the row's right edge and label center).
-fn paint_trailing(ui: &egui::Ui, anchor: egui::Pos2, trailing: &str, tint: Color32) {
+fn paint_trailing(input: PaintTrailingInput<'_>) {
+    let PaintTrailingInput {
+        ui,
+        anchor,
+        trailing,
+        tint,
+    } = input;
     if trailing == "●" {
         ui.painter()
             .circle_filled(egui::pos2(anchor.x - 10.0, anchor.y), 3.5, tint);

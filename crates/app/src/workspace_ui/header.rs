@@ -273,7 +273,14 @@ pub(super) fn click_enabled_menu_item(
     icon: &str,
 ) -> bool {
     let clicked = ui
-        .add_enabled_ui(enabled, |ui| appearance::menu_item(ui, label, icon, ""))
+        .add_enabled_ui(enabled, |ui| {
+            appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label,
+                icon,
+                shortcut: "",
+            })
+        })
         .inner
         .clicked();
     if clicked {

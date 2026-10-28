@@ -323,22 +323,50 @@ impl FileRowMenu<'_> {
     }
 
     fn perforce_items(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
-        if appearance::menu_item(ui, "Perforce: Open for edit", "Pencil", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Perforce: Open for edit",
+            icon: "Pencil",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.perforce = Some(crate::perforce::Op::Edit(self.path.into()));
             ui.close();
         }
-        if appearance::menu_item(ui, "Perforce: Reconcile file", "RefreshCw", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Perforce: Reconcile file",
+            icon: "RefreshCw",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.perforce = Some(crate::perforce::Op::Reconcile(self.path.into()));
             ui.close();
         }
-        if appearance::menu_item(ui, "Perforce: Diff", "FileDiff", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Perforce: Diff",
+            icon: "FileDiff",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.menu = Some(FileAction::NativeWorkingDiff);
             ui.close();
         }
     }
 
     fn git_items(ui: &mut egui::Ui, branches: &[String], outcome: &mut ExplorerRowOutcome) {
-        if appearance::menu_item(ui, "Show history", "History", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Show history",
+            icon: "History",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.local = Some(ExplorerLocal::History);
             ui.close();
         }
@@ -358,7 +386,14 @@ impl FileRowMenu<'_> {
     /// Reveal, copy, rename, duplicate, and delete.
     fn local_items(ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
         let mut item = |ui: &mut egui::Ui, label: &str, icon: &str, local: ExplorerLocal| {
-            if appearance::menu_item(ui, label, icon, "").clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label,
+                icon,
+                shortcut: "",
+            })
+            .clicked()
+            {
                 outcome.local = Some(local);
                 ui.close();
             }

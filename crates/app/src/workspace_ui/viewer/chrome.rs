@@ -41,18 +41,18 @@ impl Viewer<'_> {
             ("Split left", Some("left")),
             ("Split right", Some("right")),
         ] {
-            let response = appearance::menu_item(
+            let response = appearance::menu_item(appearance::MenuItemInput {
                 ui,
                 label,
-                match direction {
+                icon: match direction {
                     Some("up") => "PanelTopClose",
                     Some("down") => "PanelBottomClose",
                     Some("left") => "PanelLeftClose",
                     Some("right") => "PanelRightClose",
                     _ => "Plus",
                 },
-                &self.app.shortcut_label(split_action(direction)),
-            );
+                shortcut: &self.app.shortcut_label(split_action(direction)),
+            });
             #[cfg(feature = "test-support")]
             diagnostics::record_ui(ui, label, response.rect);
             if response.clicked() {
@@ -64,23 +64,23 @@ impl Viewer<'_> {
             return;
         }
         ui.separator();
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "New Browser Tab",
-            "Globe",
-            &self.app.shortcut_label(Action::NewBrowser),
-        )
+            label: "New Browser Tab",
+            icon: "Globe",
+            shortcut: &self.app.shortcut_label(Action::NewBrowser),
+        })
         .clicked()
         {
             self.app.open_new_browser_tab(None);
             ui.close();
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "New VNC Viewer",
-            "Monitor",
-            &self.app.shortcut_label(Action::NewVnc),
-        )
+            label: "New VNC Viewer",
+            icon: "Monitor",
+            shortcut: &self.app.shortcut_label(Action::NewVnc),
+        })
         .clicked()
         {
             self.app.open_new_vnc_tab(None);

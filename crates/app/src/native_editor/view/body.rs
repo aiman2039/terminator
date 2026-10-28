@@ -324,7 +324,14 @@ impl ViewPass<'_> {
             read_only,
             menu_style: Some(appearance::menu_style),
             menu_header: Some(appearance::target_header),
-            menu_item: Some(appearance::menu_item),
+            menu_item: Some(|ui, label, icon, shortcut| {
+                appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label,
+                    icon,
+                    shortcut,
+                })
+            }),
             soft_wrap,
             font_size: if frame.is_markdown { 14.0 } else { 13.0 },
             scroll_fraction: if mode == markdown::Mode::Split {

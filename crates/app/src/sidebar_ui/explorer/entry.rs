@@ -92,20 +92,48 @@ impl App {
     fn explorer_folder_menu(&mut self, ui: &mut egui::Ui, folder_path: &Path) {
         self.explorer_folder_menu_create(ui, folder_path);
         ui.separator();
-        if appearance::menu_item(ui, "Rename", "Pencil", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Rename",
+            icon: "Pencil",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.explorer_rename(folder_path);
             ui.close();
         }
-        if appearance::menu_item(ui, "Duplicate", "Copy", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Duplicate",
+            icon: "Copy",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.queue_workspace(workspace_ops::Op::Duplicate(folder_path.to_owned()));
             ui.close();
         }
-        if appearance::menu_item(ui, "Delete", "X", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Delete",
+            icon: "X",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.explorer_confirm_delete();
             ui.close();
         }
         ui.separator();
-        if appearance::menu_item(ui, "Collapse all", "ChevronDown", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Collapse all",
+            icon: "ChevronDown",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.expanded_dirs.clear();
             ui.close();
         }
@@ -113,30 +141,64 @@ impl App {
 
     /// New file/folder, Reveal, Copy path, and Paste.
     fn explorer_folder_menu_create(&mut self, ui: &mut egui::Ui, folder_path: &Path) {
-        if appearance::menu_item(ui, "New file", "File", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "New file",
+            icon: "File",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.open_name_prompt(workspace_ops::NamePrompt::File {
                 dir: folder_path.to_owned(),
                 name: String::new(),
             });
             ui.close();
         }
-        if appearance::menu_item(ui, "New folder", "Folder", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "New folder",
+            icon: "Folder",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.open_name_prompt(workspace_ops::NamePrompt::Folder {
                 dir: folder_path.to_owned(),
                 name: String::new(),
             });
             ui.close();
         }
-        if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Reveal in file manager",
+            icon: "FolderOpen",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.queue_workspace(workspace_ops::Op::Reveal(folder_path.to_owned()));
             ui.close();
         }
-        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Copy path",
+            icon: "Copy",
+            shortcut: "",
+        })
+        .clicked()
+        {
             ui.ctx().copy_text(folder_path.display().to_string());
             ui.close();
         }
         if self.explorer_clipboard.is_some()
-            && appearance::menu_item(ui, "Paste", "ClipboardPaste", "").clicked()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Paste",
+                icon: "ClipboardPaste",
+                shortcut: "",
+            })
+            .clicked()
         {
             self.explorer_selection = vec![folder_path.to_owned()];
             let root = folder_path.to_owned();

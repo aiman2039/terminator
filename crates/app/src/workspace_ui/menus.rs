@@ -17,34 +17,34 @@ pub(crate) struct InlineRenameInput<'a> {
 
 impl App {
     pub(super) fn workspace_new_tab_menu(&mut self, ui: &mut egui::Ui) {
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "New Terminal",
-            "Terminal",
-            &self.shortcut_label(Action::NewTerminal),
-        )
+            label: "New Terminal",
+            icon: "Terminal",
+            shortcut: &self.shortcut_label(Action::NewTerminal),
+        })
         .clicked()
         {
             self.create(None);
             ui.close();
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "New Browser Tab",
-            "Globe",
-            &self.shortcut_label(Action::NewBrowser),
-        )
+            label: "New Browser Tab",
+            icon: "Globe",
+            shortcut: &self.shortcut_label(Action::NewBrowser),
+        })
         .clicked()
         {
             self.open_new_browser_tab(None);
             ui.close();
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "New VNC Viewer",
-            "Monitor",
-            &self.shortcut_label(Action::NewVnc),
-        )
+            label: "New VNC Viewer",
+            icon: "Monitor",
+            shortcut: &self.shortcut_label(Action::NewVnc),
+        })
         .clicked()
         {
             self.open_new_vnc_tab(None);
@@ -55,12 +55,12 @@ impl App {
             ui.separator();
             ui.weak("VNC Connections");
             for profile in &profiles {
-                if appearance::menu_item(
+                if appearance::menu_item(appearance::MenuItemInput {
                     ui,
-                    &profile.display_name(),
-                    "Monitor",
-                    &profile.endpoint(),
-                )
+                    label: &profile.display_name(),
+                    icon: "Monitor",
+                    shortcut: &profile.endpoint(),
+                })
                 .clicked()
                 {
                     self.connect_vnc_profile(profile, None);
@@ -125,23 +125,23 @@ impl App {
         });
         if !strip && window.is_none() {
             ui.separator();
-            if appearance::menu_item(
+            if appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                "New Browser Tab",
-                "Globe",
-                &self.shortcut_label(Action::NewBrowser),
-            )
+                label: "New Browser Tab",
+                icon: "Globe",
+                shortcut: &self.shortcut_label(Action::NewBrowser),
+            })
             .clicked()
             {
                 self.open_new_browser_tab(None);
                 ui.close();
             }
-            if appearance::menu_item(
+            if appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                "New VNC Viewer",
-                "Monitor",
-                &self.shortcut_label(Action::NewVnc),
-            )
+                label: "New VNC Viewer",
+                icon: "Monitor",
+                shortcut: &self.shortcut_label(Action::NewVnc),
+            })
             .clicked()
             {
                 self.open_new_vnc_tab(None);
@@ -179,7 +179,14 @@ impl App {
                 _ => "Plus",
             };
             let shortcut = self.shortcut_label(action);
-            if appearance::menu_item(ui, label, icon, &shortcut).clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label,
+                icon,
+                shortcut: &shortcut,
+            })
+            .clicked()
+            {
                 if strip {
                     if let Some(pane) = pane {
                         self.add_strip_tab = Some((pane, split.map(str::to_owned)));
@@ -257,7 +264,14 @@ impl App {
                         }
                     }
                 };
-                if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
+                if appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: &label,
+                    icon: "Terminal",
+                    shortcut: "",
+                })
+                .clicked()
+                {
                     if strip {
                         self.focus_strip_tab = Some(tab);
                     } else if let Some(viewport) = window {
@@ -273,7 +287,14 @@ impl App {
     pub(crate) fn rename_action(&mut self, ui: &mut egui::Ui, sid: &str, surface: RenameSurface) {
         self.terminal_style_menu(ui, sid);
         let shortcut = self.shortcut_label(Action::RenameTerminal);
-        if appearance::menu_item(ui, "Rename terminal…", "Pencil", &shortcut).clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Rename terminal…",
+            icon: "Pencil",
+            shortcut: &shortcut,
+        })
+        .clicked()
+        {
             self.begin_rename(sid, surface);
             ui.close();
         }

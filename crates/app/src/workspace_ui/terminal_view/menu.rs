@@ -33,12 +33,12 @@ impl Viewer<'_> {
             self.terminal_session_items(ui, session);
             ui.separator();
             self.app.rename_action(ui, sid, RenameSurface::Pane);
-            if appearance::menu_item(
+            if appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                "Close session…",
-                "X",
-                &self.app.shortcut_label(Action::CloseSession),
-            )
+                label: "Close session…",
+                icon: "X",
+                shortcut: &self.app.shortcut_label(Action::CloseSession),
+            })
             .clicked()
             {
                 self.app.close_session = Some(sid.clone());
@@ -54,17 +54,24 @@ impl Viewer<'_> {
             "Ctrl+Shift+"
         };
         ui.add_enabled_ui(!selected.is_empty(), |ui| {
-            if appearance::menu_item(ui, "Copy", "Copy", &format!("{command}C")).clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Copy",
+                icon: "Copy",
+                shortcut: &format!("{command}C"),
+            })
+            .clicked()
+            {
                 ui.ctx().copy_text(selected.to_owned());
                 ui.close();
             }
         });
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "Select all",
-            "TextSelect",
-            &self.app.shortcut_label(Action::SelectAll),
-        )
+            label: "Select all",
+            icon: "TextSelect",
+            shortcut: &self.app.shortcut_label(Action::SelectAll),
+        })
         .clicked()
         {
             if let Some(backend) = self.app.backends.get_mut(sid) {
@@ -72,7 +79,14 @@ impl Viewer<'_> {
             }
             ui.close();
         }
-        if appearance::menu_item(ui, "Paste", "Clipboard", &format!("{command}V")).clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Paste",
+            icon: "Clipboard",
+            shortcut: &format!("{command}V"),
+        })
+        .clicked()
+        {
             let _ = self.app.jobs.send(Job::PasteClipboard(sid.clone()));
             ui.close();
         }
@@ -100,12 +114,12 @@ impl Viewer<'_> {
                 });
             }
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "Open file path…",
-            "File",
-            &self.app.shortcut_label(Action::OpenFile),
-        )
+            label: "Open file path…",
+            icon: "File",
+            shortcut: &self.app.shortcut_label(Action::OpenFile),
+        })
         .clicked()
         {
             selected.clone_into(&mut self.app.path_text);
@@ -117,12 +131,12 @@ impl Viewer<'_> {
     /// Scrollback search, editor save/compare, and copy directory.
     fn terminal_session_items(&mut self, ui: &mut egui::Ui, session: &Session) {
         let sid = &session.id;
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "Search scrollback",
-            "Search",
-            &self.app.shortcut_label(Action::SearchScrollback),
-        )
+            label: "Search scrollback",
+            icon: "Search",
+            shortcut: &self.app.shortcut_label(Action::SearchScrollback),
+        })
         .clicked()
         {
             self.app.open_scrollback_search(ui.ctx(), sid);
@@ -131,16 +145,16 @@ impl Viewer<'_> {
         if session.kind == SessionKind::Editor && !session.review {
             self.terminal_editor_items(ui, sid);
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            if session.remote.is_some() {
+            label: if session.remote.is_some() {
                 "Copy project directory"
             } else {
                 "Copy working directory"
             },
-            "Folder",
-            &self.app.shortcut_label(Action::CopyWorkingDirectory),
-        )
+            icon: "Folder",
+            shortcut: &self.app.shortcut_label(Action::CopyWorkingDirectory),
+        })
         .clicked()
         {
             ui.ctx().copy_text(
@@ -154,12 +168,12 @@ impl Viewer<'_> {
     }
 
     fn terminal_editor_items(&mut self, ui: &mut egui::Ui, sid: &str) {
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "Save all",
-            "Save",
-            &self.app.shortcut_label(Action::EditorSave),
-        )
+            label: "Save all",
+            icon: "Save",
+            shortcut: &self.app.shortcut_label(Action::EditorSave),
+        })
         .clicked()
         {
             self.app.send(Request::EditorSave {
@@ -167,12 +181,12 @@ impl Viewer<'_> {
             });
             ui.close();
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "Compare disk",
-            "FileDiff",
-            &self.app.shortcut_label(Action::CompareDisk),
-        )
+            label: "Compare disk",
+            icon: "FileDiff",
+            shortcut: &self.app.shortcut_label(Action::CompareDisk),
+        })
         .clicked()
         {
             self.app.send(Request::EditorCompare {

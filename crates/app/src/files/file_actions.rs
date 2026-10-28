@@ -132,7 +132,12 @@ pub fn menu_with(ui: &mut egui::Ui, spec: FileMenu, open: &str, split: &str) -> 
             FileAction::Split => split,
             _ => "",
         };
-        let response = crate::appearance::menu_item(ui, label, icon, shortcut);
+        let response = crate::appearance::menu_item(crate::appearance::MenuItemInput {
+            ui,
+            label,
+            icon,
+            shortcut,
+        });
         #[cfg(feature = "test-support")]
         crate::diagnostics::record_ui(ui, label, response.rect);
         if response.clicked() {

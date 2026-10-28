@@ -225,7 +225,14 @@ impl PerforceView<'_> {
         file: &crate::perforce::File,
         outcome: &mut GitPanelOutcome,
     ) {
-        if appearance::menu_item(ui, "Open file", "FileText", self.open_shortcut).clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Open file",
+            icon: "FileText",
+            shortcut: self.open_shortcut,
+        })
+        .clicked()
+        {
             outcome.menu.push(GitFileAction {
                 action: FileAction::Open,
                 path: file.path.clone(),
@@ -233,16 +240,37 @@ impl PerforceView<'_> {
             ui.close();
         }
         if !file.opened {
-            if appearance::menu_item(ui, "Open for edit", "Pencil", "").clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Open for edit",
+                icon: "Pencil",
+                shortcut: "",
+            })
+            .clicked()
+            {
                 outcome.perforce.push(Op::Edit(file.path.clone()));
                 ui.close();
             }
-            if appearance::menu_item(ui, "Reconcile file", "RefreshCw", "").clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Reconcile file",
+                icon: "RefreshCw",
+                shortcut: "",
+            })
+            .clicked()
+            {
                 outcome.perforce.push(Op::Reconcile(file.path.clone()));
                 ui.close();
             }
         }
-        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Copy path",
+            icon: "Copy",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.copy.push(file.path.display().to_string());
             ui.close();
         }

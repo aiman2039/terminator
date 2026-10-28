@@ -164,15 +164,36 @@ impl App {
 
     /// Unchanged-line context, whitespace, and the markdown preview.
     fn diff_view_menu(&mut self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
-        if appearance::menu_item(ui, "Show more unchanged lines", "Plus", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Show more unchanged lines",
+            icon: "Plus",
+            shortcut: "",
+        })
+        .clicked()
+        {
             pass.context = Some(pass.review.context.max(3).saturating_add(20));
             ui.close();
         }
-        if appearance::menu_item(ui, "Show all unchanged lines", "FileText", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Show all unchanged lines",
+            icon: "FileText",
+            shortcut: "",
+        })
+        .clicked()
+        {
             pass.context = Some(usize::MAX / 4);
             ui.close();
         }
-        if appearance::menu_item(ui, "Collapse unchanged lines", "ChevronsDownUp", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Collapse unchanged lines",
+            icon: "ChevronsDownUp",
+            shortcut: "",
+        })
+        .clicked()
+        {
             pass.context = Some(3);
             pass.collapse = true;
             ui.close();
@@ -190,16 +211,16 @@ impl App {
         }
         let key = &frame.key;
         if frame.is_md
-            && appearance::menu_item(
+            && appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                if self.diff_preview.contains(key) {
+                label: if self.diff_preview.contains(key) {
                     "Hide preview"
                 } else {
                     "Preview"
                 },
-                "FileText",
-                "",
-            )
+                icon: "FileText",
+                shortcut: "",
+            })
             .clicked()
         {
             if !self.diff_preview.remove(key) {
@@ -215,14 +236,24 @@ impl App {
         frame: &DiffFrame<'_>,
         pass: &mut DiffPass,
     ) {
-        let side = appearance::selectable_icon(ui, "Columns2", "Side by side", frame.split);
+        let side = appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "Columns2",
+            tip: "Side by side",
+            selected: frame.split,
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "diff-side-by-side", side.rect);
         if side.clicked() {
             self.diff_split.insert(frame.key.clone());
             pass.review.jump = true;
         }
-        let unified = appearance::selectable_icon(ui, "Rows2", "Unified", !frame.split);
+        let unified = appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "Rows2",
+            tip: "Unified",
+            selected: !frame.split,
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "diff-unified", unified.rect);
         if unified.clicked() {

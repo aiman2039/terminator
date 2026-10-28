@@ -189,9 +189,22 @@ pub fn icon_menu_button<R>(
     egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
 }
 
+pub struct SelectableIconInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub icon: &'a str,
+    pub tip: &'a str,
+    pub selected: bool,
+}
+
 /// Icon-only selectable control (tabs, toggles). The hover overlay carries the
 /// text label and the selected state fills the frame.
-pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool) -> egui::Response {
+pub fn selectable_icon(input: SelectableIconInput<'_>) -> egui::Response {
+    let SelectableIconInput {
+        ui,
+        icon,
+        tip,
+        selected,
+    } = input;
     let response = exact_button(ui, egui::Vec2::splat(TOOLBAR_BUTTON)).on_hover_text(tip);
     if response.hovered() || selected {
         ui.painter().rect_filled(
@@ -290,12 +303,20 @@ pub fn sidebar_scroll(salt: &'static str) -> egui::ScrollArea {
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
 }
 
-pub fn tool_button(
-    ui: &mut egui::Ui,
-    tool: crate::preferences::SidebarTool,
-    label: &str,
-    active: bool,
-) -> egui::Response {
+pub struct ToolButtonInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub tool: crate::preferences::SidebarTool,
+    pub label: &'a str,
+    pub active: bool,
+}
+
+pub fn tool_button(input: ToolButtonInput<'_>) -> egui::Response {
+    let ToolButtonInput {
+        ui,
+        tool,
+        label,
+        active,
+    } = input;
     use crate::preferences::SidebarTool;
     let response = ui
         .add_sized([36.0, 32.0], egui::Button::new("").frame(false))
@@ -454,8 +475,21 @@ pub fn shortcut_tip(label: &str, keys: &str) -> String {
     }
 }
 
+pub struct MenuItemInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub label: &'a str,
+    pub icon: &'a str,
+    pub shortcut: &'a str,
+}
+
 /// Flat full-width action row with a fixed icon column and optional shortcut.
-pub fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str) -> egui::Response {
+pub fn menu_item(input: MenuItemInput<'_>) -> egui::Response {
+    let MenuItemInput {
+        ui,
+        label,
+        icon,
+        shortcut,
+    } = input;
     ui.set_min_width(220.0);
     ui.spacing_mut().item_spacing.y = 2.0;
     let destructive = label.starts_with("Close ")

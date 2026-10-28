@@ -198,7 +198,12 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         vertical: vertical_tip,
         horizontal: horizontal_tip,
     };
-    let actions = bar_actions(ui, bar.id, &slots, tips);
+    let actions = bar_actions(BarActionsInput {
+        ui,
+        bar_id: bar.id,
+        slots: &slots,
+        tips,
+    });
     let bar = bar.on_hover_cursor(egui::CursorIcon::Grab);
     TerminalBar {
         bar: if title.is_empty() {

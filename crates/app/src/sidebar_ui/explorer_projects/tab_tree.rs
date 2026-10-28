@@ -292,11 +292,26 @@ impl App {
 
     fn tab_group_menu(ui: &mut egui::Ui, named: bool) -> GroupRenameAction {
         let mut action = GroupRenameAction::None;
-        if appearance::menu_item(ui, "Rename tab…", "Pencil", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Rename tab…",
+            icon: "Pencil",
+            shortcut: "",
+        })
+        .clicked()
+        {
             action = GroupRenameAction::Begin;
             ui.close();
         }
-        if named && appearance::menu_item(ui, "Clear tab name", "X", "").clicked() {
+        if named
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Clear tab name",
+                icon: "X",
+                shortcut: "",
+            })
+            .clicked()
+        {
             action = GroupRenameAction::Clear;
             ui.close();
         }

@@ -261,7 +261,14 @@ impl FindBar {
             (&mut self.word, "WholeWord", "Words"),
             (&mut self.regex, "Regex", "Regex"),
         ] {
-            if appearance::selectable_icon(ui, icon, tip, *flag).clicked() {
+            if appearance::selectable_icon(appearance::SelectableIconInput {
+                ui,
+                icon,
+                tip,
+                selected: *flag,
+            })
+            .clicked()
+            {
                 *flag = !*flag;
                 self.current = None;
             }
@@ -300,7 +307,14 @@ impl FindBar {
         if appearance::sidebar_action(ui, "ArrowDown", "Next occurrence (Enter)").clicked() {
             go = Some(true);
         }
-        if appearance::selectable_icon(ui, "Pencil", "Replace", self.replacing).clicked() {
+        if appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "Pencil",
+            tip: "Replace",
+            selected: self.replacing,
+        })
+        .clicked()
+        {
             self.replacing = !self.replacing;
         }
         if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {

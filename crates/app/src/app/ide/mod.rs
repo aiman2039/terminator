@@ -162,16 +162,16 @@ impl App {
                     }
                 }
                 let full_height = self.preferences.ide_sidebars_full_height;
-                let height = appearance::selectable_icon(
+                let height = appearance::selectable_icon(appearance::SelectableIconInput {
                     ui,
-                    "Columns3",
-                    if full_height {
+                    icon: "Columns3",
+                    tip: if full_height {
                         "Terminal full width"
                     } else {
                         "Sidebars full height"
                     },
-                    full_height,
-                );
+                    selected: full_height,
+                });
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "status-sidebar-height", height.rect);
                 if height.clicked() {

@@ -136,12 +136,25 @@ impl App {
     ) {
         self.rename_action(ui, &session.id, RenameSurface::Sidebar);
         ui.separator();
-        if appearance::menu_item(ui, "Open session", "Terminal", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Open session",
+            icon: "Terminal",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.go_session(&session.id);
             ui.close();
         }
         if let Some((project_id, tab_id)) = rename_tab
-            && appearance::menu_item(ui, "Name tab…", "Pencil", "").clicked()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Name tab…",
+                icon: "Pencil",
+                shortcut: "",
+            })
+            .clicked()
         {
             self.rename_group = Some((project_id.to_string(), tab_id.to_string()));
             self.rename_group_text.clear();
@@ -150,18 +163,25 @@ impl App {
         }
         ui.separator();
         if session.lifecycle.live() {
-            if appearance::menu_item(
+            if appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                "Close session…",
-                "X",
-                &self.shortcut_label(Action::CloseSession),
-            )
+                label: "Close session…",
+                icon: "X",
+                shortcut: &self.shortcut_label(Action::CloseSession),
+            })
             .clicked()
             {
                 self.close_session = Some(session.id.clone());
                 ui.close();
             }
-        } else if appearance::menu_item(ui, "Remove historical record", "X", "").clicked() {
+        } else if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Remove historical record",
+            icon: "X",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.send(Request::Remove {
                 session: session.id.clone(),
             });
@@ -211,16 +231,23 @@ impl App {
             self.select_project(project.id.clone());
         }
         appearance::context_menu(&response, |ui| {
-            if appearance::menu_item(ui, "Open", "FolderOpen", "").clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Open",
+                icon: "FolderOpen",
+                shortcut: "",
+            })
+            .clicked()
+            {
                 self.select_project(project.id.clone());
                 ui.close();
             }
-            if appearance::menu_item(
+            if appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                "New terminal",
-                "Terminal",
-                &self.shortcut_label(Action::NewTerminal),
-            )
+                label: "New terminal",
+                icon: "Terminal",
+                shortcut: &self.shortcut_label(Action::NewTerminal),
+            })
             .clicked()
             {
                 self.select_project(project.id.clone());
@@ -228,7 +255,14 @@ impl App {
                 ui.close();
             }
             ui.separator();
-            if appearance::menu_item(ui, "Remove worktree…", "X", "").clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Remove worktree…",
+                icon: "X",
+                shortcut: "",
+            })
+            .clicked()
+            {
                 self.confirm_remove_worktree(&project.id);
                 ui.close();
             }

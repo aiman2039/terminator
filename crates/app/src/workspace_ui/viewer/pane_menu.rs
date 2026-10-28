@@ -45,7 +45,15 @@ impl Viewer<'_> {
         if detachable {
             self.pane_detach_items(ui, tab);
         }
-        if floatable && appearance::menu_item(ui, "Float window", "ExternalLink", "").clicked() {
+        if floatable
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Float window",
+                icon: "ExternalLink",
+                shortcut: "",
+            })
+            .clicked()
+        {
             self.app.float_pane = Some(tab.clone());
             ui.close();
         }
@@ -55,7 +63,14 @@ impl Viewer<'_> {
     }
 
     fn pane_detach_items(&mut self, ui: &mut egui::Ui, tab: &Tab) {
-        if appearance::menu_item(ui, "Detach to new tab", "PanelsTopLeft", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Detach to new tab",
+            icon: "PanelsTopLeft",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.app.detach_pane = Some(tab.clone());
             ui.close();
         }
@@ -65,7 +80,14 @@ impl Viewer<'_> {
         }
         let _ = appearance::text_menu_button(ui, "Move to tab", |ui| {
             for (id, label, icon) in targets {
-                if appearance::menu_item(ui, &label, icon, "").clicked() {
+                if appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: &label,
+                    icon,
+                    shortcut: "",
+                })
+                .clicked()
+                {
                     self.app.dock_back_pane = Some((tab.clone(), id));
                     ui.close();
                 }
@@ -83,12 +105,12 @@ impl Viewer<'_> {
             .any(|session| session.id == sid && session.kind == SessionKind::Shell);
         if self.strip
             && shell
-            && appearance::menu_item(
+            && appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                "Move to main pane",
-                "ArrowUp",
-                &self.app.shortcut_label(Action::MoveToMain),
-            )
+                label: "Move to main pane",
+                icon: "ArrowUp",
+                shortcut: &self.app.shortcut_label(Action::MoveToMain),
+            })
             .clicked()
         {
             self.app.queue_strip_move(sid);
@@ -99,34 +121,34 @@ impl Viewer<'_> {
             && shell
             && self.window.is_none()
             && self.app.preferences.ide_mode
-            && appearance::menu_item(
+            && appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                "Move to lower pane",
-                "ArrowDown",
-                &self.app.shortcut_label(Action::MoveToStrip),
-            )
+                label: "Move to lower pane",
+                icon: "ArrowDown",
+                shortcut: &self.app.shortcut_label(Action::MoveToStrip),
+            })
             .clicked()
         {
             self.app.queue_main_to_strip(sid);
             ui.close();
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "Search scrollback",
-            "Search",
-            &self.app.shortcut_label(Action::SearchScrollback),
-        )
+            label: "Search scrollback",
+            icon: "Search",
+            shortcut: &self.app.shortcut_label(Action::SearchScrollback),
+        })
         .clicked()
         {
             self.app.open_scrollback_search(ui.ctx(), sid);
             ui.close();
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "Clear saved scrollback",
-            "Eraser",
-            &self.app.shortcut_label(Action::ClearScrollback),
-        )
+            label: "Clear saved scrollback",
+            icon: "Eraser",
+            shortcut: &self.app.shortcut_label(Action::ClearScrollback),
+        })
         .clicked()
         {
             self.app.send(Request::ClearHistory {

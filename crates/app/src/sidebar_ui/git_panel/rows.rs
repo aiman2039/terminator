@@ -131,7 +131,14 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
         ui.separator();
         row.menu_copy(ui, outcome);
         ui.separator();
-        if appearance::menu_item(ui, "Delete file", "X", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Delete file",
+            icon: "X",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.delete.push(change.path.clone());
             ui.close();
         }
@@ -221,7 +228,13 @@ impl ChangeRow<'_> {
     fn menu_open(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
         let path = &self.change.path;
         if let Some(action) = self.click_action(true)
-            && appearance::menu_item(ui, "Open changes", "FileDiff", "").clicked()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Open changes",
+                icon: "FileDiff",
+                shortcut: "",
+            })
+            .clicked()
         {
             outcome.menu.push(GitFileAction {
                 action,
@@ -229,7 +242,14 @@ impl ChangeRow<'_> {
             });
             ui.close();
         }
-        if appearance::menu_item(ui, "Open file", "FileCode", self.ctx.open_shortcut).clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Open file",
+            icon: "FileCode",
+            shortcut: self.ctx.open_shortcut,
+        })
+        .clicked()
+        {
             outcome.menu.push(GitFileAction {
                 action: FileAction::Open,
                 path: path.clone(),
@@ -237,7 +257,13 @@ impl ChangeRow<'_> {
             ui.close();
         }
         if self.group == terminator_git::GitGroup::Conflicts
-            && appearance::menu_item(ui, "Resolve conflicts…", "GitCompareArrows", "").clicked()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Resolve conflicts…",
+                icon: "GitCompareArrows",
+                shortcut: "",
+            })
+            .clicked()
         {
             outcome.resolve = Some(path.clone());
             ui.close();
@@ -248,15 +274,36 @@ impl ChangeRow<'_> {
     fn menu_stage(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
         let path = &self.change.path;
         if self.group == terminator_git::GitGroup::Staged {
-            if appearance::menu_item(ui, "Unstage", "ArrowLeft", "").clicked() {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Unstage",
+                icon: "ArrowLeft",
+                shortcut: "",
+            })
+            .clicked()
+            {
                 outcome.unstage.push(path.clone());
                 ui.close();
             }
-        } else if appearance::menu_item(ui, "Stage", "Plus", "").clicked() {
+        } else if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Stage",
+            icon: "Plus",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.stage.push(path.clone());
             ui.close();
         }
-        if appearance::menu_item(ui, "Discard changes", "Eraser", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Discard changes",
+            icon: "Eraser",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.discard.push((
                 path.clone(),
                 self.group == terminator_git::GitGroup::Untracked,
@@ -267,12 +314,25 @@ impl ChangeRow<'_> {
 
     fn menu_copy(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
         let path = &self.change.path;
-        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Copy path",
+            icon: "Copy",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.copy.push(path.display().to_string());
             ui.close();
         }
         if let Some(root) = self.ctx.root
-            && appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Copy relative path",
+                icon: "Copy",
+                shortcut: "",
+            })
+            .clicked()
         {
             outcome
                 .copy

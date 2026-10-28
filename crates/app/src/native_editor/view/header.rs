@@ -83,12 +83,12 @@ impl ViewPass<'_> {
             (markdown::Mode::Preview, "Eye"),
             (markdown::Mode::Split, "Columns2"),
         ] {
-            let response = appearance::selectable_icon(
+            let response = appearance::selectable_icon(appearance::SelectableIconInput {
                 ui,
                 icon,
-                option.label(),
-                self.doc.markdown_mode == option,
-            );
+                tip: option.label(),
+                selected: self.doc.markdown_mode == option,
+            });
             #[cfg(feature = "test-support")]
             crate::diagnostics::record(
                 ui.ctx(),
@@ -197,7 +197,14 @@ impl ViewPass<'_> {
         } else {
             "Bookmark file"
         };
-        if appearance::selectable_icon(ui, "FileText", label, pinned).clicked() {
+        if appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "FileText",
+            tip: label,
+            selected: pinned,
+        })
+        .clicked()
+        {
             self.requests.toggle_pin = true;
             ui.memory_mut(|memory| memory.request_focus(self.file_focus()));
         }

@@ -32,10 +32,24 @@ impl App {
                 .on_hover_text(cwd.join(path).display().to_string());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 refresh = appearance::sidebar_action(ui, "RefreshCw", "Reload").clicked();
-                if appearance::selectable_icon(ui, "Columns2", "Side by side", split).clicked() {
+                if appearance::selectable_icon(appearance::SelectableIconInput {
+                    ui,
+                    icon: "Columns2",
+                    tip: "Side by side",
+                    selected: split,
+                })
+                .clicked()
+                {
                     self.diff_split.insert(key.clone());
                 }
-                if appearance::selectable_icon(ui, "Rows2", "Unified", !split).clicked() {
+                if appearance::selectable_icon(appearance::SelectableIconInput {
+                    ui,
+                    icon: "Rows2",
+                    tip: "Unified",
+                    selected: !split,
+                })
+                .clicked()
+                {
                     self.diff_split.remove(&key);
                 }
             });

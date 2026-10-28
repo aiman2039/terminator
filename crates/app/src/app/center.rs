@@ -217,17 +217,24 @@ impl App {
     }
 
     fn worktree_row_menu(&mut self, ui: &mut egui::Ui, project_id: &str) {
-        if appearance::menu_item(ui, "Open", "FolderOpen", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Open",
+            icon: "FolderOpen",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.select_project(project_id.to_owned());
             self.worktree_open = false;
             ui.close();
         }
-        if appearance::menu_item(
+        if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            "New terminal",
-            "Terminal",
-            &self.shortcut_label(Action::NewTerminal),
-        )
+            label: "New terminal",
+            icon: "Terminal",
+            shortcut: &self.shortcut_label(Action::NewTerminal),
+        })
         .clicked()
         {
             self.select_project(project_id.to_owned());
@@ -235,7 +242,14 @@ impl App {
             self.worktree_open = false;
             ui.close();
         }
-        if appearance::menu_item(ui, "Remove worktree…", "X", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Remove worktree…",
+            icon: "X",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.confirm_remove_worktree(project_id);
             ui.close();
         }

@@ -213,7 +213,13 @@ impl App {
 
     fn project_menu(&mut self, ui: &mut egui::Ui, p: &Project) {
         if self.has_worktrees()
-            && appearance::menu_item(ui, "New task worktree…", "GitBranch", "").clicked()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "New task worktree…",
+                icon: "GitBranch",
+                shortcut: "",
+            })
+            .clicked()
         {
             self.select_project(p.id.clone());
             self.open_worktree_wizard();
@@ -223,12 +229,25 @@ impl App {
             ui.separator();
         }
         if self.managed_worktree(&p.id).is_some()
-            && appearance::menu_item(ui, "Remove worktree…", "X", "").clicked()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Remove worktree…",
+                icon: "X",
+                shortcut: "",
+            })
+            .clicked()
         {
             self.confirm_remove_worktree(&p.id);
             ui.close();
         }
-        if appearance::menu_item(ui, "Remove project from sidebar", "X", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Remove project from sidebar",
+            icon: "X",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.hide_project(&p.id);
             ui.close();
         }

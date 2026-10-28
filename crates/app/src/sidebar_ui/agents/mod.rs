@@ -107,7 +107,13 @@ impl App {
         } else {
             ""
         };
-        let clicked = appearance::menu_item(ui, &label, "Bell", mark).clicked();
+        let clicked = appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: &label,
+            icon: "Bell",
+            shortcut: mark,
+        })
+        .clicked();
         if clicked {
             self.toggle_left_agents();
         }

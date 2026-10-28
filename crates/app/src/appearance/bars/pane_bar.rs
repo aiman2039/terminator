@@ -18,13 +18,21 @@ pub(super) struct BarActions {
     pub(super) close: egui::Response,
 }
 
+pub(super) struct BarActionsInput<'a> {
+    pub(super) ui: &'a egui::Ui,
+    pub(super) bar_id: egui::Id,
+    pub(super) slots: &'a BarSlots,
+    pub(super) tips: BarTips<'a>,
+}
+
 /// The Git (with branch), stack, split and close buttons, left to right.
-pub(super) fn bar_actions(
-    ui: &egui::Ui,
-    bar_id: egui::Id,
-    slots: &BarSlots,
-    tips: BarTips<'_>,
-) -> BarActions {
+pub(super) fn bar_actions(input: BarActionsInput<'_>) -> BarActions {
+    let BarActionsInput {
+        ui,
+        bar_id,
+        slots,
+        tips,
+    } = input;
     let button = |rect, id, icon, tip| {
         bar_button(
             ui,

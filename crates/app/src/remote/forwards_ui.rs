@@ -379,16 +379,16 @@ struct ForwardClicks {
 }
 
 fn forward_toggle(ui: &mut egui::Ui, active: bool) -> egui::Response {
-    appearance::selectable_icon(
+    appearance::selectable_icon(appearance::SelectableIconInput {
         ui,
-        if active { "CircleStop" } else { "Play" },
-        if active {
+        icon: if active { "CircleStop" } else { "Play" },
+        tip: if active {
             "Stop forward"
         } else {
             "Start forward (signs in with your key or agent, or reuses a signed-in terminal)"
         },
-        active,
-    )
+        selected: active,
+    })
 }
 
 #[cfg(test)]

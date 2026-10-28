@@ -43,7 +43,12 @@ impl App {
                     ),
                 ] {
                     let check = if current == sort { "✓" } else { "" };
-                    let response = appearance::menu_item(ui, sort.menu_label(), icon, check);
+                    let response = appearance::menu_item(appearance::MenuItemInput {
+                        ui,
+                        label: sort.menu_label(),
+                        icon,
+                        shortcut: check,
+                    });
                     #[cfg(feature = "test-support")]
                     diagnostics::record(ui.ctx(), target, response.rect);
                     #[cfg(not(feature = "test-support"))]
@@ -74,7 +79,12 @@ impl App {
                 (HistorySort::NameDesc, "ArrowUp", "history-sort-name-desc"),
             ] {
                 let check = if current == sort { "✓" } else { "" };
-                let response = appearance::menu_item(ui, sort.menu_label(), icon, check);
+                let response = appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: sort.menu_label(),
+                    icon,
+                    shortcut: check,
+                });
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), target, response.rect);
                 #[cfg(not(feature = "test-support"))]
@@ -108,8 +118,13 @@ impl App {
             .style(appearance::menu_style)
             .show(|ui| {
                 for project in hidden {
-                    let response = appearance::menu_item(ui, &project.name, "FolderOpen", "")
-                        .on_hover_text(self.project_location_label(&project.id));
+                    let response = appearance::menu_item(appearance::MenuItemInput {
+                        ui,
+                        label: &project.name,
+                        icon: "FolderOpen",
+                        shortcut: "",
+                    })
+                    .on_hover_text(self.project_location_label(&project.id));
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),

@@ -61,26 +61,61 @@ impl App {
     /// The "…" folder menu. Returns whether "Find in folder" was picked.
     fn explorer_more_menu(&mut self, ui: &mut egui::Ui, cwd: &Path) -> bool {
         let mut focus_find = false;
-        if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Reveal in file manager",
+            icon: "FolderOpen",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.queue_workspace(workspace_ops::Op::Reveal(cwd.to_path_buf()));
             ui.close();
         }
-        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Copy path",
+            icon: "Copy",
+            shortcut: "",
+        })
+        .clicked()
+        {
             ui.ctx().copy_text(cwd.display().to_string());
             ui.close();
         }
-        if appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Copy relative path",
+            icon: "Copy",
+            shortcut: "",
+        })
+        .clicked()
+        {
             let root = self.op_root().unwrap_or_else(|| cwd.to_path_buf());
             ui.ctx()
                 .copy_text(workspace_ops::relative_display(&root, cwd));
             ui.close();
         }
         ui.separator();
-        if appearance::menu_item(ui, "Find in folder", "Search", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Find in folder",
+            icon: "Search",
+            shortcut: "",
+        })
+        .clicked()
+        {
             focus_find = true;
             ui.close();
         }
-        if appearance::menu_item(ui, "Collapse all", "ChevronsDownUp", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Collapse all",
+            icon: "ChevronsDownUp",
+            shortcut: "",
+        })
+        .clicked()
+        {
             self.expanded_dirs.clear();
             ui.close();
         }
@@ -118,12 +153,12 @@ impl App {
         } else {
             "EyeOff"
         };
-        let ignored = appearance::selectable_icon(
+        let ignored = appearance::selectable_icon(appearance::SelectableIconInput {
             ui,
-            ignored_icon,
-            "Show ignored files (excluded by Git ignore rules and Git metadata)",
-            self.preferences.show_ignored,
-        );
+            icon: ignored_icon,
+            tip: "Show ignored files (excluded by Git ignore rules and Git metadata)",
+            selected: self.preferences.show_ignored,
+        });
         let reveal = ui
             .add_enabled_ui(reveal_enabled, |ui| {
                 appearance::sidebar_action(ui, "LocateFixed", "Reveal current file in Explorer")

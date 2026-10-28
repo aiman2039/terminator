@@ -23,13 +23,21 @@ pub fn target_header(ui: &mut egui::Ui, label: &str, tooltip: &str) {
     ui.separator();
 }
 
+pub struct WrappingPathInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub path: &'a str,
+    pub font: FontId,
+    pub color: Color32,
+}
+
 /// One row when the path fits; wrap to two rows only when it does not.
-pub fn wrapping_path(
-    ui: &mut egui::Ui,
-    path: &str,
-    font: FontId,
-    color: Color32,
-) -> egui::Response {
+pub fn wrapping_path(input: WrappingPathInput<'_>) -> egui::Response {
+    let WrappingPathInput {
+        ui,
+        path,
+        font,
+        color,
+    } = input;
     wrapping_path_tooltip(WrappingPathTooltipInput {
         ui,
         path,
@@ -95,12 +103,13 @@ pub fn wrapping_path_row<R>(
     let mut path_response = None;
     let actions = ui
         .horizontal_wrapped(|ui| {
-            path_response = Some(wrapping_path(
+            let color = ui.visuals().text_color();
+            path_response = Some(wrapping_path(WrappingPathInput {
                 ui,
                 path,
-                FontId::proportional(12.0),
-                ui.visuals().text_color(),
-            ));
+                font: FontId::proportional(12.0),
+                color,
+            }));
             add_actions(ui)
         })
         .inner;

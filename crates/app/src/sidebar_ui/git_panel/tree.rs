@@ -397,13 +397,27 @@ impl TreeFolder<'_> {
     fn menu(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
         match self.group {
             terminator_git::GitGroup::Staged => {
-                if appearance::menu_item(ui, "Unstage folder", "ArrowLeft", "").clicked() {
+                if appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: "Unstage folder",
+                    icon: "ArrowLeft",
+                    shortcut: "",
+                })
+                .clicked()
+                {
                     outcome.unstage.extend(self.paths());
                     ui.close();
                 }
             }
             terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
-                if appearance::menu_item(ui, "Stage folder", "Plus", "").clicked() {
+                if appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: "Stage folder",
+                    icon: "Plus",
+                    shortcut: "",
+                })
+                .clicked()
+                {
                     outcome.stage.extend(self.paths());
                     ui.close();
                 }

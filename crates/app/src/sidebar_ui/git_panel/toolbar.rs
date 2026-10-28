@@ -14,7 +14,14 @@ pub(super) fn git_base_ref_contents(
     outcome: &mut GitPanelOutcome,
 ) {
     let auto = if input.base_ref.is_none() { "✓" } else { "" };
-    if appearance::menu_item(ui, "Automatic (upstream)", "GitCompareArrows", auto).clicked() {
+    if appearance::menu_item(appearance::MenuItemInput {
+        ui,
+        label: "Automatic (upstream)",
+        icon: "GitCompareArrows",
+        shortcut: auto,
+    })
+    .clicked()
+    {
         outcome.clear_base = true;
         ui.close();
     }
@@ -28,7 +35,14 @@ pub(super) fn git_base_ref_contents(
         } else {
             ""
         };
-        if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: name,
+            icon: "GitBranch",
+            shortcut: mark,
+        })
+        .clicked()
+        {
             outcome.set_base = Some(name.clone());
             ui.close();
         }
@@ -42,7 +56,12 @@ pub(super) fn git_inline_more(
     input: &GitPanelInput<'_>,
     outcome: &mut GitPanelOutcome,
 ) {
-    let list = appearance::selectable_icon(ui, "List", "View as list", input.view_list);
+    let list = appearance::selectable_icon(appearance::SelectableIconInput {
+        ui,
+        icon: "List",
+        tip: "View as list",
+        selected: input.view_list,
+    });
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), "git-view-list", list.rect);
     if list.clicked() {
@@ -73,7 +92,14 @@ pub(super) fn git_overflow_more(
 ) {
     let more = appearance::compact_menu_button(ui, "…", |ui| {
         let mark = if input.view_list { "✓" } else { "" };
-        if appearance::menu_item(ui, "View as list", "List", mark).clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "View as list",
+            icon: "List",
+            shortcut: mark,
+        })
+        .clicked()
+        {
             outcome.toggle_list = true;
             ui.close();
         }
@@ -82,7 +108,14 @@ pub(super) fn git_overflow_more(
         });
         let _ = base;
         ui.separator();
-        if appearance::menu_item(ui, "Refresh branch compare", "RefreshCw", "").clicked() {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Refresh branch compare",
+            icon: "RefreshCw",
+            shortcut: "",
+        })
+        .clicked()
+        {
             outcome.refresh_compare = true;
             ui.close();
         }
@@ -112,8 +145,18 @@ pub(super) fn git_toolbar(
         if collapse.clicked() {
             outcome.collapse = true;
         }
-        let changes = appearance::selectable_icon(ui, "FileDiff", "Changes", !input.history);
-        let history = appearance::selectable_icon(ui, "History", "History", input.history);
+        let changes = appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "FileDiff",
+            tip: "Changes",
+            selected: !input.history,
+        });
+        let history = appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "History",
+            tip: "History",
+            selected: input.history,
+        });
         #[cfg(feature = "test-support")]
         {
             diagnostics::record(ui.ctx(), "git-changes", changes.rect);
@@ -131,7 +174,14 @@ pub(super) fn git_toolbar(
             }
             for name in input.branches {
                 let mark = if name == branch_name { "✓" } else { "" };
-                if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
+                if appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: name,
+                    icon: "GitBranch",
+                    shortcut: mark,
+                })
+                .clicked()
+                {
                     outcome.switch = Some(name.clone());
                     ui.close();
                 }

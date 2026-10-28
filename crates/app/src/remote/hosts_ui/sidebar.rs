@@ -226,7 +226,14 @@ impl App {
         });
         if forwarding {
             let open = self.remote_ui.hosts.forwards_open.contains(&project.id);
-            if appearance::selectable_icon(ui, "Globe", "Port forwards", open).clicked() {
+            if appearance::selectable_icon(appearance::SelectableIconInput {
+                ui,
+                icon: "Globe",
+                tip: "Port forwards",
+                selected: open,
+            })
+            .clicked()
+            {
                 let hosts = &mut self.remote_ui.hosts;
                 if open {
                     hosts.forwards_open.remove(&project.id);
