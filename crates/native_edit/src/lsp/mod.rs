@@ -18,6 +18,8 @@ use url::Url;
 
 use crate::highlight::Language;
 
+mod completion;
+mod edits;
 mod hierarchy;
 mod parsing;
 mod requests;
@@ -25,6 +27,8 @@ mod server;
 mod types;
 mod wire;
 
+pub use completion::*;
+pub use edits::*;
 pub use hierarchy::*;
 pub use parsing::*;
 pub use requests::*;
