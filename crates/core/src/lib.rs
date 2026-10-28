@@ -25,7 +25,6 @@ pub mod ui_control;
 pub mod vnc;
 pub mod worktrees;
 
-use anyhow::{Context, Result, bail, ensure};
 pub use error::{AtomicWriteError, ErrorChain, ErrorReport, NoShellError, PathsError};
 pub use ipc::{
     Envelope, FrameError, IpcError, Request, Response, SnapshotHint, conditional_snapshot, connect,

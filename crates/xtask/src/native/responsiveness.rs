@@ -101,7 +101,7 @@ impl Drop for NvimServer {
     }
 }
 fn snapshot(paths: &Paths) -> Result<Value> {
-    ui_control::rpc(paths, ui_control::Request::Snapshot)
+    ui_control::rpc(paths, ui_control::Request::Snapshot).map_err(Into::into)
 }
 fn player(paths: &Paths, action: &str, url: Option<String>) -> Result<Value> {
     ui_control::rpc(
@@ -111,6 +111,7 @@ fn player(paths: &Paths, action: &str, url: Option<String>) -> Result<Value> {
             url,
         },
     )
+    .map_err(Into::into)
 }
 fn resources(pid: u32) -> Result<Value> {
     let mut command = std::process::Command::new("ps");

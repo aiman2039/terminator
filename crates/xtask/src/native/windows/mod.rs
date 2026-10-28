@@ -32,7 +32,7 @@ fn wait(mut check: impl FnMut() -> Result<bool>) -> Result<()> {
     }
 }
 fn ui(h: &Harness, request: Request) -> Result<Value> {
-    ui_control::rpc(&Paths::at(h.root.clone()), request)
+    ui_control::rpc(&Paths::at(h.root.clone()), request).map_err(Into::into)
 }
 fn coordinate_scale(snapshot: &Value) -> f64 {
     let window = snapshot.get("window");

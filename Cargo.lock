@@ -7407,7 +7407,6 @@ dependencies = [
 name = "terminator-core"
 version = "0.138.0"
 dependencies = [
- "anyhow",
  "base64 0.23.1",
  "directories",
  "dunce",

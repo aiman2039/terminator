@@ -6,7 +6,7 @@ use super::{
 use terminator_core::{Paths, ui_control};
 
 fn gui(h: &Harness) -> Result<Value> {
-    ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
+    ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot).map_err(Into::into)
 }
 fn wait_sidebar(h: &Harness, ids: &Value) -> Result<()> {
     h.wait(

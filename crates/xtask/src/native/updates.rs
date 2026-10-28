@@ -8,7 +8,7 @@ use super::{
 use terminator_core::{Paths, ui_control};
 
 fn snapshot(h: &Harness) -> Result<Value> {
-    ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
+    ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot).map_err(Into::into)
 }
 fn identity(snapshot: &Value) -> Value {
     fn strip_rectangles(value: &mut Value) {

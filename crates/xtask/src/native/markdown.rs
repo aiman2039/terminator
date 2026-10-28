@@ -6,7 +6,7 @@ use super::{
 use terminator_core::{Paths, transport, ui_control};
 
 fn gui(h: &Harness) -> Result<Value> {
-    ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
+    ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot).map_err(Into::into)
 }
 fn expression(h: &Harness, editor: &Value, expression: &str) -> Result<String> {
     let mut command = std::process::Command::new("nvim");
