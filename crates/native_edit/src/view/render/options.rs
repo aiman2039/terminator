@@ -1,7 +1,7 @@
 //! Host-facing options, inputs and results of one source-view frame.
 use super::marks::{Annotation, ChangeMark, DiagnosticMark, Squiggle};
 use crate::highlight::{HighlightCache, Language};
-use crate::vim::Effect;
+use crate::vim::{Effect, VimEngine};
 use egui::Color32;
 
 pub type MenuItemRenderer = fn(&mut egui::Ui, &str, &str, &str) -> egui::Response;
@@ -122,7 +122,10 @@ pub struct SourceOutcome {
     pub toggle_blame: bool,
 }
 
-pub struct ShowSourceInput<'a> {
+pub struct ShowSourceInput<'a, B> {
+    pub ui: &'a mut egui::Ui,
+    pub doc: &'a mut B,
+    pub engine: &'a mut VimEngine,
     pub options: &'a SourceOptions,
     pub highlight: &'a mut HighlightCache,
     pub language: Language,

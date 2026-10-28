@@ -20,20 +20,18 @@ fn markdown_source_uses_wrapped_viewport_height() {
         },
         |ui| {
             ui.set_width(200.0);
-            let outcome = show_source(
-                ui,
-                &mut doc,
-                &mut engine,
-                ShowSourceInput {
-                    options: &SourceOptions {
-                        soft_wrap: true,
-                        ..Default::default()
-                    },
-                    highlight: &mut highlight,
-                    language: Language::Markdown,
-                    id: "wrapped.md",
+            let outcome = show_source(ShowSourceInput {
+                ui: ui,
+                doc: &mut doc,
+                engine: &mut engine,
+                options: &SourceOptions {
+                    soft_wrap: true,
+                    ..Default::default()
                 },
-            );
+                highlight: &mut highlight,
+                language: Language::Markdown,
+                id: "wrapped.md",
+            });
             visual_count = outcome.visual_rows;
         },
     );

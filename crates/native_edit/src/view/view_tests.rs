@@ -38,7 +38,7 @@ mod tests {
                 events, ..Default::default()
             }, |ui| {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))), |ui| {
-                    show_source( ui, &mut doc, &mut engine, ShowSourceInput { options: &SourceOptions { vim: false, ..Default::default() }, highlight: &mut highlight, language: Language::Rust, id: "file.rs#project.tab.split" } );
+                    show_source(ShowSourceInput { ui: ui, doc: &mut doc, engine: &mut engine, options: &SourceOptions { vim: false, ..Default::default() }, highlight: &mut highlight, language: Language::Rust, id: "file.rs#project.tab.split" } );
                 });
                 assert!(crate::view::source_has_focus(ui.ctx()));
                 if frame == 1 {
@@ -59,17 +59,15 @@ mod tests {
         let mut highlight = HighlightCache::default();
         for _ in 0..2 {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                show_source(
-                    ui,
-                    &mut doc,
-                    &mut engine,
-                    ShowSourceInput {
-                        options: &SourceOptions::default(),
-                        highlight: &mut highlight,
-                        language: Language::Plain,
-                        id: "accessibility-editor",
-                    },
-                );
+                show_source(ShowSourceInput {
+                    ui: ui,
+                    doc: &mut doc,
+                    engine: &mut engine,
+                    options: &SourceOptions::default(),
+                    highlight: &mut highlight,
+                    language: Language::Plain,
+                    id: "accessibility-editor",
+                });
             });
             output.textures_delta.clear();
             let update = output.platform_output.accesskit_update.unwrap();
@@ -258,17 +256,15 @@ mod tests {
             let mut footer = 0.0;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let result = show_source(
-                        ui,
-                        &mut doc,
-                        &mut engine,
-                        ShowSourceInput {
-                            options: &SourceOptions::default(),
-                            highlight: &mut highlight,
-                            language: Language::Plain,
-                            id: "footer-test",
-                        },
-                    );
+                    let result = show_source(ShowSourceInput {
+                        ui: ui,
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        options: &SourceOptions::default(),
+                        highlight: &mut highlight,
+                        language: Language::Plain,
+                        id: "footer-test",
+                    });
                     footer = result.footer_rect.expect("footer").top();
                 });
             });
@@ -295,17 +291,15 @@ mod tests {
             let mut outcome = None;
             let mut output = ctx.run_ui(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    outcome = Some(show_source(
-                        ui,
-                        doc,
-                        engine,
-                        ShowSourceInput {
-                            options: &SourceOptions::default(),
-                            highlight,
-                            language: Language::Plain,
-                            id: "context-menu-test",
-                        },
-                    ));
+                    outcome = Some(show_source(ShowSourceInput {
+                        ui: ui,
+                        doc: doc,
+                        engine: engine,
+                        options: &SourceOptions::default(),
+                        highlight,
+                        language: Language::Plain,
+                        id: "context-menu-test",
+                    }));
                 });
             });
             output.textures_delta.clear();
@@ -483,17 +477,15 @@ mod tests {
             }
             let mut output = ctx.run_ui(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let outcome = super::show_source(
-                        ui,
-                        doc,
-                        engine,
-                        ShowSourceInput {
-                            options,
-                            highlight,
-                            language,
-                            id: "headless",
-                        },
-                    );
+                    let outcome = super::show_source(ShowSourceInput {
+                        ui: ui,
+                        doc: doc,
+                        engine: engine,
+                        options,
+                        highlight,
+                        language,
+                        id: "headless",
+                    });
                     effects = outcome.effects;
                 });
             });
@@ -819,17 +811,15 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        show_source(
-                            ui,
-                            &mut doc,
-                            &mut engine,
-                            ShowSourceInput {
-                                options: &SourceOptions::default(),
-                                highlight: &mut HighlightCache::default(),
-                                language: Language::Plain,
-                                id: "headless",
-                            },
-                        );
+                        show_source(ShowSourceInput {
+                            ui: ui,
+                            doc: &mut doc,
+                            engine: &mut engine,
+                            options: &SourceOptions::default(),
+                            highlight: &mut HighlightCache::default(),
+                            language: Language::Plain,
+                            id: "headless",
+                        });
                     });
                 },
             );
@@ -1360,17 +1350,15 @@ mod tests {
             let mut caret = None;
             for _ in 0..2 {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    caret = show_source(
-                        ui,
-                        &mut doc,
-                        &mut engine,
-                        ShowSourceInput {
-                            options: &options,
-                            highlight: &mut highlight,
-                            language: Language::Rust,
-                            id: "hints.rs",
-                        },
-                    )
+                    caret = show_source(ShowSourceInput {
+                        ui: ui,
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        options: &options,
+                        highlight: &mut highlight,
+                        language: Language::Rust,
+                        id: "hints.rs",
+                    })
                     .caret_rect;
                 });
                 output.textures_delta.clear();
@@ -1435,17 +1423,15 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    show_source(
-                        ui,
-                        doc,
-                        engine,
-                        ShowSourceInput {
-                            options: &options,
-                            highlight: &mut highlight,
-                            language: Language::Plain,
-                            id: "carets.txt",
-                        },
-                    );
+                    show_source(ShowSourceInput {
+                        ui: ui,
+                        doc: doc,
+                        engine: engine,
+                        options: &options,
+                        highlight: &mut highlight,
+                        language: Language::Plain,
+                        id: "carets.txt",
+                    });
                 },
             );
             output.textures_delta.clear();

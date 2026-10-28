@@ -423,17 +423,15 @@ fn select_all_yields_to_focused_native_editor() {
     let mut engine = terminator_native_edit::vim::VimEngine::new();
     let mut highlight = terminator_native_edit::highlight::HighlightCache::default();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-        terminator_native_edit::view::show_source(
-            ui,
-            &mut doc,
-            &mut engine,
-            terminator_native_edit::view::ShowSourceInput {
-                options: &terminator_native_edit::view::SourceOptions::default(),
-                highlight: &mut highlight,
-                language: terminator_native_edit::highlight::Language::Rust,
-                id: "file.rs#split-pane",
-            },
-        );
+        terminator_native_edit::view::show_source(terminator_native_edit::view::ShowSourceInput {
+            ui: ui,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &terminator_native_edit::view::SourceOptions::default(),
+            highlight: &mut highlight,
+            language: terminator_native_edit::highlight::Language::Rust,
+            id: "file.rs#split-pane",
+        });
     });
     output.textures_delta.clear();
     assert!(app.text_input_focused(&ctx));

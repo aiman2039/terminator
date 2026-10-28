@@ -41,13 +41,11 @@ const CHANGE_BAND: f32 = 8.0;
 /// for the session layer to act on. Highlighting derives from the buffer
 /// revision into the caller's [`HighlightCache`]: frames without edits
 /// repaint from the cache, edits re-derive once.
-pub fn show_source<B: Buffer>(
-    ui: &mut egui::Ui,
-    doc: &mut B,
-    engine: &mut VimEngine,
-    input: ShowSourceInput<'_>,
-) -> SourceOutcome {
+pub fn show_source<B: Buffer>(input: ShowSourceInput<'_, B>) -> SourceOutcome {
     let ShowSourceInput {
+        ui,
+        doc,
+        engine,
         options,
         highlight,
         language,

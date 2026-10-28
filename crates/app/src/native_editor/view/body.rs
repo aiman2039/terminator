@@ -364,17 +364,15 @@ impl ViewPass<'_> {
             options,
         } = input;
         let mut source = |ui: &mut egui::Ui| {
-            show_source(
-                ui,
-                buffer,
-                engine,
-                ShowSourceInput {
-                    options: &options,
-                    highlight,
-                    language,
-                    id: source_id,
-                },
-            )
+            show_source(ShowSourceInput {
+                ui: ui,
+                doc: buffer,
+                engine: engine,
+                options: &options,
+                highlight,
+                language,
+                id: source_id,
+            })
         };
         match mode {
             markdown::Mode::Preview => None,
