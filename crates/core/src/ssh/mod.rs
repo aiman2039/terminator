@@ -1,5 +1,4 @@
 //! Shared OpenSSH configuration. Keys and agents remain owned by OpenSSH.
-use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
@@ -11,6 +10,28 @@ pub use config::{ConfigHost, ConfigSource, config_hosts, parse_config_aliases, p
 
 /// `ScanHostKey`, `TrustHostKey` and `Response::SshError`.
 pub const HOST_KEYS_CAPABILITY: &str = "ssh-hostkeys-v1";
+
+/// Why SSH options, `ssh -G` output, or a forward request were rejected
+/// before OpenSSH ran.
+#[derive(Debug, thiserror::Error)]
+pub enum SshOptionsError {
+    #[error("Invalid host name or IP address")]
+    InvalidHost { host: String },
+    #[error("SSH port must be between 1 and 65535")]
+    InvalidPort,
+    #[error("Invalid SSH username")]
+    InvalidUsername { username: String },
+    #[error("SSH file paths must be absolute")]
+    RelativePath { path: PathBuf },
+    #[error("SSH paths must be valid text without control characters")]
+    InvalidPathText { path: PathBuf },
+    #[error("ssh -G did not report a hostname")]
+    MissingHostname,
+    #[error("ssh -G did not report a port")]
+    MissingPort,
+    #[error(transparent)]
+    Forward(#[from] crate::remote::ForwardError),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -25,28 +46,35 @@ pub struct SshOptions {
     pub known_hosts_file: Option<PathBuf>,
 }
 impl SshOptions {
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), SshOptionsError> {
         validate_host(&self.host)?;
-        ensure!(self.port != Some(0), "SSH port must be between 1 and 65535");
-        ensure!(
-            self.username.len() <= 128
-                && !self.username.starts_with('-')
-                && self
-                    .username
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)),
-            "Invalid SSH username"
-        );
+        if self.port == Some(0) {
+            return Err(SshOptionsError::InvalidPort);
+        }
+        let valid_username = self.username.len() <= 128
+            && !self.username.starts_with('-')
+            && self
+                .username
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c));
+        if !valid_username {
+            return Err(SshOptionsError::InvalidUsername {
+                username: self.username.clone(),
+            });
+        }
         for path in [&self.identity_file, &self.known_hosts_file]
             .into_iter()
             .flatten()
         {
-            ensure!(path.is_absolute(), "SSH file paths must be absolute");
-            ensure!(
-                path.to_str()
-                    .is_some_and(|s| s.len() <= 4096 && !s.chars().any(char::is_control)),
-                "SSH paths must be valid text without control characters"
-            );
+            if !path.is_absolute() {
+                return Err(SshOptionsError::RelativePath { path: path.clone() });
+            }
+            let valid_text = path
+                .to_str()
+                .is_some_and(|s| s.len() <= 4096 && !s.chars().any(char::is_control));
+            if !valid_text {
+                return Err(SshOptionsError::InvalidPathText { path: path.clone() });
+            }
         }
         Ok(())
     }
@@ -73,7 +101,7 @@ pub fn arguments(
     options: &SshOptions,
     terminal: bool,
     control: Option<&Path>,
-) -> Result<Vec<OsString>> {
+) -> Result<Vec<OsString>, SshOptionsError> {
     build(options, terminal, control.map(|path| (path, false)))
 }
 
@@ -89,7 +117,10 @@ pub fn arguments(
 /// against OpenSSH 10.3). It is the *requesting* client that must not carry
 /// it, or that client clears its own `-L` before sending; see
 /// [`forward_control`].
-pub fn forward_master_arguments(options: &SshOptions, control: &Path) -> Result<Vec<OsString>> {
+pub fn forward_master_arguments(
+    options: &SshOptions,
+    control: &Path,
+) -> Result<Vec<OsString>, SshOptionsError> {
     let mut args = build(options, false, Some((control, true)))?;
     args.extend(["-f".into(), "-N".into()]);
     Ok(args)
@@ -99,7 +130,7 @@ fn build(
     options: &SshOptions,
     terminal: bool,
     control: Option<(&Path, bool)>,
-) -> Result<Vec<OsString>> {
+) -> Result<Vec<OsString>, SshOptionsError> {
     options.validate()?;
     // A terminal has a PTY, so OpenSSH may prompt there for passwords,
     // passphrases, 2FA and first-connect host keys. Batch calls never prompt;
@@ -179,7 +210,7 @@ pub fn forward_control(
     start: bool,
     control: &Path,
     forward: &crate::remote::Forward,
-) -> Result<std::process::Command> {
+) -> Result<std::process::Command, SshOptionsError> {
     forward.validate()?;
     Ok(control_command(
         if start { "forward" } else { "cancel" },
@@ -318,7 +349,7 @@ impl Resolved {
 }
 
 /// Parses `ssh -G` output.
-pub fn parse_resolved(output: &str) -> Result<Resolved> {
+pub fn parse_resolved(output: &str) -> Result<Resolved, SshOptionsError> {
     let mut hostname = None;
     let mut port = None;
     let mut host_key_alias = None;
@@ -336,7 +367,7 @@ pub fn parse_resolved(output: &str) -> Result<Resolved> {
             _ => {}
         }
     }
-    let hostname = hostname.context("ssh -G did not report a hostname")?;
+    let hostname = hostname.ok_or(SshOptionsError::MissingHostname)?;
     validate_host(&hostname)?;
     if let Some(alias) = &host_key_alias {
         validate_host(alias)?;
@@ -345,7 +376,7 @@ pub fn parse_resolved(output: &str) -> Result<Resolved> {
         hostname,
         port: port
             .filter(|p| *p > 0)
-            .context("ssh -G did not report a port")?,
+            .ok_or(SshOptionsError::MissingPort)?,
         host_key_alias,
     })
 }
@@ -444,16 +475,18 @@ pub fn private_environment_keys() -> Vec<OsString> {
         .collect()
 }
 
-pub fn validate_host(host: &str) -> Result<()> {
-    ensure!(
-        !host.is_empty()
-            && host.len() <= 255
-            && !host.starts_with('-')
-            && host
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || ".-_:".contains(c)),
-        "Invalid host name or IP address"
-    );
+pub fn validate_host(host: &str) -> Result<(), SshOptionsError> {
+    let valid = !host.is_empty()
+        && host.len() <= 255
+        && !host.starts_with('-')
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".-_:".contains(c));
+    if !valid {
+        return Err(SshOptionsError::InvalidHost {
+            host: host.to_owned(),
+        });
+    }
     Ok(())
 }
 

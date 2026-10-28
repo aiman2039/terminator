@@ -1,12 +1,11 @@
 //! Remote roots never become local project filesystem paths.
 use crate::ssh::SshOptions;
-use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 mod forward;
 pub use forward::{
-    ActiveForward, BIND_ADDRESS, FORWARDING_CAPABILITY, Forward, ForwardFailure, ForwardStatus,
-    MAX_FORWARDS, validate_forwards,
+    ActiveForward, BIND_ADDRESS, FORWARDING_CAPABILITY, Forward, ForwardError, ForwardFailure,
+    ForwardStatus, MAX_FORWARDS, validate_forwards,
 };
 
 pub const CAPABILITY: &str = "ssh-projects-v1";
@@ -21,6 +20,29 @@ pub const HOME_ROOT: &str = "~";
 pub const MAX_GROUP_LEN: usize = 64;
 pub const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 1000;
+
+/// Why a remote project, group, or path is invalid.
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteError {
+    #[error(transparent)]
+    Ssh(#[from] crate::ssh::SshOptionsError),
+    #[error(transparent)]
+    Forward(#[from] ForwardError),
+    #[error("Group names must be 1–64 characters without controls")]
+    InvalidGroup { group: String },
+    #[error("Group names must be trimmed and non-empty")]
+    UntrimmedGroup { group: Option<String> },
+    #[error("Invalid remote project ID")]
+    InvalidId { id: String },
+    #[error("Remote project name must be 1–255 characters without controls")]
+    InvalidName { name: String },
+    #[error("Remote root must be an absolute POSIX path without parent traversal")]
+    InvalidRoot { root: String },
+    #[error("Remote path must be relative and contain no parent traversal or controls")]
+    InvalidRelativePath { path: String },
+    #[error("File name must be one path component without controls")]
+    InvalidFileName { name: String },
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteProject {
     #[serde(default)]
@@ -39,49 +61,57 @@ pub struct RemoteProject {
     pub forwards: Vec<Forward>,
 }
 /// Trims a group name; blank means ungrouped.
-pub fn normalize_group(group: Option<&str>) -> Result<Option<String>> {
+pub fn normalize_group(group: Option<&str>) -> Result<Option<String>, RemoteError> {
     let Some(group) = group.map(str::trim).filter(|g| !g.is_empty()) else {
         return Ok(None);
     };
-    ensure!(
-        group.len() <= MAX_GROUP_LEN && !group.chars().any(char::is_control),
-        "Group names must be 1–64 characters without controls"
-    );
+    if group.len() > MAX_GROUP_LEN || group.chars().any(char::is_control) {
+        return Err(RemoteError::InvalidGroup {
+            group: group.to_owned(),
+        });
+    }
     Ok(Some(group.to_owned()))
 }
 impl RemoteProject {
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), RemoteError> {
         self.ssh.validate()?;
-        ensure!(
-            normalize_group(self.group.as_deref())? == self.group,
-            "Group names must be trimmed and non-empty"
-        );
+        if normalize_group(self.group.as_deref())? != self.group {
+            return Err(RemoteError::UntrimmedGroup {
+                group: self.group.clone(),
+            });
+        }
         validate_forwards(&self.forwards)?;
-        ensure!(
-            self.id.len() <= 128
-                && self
-                    .id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)),
-            "Invalid remote project ID"
-        );
-        ensure!(
-            !self.name.trim().is_empty()
-                && self.name.len() <= 255
-                && !self.name.chars().any(char::is_control),
-            "Remote project name must be 1–255 characters without controls"
-        );
-        ensure!(
-            self.root.starts_with('/')
-                && self.root.len() <= 4096
-                && !self.root.contains('\\')
-                && !self.root.chars().any(char::is_control)
-                && !self.root.split('/').any(|s| s == ".."),
-            "Remote root must be an absolute POSIX path without parent traversal"
-        );
+        let valid_id = self.id.len() <= 128
+            && self
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c));
+        if !valid_id {
+            return Err(RemoteError::InvalidId {
+                id: self.id.clone(),
+            });
+        }
+        let valid_name = !self.name.trim().is_empty()
+            && self.name.len() <= 255
+            && !self.name.chars().any(char::is_control);
+        if !valid_name {
+            return Err(RemoteError::InvalidName {
+                name: self.name.clone(),
+            });
+        }
+        let valid_root = self.root.starts_with('/')
+            && self.root.len() <= 4096
+            && !self.root.contains('\\')
+            && !self.root.chars().any(char::is_control)
+            && !self.root.split('/').any(|s| s == "..");
+        if !valid_root {
+            return Err(RemoteError::InvalidRoot {
+                root: self.root.clone(),
+            });
+        }
         Ok(())
     }
-    pub fn absolute(&self, relative: &str) -> Result<String> {
+    pub fn absolute(&self, relative: &str) -> Result<String, RemoteError> {
         validate_relative(relative)?;
         Ok(if relative.is_empty() {
             self.root.trim_end_matches('/').to_owned() + "/"
@@ -97,15 +127,17 @@ impl RemoteProject {
         std::path::PathBuf::from(format!("/__terminator_remote__/{}", self.id))
     }
 }
-pub fn validate_relative(path: &str) -> Result<()> {
-    ensure!(
-        path.len() <= 4096
-            && !path.starts_with('/')
-            && !path.contains('\\')
-            && !path.chars().any(char::is_control)
-            && !path.split('/').any(|part| part == ".." || part == "."),
-        "Remote path must be relative and contain no parent traversal or controls"
-    );
+pub fn validate_relative(path: &str) -> Result<(), RemoteError> {
+    let valid = path.len() <= 4096
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
+        && !path.split('/').any(|part| part == ".." || part == ".");
+    if !valid {
+        return Err(RemoteError::InvalidRelativePath {
+            path: path.to_owned(),
+        });
+    }
     Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,17 +215,19 @@ pub struct TransferStatus {
     pub ssh: Option<crate::ssh::SshError>,
 }
 /// A file name an upload may create: one path component, no controls.
-pub fn validate_file_name(name: &str) -> Result<()> {
-    ensure!(
-        !name.is_empty()
-            && name.len() <= 255
-            && name != "."
-            && name != ".."
-            && !name.contains('/')
-            && !name.contains('\\')
-            && !name.chars().any(char::is_control),
-        "File name must be one path component without controls"
-    );
+pub fn validate_file_name(name: &str) -> Result<(), RemoteError> {
+    let valid = !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.chars().any(char::is_control);
+    if !valid {
+        return Err(RemoteError::InvalidFileName {
+            name: name.to_owned(),
+        });
+    }
     Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
