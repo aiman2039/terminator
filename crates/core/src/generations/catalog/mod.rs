@@ -489,7 +489,7 @@ impl Catalog {
 /// `legacy` narrowed to `owner`'s sessions and their records, plus those session IDs.
 fn owner_archive(legacy: &State, owner: &str) -> (State, BTreeSet<String>) {
     let mut archive = legacy.clone();
-    archive.generation = owner.to_owned();
+    owner.clone_into(&mut archive.generation);
     archive.sessions.retain(|s| s.generation == owner);
     let ids: BTreeSet<_> = archive.sessions.iter().map(|s| s.id.clone()).collect();
     archive.agents.retain(|a| ids.contains(&a.session_id));
