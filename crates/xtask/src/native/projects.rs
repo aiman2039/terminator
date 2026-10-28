@@ -106,21 +106,7 @@ pub fn run(o: &Options) -> Result<()> {
     .join("kept.md");
     fs::write(&path, "# Saved project file\n")?;
     let editor = h.editor(&first, &path)?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok()
-        },
-        5,
-    )?;
-    h.write(&mut h.attach(&editor)?, "gg0C# Unsaved project file\u{1b}")?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|s| s.get("Text").is_some_and(|text| text == "1"))
-        },
-        5,
-    )?;
+    h.dirty_editor(&editor, "gg0C# Unsaved project file\u{1b}", 5)?;
     let shell_layout = h.layout(&first, std::slice::from_ref(&shell))?;
     let editor_layout = h.layout(&first, std::slice::from_ref(&editor))?;
     h.rpc(json!({"SaveLayout":{"project":id(&first),"layout":{

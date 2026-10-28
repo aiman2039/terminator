@@ -12,11 +12,12 @@ use std::{
 };
 use terminator_core::{read_frame, transport, write_frame};
 
+mod editor_steps;
 mod records;
 use records::session_summary;
 pub use records::{
-    Process, artifacts, bin, git, id, output, root, session, session_closed, session_ids,
-    session_present, sessions, wait_child,
+    Process, artifacts, bin, first_layout, git, id, output, require_first_layout, root, session,
+    session_closed, session_ids, session_present, sessions, wait_child,
 };
 
 pub struct Harness {

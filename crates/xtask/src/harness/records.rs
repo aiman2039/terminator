@@ -128,3 +128,14 @@ impl Drop for Process {
         let _ = self.0.wait();
     }
 }
+/// The saved layout of the first project in a daemon snapshot.
+pub fn first_layout(state: &Value) -> Option<&Value> {
+    state
+        .get("projects")
+        .and_then(|projects| projects.get(0))
+        .and_then(|project| project.get("layout"))
+}
+/// Like [`first_layout`], failing when the first project has no layout.
+pub fn require_first_layout(state: &Value) -> Result<&Value> {
+    first_layout(state).ok_or_else(|| anyhow!("missing projects[0].layout"))
+}

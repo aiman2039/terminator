@@ -68,24 +68,7 @@ pub fn run(o: &Options) -> Result<()> {
     let path = root.join("unsaved.md");
     fs::write(&path, "# Saved on disk\n")?;
     let editor = h.editor(&first, &path)?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok()
-        },
-        8,
-    )?;
-    h.write(
-        &mut h.attach(&editor)?,
-        "gg0C# Unsaved across GUI update\u{1b}",
-    )?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|r| r.get("Text").is_some_and(|text| text == "1"))
-        },
-        8,
-    )?;
+    h.dirty_editor(&editor, "gg0C# Unsaved across GUI update\u{1b}", 8)?;
     let image = root.join("preview.png");
     image::RgbaImage::from_pixel(64, 64, image::Rgba([30, 130, 210, 255])).save(&image)?;
     let shell_layout = h.layout(&first, &[shell.clone(), split.clone()])?;

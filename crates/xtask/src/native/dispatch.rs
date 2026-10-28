@@ -30,6 +30,12 @@ impl Default for Options {
         }
     }
 }
+/// The harness and options shared by every step of one native case.
+#[derive(Clone, Copy)]
+pub(crate) struct Case<'a> {
+    pub h: &'a Harness,
+    pub o: &'a Options,
+}
 /// One native GUI capture: the fixture actions to replay and when to take the screenshot.
 pub(crate) struct CaptureInput<'a> {
     pub h: &'a Harness,

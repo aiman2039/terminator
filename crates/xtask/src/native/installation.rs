@@ -308,21 +308,7 @@ fn restart_relaunch(o: &Options) -> Result<()> {
     fs::create_dir_all(file.parent().unwrap())?;
     fs::write(&file, "saved file\n")?;
     let editor = h.editor(&project, &file)?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok()
-        },
-        8,
-    )?;
-    h.write(&mut h.attach(&editor)?, "gg0Cunsaved buffer\u{1b}")?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|status| status.get("Text").is_some_and(|text| text == "1"))
-        },
-        8,
-    )?;
+    h.dirty_editor(&editor, "gg0Cunsaved buffer\u{1b}", 8)?;
     h.layout(&project, &[shell, editor])?;
     let state = h.state()?;
     let generation = state
@@ -449,21 +435,7 @@ fn cleanup_closes_gui(o: &Options, minimized: bool) -> Result<()> {
     let file = h.root.join("cleanup-gui/unsaved.txt");
     fs::write(&file, "saved file\n")?;
     let editor = h.editor(&project, &file)?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok()
-        },
-        8,
-    )?;
-    h.write(&mut h.attach(&editor)?, "gg0Cunsaved buffer\u{1b}")?;
-    h.wait(
-        |_| {
-            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|status| status.get("Text").is_some_and(|text| text == "1"))
-        },
-        8,
-    )?;
+    h.dirty_editor(&editor, "gg0Cunsaved buffer\u{1b}", 8)?;
     h.layout(&project, &[shell, editor])?;
     let log = fs::File::create(o.output.join(if minimized {
         "cleanup-minimized.log"
