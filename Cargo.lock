@@ -7469,7 +7469,6 @@ dependencies = [
 name = "terminator-git"
 version = "0.138.0"
 dependencies = [
- "anyhow",
  "tempfile",
  "terminator-core",
  "thiserror 2.0.21",

@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 terminator-core = { workspace = true, features = ["async-client"] }
-anyhow.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
