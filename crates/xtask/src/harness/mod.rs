@@ -6,133 +6,19 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::Command,
     thread,
     time::{Duration, Instant},
 };
 use terminator_core::{read_frame, transport, write_frame};
 
-pub fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .into()
-}
-pub fn bin() -> PathBuf {
-    if let Some(path) = std::env::var_os("TERMINATOR_TEST_BIN_DIR") {
-        return PathBuf::from(path);
-    }
+mod records;
+use records::session_summary;
+pub use records::{
+    Process, artifacts, bin, git, id, output, root, session, session_closed, session_ids,
+    session_present, sessions, wait_child,
+};
 
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(|| root().join("target"), PathBuf::from)
-        .join("debug")
-}
-pub fn artifacts() -> PathBuf {
-    bin().parent().unwrap().join("validation")
-}
-pub fn id(value: &Value) -> &str {
-    value["id"].as_str().expect("fixture record ID")
-}
-pub fn sessions(state: &Value) -> &[Value] {
-    state["sessions"].as_array().expect("session inventory")
-}
-pub fn session<'a>(state: &'a Value, sid: &str) -> &'a Value {
-    sessions(state)
-        .iter()
-        .find(|s| id(s) == sid)
-        .expect("session exists")
-}
-/// True when the daemon still tracks this session. Ended shells and editors
-/// without an agent resume command are pruned from state entirely.
-pub fn session_present(state: &Value, sid: &str) -> bool {
-    sessions(state).iter().any(|s| id(s) == sid)
-}
-/// Closed sessions may remain as ended history or be pruned from inventory.
-pub fn session_closed(state: &Value, sid: &str) -> bool {
-    sessions(state)
-        .iter()
-        .find(|session| id(session) == sid)
-        .is_none_or(|session| {
-            session
-                .get("lifecycle")
-                .is_some_and(|value| value == "ended")
-        })
-}
-fn session_summary(state: &Value) -> String {
-    let Some(list) = state["sessions"].as_array() else {
-        return "no session inventory".into();
-    };
-    if list.is_empty() {
-        return "no sessions".into();
-    }
-    list.iter()
-        .map(|session| {
-            format!(
-                "{}:{}",
-                session["id"].as_str().unwrap_or("?"),
-                session["lifecycle"].as_str().unwrap_or("unknown")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-pub fn session_ids(value: &Value) -> Vec<String> {
-    match value {
-        Value::Object(map) if map.get("version").is_some() && map.contains_key("tabs") => {
-            session_ids(&map["tabs"])
-        }
-        Value::Object(map) if map.get("Terminal").is_some_and(Value::is_string) => {
-            vec![map["Terminal"].as_str().unwrap().into()]
-        }
-        Value::Object(map) => map
-            .iter()
-            .filter(|(k, _)| k.as_str() != "primary")
-            .flat_map(|(_, v)| session_ids(v))
-            .collect(),
-        Value::Array(list) => list.iter().flat_map(session_ids).collect(),
-        _ => vec![],
-    }
-}
-pub fn output(mut command: Command) -> Result<Vec<u8>> {
-    command.stdin(Stdio::null());
-    Ok(terminator_core::run_command(
-        command,
-        terminator_core::CommandOptions {
-            timeout: Duration::from_secs(20),
-            stdout_limit: 8 * 1024 * 1024,
-            ..Default::default()
-        },
-    )?
-    .stdout)
-}
-pub fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let mut c = Command::new("git");
-    c.arg("-C").arg(cwd).args(args);
-    output(c)
-}
-pub fn wait_child(child: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus> {
-    let end = Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| anyhow!("child deadline overflow"))?;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status);
-        }
-        ensure!(Instant::now() < end, "Child process timed out");
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-pub struct Process(pub Child);
-impl Drop for Process {
-    fn drop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_none() {
-            let _ = self.0.kill();
-        }
-        let _ = self.0.wait();
-    }
-}
 pub struct Harness {
     pub _temp: tempfile::TempDir,
     pub root: PathBuf,
@@ -454,41 +340,51 @@ fn configure_gui(command: &mut Command, renderer: Option<std::ffi::OsString>, vi
 impl Drop for Harness {
     fn drop(&mut self) {
         if let Ok(state) = self.state() {
-            for session in sessions(&state) {
-                if matches!(session["lifecycle"].as_str(), Some("running" | "stopping")) {
-                    let _ = self.rpc(json!({"Stop":{"session":id(session)}}));
-                }
-            }
-            let _ = self.wait(
-                |state| {
-                    sessions(state)
-                        .iter()
-                        .all(|s| !matches!(s["lifecycle"].as_str(), Some("running" | "stopping")))
-                },
-                5,
-            );
-            let paths = terminator_core::Paths::at(self.root.clone());
-            if let Ok(catalog) = terminator_core::generations::Catalog::open(&paths)
-                && let Ok(owners) = catalog.generations()
-            {
-                for owner in owners {
-                    let endpoint = owner.paths();
-                    let _ =
-                        terminator_core::rpc(&endpoint, terminator_core::Request::ShutdownIfIdle);
-                    if let Some(deadline) = Instant::now().checked_add(Duration::from_secs(5)) {
-                        while endpoint.socket().exists() && Instant::now() < deadline {
-                            thread::sleep(Duration::from_millis(50));
-                        }
-                    }
-                }
-            } else {
-                let _ = self.rpc(json!("Shutdown"));
-            }
+            self.stop_live_sessions(&state);
+            self.shutdown_owners();
             if let Some(daemon) = &mut self.daemon {
                 let _ = wait_child(&mut daemon.0, Duration::from_secs(5));
             }
         }
         self.daemon.take();
+    }
+}
+impl Harness {
+    fn stop_live_sessions(&self, state: &Value) {
+        for session in sessions(state) {
+            if matches!(session["lifecycle"].as_str(), Some("running" | "stopping")) {
+                let _ = self.rpc(json!({"Stop":{"session":id(session)}}));
+            }
+        }
+        let _ = self.wait(
+            |state| {
+                sessions(state)
+                    .iter()
+                    .all(|s| !matches!(s["lifecycle"].as_str(), Some("running" | "stopping")))
+            },
+            5,
+        );
+    }
+    fn shutdown_owners(&self) {
+        let paths = terminator_core::Paths::at(self.root.clone());
+        if let Ok(catalog) = terminator_core::generations::Catalog::open(&paths)
+            && let Ok(owners) = catalog.generations()
+        {
+            for owner in owners {
+                Self::shutdown_owner(&owner.paths());
+            }
+        } else {
+            let _ = self.rpc(json!("Shutdown"));
+        }
+    }
+    fn shutdown_owner(endpoint: &terminator_core::Paths) {
+        let _ = terminator_core::rpc(endpoint, terminator_core::Request::ShutdownIfIdle);
+        let Some(deadline) = Instant::now().checked_add(Duration::from_secs(5)) else {
+            return;
+        };
+        while endpoint.socket().exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -503,109 +399,4 @@ fn clear_inherited_terminator(
     }
 }
 #[cfg(test)]
-mod isolation_tests {
-    use super::*;
-    fn gui_env(command: &Command, name: &str) -> Option<std::ffi::OsString> {
-        command
-            .get_envs()
-            .find(|(key, _)| *key == std::ffi::OsStr::new(name))
-            .and_then(|(_, value)| value.map(std::borrow::ToOwned::to_owned))
-    }
-
-    #[test]
-    fn gui_defaults_to_glow_without_inherited_foreground_or_native_input() {
-        let mut command = Command::new("fixture");
-        for key in [
-            "TERMINATOR_TEST_VISIBLE_CAPTURE",
-            "TERMINATOR_TEST_FOREGROUND",
-            "TERMINATOR_TEST_NATIVE_INPUT",
-        ] {
-            command.env(key, "1");
-        }
-        configure_gui(&mut command, None, false);
-        assert_eq!(
-            gui_env(&command, "TERMINATOR_RENDERER"),
-            Some("glow".into())
-        );
-        assert_eq!(
-            gui_env(&command, "TERMINATOR_TEST_BACKGROUND"),
-            Some("1".into())
-        );
-        assert_eq!(
-            gui_env(&command, "TERMINATOR_TEST_RENDER_OCCLUDED"),
-            Some("1".into())
-        );
-        for key in [
-            "TERMINATOR_TEST_VISIBLE_CAPTURE",
-            "TERMINATOR_TEST_FOREGROUND",
-            "TERMINATOR_TEST_NATIVE_INPUT",
-        ] {
-            assert_eq!(gui_env(&command, key), None);
-        }
-    }
-
-    #[test]
-    fn explicit_visible_renderer_test_preserves_renderer_selection() {
-        let mut command = Command::new("fixture");
-        command.env("TERMINATOR_TEST_BACKGROUND", "1");
-        configure_gui(&mut command, Some("wgpu".into()), true);
-        assert_eq!(
-            gui_env(&command, "TERMINATOR_RENDERER"),
-            Some("wgpu".into())
-        );
-        assert_eq!(gui_env(&command, "TERMINATOR_TEST_BACKGROUND"), None);
-    }
-
-    #[test]
-    fn closed_session_accepts_ended_history_or_a_pruned_record() {
-        for state in [
-            json!({"sessions":[]}),
-            json!({"sessions":[{"id":"editor","lifecycle":"ended"}]}),
-        ] {
-            assert!(session_closed(&state, "editor"));
-        }
-    }
-
-    #[test]
-    fn closed_session_rejects_live_stopping_and_unknown_records() {
-        for lifecycle in ["running", "stopping", "starting", "unknown"] {
-            let state = json!({"sessions":[
-                {"id":"other","lifecycle":"ended"},
-                {"id":"editor","lifecycle":lifecycle}
-            ]});
-            assert!(!session_closed(&state, "editor"), "Accepted {lifecycle}");
-        }
-        assert!(!session_closed(
-            &json!({"sessions":[{"id":"editor"}]}),
-            "editor"
-        ));
-    }
-
-    #[test]
-    fn inherited_catalog_generation_and_session_routing_cannot_escape_fixture() {
-        let mut command = Command::new("fixture");
-        let names = [
-            "TERMINATOR_CATALOG_DATA",
-            "TERMINATOR_CATALOG_RUNTIME",
-            "TERMINATOR_GENERATION",
-            "TERMINATOR_DATA_DIR",
-            "TERMINATOR_RUNTIME_DIR",
-            "TERMINATOR_SESSION_ID",
-            "TERMINATOR_SESSION_TOKEN",
-        ];
-        clear_inherited_terminator(&mut command, names.iter().map(std::ffi::OsString::from));
-        command.env("TERMINATOR_DATA_DIR", "/isolated/fixture");
-        for name in names {
-            let value = command
-                .get_envs()
-                .find(|(key, _)| *key == std::ffi::OsStr::new(name))
-                .unwrap()
-                .1;
-            if name == "TERMINATOR_DATA_DIR" {
-                assert_eq!(value, Some(std::ffi::OsStr::new("/isolated/fixture")));
-            } else {
-                assert!(value.is_none(), "inherited route {name} was retained");
-            }
-        }
-    }
-}
+mod isolation_tests;
