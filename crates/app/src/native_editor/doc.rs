@@ -1,9 +1,9 @@
 //! The native editor's GUI-owned buffer: load, dirty tracking, disk
 //! modification-time probes, and atomic saves.
+use super::file_io::{LoadedFile, NativeFileIo};
 use super::gutter;
 use crate::gui_services;
 use crate::markdown;
-use anyhow::Context as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
@@ -14,33 +14,6 @@ use terminator_native_edit::vim::{
     Key as VimKey, ModalEngine, VimEngine, VimrcOptions, parse_vimrc,
 };
 pub(super) const MAX_NATIVE_BYTES: u64 = 1024 * 1024;
-
-pub struct LoadedFile {
-    pub(super) text: String,
-    pub(super) mtime: Option<SystemTime>,
-}
-
-pub(super) fn read_native_file(path: &Path, limit: u64) -> anyhow::Result<LoadedFile> {
-    let file = std::fs::File::open(path).context("Open file")?;
-    anyhow::ensure!(file.metadata()?.is_file(), "Not a regular file");
-    let mut bytes = Vec::new();
-    use std::io::Read as _;
-    file.take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .context("Read file")?;
-    anyhow::ensure!(
-        bytes.len() as u64 <= limit,
-        "File exceeds the {} MiB viewer limit",
-        limit / (1024 * 1024)
-    );
-    let text = String::from_utf8(bytes).context("File is not UTF-8")?;
-    let mtime = disk_mtime(path);
-    Ok(LoadedFile { text, mtime })
-}
-
-pub(super) fn disk_mtime(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
-}
 
 /// Options from `~/.vimrc`, read once per process. Only `set`/`setlocal`
 /// names the native engine implements are applied (wrap, ignorecase);
@@ -224,7 +197,7 @@ impl NativeDoc {
         if revision == doc.revision() {
             return dirty;
         }
-        let dirty = text_hash(&doc.text()) != self.saved_hash;
+        let dirty = NativeFileIo::text_hash(&doc.text()) != self.saved_hash;
         self.dirty_memo.set((doc.revision(), dirty));
         dirty
     }
@@ -287,7 +260,7 @@ impl NativeDoc {
                 let token = CancellationToken::new();
                 if let Ok(mtime) = service
                     .fs()
-                    .run(&token, move || Ok(disk_mtime(&path)))
+                    .run(&token, move || Ok(NativeFileIo::disk_mtime(&path)))
                     .await
                 {
                     let _ = tx.send(mtime);
@@ -327,7 +300,7 @@ impl NativeDoc {
                 let token = CancellationToken::new();
                 let result = service
                     .fs()
-                    .run(&token, move || read_native_file(&path, limit))
+                    .run(&token, move || NativeFileIo::read(&path, limit))
                     .await;
                 let _ = tx.send(result);
                 Ok(Vec::new())
@@ -354,7 +327,7 @@ impl NativeDoc {
                     } else {
                         loaded.text
                     };
-                    self.saved_hash = text_hash(&text);
+                    self.saved_hash = NativeFileIo::text_hash(&text);
                     self.doc = Some(Doc::new(text));
                     self.saved_revision = self.doc.as_ref().map_or(0, Doc::revision);
                     self.save_revision = self.saved_revision;
@@ -407,7 +380,7 @@ impl NativeDoc {
         let path = self.path.clone();
         let text = doc.text();
         self.save_revision = doc.revision();
-        self.save_hash = text_hash(&text);
+        self.save_hash = NativeFileIo::text_hash(&text);
         let text = if self.crlf {
             text.replace('\n', "\r\n")
         } else {
@@ -428,15 +401,15 @@ impl NativeDoc {
                 let result = service
                     .fs()
                     .run(&token, move || {
-                        if !force && disk_mtime(&path) != expected {
+                        if !force && NativeFileIo::disk_mtime(&path) != expected {
                             anyhow::bail!("Changed on disk since loading");
                         }
                         anyhow::ensure!(
                             text.len() as u64 <= MAX_NATIVE_BYTES,
                             "Native editing is limited to 1 MiB"
                         );
-                        write_atomically(&path, text.as_bytes())?;
-                        Ok(disk_mtime(&path))
+                        NativeFileIo::write_atomically(&path, text.as_bytes())?;
+                        Ok(NativeFileIo::disk_mtime(&path))
                     })
                     .await;
                 let _ = tx.send(result);
@@ -456,41 +429,6 @@ pub(super) type GutterCache = (
     std::sync::Arc<Vec<gutter::GutterHunk>>,
     std::sync::Arc<Vec<terminator_native_edit::view::ChangeMark>>,
 );
-
-pub(super) fn text_hash(text: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// Replace a file's contents without a window where it is truncated or
-/// half-written: write a sibling temp file, give it the target's
-/// permissions, then rename it over the target. A symlink is followed so
-/// the link itself survives.
-pub(super) fn write_atomically(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    use std::io::Write as _;
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let dir = target.parent().context("File has no parent folder")?;
-    let name = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let temp = dir.join(format!(".{name}.terminator-save-{}", std::process::id()));
-    let result = (|| {
-        let mut file = std::fs::File::create(&temp).context("Create temporary file")?;
-        file.write_all(bytes).context("Write file")?;
-        file.sync_all().context("Flush file")?;
-        if let Ok(meta) = std::fs::metadata(&target) {
-            std::fs::set_permissions(&temp, meta.permissions()).context("Copy permissions")?;
-        }
-        std::fs::rename(&temp, &target).context("Replace file")
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result
-}
 
 #[cfg(test)]
 impl NativeDoc {

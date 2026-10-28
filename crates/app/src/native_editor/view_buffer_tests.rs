@@ -1,3 +1,4 @@
+use super::file_io::NativeFileIo;
 use super::*;
 use std::time::SystemTime;
 use terminator_native_edit::vim::Key as VimKey;
@@ -59,7 +60,7 @@ fn split_views_keep_their_own_caret_and_the_focused_one_rests_live() {
 fn undoing_back_to_the_saved_text_is_clean() {
     let mut native = NativeDoc::new(PathBuf::from("/tmp/clean.txt"), true);
     let mut buffer = Doc::new("saved");
-    native.saved_hash = text_hash("saved");
+    native.saved_hash = NativeFileIo::text_hash("saved");
     native.saved_revision = buffer.revision();
     native.engine.press_key(&mut buffer, VimKey::Char('i'));
     native.engine.type_text(&mut buffer, "x");
@@ -82,7 +83,7 @@ fn atomic_save_keeps_permissions_and_symlinks() {
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
     let link = dir.path().join("link.sh");
     std::os::unix::fs::symlink(&target, &link).unwrap();
-    write_atomically(&link, b"new").unwrap();
+    NativeFileIo::write_atomically(&link, b"new").unwrap();
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
     assert!(
         std::fs::symlink_metadata(&link)
@@ -109,14 +110,14 @@ fn remote_markdown_loads_up_to_two_mib_and_local_limit_stays_one_mib() {
     std::fs::write(&path, &bytes).unwrap();
     let limit = app.native_doc(&path, false).read_limit;
     assert_eq!(
-        read_native_file(&path, limit).unwrap().text.len(),
+        NativeFileIo::read(&path, limit).unwrap().text.len(),
         bytes.len()
     );
     let local = dir.path().join("local.md");
     std::fs::write(&local, &bytes).unwrap();
-    assert!(read_native_file(&local, app.native_doc(&local, false).read_limit).is_err());
+    assert!(NativeFileIo::read(&local, app.native_doc(&local, false).read_limit).is_err());
     std::fs::write(&path, vec![b'a'; bytes.len() + 1]).unwrap();
-    assert!(read_native_file(&path, limit).is_err());
+    assert!(NativeFileIo::read(&path, limit).is_err());
 }
 
 #[test]

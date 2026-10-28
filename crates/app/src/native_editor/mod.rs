@@ -10,6 +10,7 @@ mod blame;
 mod close;
 mod complete;
 mod doc;
+mod file_io;
 mod find;
 mod gutter;
 mod hierarchy;
