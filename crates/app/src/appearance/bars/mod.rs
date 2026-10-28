@@ -1,6 +1,9 @@
+mod pane_bar;
+
 use super::rows::{PaintStatusIconInput, paint_status_icon, u8_from_f32};
 use super::theme::{WIDGET_RADIUS, color, icon_color};
 use eframe::egui::{self, Color32, FontId, RichText};
+use pane_bar::*;
 use terminator_core::appearance::AppearanceConfig;
 
 pub struct UnsavedCloseBar<'a> {
@@ -188,52 +191,14 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     bar.widget_info(|| {
         egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, title)
     });
-    let button = |ui: &mut egui::Ui, rect, id, icon, tip| {
-        bar_button(
-            ui,
-            BarButton {
-                bar_id: bar.id,
-                rect,
-                id,
-                icon,
-                tip,
-                hover_tint: None,
-            },
-        )
+    let tips = BarTips {
+        branch,
+        git: git_tip,
+        stack: stack_tip,
+        vertical: vertical_tip,
+        horizontal: horizontal_tip,
     };
-    let git = button(ui, slots.git, "git", "GitBranch", git_tip);
-    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
-        paint_branch(ui, slots.git, branch);
-    }
-    let stack = slots
-        .stack
-        .zip(stack_tip)
-        .map(|(rect, tip)| button(ui, rect, "stack-tab", "Plus", tip));
-    let split_vertical = button(
-        ui,
-        slots.vertical,
-        "split-vertical",
-        "Columns2",
-        vertical_tip,
-    );
-    let split_horizontal = button(
-        ui,
-        slots.horizontal,
-        "split-horizontal",
-        "Rows2",
-        horizontal_tip,
-    );
-    let close = bar_button(
-        ui,
-        BarButton {
-            bar_id: bar.id,
-            rect: slots.close,
-            id: "close-pane",
-            icon: "X",
-            tip: "Close pane",
-            hover_tint: Some(ui.visuals().error_fg_color),
-        },
-    );
+    let actions = bar_actions(ui, bar.id, &slots, tips);
     let bar = bar.on_hover_cursor(egui::CursorIcon::Grab);
     TerminalBar {
         bar: if title.is_empty() {
@@ -241,208 +206,12 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         } else {
             bar.on_hover_text(title)
         },
-        git,
-        stack,
-        split_vertical,
-        split_horizontal,
-        close,
+        git: actions.git,
+        stack: actions.stack,
+        split_vertical: actions.split_vertical,
+        split_horizontal: actions.split_horizontal,
+        close: actions.close,
     }
-}
-
-/// Branch label width beside the Git icon, capped.
-fn branch_width(ui: &egui::Ui, branch: Option<&str>) -> f32 {
-    branch
-        .map(|text| {
-            ui.painter()
-                .layout_no_wrap(text.into(), FontId::proportional(12.0), icon_color())
-                .size()
-                .x
-                + 6.0
-        })
-        .unwrap_or(0.0)
-        .min(TERMINAL_BRANCH_MAX)
-}
-
-/// Right-aligned button slots, laid out right to left.
-struct BarSlots {
-    close: egui::Rect,
-    horizontal: egui::Rect,
-    vertical: egui::Rect,
-    stack: Option<egui::Rect>,
-    git: egui::Rect,
-}
-
-impl BarSlots {
-    fn layout(rect: egui::Rect, git_width: f32, stack: bool) -> Self {
-        let mut cursor = rect.right() - 2.0;
-        let mut slot = |width: f32| {
-            let slot = egui::Rect::from_min_max(
-                egui::pos2(cursor - width, rect.center().y - TERMINAL_BUTTON / 2.0),
-                egui::pos2(cursor, rect.center().y + TERMINAL_BUTTON / 2.0),
-            );
-            cursor -= width + 2.0;
-            slot
-        };
-        let close = slot(TERMINAL_BUTTON);
-        let horizontal = slot(TERMINAL_BUTTON);
-        let vertical = slot(TERMINAL_BUTTON);
-        let stack = stack.then(|| slot(TERMINAL_BUTTON));
-        let git = slot(git_width);
-        Self {
-            close,
-            horizontal,
-            vertical,
-            stack,
-            git,
-        }
-    }
-}
-
-struct LeadingIcons<'a> {
-    brand: Option<&'a str>,
-    status_icon: Option<&'a str>,
-    status_tint: Option<Color32>,
-    spin: bool,
-    kind: Option<&'a str>,
-    title_tint: Option<Color32>,
-}
-
-/// Leading identity icons mirror the workspace strip: stable brand plus
-/// hook lifecycle status, or the session-kind glyph for plain shells.
-/// Returns where the title starts.
-fn paint_leading_icons(ui: &mut egui::Ui, rect: egui::Rect, icons: LeadingIcons<'_>) -> f32 {
-    let LeadingIcons {
-        brand,
-        status_icon,
-        status_tint,
-        spin,
-        kind,
-        title_tint,
-    } = icons;
-    let mut lead = rect.left() + 8.0;
-    let mut paint_lead = |ui: &mut egui::Ui, icon: &str, tint: Color32, spin: bool| {
-        paint_status_icon(PaintStatusIconInput {
-            ui,
-            rect: egui::Rect::from_center_size(
-                egui::pos2(lead + 6.5, rect.center().y),
-                egui::vec2(13.0, 13.0),
-            ),
-            icon,
-            tint,
-            spin,
-        });
-        lead += TERMINAL_LEADING_SLOT;
-    };
-    if let Some(brand) = brand {
-        paint_lead(ui, brand, icon_color(), false);
-    }
-    if let Some(icon) = status_icon {
-        paint_lead(ui, icon, status_tint.unwrap_or(icon_color()), spin);
-    } else if let Some(kind) = kind {
-        paint_lead(ui, kind, title_tint.unwrap_or(icon_color()), false);
-    }
-    lead
-}
-
-struct BarTitle<'a> {
-    rect: egui::Rect,
-    git_left: f32,
-    lead: f32,
-    title: &'a str,
-    tint: Color32,
-    status: Option<Color32>,
-}
-
-/// One-line title clipped before the Git slot, then the status dot.
-fn paint_title(ui: &egui::Ui, input: BarTitle<'_>) {
-    let BarTitle {
-        rect,
-        git_left,
-        lead,
-        title,
-        tint,
-        status,
-    } = input;
-    let dot_gap = if status.is_some() { 14.0 } else { 0.0 };
-    let title_width = (git_left - dot_gap - lead - 4.0).max(0.0);
-    let mut job =
-        egui::text::LayoutJob::simple(title.into(), FontId::proportional(12.0), tint, title_width);
-    job.wrap.max_rows = 1;
-    job.wrap.break_anywhere = true;
-    let galley = ui.painter().layout_job(job);
-    let position = egui::pos2(lead, rect.center().y - galley.size().y * 0.5);
-    ui.painter()
-        .with_clip_rect(egui::Rect::from_min_max(
-            rect.min,
-            egui::pos2(git_left - dot_gap - 4.0, rect.bottom()),
-        ))
-        .galley(position, galley, tint);
-    if let Some(color) = status {
-        ui.painter()
-            .circle_filled(egui::pos2(git_left - 8.0, rect.center().y), 3.5, color);
-    }
-}
-
-struct BarButton<'a> {
-    bar_id: egui::Id,
-    rect: egui::Rect,
-    id: &'a str,
-    icon: &'a str,
-    tip: &'a str,
-    hover_tint: Option<Color32>,
-}
-
-fn bar_button(ui: &egui::Ui, input: BarButton<'_>) -> egui::Response {
-    let BarButton {
-        bar_id,
-        rect,
-        id,
-        icon,
-        tip,
-        hover_tint,
-    } = input;
-    let response = ui
-        .interact(rect, bar_id.with(id), egui::Sense::click())
-        .on_hover_text(tip)
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);
-    }
-    let tint = hover_tint
-        .filter(|_| response.hovered())
-        .unwrap_or(icon_color());
-    egui::Image::new(crate::icons::source(icon))
-        .tint(tint)
-        .paint_at(
-            ui,
-            egui::Rect::from_center_size(
-                egui::pos2(rect.left() + TERMINAL_BUTTON / 2.0, rect.center().y),
-                egui::vec2(14.0, 14.0),
-            ),
-        );
-    response
-}
-
-fn paint_branch(ui: &egui::Ui, git_rect: egui::Rect, branch: &str) {
-    let mut job = egui::text::LayoutJob::simple(
-        branch.into(),
-        FontId::proportional(12.0),
-        ui.visuals().weak_text_color(),
-        (git_rect.width() - TERMINAL_BUTTON).max(0.0),
-    );
-    job.wrap.max_rows = 1;
-    job.wrap.break_anywhere = true;
-    let galley = ui.painter().layout_job(job);
-    ui.painter().with_clip_rect(git_rect).galley(
-        egui::pos2(
-            git_rect.left() + TERMINAL_BUTTON,
-            git_rect.center().y - galley.size().y * 0.5,
-        ),
-        galley,
-        ui.visuals().weak_text_color(),
-    );
 }
 
 /// Brief focus emphasis, fading to a thin, translucent steady-state outline.
