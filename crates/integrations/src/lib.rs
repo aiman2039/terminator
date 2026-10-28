@@ -9,6 +9,10 @@ pub enum Error {
     #[error(transparent)]
     Core(#[from] anyhow::Error),
     #[error(transparent)]
+    Paths(#[from] terminator_core::PathsError),
+    #[error(transparent)]
+    Write(#[from] terminator_core::AtomicWriteError),
+    #[error(transparent)]
     Serde(#[from] serde_json::Error),
     #[error("{context}")]
     Json {

@@ -37,7 +37,9 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
         let std_listener: transport::Listener = service
             .client()
             .catalog
-            .run(&token, move || transport::Listener::bind_ipc(&bind))
+            .run(&token, move || {
+                Ok::<_, anyhow::Error>(transport::Listener::bind_ipc(&bind)?)
+            })
             .await?;
         let listener = transport::AsyncListener::from_std(std_listener)?;
         let mut clients = FuturesUnordered::new();
@@ -109,7 +111,9 @@ async fn serve_until(
         let token = service
             .client()
             .catalog
-            .run(&CancellationToken::new(), move || paths.token())
+            .run(&CancellationToken::new(), move || {
+                Ok::<_, anyhow::Error>(paths.token()?)
+            })
             .await?;
         ensure!(
             envelope.version == 1 && envelope.auth == token,

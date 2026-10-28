@@ -1,6 +1,7 @@
+use super::{GenerationsError, Result};
 use crate::{
-    BTreeSet, Context, Deserialize, Duration, PROTOCOL_VERSION, Path, PathBuf, Paths, Read, Result,
-    Serialize, State, bail, ensure, exe_name, fs, id,
+    BTreeSet, Deserialize, Duration, PROTOCOL_VERSION, Path, PathBuf, Paths, Read, Serialize,
+    State, exe_name, fs, id,
 };
 use fs2::FileExt;
 use rusqlite::{Connection, OpenFlags, params};
@@ -129,7 +130,7 @@ pub fn coordinate_timeout(paths: &Paths, wait: Duration) -> Result<fs::File> {
             return Ok(file);
         }
         if start.elapsed() >= wait {
-            bail!("Session service is busy; retry the action");
+            return Err(GenerationsError::Busy { waited: wait });
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -144,10 +145,9 @@ impl Catalog {
         )?;
         conn.busy_timeout(Duration::from_secs(3))?;
         let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(
-            version == CATALOG_VERSION,
-            "Unsupported generation catalog version {version}"
-        );
+        if version != CATALOG_VERSION {
+            return Err(GenerationsError::UnsupportedCatalog { version });
+        }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS remote_projects(id TEXT PRIMARY KEY,json TEXT NOT NULL)",
         )?;
@@ -169,13 +169,34 @@ impl Catalog {
     }
 
     pub fn import(paths: &Paths, legacy: &State) -> Result<()> {
-        ensure!(!exists(paths), "Catalog already exists");
-        ensure!(
-            !legacy.sessions.iter().any(|s| s.lifecycle.live()),
-            "Legacy sessions must finish before migration"
-        );
+        if exists(paths) {
+            return Err(GenerationsError::CatalogExists);
+        }
+        if legacy.sessions.iter().any(|s| s.lifecycle.live()) {
+            return Err(GenerationsError::LegacySessionsLive);
+        }
         let temporary = paths.data.join(format!("catalog-{}.tmp", id()));
-        let conn = Connection::open(&temporary)?;
+        let conn = Self::create_import(&temporary, legacy)?;
+        // Import each historical owner independently, preserving UUIDs and history.
+        let owners: BTreeSet<_> = legacy
+            .sessions
+            .iter()
+            .map(|s| s.generation.clone())
+            .collect();
+        for owner in owners {
+            let record = Self::import_owner(paths, legacy, owner)?;
+            conn.execute(
+                "INSERT INTO generations VALUES(?1,?2)",
+                params![record.id, serde_json::to_string(&record)?],
+            )?;
+        }
+        drop(conn);
+        Self::publish_catalog(paths, &temporary)
+    }
+
+    /// The unpublished catalog database holding the legacy shared workspace.
+    fn create_import(temporary: &Path, legacy: &State) -> Result<Connection> {
+        let conn = Connection::open(temporary)?;
         conn.execute_batch("PRAGMA synchronous=FULL; CREATE TABLE workspace(id INTEGER PRIMARY KEY CHECK(id=1),json TEXT NOT NULL,revision INTEGER NOT NULL); CREATE TABLE generations(id TEXT PRIMARY KEY,json TEXT NOT NULL); CREATE TABLE control(id INTEGER PRIMARY KEY CHECK(id=1),active TEXT,frozen INTEGER NOT NULL DEFAULT 0, freeze_pid INTEGER); INSERT INTO control(id) VALUES(1); PRAGMA user_version=1;")?;
         let mut shared = legacy.clone();
         clear_owned(&mut shared);
@@ -186,69 +207,35 @@ impl Catalog {
                 i64::try_from(legacy.revision)?
             ],
         )?;
-        // Import each historical owner independently, preserving UUIDs and history.
-        let owners: BTreeSet<_> = legacy
-            .sessions
-            .iter()
-            .map(|s| s.generation.clone())
-            .collect();
-        for owner in owners {
-            let data = paths.data.join("generations").join(id());
-            let archive_paths = Paths::at(data.clone());
-            fs::create_dir_all(archive_paths.history_dir())?;
-            #[cfg(unix)]
-            fs::set_permissions(&data, fs::Permissions::from_mode(0o700))?;
-            let mut archive = legacy.clone();
-            archive.generation.clone_from(&owner);
-            archive.sessions.retain(|s| s.generation == owner);
-            let ids: BTreeSet<_> = archive.sessions.iter().map(|s| s.id.clone()).collect();
-            archive.agents.retain(|a| ids.contains(&a.session_id));
-            archive
-                .notifications
-                .retain(|n| ids.contains(&n.session_id));
-            archive
-                .terminal_notices
-                .retain(|n| ids.contains(&n.session_id));
-            archive.projects.clear();
-            archive.worktrees.clear();
-            let db = Connection::open(data.join("state.sqlite3"))?;
-            db.execute_batch("CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;")?;
-            db.execute(
-                "INSERT INTO app_state VALUES(1,?1)",
-                [serde_json::to_string(&archive)?],
-            )?;
-            for entry in fs::read_dir(paths.history_dir())? {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if entry.file_type()?.is_file()
-                    && ids.iter().any(|sid| name.starts_with(&format!("{sid}-")))
-                {
-                    let destination = archive_paths.history_dir().join(entry.file_name());
-                    fs::copy(entry.path(), &destination)?;
-                    fs::OpenOptions::new()
-                        .write(true)
-                        .open(destination)?
-                        .sync_all()?;
-                }
-            }
-            let record = Generation {
-                id: owner,
-                data,
-                runtime: archive_paths.runtime,
-                version: legacy.daemon_version.clone().unwrap_or_default(),
-                build: "legacy import".into(),
-                protocol: PROTOCOL_VERSION,
-                catalog: CATALOG_VERSION,
-                status: Status::Retired,
-                pid: None,
-            };
-            conn.execute(
-                "INSERT INTO generations VALUES(?1,?2)",
-                params![record.id, serde_json::to_string(&record)?],
-            )?;
-        }
-        drop(conn);
-        Self::publish_catalog(paths, &temporary)
+        Ok(conn)
+    }
+
+    /// Archives one legacy owner's records and history as a retired generation.
+    fn import_owner(paths: &Paths, legacy: &State, owner: String) -> Result<Generation> {
+        let data = paths.data.join("generations").join(id());
+        let archive_paths = Paths::at(data.clone());
+        fs::create_dir_all(archive_paths.history_dir())?;
+        #[cfg(unix)]
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o700))?;
+        let (archive, ids) = owner_archive(legacy, &owner);
+        let db = Connection::open(data.join("state.sqlite3"))?;
+        db.execute_batch("CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;")?;
+        db.execute(
+            "INSERT INTO app_state VALUES(1,?1)",
+            [serde_json::to_string(&archive)?],
+        )?;
+        copy_owner_history(paths, &archive_paths, &ids)?;
+        Ok(Generation {
+            id: owner,
+            data,
+            runtime: archive_paths.runtime,
+            version: legacy.daemon_version.clone().unwrap_or_default(),
+            build: "legacy import".into(),
+            protocol: PROTOCOL_VERSION,
+            catalog: CATALOG_VERSION,
+            status: Status::Retired,
+            pid: None,
+        })
     }
 
     pub fn generations(&self) -> Result<Vec<Generation>> {
@@ -259,10 +246,13 @@ impl Catalog {
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
     pub fn register(&self, owner: &Generation) -> Result<()> {
-        ensure!(
-            owner.protocol == PROTOCOL_VERSION && owner.catalog == CATALOG_VERSION,
-            "Incompatible generation"
-        );
+        if owner.protocol != PROTOCOL_VERSION || owner.catalog != CATALOG_VERSION {
+            return Err(GenerationsError::Incompatible {
+                owner: owner.id.clone(),
+                protocol: owner.protocol,
+                catalog: owner.catalog,
+            });
+        }
         self.0.execute(
             "INSERT INTO generations VALUES(?1,?2)",
             params![owner.id, serde_json::to_string(owner)?],
@@ -270,15 +260,12 @@ impl Catalog {
         Ok(())
     }
     pub fn set_pid(&self, owner: &str, pid: u32) -> Result<()> {
-        let mut g = self
-            .generations()?
-            .into_iter()
-            .find(|g| g.id == owner)
-            .context("Unknown owner")?;
-        ensure!(
-            g.status == Status::Prepared && g.pid.is_none(),
-            "Owner has already started"
-        );
+        let mut g = self.known(owner)?;
+        if g.status != Status::Prepared || g.pid.is_some() {
+            return Err(GenerationsError::AlreadyStarted {
+                owner: owner.to_owned(),
+            });
+        }
         g.pid = Some(pid);
         self.0.execute(
             "UPDATE generations SET json=?2 WHERE id=?1",
@@ -336,8 +323,8 @@ impl Catalog {
         Ok(!self.frozen()? && self.active()?.as_deref() == Some(owner))
     }
     pub fn freeze(&self, frozen: bool) -> Result<()> {
-        if frozen {
-            ensure!(!self.frozen()?, "Another recovery is already in progress");
+        if frozen && self.frozen()? {
+            return Err(GenerationsError::RecoveryInProgress);
         }
         self.0.execute(
             "UPDATE control SET frozen=?1,freeze_pid=?2 WHERE id=1",
@@ -347,21 +334,30 @@ impl Catalog {
     }
     /// Called after authenticated candidate verification, while coordinated.
     pub fn activate(&mut self, owner: &str) -> Result<()> {
-        ensure!(!self.frozen()?, "Session creation is frozen for recovery");
+        let frozen = || GenerationsError::CreationFrozen {
+            owner: owner.to_owned(),
+        };
+        if self.frozen()? {
+            return Err(frozen());
+        }
         let mut owners = self.generations()?;
-        ensure!(
-            owners
-                .iter()
-                .any(|g| g.id == owner && g.status == Status::Prepared),
-            "Candidate is not prepared"
-        );
-        ensure!(
-            owners
-                .iter()
-                .filter(|g| g.status != Status::Retired)
-                .all(|g| g.protocol == PROTOCOL_VERSION && g.catalog == CATALOG_VERSION),
-            "Live owner is incompatible"
-        );
+        if !owners
+            .iter()
+            .any(|g| g.id == owner && g.status == Status::Prepared)
+        {
+            return Err(GenerationsError::NotPrepared {
+                owner: owner.to_owned(),
+            });
+        }
+        if !owners
+            .iter()
+            .filter(|g| g.status != Status::Retired)
+            .all(|g| g.protocol == PROTOCOL_VERSION && g.catalog == CATALOG_VERSION)
+        {
+            return Err(GenerationsError::LiveOwnerIncompatible {
+                candidate: owner.to_owned(),
+            });
+        }
         let tx = self.0.transaction()?;
         for g in &mut owners {
             if g.id == owner {
@@ -378,16 +374,23 @@ impl Catalog {
             "UPDATE control SET active=?1 WHERE id=1 AND frozen=0",
             [owner],
         )?;
-        ensure!(tx.changes() == 1, "Session creation is frozen for recovery");
+        if tx.changes() != 1 {
+            return Err(frozen());
+        }
         tx.commit()?;
         Ok(())
     }
-    pub fn retire(&self, owner: &str) -> Result<()> {
-        let mut g = self
-            .generations()?
+    /// The registered generation `owner`.
+    fn known(&self, owner: &str) -> Result<Generation> {
+        self.generations()?
             .into_iter()
             .find(|g| g.id == owner)
-            .context("Unknown owner")?;
+            .ok_or_else(|| GenerationsError::UnknownOwner {
+                owner: owner.to_owned(),
+            })
+    }
+    pub fn retire(&self, owner: &str) -> Result<()> {
+        let mut g = self.known(owner)?;
         g.status = Status::Retired;
         self.0.execute(
             "UPDATE generations SET json=?2 WHERE id=?1",
@@ -411,7 +414,9 @@ impl Catalog {
             .generations()?
             .into_iter()
             .find(|g| g.id == active)
-            .context("Unknown active owner")?;
+            .ok_or_else(|| GenerationsError::UnknownActiveOwner {
+                owner: active.clone(),
+            })?;
         if g.status != Status::Retired {
             return Ok(false);
         }
@@ -460,10 +465,11 @@ impl Catalog {
         Ok(())
     }
     pub fn save_workspace(&self, state: &State) -> Result<()> {
-        ensure!(
-            self.active()?.as_deref() == Some(&state.generation),
-            "Only the active generation may save workspace data"
-        );
+        if self.active()?.as_deref() != Some(&state.generation) {
+            return Err(GenerationsError::NotActive {
+                generation: state.generation.clone(),
+            });
+        }
         let mut shared = state.clone();
         clear_owned(&mut shared);
         let tx = self.0.unchecked_transaction()?;
@@ -478,6 +484,44 @@ impl Catalog {
         tx.commit()?;
         Ok(())
     }
+}
+
+/// `legacy` narrowed to `owner`'s sessions and their records, plus those session IDs.
+fn owner_archive(legacy: &State, owner: &str) -> (State, BTreeSet<String>) {
+    let mut archive = legacy.clone();
+    archive.generation = owner.to_owned();
+    archive.sessions.retain(|s| s.generation == owner);
+    let ids: BTreeSet<_> = archive.sessions.iter().map(|s| s.id.clone()).collect();
+    archive.agents.retain(|a| ids.contains(&a.session_id));
+    archive
+        .notifications
+        .retain(|n| ids.contains(&n.session_id));
+    archive
+        .terminal_notices
+        .retain(|n| ids.contains(&n.session_id));
+    archive.projects.clear();
+    archive.worktrees.clear();
+    (archive, ids)
+}
+
+/// Copies and syncs the legacy history files of the sessions in `ids`.
+fn copy_owner_history(paths: &Paths, archive: &Paths, ids: &BTreeSet<String>) -> Result<()> {
+    for entry in fs::read_dir(paths.history_dir())? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.file_type()?.is_file()
+            || !ids.iter().any(|sid| name.starts_with(&format!("{sid}-")))
+        {
+            continue;
+        }
+        let destination = archive.history_dir().join(entry.file_name());
+        fs::copy(entry.path(), &destination)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(destination)?
+            .sync_all()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

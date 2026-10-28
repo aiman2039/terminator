@@ -180,7 +180,7 @@ impl Client {
             let target = self
                 .catalog
                 .run(&CancellationToken::new(), move || {
-                    generations::owner_for(&paths, &route_request)
+                    Ok(generations::owner_for(&paths, &route_request)?)
                 })
                 .await?;
             let response = self.direct(target, request.clone(), None).await?;
@@ -365,11 +365,11 @@ impl Client {
                         let (saved, error) = client
                             .catalog
                             .run(&CancellationToken::new(), move || {
-                                generations::unavailable_snapshot(
+                                Ok(generations::unavailable_snapshot(
                                     &unavailable,
                                     &active,
                                     format!("Owner unavailable: {result:?}"),
-                                )
+                                )?)
                             })
                             .await?;
                         (Arc::new(saved), error)
@@ -431,7 +431,7 @@ impl Client {
         let token_paths = paths.clone();
         let token = self
             .catalog
-            .run(&CancellationToken::new(), move || token_paths.token())
+            .run(&CancellationToken::new(), move || Ok(token_paths.token()?))
             .await?;
         let mutation = !read_only(&request);
         // Static operation name for the deadline below; the envelope takes

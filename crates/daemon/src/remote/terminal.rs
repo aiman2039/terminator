@@ -11,9 +11,9 @@ fn resolve_cwd(project: &RemoteProject, cwd: Option<&Path>) -> Result<String> {
                 .strip_prefix(project.root.trim_end_matches('/'))
                 .filter(|tail| tail.is_empty() || tail.starts_with('/'))
                 .context("Remote cwd is outside the project root")?;
-            project.absolute(relative.trim_start_matches('/'))
+            Ok(project.absolute(relative.trim_start_matches('/'))?)
         } else {
-            project.absolute(value)
+            Ok(project.absolute(value)?)
         }
     } else {
         Ok(project.root.clone())
@@ -27,9 +27,9 @@ fn resolve_file(project: &RemoteProject, file: Option<&Path>) -> Result<Option<S
                 .strip_prefix(project.root.trim_end_matches('/'))
                 .filter(|tail| tail.starts_with('/'))
                 .context("Remote file is outside the project root")?;
-            project.absolute(relative.trim_start_matches('/'))
+            Ok(project.absolute(relative.trim_start_matches('/'))?)
         } else {
-            project.absolute(value)
+            Ok(project.absolute(value)?)
         }
     })
     .transpose()

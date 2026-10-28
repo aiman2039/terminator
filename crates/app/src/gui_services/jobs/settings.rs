@@ -65,7 +65,11 @@ impl Services {
         let file = client
             .catalog
             .run(&cancel, move || {
-                AppearanceFile::save(&config_path(&paths)?, &theme, &expected)
+                Ok::<_, anyhow::Error>(AppearanceFile::save(
+                    &config_path(&paths)?,
+                    &theme,
+                    &expected,
+                )?)
             })
             .await?;
         updates.push(Update::Appearance(Box::new(file)));

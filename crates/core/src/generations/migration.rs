@@ -1,4 +1,5 @@
-use crate::{Context, Paths, Result, State, atomic_write, ensure, fs, id};
+use super::{GenerationsError, Result};
+use crate::{Paths, State, atomic_write, fs, id};
 use fs2::FileExt;
 use rusqlite::Connection;
 #[cfg(unix)]
@@ -21,10 +22,10 @@ pub fn migrate_after_legacy_exit(paths: &Paths) -> Result<()> {
     options.create(true).truncate(false).write(true);
     #[cfg(unix)]
     options.mode(0o600);
-    let legacy = options.open(paths.runtime.join("daemon.lock"))?;
-    lock_released_soon(&legacy).context(
-        "Running daemon is unresponsive or incompatible; its sessions have been preserved",
-    )?;
+    let lock = paths.runtime.join("daemon.lock");
+    let legacy = options.open(&lock)?;
+    lock_released_soon(&legacy)
+        .map_err(|source| GenerationsError::LegacyUnresponsive { lock, source })?;
     migrate(paths, true)
 }
 
@@ -62,14 +63,15 @@ fn migrate(paths: &Paths, reconcile_exited: bool) -> Result<()> {
     if reconcile_exited && legacy.sessions.iter().any(|s| s.lifecycle.live()) {
         legacy.recover();
     }
-    ensure!(
-        !legacy.sessions.iter().any(|s| s.lifecycle.live()),
-        "Migration waits for legacy sessions to finish"
-    );
+    if legacy.sessions.iter().any(|s| s.lifecycle.live()) {
+        return Err(GenerationsError::MigrationWaits);
+    }
     if database.exists() {
         let conn = Connection::open(&database)?;
         let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(version <= 2, "Legacy database is incompatible");
+        if version > 2 {
+            return Err(GenerationsError::LegacyIncompatible { version });
+        }
         let backup = paths.data.join("state.before-generations.sqlite3");
         if !backup.exists() {
             conn.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
