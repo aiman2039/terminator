@@ -2,6 +2,10 @@
 //! exhaustion, aborted handshakes) must not end the daemon, because exiting
 //! closes every PTY master and hangs up all live sessions.
 
+mod event_loop;
+
+pub(crate) use event_loop::AcceptLoop;
+
 use std::{io, thread, time::Duration};
 
 /// Back-off after a transient accept failure so descriptor exhaustion does

@@ -1,4 +1,6 @@
 use super::*;
+use crate::server::HistoryJob;
+use std::{io::Write, sync::atomic::AtomicBool, sync::mpsc};
 
 pub(crate) struct Bootstrap {
     pub(crate) paths: Paths,
@@ -142,4 +144,112 @@ pub(crate) fn open_state(
     }
     store.save(&state)?;
     Ok((store, state))
+}
+
+/// Removes helpers left by crashed daemons and stages this one's.
+pub(crate) fn stage_helper(paths: &Paths) -> Result<helper::Helper> {
+    helper::cleanup_abandoned(&paths.data)?;
+    helper::Helper::stage(
+        &std::env::current_exe()?.with_file_name(exe_name("terminator-hook")),
+        &paths.data,
+    )
+}
+
+pub(crate) fn bind_listener(paths: &Paths) -> Result<transport::Listener> {
+    let listener = transport::Listener::bind_ipc(&paths.socket())?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
+/// Writes a fresh client auth token and returns it.
+pub(crate) fn publish_auth(paths: &Paths) -> Result<String> {
+    let auth = id();
+    atomic_write(&paths.auth(), auth.as_bytes())?;
+    Ok(auth)
+}
+
+pub(crate) struct StartInput {
+    pub(crate) helper: helper::Helper,
+    pub(crate) catalog_paths: Option<Paths>,
+    pub(crate) store: storage::Store,
+    pub(crate) state: State,
+    pub(crate) paths: Paths,
+    pub(crate) auth: String,
+}
+
+/// The shared daemon state and the receivers its workers drain.
+pub(crate) struct Started {
+    pub(crate) shared: Arc<Shared>,
+    pub(crate) history_rx: mpsc::Receiver<HistoryJob>,
+    pub(crate) alert_rx: mpsc::Receiver<String>,
+}
+
+pub(crate) fn start_shared(input: StartInput) -> Started {
+    let StartInput {
+        helper,
+        catalog_paths,
+        store,
+        state,
+        paths,
+        auth,
+    } = input;
+    let (history, history_rx) = mpsc::sync_channel::<HistoryJob>(512);
+    let (alerts, alert_rx) = mpsc::sync_channel::<String>(64);
+    let shared = Arc::new(Shared {
+        helper,
+        catalog_paths,
+        state: Mutex::new(state),
+        store: Mutex::new(store),
+        sessions: Mutex::new(HashMap::new()),
+        vnc_sessions: Mutex::new(HashMap::new()),
+        paths,
+        auth,
+        focused: Mutex::new((false, Instant::now())),
+        worktree_operations: Mutex::new(()),
+        terminal_operations: Mutex::new(()),
+        shutdown: AtomicBool::new(false),
+        history,
+        alerts,
+        ntfy: ntfy::start(),
+        ntfy_cooldown: Mutex::new(ntfy::Cooldown::default()),
+        forwards: Mutex::new(crate::remote::Forwards::default()),
+        remote_transfers: Mutex::new(crate::remote::Transfers::default()),
+    });
+    Started {
+        shared,
+        history_rx,
+        alert_rx,
+    }
+}
+
+/// The accept loop's wake socketpair. `tx` stays alive for the daemon's
+/// lifetime; the notification waker writes through a clone of it.
+pub(crate) struct Waker {
+    _tx: transport::Stream,
+    pub(crate) rx: transport::Stream,
+    /// Draining through a clone: the poll set borrows `rx` while a wake
+    /// needs a mutable drain handle on the same socket buffer.
+    pub(crate) drain: transport::Stream,
+}
+
+/// A socketpair wakes the accept loop when a notification waiter needs
+/// Cocoa run-loop pumping or has finished.
+pub(crate) fn install_waker() -> Result<Waker> {
+    let (wake_tx, wake_rx) = transport::pair()?;
+    wake_tx.set_nonblocking(true)?;
+    wake_rx.set_nonblocking(true)?;
+    let wake_drain = wake_rx.try_clone()?;
+    notifications::set_waker({
+        let wake_tx = Mutex::new(wake_tx.try_clone()?);
+        move || {
+            if let Ok(mut guard) = wake_tx.lock() {
+                let _ = guard.write(&[1u8]);
+            }
+        }
+    });
+    Ok(Waker {
+        _tx: wake_tx,
+        rx: wake_rx,
+        drain: wake_drain,
+    })
 }
