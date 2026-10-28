@@ -3,18 +3,18 @@ use super::*;
 
 async fn current(service: &Services, change: &Undo, cancel: &CancellationToken) -> Result<Version> {
     if change.index {
-        let entry = git(
+        let entry = git(GitInput {
             service,
-            &change.root,
-            vec![
+            root: &change.root,
+            args: vec![
                 "ls-files".into(),
                 "--stage".into(),
                 "-z".into(),
                 "--".into(),
                 literal(&change.path),
             ],
-            None,
-        )
+            input: None,
+        })
         .await?;
         ensure!(
             entry.split(|b| *b == 0).filter(|s| !s.is_empty()).count() <= 1,
@@ -26,12 +26,12 @@ async fn current(service: &Services, change: &Undo, cancel: &CancellationToken) 
             .map(std::str::from_utf8)
             .transpose()?;
         let text = if let Some(oid) = oid {
-            git(
+            git(GitInput {
                 service,
-                &change.root,
-                vec!["cat-file".into(), "blob".into(), oid.into()],
-                None,
-            )
+                root: &change.root,
+                args: vec!["cat-file".into(), "blob".into(), oid.into()],
+                input: None,
+            })
             .await?
         } else {
             Vec::new()
@@ -87,22 +87,42 @@ async fn apply(service: &Services, change: &Undo, cancel: &CancellationToken) ->
     }
     let mut check = args.clone();
     check.push("--check".into());
-    git(service, &change.root, check, Some(bytes.clone())).await?;
+    git(GitInput {
+        service,
+        root: &change.root,
+        args: check,
+        input: Some(bytes.clone()),
+    })
+    .await?;
     // Recheck the complete target, including changes outside the selected hunk.
     ensure!(
         current(service, change, cancel).await? == change.before,
         "The file or index changed; refresh the diff before retrying"
     );
-    git(service, &change.root, args, Some(bytes)).await?;
+    git(GitInput {
+        service,
+        root: &change.root,
+        args,
+        input: Some(bytes),
+    })
+    .await?;
     Ok(())
 }
 
-pub(crate) async fn execute(
-    service: &Services,
-    request: Request,
-    staged: bool,
-    cancel: &CancellationToken,
-) -> Result<Outcome> {
+pub(crate) struct ExecuteInput<'a> {
+    pub(crate) service: &'a Services,
+    pub(crate) request: Request,
+    pub(crate) staged: bool,
+    pub(crate) cancel: &'a CancellationToken,
+}
+
+pub(crate) async fn execute(input: ExecuteInput<'_>) -> Result<Outcome> {
+    let ExecuteInput {
+        service,
+        request,
+        staged,
+        cancel,
+    } = input;
     // Serialize the full read/check/apply sequence across native diff tabs.
     static MUTATIONS: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     let _guard = MUTATIONS

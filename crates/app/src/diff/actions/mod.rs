@@ -13,7 +13,7 @@ mod execute;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use execute::execute;
+pub(crate) use execute::{ExecuteInput, execute};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Source {
@@ -31,12 +31,20 @@ pub(super) fn literal(path: &Path) -> OsString {
     value
 }
 
-async fn git(
-    service: &Services,
-    root: &Path,
+struct GitInput<'a> {
+    service: &'a Services,
+    root: &'a Path,
     args: Vec<OsString>,
     input: Option<Vec<u8>>,
-) -> Result<Vec<u8>> {
+}
+
+async fn git(input: GitInput<'_>) -> Result<Vec<u8>> {
+    let GitInput {
+        service,
+        root,
+        args,
+        input,
+    } = input;
     Ok(terminator_git::run(
         service.processes(),
         service.fs(),
@@ -53,25 +61,33 @@ async fn git(
     .await?)
 }
 
+pub struct CaptureInput<'a> {
+    pub service: &'a Services,
+    pub root: &'a Path,
+    pub path: &'a Path,
+    pub cancel: &'a CancellationToken,
+}
+
 impl Source {
-    pub async fn capture(
-        service: &Services,
-        root: &Path,
-        path: &Path,
-        cancel: &CancellationToken,
-    ) -> Result<Self> {
-        let index = git(
+    pub async fn capture(input: CaptureInput<'_>) -> Result<Self> {
+        let CaptureInput {
             service,
             root,
-            vec![
+            path,
+            cancel,
+        } = input;
+        let index = git(GitInput {
+            service,
+            root,
+            args: vec![
                 "ls-files".into(),
                 "--stage".into(),
                 "-z".into(),
                 "--".into(),
                 literal(path),
             ],
-            None,
-        )
+            input: None,
+        })
         .await?;
         // An unborn branch has no HEAD tree.
         let head = terminator_git::run(
@@ -198,11 +214,24 @@ impl LineSelection {
     }
 }
 
+struct PartialLinesInput<'a> {
+    doc: &'a DiffDocument,
+    hunk: &'a Hunk,
+    kind: Kind,
+    picked: &'a LineSelection,
+}
+
 /// The hunk region rewritten with only the picked lines applied. Staging
 /// drops picked removals and adds picked additions to the left text;
 /// unstaging or discarding restores picked removals and drops picked
 /// additions from the right text. Unpicked lines stay as they were.
-fn partial_lines(doc: &DiffDocument, hunk: &Hunk, kind: Kind, picked: &LineSelection) -> String {
+fn partial_lines(input: PartialLinesInput<'_>) -> String {
+    let PartialLinesInput {
+        doc,
+        hunk,
+        kind,
+        picked,
+    } = input;
     let left: Vec<&str> = doc.left_text.split_inclusive('\n').collect();
     let right: Vec<&str> = doc.right_text.split_inclusive('\n').collect();
     let old = hunk
@@ -258,12 +287,20 @@ pub(crate) struct Outcome {
     pub message: String,
 }
 
-fn replace_lines(
-    text: &str,
-    range: &std::ops::Range<usize>,
-    replacement: &str,
-    selected: &std::ops::Range<usize>,
-) -> String {
+struct ReplaceLinesInput<'a> {
+    text: &'a str,
+    range: &'a std::ops::Range<usize>,
+    replacement: &'a str,
+    selected: &'a std::ops::Range<usize>,
+}
+
+fn replace_lines(input: ReplaceLinesInput<'_>) -> String {
+    let ReplaceLinesInput {
+        text,
+        range,
+        replacement,
+        selected,
+    } = input;
     text.split_inclusive('\n')
         .take(range.start)
         .chain(
@@ -312,19 +349,37 @@ fn edit(input: EditInput<'_>) -> Undo {
     };
     let text = match lines.filter(|picked| !picked.is_empty()) {
         Some(picked) => {
-            let region = partial_lines(doc, hunk, kind, picked);
+            let region = partial_lines(PartialLinesInput {
+                doc,
+                hunk,
+                kind,
+                picked,
+            });
             let (base, range) = if kind == Kind::Stage {
                 (&doc.left_text, &hunk.old)
             } else {
                 (&doc.right_text, &hunk.new)
             };
             let count = region.split_inclusive('\n').count();
-            replace_lines(base, range, &region, &(0..count))
+            replace_lines(ReplaceLinesInput {
+                text: base,
+                range,
+                replacement: &region,
+                selected: &(0..count),
+            })
         }
-        None if kind == Kind::Stage => {
-            replace_lines(&doc.left_text, &hunk.old, &doc.right_text, &hunk.new)
-        }
-        None => replace_lines(&doc.right_text, &hunk.new, &doc.left_text, &hunk.old),
+        None if kind == Kind::Stage => replace_lines(ReplaceLinesInput {
+            text: &doc.left_text,
+            range: &hunk.old,
+            replacement: &doc.right_text,
+            selected: &hunk.new,
+        }),
+        None => replace_lines(ReplaceLinesInput {
+            text: &doc.right_text,
+            range: &hunk.new,
+            replacement: &doc.left_text,
+            selected: &hunk.old,
+        }),
     };
     let (base_exists, base_mode) = match kind {
         Kind::Stage => (source.exists, source.mode),

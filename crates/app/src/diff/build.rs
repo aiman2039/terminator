@@ -2,7 +2,21 @@
 use super::*;
 
 #[cfg(test)]
-pub(super) fn build(path: &Path, left: &str, right: &str, staged: bool) -> DiffDocument {
+pub(super) struct BuildInput<'a> {
+    pub(super) path: &'a Path,
+    pub(super) left: &'a str,
+    pub(super) right: &'a str,
+    pub(super) staged: bool,
+}
+
+#[cfg(test)]
+pub(super) fn build(input: BuildInput<'_>) -> DiffDocument {
+    let BuildInput {
+        path,
+        left,
+        right,
+        staged,
+    } = input;
     build_with_context(BuildWithContextInput {
         path,
         left,
@@ -208,18 +222,21 @@ impl<'b> Sides<'_, 'b> {
 
     fn emit_equal(self, op: &similar::DiffOp, doc: &mut DiffDocument) {
         for change in self.diff.iter_changes(op) {
-            let line = equal_line(
+            let line = equal_line(EqualLineInput {
                 change,
-                self.old_hl,
-                self.originals.map(|o| o.old.as_slice()),
-                true,
-            );
+                highlighted: self.old_hl,
+                originals: self.originals.map(|o| o.old.as_slice()),
+                old_side: true,
+            });
             // Whitespace-insensitive equal lines may still differ in
             // whitespace: each side shows its own text.
             let right = match self.originals {
-                Some(originals) => {
-                    equal_line(change, self.new_hl, Some(originals.new.as_slice()), false)
-                }
+                Some(originals) => equal_line(EqualLineInput {
+                    change,
+                    highlighted: self.new_hl,
+                    originals: Some(originals.new.as_slice()),
+                    old_side: false,
+                }),
                 None => line.clone(),
             };
             doc.unified.push(right.clone());
@@ -316,12 +333,20 @@ fn push_gap_row(doc: &mut DiffDocument, old: std::ops::Range<usize>, new: std::o
     });
 }
 
-fn equal_line(
-    change: similar::Change<&str>,
-    highlighted: &[Vec<DiffSpan>],
-    originals: Option<&[&str]>,
+struct EqualLineInput<'a> {
+    change: similar::Change<&'a str>,
+    highlighted: &'a [Vec<DiffSpan>],
+    originals: Option<&'a [&'a str]>,
     old_side: bool,
-) -> DiffLine {
+}
+
+fn equal_line(input: EqualLineInput<'_>) -> DiffLine {
+    let EqualLineInput {
+        change,
+        highlighted,
+        originals,
+        old_side,
+    } = input;
     let index = if old_side {
         change.old_index()
     } else {

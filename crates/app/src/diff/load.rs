@@ -76,7 +76,13 @@ pub(crate) async fn document_with_context(
         })
         .await?;
     let (left, right) = git.sides(&root, &relative, staged).await?;
-    let source = actions::Source::capture(service, &root, &relative, cancel).await?;
+    let source = actions::Source::capture(actions::CaptureInput {
+        service,
+        root: &root,
+        path: &relative,
+        cancel,
+    })
+    .await?;
     service
         .cpu()
         .run(cancel, move || {

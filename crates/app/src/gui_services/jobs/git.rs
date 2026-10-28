@@ -52,9 +52,14 @@ impl Services {
         );
         let undo = matches!(request.as_ref(), diff::actions::Request::Undo(_));
         let staged = matches!(&tab, Tab::Diff { staged: true, .. });
-        let result = diff::actions::execute(self, *request, staged, &cancel)
-            .await
-            .map_err(|error| format!("{error:#}"));
+        let result = diff::actions::execute(diff::actions::ExecuteInput {
+            service: self,
+            request: *request,
+            staged,
+            cancel: &cancel,
+        })
+        .await
+        .map_err(|error| format!("{error:#}"));
         updates.push(Update::DiffAction(tab, undo, result));
         Ok(())
     }

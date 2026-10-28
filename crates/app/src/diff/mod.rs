@@ -32,9 +32,9 @@ pub(crate) mod review;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-use build::build;
 use build::build_with_options;
+#[cfg(test)]
+use build::{BuildInput, build};
 pub(crate) use build::{BuildWithContextInput, BuildWithOptionsInput, build_with_context};
 pub(crate) use highlight::highlight_spans;
 use highlight::{fallback_rgb, highlight_file, line_spans, overlay};
@@ -232,7 +232,12 @@ pub fn document(DiffRequest { cwd, path, staged }: DiffRequest<'_>) -> Result<Di
         options: &options,
     })?;
     let (left, right) = decode_sides(&left, &right)?;
-    Ok(build(&relative, &left, &right, staged))
+    Ok(build(BuildInput {
+        path: &relative,
+        left: &left,
+        right: &right,
+        staged,
+    }))
 }
 
 #[cfg(test)]

@@ -67,27 +67,27 @@ impl Fixture {
     }
 
     async fn change(&self, doc: Arc<DiffDocument>, hunk: usize, kind: Kind) -> Result<Outcome> {
-        execute(
-            &self.service,
-            Request::Hunk {
+        execute(ExecuteInput {
+            service: &self.service,
+            request: Request::Hunk {
                 document: doc,
                 hunk,
                 kind,
                 lines: None,
             },
-            kind == Kind::Unstage,
-            &CancellationToken::new(),
-        )
+            staged: kind == Kind::Unstage,
+            cancel: &CancellationToken::new(),
+        })
         .await
     }
 
     async fn undo(&self, undo: Undo) -> Result<Outcome> {
-        execute(
-            &self.service,
-            Request::Undo(undo),
-            false,
-            &CancellationToken::new(),
-        )
+        execute(ExecuteInput {
+            service: &self.service,
+            request: Request::Undo(undo),
+            staged: false,
+            cancel: &CancellationToken::new(),
+        })
         .await
     }
 }
@@ -117,15 +117,15 @@ async fn read_only_document_rejects_save_and_hunk_changes_even_with_a_git_source
             .is_err()
     );
     assert!(
-        execute(
-            &fixture.service,
-            Request::Save {
+        execute(ExecuteInput {
+            service: &fixture.service,
+            request: Request::Save {
                 document: doc,
                 text: "changed\n".into()
             },
-            false,
-            &CancellationToken::new(),
-        )
+            staged: false,
+            cancel: &CancellationToken::new()
+        })
         .await
         .is_err()
     );
@@ -145,15 +145,15 @@ fn changed() -> String {
 async fn saving_diff_edits_preserves_index_and_supports_undo() {
     let fixture = Fixture::new("file.txt", Some("base\n"));
     std::fs::write(fixture.absolute(), "local\n").unwrap();
-    let outcome = execute(
-        &fixture.service,
-        Request::Save {
+    let outcome = execute(ExecuteInput {
+        service: &fixture.service,
+        request: Request::Save {
             document: fixture.doc(false).await,
             text: "edited λ\nlast line".into(),
         },
-        false,
-        &CancellationToken::new(),
-    )
+        staged: false,
+        cancel: &CancellationToken::new(),
+    })
     .await
     .unwrap();
     assert_eq!(
@@ -173,27 +173,27 @@ async fn saving_diff_edits_refuses_stale_disk_and_staged_snapshots() {
     let fixture = Fixture::new("file.txt", Some("base\n"));
     let document = fixture.doc(false).await;
     std::fs::write(fixture.absolute(), "external edit\n").unwrap();
-    let error = execute(
-        &fixture.service,
-        Request::Save {
+    let error = execute(ExecuteInput {
+        service: &fixture.service,
+        request: Request::Save {
             document,
             text: "draft\n".into(),
         },
-        false,
-        &CancellationToken::new(),
-    )
+        staged: false,
+        cancel: &CancellationToken::new(),
+    })
     .await
     .unwrap_err();
     assert!(error.to_string().contains("changed"));
-    let error = execute(
-        &fixture.service,
-        Request::Save {
+    let error = execute(ExecuteInput {
+        service: &fixture.service,
+        request: Request::Save {
             document: fixture.doc(true).await,
             text: "draft\n".into(),
         },
-        true,
-        &CancellationToken::new(),
-    )
+        staged: true,
+        cancel: &CancellationToken::new(),
+    })
     .await
     .unwrap_err();
     assert!(error.to_string().contains("working tree"));
@@ -458,9 +458,9 @@ async fn change_lines(input: ChangeLinesInput<'_>) -> Result<Outcome> {
         old,
         new,
     } = input;
-    execute(
-        &fixture.service,
-        Request::Hunk {
+    execute(ExecuteInput {
+        service: &fixture.service,
+        request: Request::Hunk {
             document: doc,
             hunk: 0,
             kind,
@@ -469,9 +469,9 @@ async fn change_lines(input: ChangeLinesInput<'_>) -> Result<Outcome> {
                 new: new.iter().copied().collect(),
             }),
         },
-        kind == Kind::Unstage,
-        &CancellationToken::new(),
-    )
+        staged: kind == Kind::Unstage,
+        cancel: &CancellationToken::new(),
+    })
     .await
 }
 
