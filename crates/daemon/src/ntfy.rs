@@ -123,7 +123,7 @@ pub fn start() -> mpsc::SyncSender<Ping> {
                 && ping.send("https://ntfy.sh").is_err()
             {
                 // Do not expose the channel or provider text in logs.
-                eprintln!("ntfy notification delivery failed");
+                crate::console::Console::err(format_args!("ntfy notification delivery failed"));
             }
         }
     });

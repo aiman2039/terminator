@@ -174,7 +174,13 @@ impl App {
             "Show sidebar"
         };
         let shortcut = self.shortcut_label(Action::ToggleLeftSidebar);
-        let clicked = appearance::menu_item(ui, label, "PanelLeft", &shortcut).clicked();
+        let clicked = appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label,
+            icon: "PanelLeft",
+            shortcut: &shortcut,
+        })
+        .clicked();
         if clicked {
             self.toggle_left_sidebar();
         }
@@ -266,7 +272,14 @@ impl App {
                 } else {
                     ""
                 };
-                if appearance::menu_item(ui, &project.name, "Folder", mark).clicked() {
+                if appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: &project.name,
+                    icon: "Folder",
+                    shortcut: mark,
+                })
+                .clicked()
+                {
                     chosen = Some(project.id.clone());
                 }
             }
@@ -400,8 +413,12 @@ impl App {
         tool: SidebarTool,
         view: &HeaderActionView,
     ) -> egui::Response {
-        let response =
-            appearance::tool_button(ui, tool, view.label, self.header_tool_selected(tool));
+        let response = appearance::tool_button(appearance::ToolButtonInput {
+            ui,
+            tool,
+            label: view.label,
+            active: self.header_tool_selected(tool),
+        });
         if tool == SidebarTool::Explorer {
             response.on_hover_text(self.explorer_tooltip())
         } else {
@@ -412,7 +429,12 @@ impl App {
     pub(super) fn header_menu_choice(&mut self, ui: &mut egui::Ui, action: HeaderAction) -> bool {
         let view = header_action_view(action);
         let mark = self.header_menu_mark(action);
-        let response = appearance::menu_item(ui, view.label, view.icon, &mark);
+        let response = appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: view.label,
+            icon: view.icon,
+            shortcut: &mark,
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record_ui(ui, view.target, response.rect);
         if response.clicked() {

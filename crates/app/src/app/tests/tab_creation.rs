@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::TerminalActionInput;
 
 #[test]
 fn worktree_completion_opens_only_the_requested_projects_terminal() {
@@ -329,7 +330,12 @@ fn file_open_here_routes_stacked_create() {
     let session = session_fixture("one", SessionKind::Shell);
     app.state.sessions.push(session.clone());
     let target = services::Target::File("/a/note.md".into(), None, None);
-    app.terminal_action(&ctx, &session, &target, FileAction::Here);
+    app.terminal_action(TerminalActionInput {
+        ctx: &ctx,
+        session: &session,
+        target: &target,
+        action: FileAction::Here,
+    });
     let Job::Control(_, After::CreateAt(_, split)) = received.try_recv().unwrap() else {
         panic!("Here opens stacked in the current split");
     };

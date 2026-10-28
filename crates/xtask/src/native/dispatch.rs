@@ -30,14 +30,31 @@ impl Default for Options {
         }
     }
 }
+/// The harness and options shared by every step of one native case.
+#[derive(Clone, Copy)]
+pub(crate) struct Case<'a> {
+    pub h: &'a Harness,
+    pub o: &'a Options,
+}
+/// One native GUI capture: the fixture actions to replay and when to take the screenshot.
+pub(crate) struct CaptureInput<'a> {
+    pub h: &'a Harness,
+    pub opts: &'a Options,
+    pub name: &'a str,
+    pub actions: Value,
+    pub after: u64,
+}
 pub(crate) fn capture(
-    h: &Harness,
-    opts: &Options,
-    name: &str,
-    actions: Value,
-    after: u64,
+    input: CaptureInput<'_>,
     during: impl FnOnce(&mut Child) -> Result<()>,
 ) -> Result<String> {
+    let CaptureInput {
+        h,
+        opts,
+        name,
+        actions,
+        after,
+    } = input;
     let directory = std::path::absolute(&opts.output)?;
     fs::create_dir_all(&directory)?;
     let path = directory.join(format!("{name}.png"));
@@ -84,14 +101,8 @@ pub(crate) fn capture(
     );
     Ok(logs)
 }
-pub(crate) fn plain(
-    h: &Harness,
-    o: &Options,
-    name: &str,
-    actions: Value,
-    after: u64,
-) -> Result<String> {
-    capture(h, o, name, actions, after, |_| Ok(()))
+pub(crate) fn plain(input: CaptureInput<'_>) -> Result<String> {
+    capture(input, |_| Ok(()))
 }
 pub(crate) fn prefs(h: &Harness) -> Result<Value> {
     Ok(serde_json::from_slice(&fs::read(
@@ -119,6 +130,28 @@ pub(crate) fn setup(name: &str) -> Result<(Harness, Value, Vec<Value>, PathBuf)>
     Ok((h, p, sessions, root))
 }
 pub fn run(case: &str, opts: Options) -> Result<()> {
+    validate(case, &opts)?;
+    let cases = selected_cases(case);
+    ensure!(
+        cases.len() == 1 || !crate::harness::fixture_visible() || opts.jobs == 1,
+        "Visible GUI suites require --jobs 1; parallel workers require quiet fixtures"
+    );
+    let workers = opts.jobs.min(cases.len());
+    println!("Running {} GUI cases with {workers} worker(s)", cases.len());
+    let results = run_cases(&cases, &opts, workers)?;
+    let failures = results
+        .into_iter()
+        .filter_map(|(case, result)| result.err().map(|error| format!("{case}: {error:#}")))
+        .collect::<Vec<_>>();
+    ensure!(
+        failures.is_empty(),
+        "GUI failures:\n{}",
+        failures.join("\n")
+    );
+    Ok(())
+}
+
+fn validate(case: &str, opts: &Options) -> Result<()> {
     ensure!(
         (1..=16).contains(&opts.jobs),
         "GUI jobs must be between 1 and 16"
@@ -145,68 +178,61 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
         (3..=60).contains(&opts.seconds) || (case == "responsiveness" && opts.seconds <= 1800),
         "Native duration must be 3–60 seconds"
     );
-    let cases = if case == "all" {
-        vec![
-            "smoke",
-            "workspace-tabs",
-            "scrolling-bounded",
-            "split-file-opening",
-            "markdown",
-            "markdown-busy",
-            "project-sidebar",
-            "agent-sidebar",
-            "inline-rename",
-            "editor-lifecycle",
-            "file-close",
-            "focus-editor-close",
-            "ui-cleanup",
-            "external-editor",
-            "images",
-            "browser",
-            "control",
-            "terminal-actions",
-            "hover-menu",
-            "reviews",
-            "diff-hunks",
-            "file-reuse",
-            "legacy-diff",
-        ]
-    } else {
-        vec![case]
-    };
-    ensure!(
-        cases.len() == 1 || !crate::harness::fixture_visible() || opts.jobs == 1,
-        "Visible GUI suites require --jobs 1; parallel workers require quiet fixtures"
-    );
-    let workers = opts.jobs.min(cases.len());
-    println!("Running {} GUI cases with {workers} worker(s)", cases.len());
-    let results = if workers == 1 {
+    Ok(())
+}
+
+fn selected_cases(case: &str) -> Vec<&str> {
+    if case != "all" {
+        return vec![case];
+    }
+    vec![
+        "smoke",
+        "workspace-tabs",
+        "scrolling-bounded",
+        "split-file-opening",
+        "markdown",
+        "markdown-busy",
+        "project-sidebar",
+        "agent-sidebar",
+        "inline-rename",
+        "editor-lifecycle",
+        "file-close",
+        "focus-editor-close",
+        "ui-cleanup",
+        "external-editor",
+        "images",
+        "browser",
+        "control",
+        "terminal-actions",
+        "hover-menu",
+        "reviews",
+        "diff-hunks",
+        "file-reuse",
+        "legacy-diff",
+    ]
+}
+
+fn run_cases<'a>(
+    cases: &'a [&'a str],
+    opts: &Options,
+    workers: usize,
+) -> Result<Vec<(&'a &'a str, Result<()>)>> {
+    if workers == 1 {
         // Keep native desktop APIs on the calling thread for serial runs.
-        cases
+        return Ok(cases
             .iter()
             .map(|case| (case, run_case(case, opts.clone())))
-            .collect::<Vec<_>>()
-    } else {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()?
-            .install(|| {
-                cases
-                    .par_iter()
-                    .map(|case| (case, run_case(case, opts.clone())))
-                    .collect::<Vec<_>>()
-            })
-    };
-    let failures = results
-        .into_iter()
-        .filter_map(|(case, result)| result.err().map(|error| format!("{case}: {error:#}")))
-        .collect::<Vec<_>>();
-    ensure!(
-        failures.is_empty(),
-        "GUI failures:\n{}",
-        failures.join("\n")
-    );
-    Ok(())
+            .collect::<Vec<_>>());
+    }
+    Ok(rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()?
+        .install(|| {
+            cases
+                .par_iter()
+                .map(|case| (case, run_case(case, opts.clone())))
+                .collect::<Vec<_>>()
+        }))
 }
 
 fn run_case(case: &str, mut opts: Options) -> Result<()> {
@@ -235,58 +261,8 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
         "generations" => super::generations::run(&opts)?,
         "project-sidebar" => super::projects::run(&opts)?,
         "agent-sidebar" => super::agents::run(&opts)?,
-        "pane-close" => {
-            let (h, _, originals, _) = setup("pane-close")?;
-            let first = originals.first().ok_or_else(|| anyhow!("missing pane"))?;
-            let target = format!("pane-close:{}", id(first));
-            plain(
-                &h,
-                &opts,
-                "confirmation",
-                json!([
-                    {"at_ms":1100,"target":target}
-                ]),
-                2500,
-            )?;
-            h.assert_pids(&originals)?;
-            plain(
-                &h,
-                &opts,
-                "backgrounded",
-                json!([
-                    {"at_ms":1100,"target":target},
-                    {"at_ms":1800,"target":"close-session-keep"}
-                ]),
-                3000,
-            )?;
-            let state = h.state()?;
-            let remaining = session_ids(
-                state
-                    .get("projects")
-                    .and_then(|projects| projects.get(0))
-                    .and_then(|project| project.get("layout"))
-                    .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
-            );
-            ensure!(
-                remaining.len() == originals.len().saturating_sub(1)
-                    && !remaining.contains(&id(first).to_owned()),
-                "Pane close removed the wrong session"
-            );
-            h.assert_pids(&originals)?;
-        }
-        "popup" => {
-            let (h, _, originals, _) = setup("popup")?;
-            plain(
-                &h,
-                &opts,
-                "shell-close-dialog",
-                json!([
-                    {"at_ms":1100,"target":"workspace-close:Terminal 1"}
-                ]),
-                3000,
-            )?;
-            h.assert_pids(&originals)?;
-        }
+        "pane-close" => pane_close(&opts)?,
+        "popup" => popup(&opts)?,
         "inline-rename" => inline_rename(&opts)?,
         "editor-lifecycle" => editor_lifecycle(&opts)?,
         "file-close" => file_close(&opts)?,
@@ -317,4 +293,58 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
         json!({"fixture":case,"passed":true,"scale":opts.scale,"narrow":opts.narrow,"captures":opts.output})
     );
     Ok(())
+}
+
+fn pane_close(opts: &Options) -> Result<()> {
+    let (h, _, originals, _) = setup("pane-close")?;
+    let first = originals.first().ok_or_else(|| anyhow!("missing pane"))?;
+    let target = format!("pane-close:{}", id(first));
+    plain(CaptureInput {
+        h: &h,
+        opts,
+        name: "confirmation",
+        actions: json!([
+            {"at_ms":1100,"target":target}
+        ]),
+        after: 2500,
+    })?;
+    h.assert_pids(&originals)?;
+    plain(CaptureInput {
+        h: &h,
+        opts,
+        name: "backgrounded",
+        actions: json!([
+            {"at_ms":1100,"target":target},
+            {"at_ms":1800,"target":"close-session-keep"}
+        ]),
+        after: 3000,
+    })?;
+    let state = h.state()?;
+    let remaining = session_ids(
+        state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+    );
+    ensure!(
+        remaining.len() == originals.len().saturating_sub(1)
+            && !remaining.contains(&id(first).to_owned()),
+        "Pane close removed the wrong session"
+    );
+    h.assert_pids(&originals)
+}
+
+fn popup(opts: &Options) -> Result<()> {
+    let (h, _, originals, _) = setup("popup")?;
+    plain(CaptureInput {
+        h: &h,
+        opts,
+        name: "shell-close-dialog",
+        actions: json!([
+            {"at_ms":1100,"target":"workspace-close:Terminal 1"}
+        ]),
+        after: 3000,
+    })?;
+    h.assert_pids(&originals)
 }

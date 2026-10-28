@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::FileActionInput;
 
 fn run_git_outcome(app: &mut App, ctx: &egui::Context, outcome: sidebar_ui::GitPanelOutcome) {
     let mut outcome = Some(outcome);
@@ -30,11 +31,21 @@ fn legacy_daemon_diff_never_sends_an_unsupported_creation_request() {
     app.selected = Some("a".into());
     app.error = Some("failed to fill whole buffer".into());
     for staged in [false, true] {
-        let action =
-            sidebar_ui::git_click_action(false, Some(staged), true, ReviewMode::Neovim, false)
-                .unwrap();
+        let action = sidebar_ui::git_click_action(sidebar_ui::GitClickActionInput {
+            deleted: false,
+            staged: Some(staged),
+            clicked: true,
+            review_mode: ReviewMode::Neovim,
+            neovim_review: false,
+        })
+        .unwrap();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.file_action(ui, action, Path::new("/a/file.rs"), None);
+            app.file_action(FileActionInput {
+                ui,
+                action,
+                path: Path::new("/a/file.rs"),
+                line: None,
+            });
         });
         output.textures_delta.clear();
         let Job::Diff(Tab::Diff { staged: actual, .. }) = requests.recv().unwrap() else {
@@ -90,16 +101,21 @@ fn native_review_skips_create_review_when_the_daemon_can_review() {
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
     app.selected = Some("a".into());
-    let action = sidebar_ui::git_click_action(
-        false,
-        Some(false),
-        true,
-        app.state.settings.review_mode,
-        true,
-    )
+    let action = sidebar_ui::git_click_action(sidebar_ui::GitClickActionInput {
+        deleted: false,
+        staged: Some(false),
+        clicked: true,
+        review_mode: app.state.settings.review_mode,
+        neovim_review: true,
+    })
     .unwrap();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-        app.file_action(ui, action, Path::new("/a/file.rs"), None);
+        app.file_action(FileActionInput {
+            ui,
+            action,
+            path: Path::new("/a/file.rs"),
+            line: None,
+        });
     });
     output.textures_delta.clear();
     let Job::Diff(Tab::Diff { staged, .. }) = requests.recv().unwrap() else {
@@ -128,16 +144,21 @@ fn git_click_opens_a_native_diff() {
     app.selected = Some("a".into());
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
-    let action = sidebar_ui::git_click_action(
-        false,
-        Some(false),
-        true,
-        app.state.settings.review_mode,
-        false,
-    )
+    let action = sidebar_ui::git_click_action(sidebar_ui::GitClickActionInput {
+        deleted: false,
+        staged: Some(false),
+        clicked: true,
+        review_mode: app.state.settings.review_mode,
+        neovim_review: false,
+    })
     .unwrap();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-        app.file_action(ui, action, Path::new("/a/dirty.rs"), None);
+        app.file_action(FileActionInput {
+            ui,
+            action,
+            path: Path::new("/a/dirty.rs"),
+            line: None,
+        });
     });
     output.textures_delta.clear();
     let Job::Diff(Tab::Diff { path, staged, .. }) = requests.recv().unwrap() else {
@@ -262,11 +283,21 @@ fn git_reviews_open_distinct_top_level_tabs_in_the_origin_project() {
         error: None,
     });
     for staged in [false, true] {
-        let action =
-            sidebar_ui::git_click_action(false, Some(staged), true, ReviewMode::Neovim, true)
-                .unwrap();
+        let action = sidebar_ui::git_click_action(sidebar_ui::GitClickActionInput {
+            deleted: false,
+            staged: Some(staged),
+            clicked: true,
+            review_mode: ReviewMode::Neovim,
+            neovim_review: true,
+        })
+        .unwrap();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.file_action(ui, action, Path::new("/a/file.rs"), None);
+            app.file_action(FileActionInput {
+                ui,
+                action,
+                path: Path::new("/a/file.rs"),
+                line: None,
+            });
         });
         output.textures_delta.clear();
     }

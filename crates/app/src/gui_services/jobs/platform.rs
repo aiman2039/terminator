@@ -6,6 +6,21 @@ use std::path::PathBuf;
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
 
+pub(crate) struct TestExternalInput {
+    pub(in crate::gui_services) path: PathBuf,
+    pub(in crate::gui_services) program: String,
+    pub(in crate::gui_services) args: Vec<String>,
+    pub(in crate::gui_services) cancel: CancellationToken,
+}
+
+pub(crate) struct LaunchExternalInput<'a> {
+    pub(crate) path: PathBuf,
+    pub(crate) program: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) test: bool,
+    pub(crate) _cancel: &'a CancellationToken,
+}
+
 impl Services {
     pub(in crate::gui_services) async fn paste_clipboard(
         &self,
@@ -27,7 +42,7 @@ impl Services {
         self.platform()
             .run(&cancel, move || {
                 open::that(url)?;
-                Ok(())
+                anyhow::Ok(())
             })
             .await?;
         Ok(())
@@ -47,32 +62,53 @@ impl Services {
             };
             (state.settings.external_editor, state.settings.external_args)
         };
-        self.launch_external(path, program, args, false, &cancel)
-            .await?;
+        self.launch_external(LaunchExternalInput {
+            path,
+            program,
+            args,
+            test: false,
+            _cancel: &cancel,
+        })
+        .await?;
         Ok(())
     }
 
     pub(in crate::gui_services) async fn test_external(
         &self,
-        path: PathBuf,
-        program: String,
-        args: Vec<String>,
-        cancel: CancellationToken,
+        input: TestExternalInput,
     ) -> Result<()> {
-        self.launch_external(path, program, args, true, &cancel)
-            .await?;
+        let TestExternalInput {
+            path,
+            program,
+            args,
+            cancel,
+        } = input;
+        self.launch_external(LaunchExternalInput {
+            path,
+            program,
+            args,
+            test: true,
+            _cancel: &cancel,
+        })
+        .await?;
         Ok(())
     }
 
-    async fn launch_external(
-        &self,
-        path: PathBuf,
-        program: String,
-        args: Vec<String>,
-        test: bool,
-        _cancel: &CancellationToken,
-    ) -> Result<()> {
-        external_editor::launch_supervised(self.clone(), program, args, path).await?;
+    async fn launch_external(&self, input: LaunchExternalInput<'_>) -> Result<()> {
+        let LaunchExternalInput {
+            path,
+            program,
+            args,
+            test,
+            _cancel,
+        } = input;
+        external_editor::launch_supervised(external_editor::LaunchSupervisedInput {
+            service: self.clone(),
+            program,
+            args,
+            path,
+        })
+        .await?;
         if test {
             self.emit(Update::Info("External editor launched with draft settings. Check the selected file in the editor.".into())).await?;
         }

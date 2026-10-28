@@ -88,14 +88,22 @@ pub(crate) struct GutterPopup {
     pub at: egui::Pos2,
 }
 
+pub(crate) struct PopupUiInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) popup: &'a mut Option<GutterPopup>,
+    pub(crate) hunks: &'a [GutterHunk],
+    pub(crate) deleted: egui::Color32,
+}
+
 /// Paint the popup; returns true when Rollback was pressed, and clears
 /// `popup` when the user closes it.
-pub(crate) fn popup_ui(
-    ui: &egui::Ui,
-    popup: &mut Option<GutterPopup>,
-    hunks: &[GutterHunk],
-    deleted: egui::Color32,
-) -> bool {
+pub(crate) fn popup_ui(input: PopupUiInput<'_>) -> bool {
+    let PopupUiInput {
+        ui,
+        popup,
+        hunks,
+        deleted,
+    } = input;
     let Some(open) = popup.as_ref() else {
         return false;
     };

@@ -67,6 +67,14 @@ pub struct Desktop {
     window: u32,
     output: PathBuf,
 }
+/// One synthetic XTEST event at root coordinates.
+struct FakeInput {
+    kind: u8,
+    detail: u8,
+    x: f64,
+    y: f64,
+}
+
 impl Desktop {
     pub fn preflight() -> Result<()> {
         ensure!(
@@ -136,7 +144,8 @@ impl Desktop {
             f64::from(geometry.height),
         ])
     }
-    fn event(&self, kind: u8, detail: u8, x: f64, y: f64) -> Result<()> {
+    fn event(&self, input: FakeInput) -> Result<()> {
+        let FakeInput { kind, detail, x, y } = input;
         self.connection
             .xtest_fake_input(
                 kind,
@@ -153,22 +162,52 @@ impl Desktop {
         Ok(())
     }
     pub fn click(&mut self, x: f64, y: f64) -> Result<()> {
-        self.event(xproto::MOTION_NOTIFY_EVENT, 0, x, y)?;
-        self.event(xproto::BUTTON_PRESS_EVENT, 1, x, y)?;
-        self.event(xproto::BUTTON_RELEASE_EVENT, 1, x, y)
+        self.event(FakeInput {
+            kind: xproto::MOTION_NOTIFY_EVENT,
+            detail: 0,
+            x,
+            y,
+        })?;
+        self.event(FakeInput {
+            kind: xproto::BUTTON_PRESS_EVENT,
+            detail: 1,
+            x,
+            y,
+        })?;
+        self.event(FakeInput {
+            kind: xproto::BUTTON_RELEASE_EVENT,
+            detail: 1,
+            x,
+            y,
+        })
     }
     pub fn drag(&mut self, start: (f64, f64), end: (f64, f64)) -> Result<()> {
-        self.event(xproto::MOTION_NOTIFY_EVENT, 0, start.0, start.1)?;
-        self.event(xproto::BUTTON_PRESS_EVENT, 1, start.0, start.1)?;
+        self.event(FakeInput {
+            kind: xproto::MOTION_NOTIFY_EVENT,
+            detail: 0,
+            x: start.0,
+            y: start.1,
+        })?;
+        self.event(FakeInput {
+            kind: xproto::BUTTON_PRESS_EVENT,
+            detail: 1,
+            x: start.0,
+            y: start.1,
+        })?;
         for i in 1..=10 {
-            self.event(
-                xproto::MOTION_NOTIFY_EVENT,
-                0,
-                start.0 + (end.0 - start.0) * f64::from(i) / 10.0,
-                start.1 + (end.1 - start.1) * f64::from(i) / 10.0,
-            )?;
+            self.event(FakeInput {
+                kind: xproto::MOTION_NOTIFY_EVENT,
+                detail: 0,
+                x: start.0 + (end.0 - start.0) * f64::from(i) / 10.0,
+                y: start.1 + (end.1 - start.1) * f64::from(i) / 10.0,
+            })?;
         }
-        self.event(xproto::BUTTON_RELEASE_EVENT, 1, end.0, end.1)
+        self.event(FakeInput {
+            kind: xproto::BUTTON_RELEASE_EVENT,
+            detail: 1,
+            x: end.0,
+            y: end.1,
+        })
     }
     pub fn minimize(&mut self) -> Result<()> {
         let r = self.geometry()?;
@@ -313,12 +352,32 @@ impl Desktop {
             modifiers.push(0xffe1);
         }
         for key in &modifiers {
-            self.event(xproto::KEY_PRESS_EVENT, self.keycode(*key)?.0, 0.0, 0.0)?;
+            self.event(FakeInput {
+                kind: xproto::KEY_PRESS_EVENT,
+                detail: self.keycode(*key)?.0,
+                x: 0.0,
+                y: 0.0,
+            })?;
         }
-        self.event(xproto::KEY_PRESS_EVENT, code, 0.0, 0.0)?;
-        self.event(xproto::KEY_RELEASE_EVENT, code, 0.0, 0.0)?;
+        self.event(FakeInput {
+            kind: xproto::KEY_PRESS_EVENT,
+            detail: code,
+            x: 0.0,
+            y: 0.0,
+        })?;
+        self.event(FakeInput {
+            kind: xproto::KEY_RELEASE_EVENT,
+            detail: code,
+            x: 0.0,
+            y: 0.0,
+        })?;
         for key in modifiers.iter().rev() {
-            self.event(xproto::KEY_RELEASE_EVENT, self.keycode(*key)?.0, 0.0, 0.0)?;
+            self.event(FakeInput {
+                kind: xproto::KEY_RELEASE_EVENT,
+                detail: self.keycode(*key)?.0,
+                x: 0.0,
+                y: 0.0,
+            })?;
         }
         Ok(())
     }

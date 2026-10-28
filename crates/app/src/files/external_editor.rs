@@ -1,0 +1,439 @@
+//! Shell-free external launching. Waiting and stderr draining never occupy the GUI
+//! or its settings/refresh worker; a long-lived editor is never timed out or killed.
+use anyhow::{Context, Result};
+#[cfg(test)]
+use std::{
+    io::Read,
+    sync::{Arc, Mutex},
+    thread,
+};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
+use terminator_core::{Settings, find_executable};
+
+pub const PRESETS: [&str; 6] = [
+    "System default",
+    "VS Code",
+    "Cursor",
+    "RustRover",
+    "Zed",
+    "Custom",
+];
+pub const CUSTOM: usize = 5;
+pub fn preset(index: usize) -> (String, Vec<String>) {
+    let apps = ["", "Visual Studio Code", "Cursor", "RustRover", "Zed"];
+    let commands = ["xdg-open", "code", "cursor", "rustrover", "zed"];
+    if cfg!(target_os = "macos") {
+        (
+            "open".into(),
+            if index == 0 {
+                vec![]
+            } else if let Some(app) = apps.get(index) {
+                vec!["-a".into(), (*app).into()]
+            } else {
+                vec![]
+            },
+        )
+    } else if let Some(command) = commands.get(index) {
+        ((*command).into(), vec![])
+    } else {
+        ("xdg-open".into(), vec![])
+    }
+}
+pub fn selected(settings: &Settings) -> usize {
+    (0..CUSTOM)
+        .find(|&i| {
+            preset(i)
+                == (
+                    settings.external_editor.clone(),
+                    settings.external_args.clone(),
+                )
+        })
+        .unwrap_or(CUSTOM)
+}
+/// macOS `open file.png` asks Launch Services for a UTI handler and can fail for
+/// owner-only temp files (`NSOSStatusErrorDomain` -10661). Naming Preview skips
+/// that lookup. Linux `xdg-open` does not have the same failure mode.
+pub fn image_opener() -> (String, Vec<String>) {
+    if cfg!(target_os = "macos") {
+        (
+            "open".into(),
+            vec!["-a".into(), "Preview".into(), "--".into()],
+        )
+    } else {
+        ("xdg-open".into(), vec![])
+    }
+}
+fn command(program: &str, args: &[String], path: &Path) -> Result<Command> {
+    let executable = find_executable(program)
+        .with_context(|| format!("External editor executable not found: {program}"))?;
+    let path = std::path::absolute(path).context("Resolve external editor file path")?;
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    Ok(command)
+}
+#[cfg(test)]
+pub struct LaunchInput<'a, F: FnOnce(Result<()>) + Send + 'static> {
+    pub program: &'a str,
+    pub args: &'a [String],
+    pub path: &'a Path,
+    pub done: F,
+}
+
+#[cfg(test)]
+pub fn launch(input: LaunchInput<'_, impl FnOnce(Result<()>) + Send + 'static>) -> Result<()> {
+    let LaunchInput {
+        program,
+        args,
+        path,
+        done,
+    } = input;
+    let mut child = command(program, args, path)?
+        .spawn()
+        .with_context(|| format!("Start external editor {program}"))?;
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let diagnostic = Arc::new(Mutex::new(Vec::new()));
+    let output = Arc::clone(&diagnostic);
+    let (drained, drain_complete) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = [0; 1024];
+        loop {
+            match stderr.read(&mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let mut output = output.lock().unwrap();
+                    let count = n.min(4096usize.saturating_sub(output.len()));
+                    output.extend_from_slice(&bytes[..count]);
+                }
+            }
+        }
+        let _ = drained.send(());
+    });
+    let program = program.to_owned();
+    thread::spawn(move || {
+        let result = child
+            .wait()
+            .with_context(|| format!("Wait for external editor {program}"))
+            .and_then(|status| {
+                if status.success() {
+                    return Ok(());
+                }
+                let _ = drain_complete.recv_timeout(std::time::Duration::from_millis(100));
+                // Do not join the pipe reader: a GUI editor's descendant may inherit it.
+                let bytes = diagnostic.lock().unwrap();
+                let message: String = String::from_utf8_lossy(&bytes)
+                    .chars()
+                    .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                    .take(2048)
+                    .collect();
+                anyhow::bail!(
+                    "External editor {program} exited with {status}: {}",
+                    message.trim()
+                );
+            });
+        done(result);
+    });
+    Ok(())
+}
+
+pub struct LaunchSupervisedInput {
+    pub service: crate::gui_services::Services,
+    pub program: String,
+    pub args: Vec<String>,
+    pub path: std::path::PathBuf,
+}
+
+pub async fn launch_supervised(input: LaunchSupervisedInput) -> Result<()> {
+    let LaunchSupervisedInput {
+        service,
+        program,
+        args,
+        path,
+    } = input;
+    use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let mut context = OperationContext::new(
+        "external-editor",
+        terminator_core::id(),
+        Policy::ServiceLifetime,
+    );
+    context.deadline = None;
+    let handle = service.handle().clone();
+    let launch = Launch {
+        program,
+        args,
+        path,
+    };
+    handle.submit(context, cancel, async move {
+        let child = match spawn_editor(&service, &token, launch).await {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = started.send(Err(error));
+                return Ok(Vec::new());
+            }
+        };
+        let _ = started.send(Ok(()));
+        watch_editor(child, &token).await
+    })?;
+    ready
+        .await
+        .context("External editor launch cancelled before acknowledgment")?
+        .map_err(anyhow::Error::msg)
+}
+
+/// The external editor command line for one file.
+struct Launch {
+    program: String,
+    args: Vec<String>,
+    path: std::path::PathBuf,
+}
+
+async fn spawn_editor(
+    service: &crate::gui_services::Services,
+    token: &terminator_core::async_service::CancellationToken,
+    launch: Launch,
+) -> std::result::Result<tokio::process::Child, String> {
+    let Launch {
+        program,
+        args,
+        path,
+    } = launch;
+    let command = service
+        .fs()
+        .run(token, move || command(&program, &args, &path))
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    tokio::process::Command::from(command)
+        .kill_on_drop(false)
+        .spawn()
+        .map_err(|error| format!("Start external editor: {error}"))
+}
+
+/// Waits for the editor; a failed exit reports its stderr. A persistent
+/// external editor is never killed on cancellation.
+async fn watch_editor(
+    mut child: tokio::process::Child,
+    token: &terminator_core::async_service::CancellationToken,
+) -> anyhow::Result<Vec<crate::Update>> {
+    let Some(stderr) = child.stderr.take() else {
+        let result = child.wait().await?;
+        if !result.success() {
+            return Ok(vec![crate::Update::Error(format!(
+                "External editor exited with {result}"
+            ))]);
+        }
+        return Ok(Vec::new());
+    };
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let read = read_stderr(stderr, std::sync::Arc::clone(&output));
+    tokio::pin!(read);
+    let mut drained = false;
+    let result = loop {
+        tokio::select! {
+            () = token.cancelled() => return Ok(Vec::new()), // persistent external editor is never killed
+            result = &mut read, if !drained => { let _ = result; drained = true; }
+            result = child.wait() => break result?,
+        }
+    };
+    if result.success() {
+        return Ok(Vec::new());
+    }
+    if !drained {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), &mut read).await;
+    }
+    let bytes = output
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let message: String = String::from_utf8_lossy(&bytes)
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .take(2048)
+        .collect();
+    Ok(vec![crate::Update::Error(format!(
+        "External editor exited with {result}: {}",
+        message.trim()
+    ))])
+}
+
+/// Keeps the first 4 KiB of the editor's stderr.
+async fn read_stderr(
+    mut stderr: tokio::process::ChildStderr,
+    collected: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = [0; 1024];
+    loop {
+        let n = stderr.read(&mut bytes).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        let mut output = collected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let n = n.min(4096usize.saturating_sub(output.len()));
+        let Some(chunk) = bytes.get(..n) else {
+            return Ok(());
+        };
+        output.extend_from_slice(chunk);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    #[test]
+    fn arguments_and_absolute_path_are_separate_and_literal() {
+        let args = vec![
+            "--wait".into(),
+            "a b; $(touch unwanted)".into(),
+            String::new(),
+        ];
+        let executable = std::env::current_exe().unwrap();
+        let cmd = command(executable.to_str().unwrap(), &args, Path::new("a b;$x.rs")).unwrap();
+        let actual: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
+        assert_eq!(
+            &actual[..3],
+            &args
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(actual[3], std::path::absolute("a b;$x.rs").unwrap());
+    }
+    #[test]
+    fn missing_executable_and_spawn_failure_are_reported() {
+        assert!(
+            launch(LaunchInput {
+                program: "terminator-nonexistent-fixture-editor",
+                args: &[],
+                path: Path::new("file"),
+                done: |_| {}
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("not found")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let invalid = dir.path().join("invalid");
+        std::fs::write(&invalid, "#!/missing/fixture/interpreter\n").unwrap();
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
+        std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = launch(LaunchInput {
+            program: invalid.to_str().unwrap(),
+            args: &[],
+            path: Path::new("file"),
+            done: move |result| {
+                tx.send(result).unwrap();
+            },
+        });
+        // Binary translators may acknowledge spawning before reporting an
+        // invalid interpreter through the child's exit status.
+        if started.is_ok() {
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn failing_exit_is_reported_and_long_running_editor_does_not_block() {
+        let (tx, rx) = mpsc::channel();
+        let start = Instant::now();
+        launch(LaunchInput {
+            program: "/bin/sh",
+            args: &[
+                "-c".into(),
+                "sleep 1; echo fixture-failure >&2; exit 7".into(),
+            ],
+            path: Path::new("file"),
+            done: move |result| {
+                tx.send(result.map_err(|e| e.to_string())).unwrap();
+            },
+        })
+        .unwrap();
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+        let error = rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains('7'));
+        assert!(error.contains("fixture-failure"));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn noisy_failure_is_drained_but_diagnostic_is_bounded() {
+        let (tx, rx) = mpsc::channel();
+        launch(LaunchInput {
+            program: "/bin/sh",
+            args: &[
+                "-c".into(),
+                "i=0; while [ $i -lt 3000 ]; do echo diagnostic-line >&2; i=$((i+1)); done; exit 2"
+                    .into(),
+            ],
+            path: Path::new("file"),
+            done: move |r| {
+                tx.send(r.map_err(|e| e.to_string())).unwrap();
+            },
+        })
+        .unwrap();
+        let error = rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("diagnostic-line"));
+        assert!(error.len() < 2200);
+    }
+    #[test]
+    fn presets_round_trip_and_unmatched_settings_stay_custom() {
+        let mut settings = Settings::default();
+        for i in 0..CUSTOM {
+            (settings.external_editor, settings.external_args) = preset(i);
+            assert_eq!(selected(&settings), i);
+        }
+        settings.external_args.push("--my-config".into());
+        assert_eq!(selected(&settings), CUSTOM);
+    }
+    #[test]
+    fn images_use_preview_and_source_files_keep_the_configured_editor() {
+        assert!(crate::image_preview::supported(Path::new("shot.PNG")));
+        assert!(!crate::image_preview::supported(Path::new("src/main.rs")));
+        let (program, args) = image_opener();
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(program, "open");
+            assert_eq!(args, vec!["-a", "Preview", "--"]);
+            let cmd = command(&program, &args, Path::new("paste.png")).unwrap();
+            let actual: Vec<_> = cmd
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(&actual[..3], &["-a", "Preview", "--"]);
+            assert!(actual[3].ends_with("paste.png"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(program, "xdg-open");
+            assert!(args.is_empty());
+        }
+    }
+}

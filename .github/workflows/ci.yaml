@@ -85,6 +85,12 @@ jobs:
       # what it needs, so a plain build only recompiles everything.
       - name: Clippy
         run: sh scripts/check.sh clippy
+      - name: Size and structure limits (sarah.toml)
+        if: runner.os == 'Linux'
+        uses: aiman2039/sarah@v0.1.7
+        with:
+          path: .
+          fail-on-warn: true
       - name: Tests
         env:
           TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-state

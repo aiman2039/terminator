@@ -1,3 +1,5 @@
+use crate::agent_presence::AttentionInput;
+use crate::agent_presence::GetInput;
 use eframe::egui::{self};
 use egui_dock::NodeIndex;
 use std::collections::{HashMap, HashSet};
@@ -128,9 +130,12 @@ impl App {
         &self,
         id: &str,
     ) -> std::sync::Arc<agent_presence::AgentPresentation> {
-        self.presentations
-            .borrow_mut()
-            .get(&self.state, id, now(), self.services.presence_fresh())
+        self.presentations.borrow_mut().get(GetInput {
+            state: &self.state,
+            id,
+            now: now(),
+            fresh: self.services.presence_fresh(),
+        })
     }
 
     pub(crate) fn reconcile_presentations(&mut self) {
@@ -145,12 +150,12 @@ impl App {
         &self,
         session_ids: &[String],
     ) -> agent_presence::AttentionCounts {
-        self.presentations.borrow_mut().attention(
-            &self.state,
+        self.presentations.borrow_mut().attention(AttentionInput {
+            state: &self.state,
             session_ids,
-            now(),
-            self.services.presence_fresh(),
-        )
+            now: now(),
+            fresh: self.services.presence_fresh(),
+        })
     }
 
     /// Global cycle order for attention navigation: distinct live terminals

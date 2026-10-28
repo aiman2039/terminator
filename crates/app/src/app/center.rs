@@ -1,9 +1,18 @@
 use super::super::appearance;
+use crate::worktree_ui::WorktreeFormInput;
 use eframe::egui::{self};
 use egui_dock::DockArea;
 use terminator_core::*;
 
 use super::super::*;
+
+pub(crate) struct PaintFloatDockInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) viewport: egui::ViewportId,
+    pub(crate) project: &'a str,
+    pub(crate) dock: &'a mut egui_dock::DockState<Tab>,
+}
+
 impl App {
     pub(crate) fn center_pane(&mut self, ui: &mut egui::Ui) {
         self.settings_unsaved_dialog(ui.ctx());
@@ -102,30 +111,53 @@ impl App {
             }
             return;
         }
-        if let Some(draft) = &self.worktree_draft {
-            let mut submit = false;
-            let mut browse = false;
-            let mut cancel = false;
-            let mut clone = draft.clone();
-            self.worktree_form(ui, &mut clone, &mut submit, &mut browse, &mut cancel);
-            if browse {
-                self.browse_target = Some(BrowseTarget::WorktreeDest);
-            }
-            if submit {
-                self.submit_worktree(&clone);
-            }
-            if submit || cancel {
-                self.worktree_draft = None;
-            } else {
-                self.worktree_draft = Some(clone);
-            }
-            ui.add_space(12.0);
-            ui.separator();
-            ui.add_space(4.0);
+        if self.worktree_draft.is_some() {
+            self.worktree_draft_form(ui);
         }
-        let _header_h = 28.0;
         let footer_h = 44.0;
         let list_h = (ui.available_height() - footer_h).max(80.0);
+        self.worktree_list(ui, list_h);
+        ui.separator();
+        ui.horizontal(|ui| {
+            if self.worktree_draft.is_none() && ui.button("New worktree").clicked() {
+                self.open_worktree_wizard();
+            }
+        });
+    }
+
+    /// The new-worktree form over the list, while a draft is open.
+    fn worktree_draft_form(&mut self, ui: &mut egui::Ui) {
+        let Some(draft) = &self.worktree_draft else {
+            return;
+        };
+        let mut submit = false;
+        let mut browse = false;
+        let mut cancel = false;
+        let mut clone = draft.clone();
+        self.worktree_form(WorktreeFormInput {
+            ui,
+            draft: &mut clone,
+            submit: &mut submit,
+            browse: &mut browse,
+            cancel: &mut cancel,
+        });
+        if browse {
+            self.browse_target = Some(BrowseTarget::WorktreeDest);
+        }
+        if submit {
+            self.submit_worktree(&clone);
+        }
+        if submit || cancel {
+            self.worktree_draft = None;
+        } else {
+            self.worktree_draft = Some(clone);
+        }
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(4.0);
+    }
+
+    fn worktree_list(&mut self, ui: &mut egui::Ui, list_h: f32) {
         let worktrees: Vec<_> = self
             .state
             .worktrees
@@ -138,75 +170,89 @@ impl App {
             .max_height(list_h)
             .show(ui, |ui| {
                 for worktree in &worktrees {
-                    let Some(project) = self
-                        .state
-                        .projects
-                        .iter()
-                        .find(|p| p.id == worktree.project_id)
-                    else {
-                        continue;
-                    };
-                    let live = self
-                        .state
-                        .sessions
-                        .iter()
-                        .filter(|s| s.project_id == project.id && s.lifecycle.live())
-                        .count();
-                    let is_selected = selected.as_ref() == Some(&project.id);
-                    let path = project.path.display().to_string();
-                    let name = project.name.clone();
-                    let project_id = project.id.clone();
-                    let response = appearance::project_row(
-                        ui,
-                        &name,
-                        "GitBranch",
-                        is_selected,
-                        self.theme.row_height(),
-                        &live.to_string(),
-                        appearance::color(&self.theme.secondary),
-                    )
-                    .on_hover_text(format!(
-                        "{}\n{}",
-                        path,
-                        worktree.path.display()
-                    ));
-                    if response.clicked() {
-                        self.select_project(project_id.clone());
-                        self.worktree_open = false;
-                    }
-                    let app = &mut *self;
-                    appearance::context_menu(&response, |ui| {
-                        if appearance::menu_item(ui, "Open", "FolderOpen", "").clicked() {
-                            app.select_project(project_id.clone());
-                            app.worktree_open = false;
-                            ui.close();
-                        }
-                        if appearance::menu_item(
-                            ui,
-                            "New terminal",
-                            "Terminal",
-                            &app.shortcut_label(Action::NewTerminal),
-                        )
-                        .clicked()
-                        {
-                            app.select_project(project_id.clone());
-                            app.create(None);
-                            app.worktree_open = false;
-                            ui.close();
-                        }
-                        if appearance::menu_item(ui, "Remove worktree…", "X", "").clicked() {
-                            app.confirm_remove_worktree(&project_id);
-                            ui.close();
-                        }
-                    });
+                    self.worktree_row(ui, worktree, selected.as_ref());
                 }
             });
-        ui.separator();
-        ui.horizontal(|ui| {
-            if self.worktree_draft.is_none() && ui.button("New worktree").clicked() {
-                self.open_worktree_wizard();
-            }
-        });
+    }
+
+    fn worktree_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        worktree: &worktrees::Registration,
+        selected: Option<&String>,
+    ) {
+        let Some(project) = self
+            .state
+            .projects
+            .iter()
+            .find(|p| p.id == worktree.project_id)
+        else {
+            return;
+        };
+        let live = self
+            .state
+            .sessions
+            .iter()
+            .filter(|s| s.project_id == project.id && s.lifecycle.live())
+            .count();
+        let is_selected = selected == Some(&project.id);
+        let path = project.path.display().to_string();
+        let name = project.name.clone();
+        let project_id = project.id.clone();
+        let response = appearance::project_row(appearance::ProjectRowInput {
+            ui,
+            label: &name,
+            icon: "GitBranch",
+            selected: is_selected,
+            height: self.theme.row_height(),
+            trailing: &live.to_string(),
+            tint: appearance::color(&self.theme.secondary),
+        })
+        .on_hover_text(format!("{}\n{}", path, worktree.path.display()));
+        if response.clicked() {
+            self.select_project(project_id.clone());
+            self.worktree_open = false;
+        }
+        appearance::context_menu(&response, |ui| self.worktree_row_menu(ui, &project_id));
+    }
+
+    fn worktree_row_menu(&mut self, ui: &mut egui::Ui, project_id: &str) {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Open",
+            icon: "FolderOpen",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            self.select_project(project_id.to_owned());
+            self.worktree_open = false;
+            ui.close();
+        }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "New terminal",
+            icon: "Terminal",
+            shortcut: &self.shortcut_label(Action::NewTerminal),
+        })
+        .clicked()
+        {
+            self.select_project(project_id.to_owned());
+            self.create(None);
+            self.worktree_open = false;
+            ui.close();
+        }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Remove worktree…",
+            icon: "X",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            self.confirm_remove_worktree(project_id);
+            ui.close();
+        }
     }
 
     pub(crate) fn workspace_center(&mut self, ui: &mut egui::Ui) {
@@ -386,13 +432,13 @@ impl App {
     /// and pane controls. Cross-window drag-drop is unsupported, so no
     /// drop landing runs here; a main-dock drag released over a float is
     /// cancelled by the main window's own release handling.
-    pub(crate) fn paint_float_dock(
-        &mut self,
-        ui: &mut egui::Ui,
-        viewport: egui::ViewportId,
-        project: &str,
-        dock: &mut egui_dock::DockState<Tab>,
-    ) {
+    pub(crate) fn paint_float_dock(&mut self, input: PaintFloatDockInput<'_>) {
+        let PaintFloatDockInput {
+            ui,
+            viewport,
+            project,
+            dock,
+        } = input;
         let style = self.dock_style(ui);
         self.refresh_float_pane_maps(dock);
         DockArea::new(dock)

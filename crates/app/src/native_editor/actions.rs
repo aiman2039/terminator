@@ -243,7 +243,20 @@ impl App {
 mod tests {
     use super::*;
 
-    fn edit(line: u32, from: u32, to: u32, text: &str) -> native_lsp::RenameTextEdit {
+    struct EditInput<'a> {
+        line: u32,
+        from: u32,
+        to: u32,
+        text: &'a str,
+    }
+
+    fn edit(input: EditInput<'_>) -> native_lsp::RenameTextEdit {
+        let EditInput {
+            line,
+            from,
+            to,
+            text,
+        } = input;
         native_lsp::RenameTextEdit {
             range: native_lsp::Range {
                 start: native_lsp::Position {
@@ -265,7 +278,20 @@ mod tests {
         let mut engine = VimEngine::new();
         assert!(apply_text_edits(
             &mut buffer,
-            &[edit(0, 6, 6, " "), edit(1, 0, 0, "    ")],
+            &[
+                edit(EditInput {
+                    line: 0,
+                    from: 6,
+                    to: 6,
+                    text: " "
+                }),
+                edit(EditInput {
+                    line: 1,
+                    from: 0,
+                    to: 0,
+                    text: "    "
+                })
+            ],
         ));
         assert_eq!(buffer.text(), "fn a() {\n    x\n}\n");
         engine.undo(&mut buffer);

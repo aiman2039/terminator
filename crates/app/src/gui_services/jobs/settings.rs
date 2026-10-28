@@ -8,6 +8,27 @@ use terminator_core::appearance::{AppearanceConfig, AppearanceFile, config_path}
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
 
+pub(crate) struct SaveAppearanceInput<'a> {
+    pub(in crate::gui_services) theme: Box<AppearanceConfig>,
+    pub(in crate::gui_services) expected: String,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct InstallInput<'a> {
+    pub(in crate::gui_services) kind: String,
+    pub(in crate::gui_services) remove: bool,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct TestNtfyInput<'a> {
+    pub(in crate::gui_services) channel: String,
+    pub(in crate::gui_services) machine: String,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
 impl Services {
     pub(in crate::gui_services) async fn save_preferences(
         &self,
@@ -21,7 +42,7 @@ impl Services {
             .catalog
             .run(&cancel, move || {
                 prefs.save(&data)?;
-                Ok(prefs)
+                anyhow::Ok(prefs)
             })
             .await
             .map_err(|e| format!("Save UI preferences: {e:#}"));
@@ -31,17 +52,24 @@ impl Services {
 
     pub(in crate::gui_services) async fn save_appearance(
         &self,
-        theme: Box<AppearanceConfig>,
-        expected: String,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: SaveAppearanceInput<'_>,
     ) -> Result<()> {
+        let SaveAppearanceInput {
+            theme,
+            expected,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let paths = client.paths.clone();
         let file = client
             .catalog
             .run(&cancel, move || {
-                AppearanceFile::save(&config_path(&paths)?, &theme, &expected)
+                Ok::<_, anyhow::Error>(AppearanceFile::save(
+                    &config_path(&paths)?,
+                    &theme,
+                    &expected,
+                )?)
             })
             .await?;
         updates.push(Update::Appearance(Box::new(file)));
@@ -97,28 +125,30 @@ impl Services {
                 let home = std::env::var_os("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_default();
-                Ok(terminator_integrations::AGENTS
-                    .iter()
-                    .map(|kind| {
-                        (
-                            (*kind).to_string(),
-                            terminator_integrations::installed(&home, kind),
-                        )
-                    })
-                    .collect())
+                anyhow::Ok(
+                    terminator_integrations::AGENTS
+                        .iter()
+                        .map(|kind| {
+                            (
+                                (*kind).to_string(),
+                                terminator_integrations::installed(&home, kind),
+                            )
+                        })
+                        .collect(),
+                )
             })
             .await?;
         updates.push(Update::HookStatus(status));
         Ok(())
     }
 
-    pub(in crate::gui_services) async fn install(
-        &self,
-        kind: String,
-        remove: bool,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
-    ) -> Result<()> {
+    pub(in crate::gui_services) async fn install(&self, input: InstallInput<'_>) -> Result<()> {
+        let InstallInput {
+            kind,
+            remove,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let paths = client.paths.clone();
         let message = client
@@ -131,13 +161,14 @@ impl Services {
                 let home = std::env::var_os("HOME").context("No home directory")?;
                 let helper =
                     terminator_core::sibling_exe(&std::env::current_exe()?, "terminator-hook");
-                let path = terminator_integrations::install_at(
-                    Path::new(&home),
-                    &kind,
-                    &helper,
-                    remove,
-                    &paths,
-                )?;
+                let path =
+                    terminator_integrations::install_at(terminator_integrations::InstallAtInput {
+                        home: Path::new(&home),
+                        kind: &kind,
+                        helper: &helper,
+                        remove,
+                        paths: &paths,
+                    })?;
                 Ok(format!(
                     "{} hooks: {}",
                     if remove { "Removed" } else { "Installed" },
@@ -149,13 +180,13 @@ impl Services {
         Ok(())
     }
 
-    pub(in crate::gui_services) async fn test_ntfy(
-        &self,
-        channel: String,
-        machine: String,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
-    ) -> Result<()> {
+    pub(in crate::gui_services) async fn test_ntfy(&self, input: TestNtfyInput<'_>) -> Result<()> {
+        let TestNtfyInput {
+            channel,
+            machine,
+            cancel,
+            updates,
+        } = input;
         let delivered = self
             .platform()
             .run(&cancel, move || {

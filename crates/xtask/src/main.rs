@@ -1,7 +1,17 @@
 //! Repository automation in Rust. No Python interpreter or downloaded test runner.
 #![forbid(unsafe_code)]
 // The harness fails the process on a broken fixture. That is an assertion, not a library error.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "Dev tool: a failed step aborts the task"
+)]
+// xtask is a developer CLI; its stdout/stderr is the task report.
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "xtask is a developer CLI; its output is the task report"
+)]
 mod async_boundary;
 mod browser_fixture;
 mod harness;
@@ -123,23 +133,7 @@ enum Task {
         require: bool,
     },
     /// Quiet Glow GUI fixtures. Requires a desktop and test-support build.
-    Gui {
-        #[arg(default_value = "all")]
-        case: String,
-        #[arg(long, default_value = "1")]
-        scale: f32,
-        #[arg(long)]
-        narrow: bool,
-        #[arg(long)]
-        output: Option<PathBuf>,
-        #[arg(long, default_value = "50")]
-        sessions: usize,
-        #[arg(long, default_value = "5")]
-        seconds: u64,
-        /// Parallel quiet GUI workers; native-input cases always run alone.
-        #[arg(long, default_value = "8")]
-        jobs: usize,
-    },
+    Gui(GuiArgs),
     /// Bounded daemon transport/PTY load (does not measure GUI FPS).
     Load {
         #[arg(long, default_value = "10")]
@@ -155,26 +149,7 @@ enum Task {
         after: PathBuf,
     },
     /// Isolated A/B benchmark of the daemon notification path.
-    NotificationPerf {
-        /// Baseline daemon binary (defaults to the built debug daemon).
-        #[arg(long)]
-        baseline_bin: Option<PathBuf>,
-        /// Candidate daemon binary (defaults to the built debug daemon).
-        #[arg(long)]
-        candidate_bin: Option<PathBuf>,
-        #[arg(long, default_value = "60")]
-        seconds: u64,
-        #[arg(long, default_value = "10")]
-        warmup: u64,
-        #[arg(long, default_value = "3")]
-        repetitions: u32,
-        #[arg(long, default_value = "20")]
-        burst: usize,
-        #[arg(long, default_value = "all")]
-        cases: String,
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
+    NotificationPerf(notification_perf::Options),
     /// Count Git/PR subprocesses in an isolated native refresh fixture.
     CommandCounts {
         #[arg(long, default_value = "5")]
@@ -189,52 +164,52 @@ enum Task {
     },
 }
 fn main() -> Result<()> {
-    if std::env::args_os()
-        .next()
-        .and_then(|p| {
-            PathBuf::from(p)
-                .file_name()
-                .map(std::borrow::ToOwned::to_owned)
-        })
-        .is_some_and(|s| s == "terminator-test-shell")
-    {
-        // Native-input fixtures use a non-executing PTY sink, so desktop typing
-        // can never become shell commands or appear in their captures.
-        #[cfg(unix)]
-        {
-            let mut attributes = rustix::termios::tcgetattr(std::io::stdin())
-                .map_err(|_| anyhow::anyhow!("Fixture sink requires a PTY"))?;
-            attributes
-                .local_modes
-                .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
-            rustix::termios::tcsetattr(
-                std::io::stdin(),
-                rustix::termios::OptionalActions::Now,
-                &attributes,
-            )
-            .map_err(|_| anyhow::anyhow!("Cannot disable fixture echo"))?;
-        }
-        #[cfg(not(unix))]
-        anyhow::ensure!(
-            false,
-            "Fixture sink requires a Unix PTY; Windows fixtures are not implemented yet"
-        );
-        std::io::copy(&mut std::io::stdin(), &mut std::io::sink())?;
-        return Ok(());
+    if invoked_as(|name| name == "terminator-test-shell") {
+        return test_shell_sink();
     }
-
-    if std::env::args_os()
-        .next()
-        .and_then(|p| {
-            PathBuf::from(p)
-                .file_name()
-                .map(std::borrow::ToOwned::to_owned)
-        })
-        .is_some_and(|name| name == "git" || name == "ps" || name == "gh")
-    {
+    if invoked_as(|name| name == "git" || name == "ps" || name == "gh") {
         return integration::git_shim();
     }
-    match Args::parse().task {
+    dispatch(Args::parse().task)
+}
+/// Whether this executable was started under a file name matching `matches`.
+fn invoked_as(matches: impl Fn(&std::ffi::OsStr) -> bool) -> bool {
+    std::env::args_os()
+        .next()
+        .and_then(|p| {
+            PathBuf::from(p)
+                .file_name()
+                .map(std::borrow::ToOwned::to_owned)
+        })
+        .is_some_and(|name| matches(&name))
+}
+fn test_shell_sink() -> Result<()> {
+    // Native-input fixtures use a non-executing PTY sink, so desktop typing
+    // can never become shell commands or appear in their captures.
+    #[cfg(unix)]
+    {
+        let mut attributes = rustix::termios::tcgetattr(std::io::stdin())
+            .map_err(|_| anyhow::anyhow!("Fixture sink requires a PTY"))?;
+        attributes
+            .local_modes
+            .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
+        rustix::termios::tcsetattr(
+            std::io::stdin(),
+            rustix::termios::OptionalActions::Now,
+            &attributes,
+        )
+        .map_err(|_| anyhow::anyhow!("Cannot disable fixture echo"))?;
+    }
+    #[cfg(not(unix))]
+    anyhow::ensure!(
+        false,
+        "Fixture sink requires a Unix PTY; Windows fixtures are not implemented yet"
+    );
+    std::io::copy(&mut std::io::stdin(), &mut std::io::sink())?;
+    Ok(())
+}
+fn dispatch(task: Task) -> Result<()> {
+    match task {
         Task::Release(options) => release::run(options),
         Task::ReleaseCheck { output } => release::checks::run(&output),
         Task::ReleaseWindows {
@@ -242,7 +217,12 @@ fn main() -> Result<()> {
             artifacts,
             host,
             bash,
-        } => release::windows::run(&source, &artifacts, &host, &bash),
+        } => release::windows::run(release::windows::RunInput {
+            source: &source,
+            artifacts: &artifacts,
+            host: &host,
+            bash: &bash,
+        }),
         Task::BumpVersion => release::version::bump(&harness::root()).map(|_| ()),
         Task::AsyncBoundary => async_boundary::run(),
         Task::LaunchAssets => launch::run(),
@@ -264,7 +244,12 @@ fn main() -> Result<()> {
             styled,
             output,
             timings,
-        } => package::local_dmg(release, styled, output, timings),
+        } => package::local_dmg(package::LocalDmgInput {
+            release,
+            styled,
+            destination: output,
+            timings,
+        }),
         Task::Dmg { app, output } => package::dmg(&app, &output),
         Task::Assemble {
             app,
@@ -277,30 +262,83 @@ fn main() -> Result<()> {
             build_number,
             destination: &output,
         }),
-        Task::Integration => std::thread::scope(|scope| -> Result<()> {
-            let tasks = [
-                ("run", scope.spawn(integration::run)),
-                ("controls", scope.spawn(integration::controls)),
-                ("hook_controls", scope.spawn(integration::hook_controls)),
-                ("regressions", scope.spawn(regressions::run)),
-            ];
-            let mut failures = Vec::new();
-            for (name, task) in tasks {
-                match task.join() {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => failures.push(format!("{name}: {error:#}")),
-                    Err(_) => failures.push(format!("{name}: panicked")),
-                }
-            }
-            anyhow::ensure!(
-                failures.is_empty(),
-                "Integration failures:\n{}",
-                failures.join("\n")
-            );
-            Ok(())
-        }),
+        Task::Integration => integration_all(),
         Task::Ssh { require } => ssh_fixture::run(require),
-        Task::Gui {
+        Task::Gui(args) => args.run(),
+        Task::Load {
+            seconds,
+            output,
+            conditional,
+        } => integration::load(Duration::from_secs(seconds), output, conditional),
+        Task::CompareLoad { before, after } => compare_load(&before, &after),
+        Task::NotificationPerf(options) => notification_perf::run(options),
+        Task::CommandCounts { seconds, output } => integration::command_counts(seconds, output),
+        Task::MuseEcho { muse } => integration::muse(&muse),
+    }
+}
+fn integration_all() -> Result<()> {
+    std::thread::scope(|scope| -> Result<()> {
+        let tasks = [
+            ("run", scope.spawn(integration::run)),
+            ("controls", scope.spawn(integration::controls)),
+            ("hook_controls", scope.spawn(integration::hook_controls)),
+            ("regressions", scope.spawn(regressions::run)),
+        ];
+        let mut failures = Vec::new();
+        for (name, task) in tasks {
+            match task.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(format!("{name}: {error:#}")),
+                Err(_) => failures.push(format!("{name}: panicked")),
+            }
+        }
+        anyhow::ensure!(
+            failures.is_empty(),
+            "Integration failures:\n{}",
+            failures.join("\n")
+        );
+        Ok(())
+    })
+}
+fn compare_load(before: &std::path::Path, after: &std::path::Path) -> Result<()> {
+    let a: serde_json::Value = serde_json::from_slice(&std::fs::read(before)?)?;
+    let b: serde_json::Value = serde_json::from_slice(&std::fs::read(after)?)?;
+    let mut comparison = serde_json::Map::new();
+    for key in ["snapshot_p95_ms", "daemon_peak_rss_kib", "bytes_received"] {
+        let old = a
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .with_context(|| format!("Missing baseline metric {key}"))?;
+        let new = b
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .with_context(|| format!("Missing current metric {key}"))?;
+        comparison.insert(key.into(),serde_json::json!({"before":old,"after":new,"ratio":if old==0.0 {None}else{Some(new/old)}}));
+    }
+    println!("{}", serde_json::to_string_pretty(&comparison)?);
+    Ok(())
+}
+#[derive(clap::Args)]
+struct GuiArgs {
+    #[arg(default_value = "all")]
+    case: String,
+    #[arg(long, default_value = "1")]
+    scale: f32,
+    #[arg(long)]
+    narrow: bool,
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long, default_value = "50")]
+    sessions: usize,
+    #[arg(long, default_value = "5")]
+    seconds: u64,
+    /// Parallel quiet GUI workers; native-input cases always run alone.
+    #[arg(long, default_value = "8")]
+    jobs: usize,
+}
+impl GuiArgs {
+    fn run(self) -> Result<()> {
+        let Self {
             case,
             scale,
             narrow,
@@ -308,7 +346,8 @@ fn main() -> Result<()> {
             sessions,
             seconds,
             jobs,
-        } => native::run(
+        } = self;
+        native::run(
             &case,
             native::Options {
                 scale,
@@ -318,50 +357,6 @@ fn main() -> Result<()> {
                 seconds,
                 jobs,
             },
-        ),
-        Task::Load {
-            seconds,
-            output,
-            conditional,
-        } => integration::load(Duration::from_secs(seconds), output, conditional),
-        Task::CompareLoad { before, after } => {
-            let a: serde_json::Value = serde_json::from_slice(&std::fs::read(before)?)?;
-            let b: serde_json::Value = serde_json::from_slice(&std::fs::read(after)?)?;
-            let mut comparison = serde_json::Map::new();
-            for key in ["snapshot_p95_ms", "daemon_peak_rss_kib", "bytes_received"] {
-                let old = a
-                    .get(key)
-                    .and_then(serde_json::Value::as_f64)
-                    .with_context(|| format!("Missing baseline metric {key}"))?;
-                let new = b
-                    .get(key)
-                    .and_then(serde_json::Value::as_f64)
-                    .with_context(|| format!("Missing current metric {key}"))?;
-                comparison.insert(key.into(),serde_json::json!({"before":old,"after":new,"ratio":if old==0.0 {None}else{Some(new/old)}}));
-            }
-            println!("{}", serde_json::to_string_pretty(&comparison)?);
-            Ok(())
-        }
-        Task::NotificationPerf {
-            baseline_bin,
-            candidate_bin,
-            seconds,
-            warmup,
-            repetitions,
-            burst,
-            cases,
-            output,
-        } => notification_perf::run(notification_perf::Options {
-            baseline_bin,
-            candidate_bin,
-            seconds,
-            warmup,
-            repetitions,
-            burst,
-            cases,
-            output,
-        }),
-        Task::CommandCounts { seconds, output } => integration::command_counts(seconds, output),
-        Task::MuseEcho { muse } => integration::muse(&muse),
+        )
     }
 }

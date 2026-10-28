@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use std::{
     collections::HashMap,
     fs,
@@ -9,6 +9,7 @@ use std::{
 use terminator_core::*;
 
 use super::super::shared::{HistoryJob, Runtime, Shared, relock};
+use super::archived::ArchivedOwner;
 use crate::storage;
 
 impl Shared {
@@ -154,72 +155,13 @@ impl Shared {
             !state.sessions.iter().any(|s| s.lifecycle.live()),
             "Retired owner still has live records"
         );
-        match *request {
-            Request::PruneHistory { budget } => {
-                generations::Catalog::open(root)?.refresh(&mut state)?;
-                let ids =
-                    storage::History::new(paths)?.prune_with_budget(&state.settings, budget)?;
-                for session in &mut state.sessions {
-                    if ids.contains(&session.id) {
-                        session.truncated = true;
-                    }
-                }
-            }
-            Request::History { session } => {
-                let record = state
-                    .sessions
-                    .iter()
-                    .find(|s| s.id == session)
-                    .context("Unknown historical session")?;
-                return Ok(Response::Text(storage::text(&paths, record)?));
-            }
-            Request::Rename { session, label } => {
-                ensure!(label.len() <= 256, "Label too long");
-                state
-                    .sessions
-                    .iter_mut()
-                    .find(|s| s.id == session)
-                    .context("Unknown session")?
-                    .label = label;
-            }
-            Request::Focus { session } => state.focus(&session),
-            Request::Notice { id, action } => {
-                let n = state
-                    .notifications
-                    .iter_mut()
-                    .find(|n| n.id == id)
-                    .context("Unknown notification")?;
-                match action.as_str() {
-                    "read" => n.read = true,
-                    "dismiss" => n.dismissed = true,
-                    "snooze" => n.snoozed_until = now().saturating_add(600),
-                    _ => bail!("Unknown notification action"),
-                }
-            }
-            Request::DismissTerminalNotice { id } => {
-                state
-                    .terminal_notices
-                    .iter_mut()
-                    .find(|n| n.id == id)
-                    .context("Unknown notice")?
-                    .dismissed = true;
-            }
-            Request::Remove { session } => {
-                storage::History::new(paths)?.clear(Some(&session), true)?;
-                state.sessions.retain(|s| s.id != session);
-                state.agents.retain(|a| a.session_id != session);
-                state.notifications.retain(|n| n.session_id != session);
-                state.terminal_notices.retain(|n| n.session_id != session);
-            }
-            Request::ClearHistory { session } => {
-                storage::History::new(paths)?.clear(session.as_deref(), false)?;
-                for s in &mut state.sessions {
-                    if session.as_ref().is_none_or(|id| id == &s.id) {
-                        s.truncated = true;
-                    }
-                }
-            }
-            _ => bail!("Operation requires a live session owner"),
+        let mut archived = ArchivedOwner {
+            paths: &paths,
+            root,
+            state: &mut state,
+        };
+        if let Some(response) = archived.apply(*request)? {
+            return Ok(response);
         }
         state.revision = state.revision.saturating_add(1);
         store.save(&state)?;

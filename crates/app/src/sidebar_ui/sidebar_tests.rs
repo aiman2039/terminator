@@ -2,12 +2,13 @@ use super::attention::*;
 use super::explorer_rows::*;
 use super::git_panel::*;
 use crate::agent_presence::attention_status_icon;
-use crate::{
-    appearance, file_actions::FileAction, icons, preferences::ExplorerSearchMode,
-    services::ContextData, workspace_ops,
-};
+use crate::{appearance, file_actions::FileAction, icons};
+#[cfg(feature = "test-support")]
+use crate::{preferences::ExplorerSearchMode, services::ContextData, workspace_ops};
 use eframe::egui::{self};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "test-support")]
+use std::path::PathBuf;
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{AgentState, Notification, ReviewMode};
 
@@ -37,7 +38,20 @@ mod tests {
 
     #[test]
     fn inbox_rows_fold_notices_per_session() {
-        fn notice(id: &str, session: &str, invocation: &str, created: u64) -> Notification {
+        struct NoticeInput<'a> {
+            id: &'a str,
+            session: &'a str,
+            invocation: &'a str,
+            created: u64,
+        }
+
+        fn notice(input: NoticeInput<'_>) -> Notification {
+            let NoticeInput {
+                id,
+                session,
+                invocation,
+                created,
+            } = input;
             Notification {
                 id: id.into(),
                 session_id: session.into(),
@@ -54,10 +68,30 @@ mod tests {
             }
         }
         let groups = group_notices(vec![
-            notice("n1", "s", "a", 3),
-            notice("n2", "s", "a", 2),
-            notice("n3", "s", "b", 1),
-            notice("n4", "t", "a", 0),
+            notice(NoticeInput {
+                id: "n1",
+                session: "s",
+                invocation: "a",
+                created: 3,
+            }),
+            notice(NoticeInput {
+                id: "n2",
+                session: "s",
+                invocation: "a",
+                created: 2,
+            }),
+            notice(NoticeInput {
+                id: "n3",
+                session: "s",
+                invocation: "b",
+                created: 1,
+            }),
+            notice(NoticeInput {
+                id: "n4",
+                session: "t",
+                invocation: "a",
+                created: 0,
+            }),
         ]);
         // Repeated agent runs in one session fold into a single row.
         assert_eq!(groups.len(), 2);
@@ -136,7 +170,13 @@ mod tests {
             (false, Some(false), false, ReviewMode::Neovim, true, None),
         ] {
             assert_eq!(
-                git_click_action(deleted, staged, clicked, mode, advertised),
+                git_click_action(GitClickActionInput {
+                    deleted,
+                    staged,
+                    clicked,
+                    review_mode: mode,
+                    neovim_review: advertised
+                }),
                 expected,
                 "deleted={deleted} staged={staged:?} clicked={clicked} mode={mode:?} advertised={advertised}"
             );
@@ -249,15 +289,15 @@ mod tests {
                         continue;
                     }
                     rendered += 1;
-                    appearance::file_row(
+                    appearance::file_row(appearance::FileRowInput {
                         ui,
-                        "file.rs",
-                        icons::file_icon(std::path::Path::new("file.rs")),
-                        false,
-                        GIT_TREE_ROW_HEIGHT,
-                        "M",
-                        egui::Color32::WHITE,
-                    );
+                        label: "file.rs",
+                        icon: icons::file_icon(std::path::Path::new("file.rs")),
+                        selected: false,
+                        height: GIT_TREE_ROW_HEIGHT,
+                        trailing: "M",
+                        tint: egui::Color32::WHITE,
+                    });
                 }
                 assert!((ui.next_widget_position().y - start - stride * 23_315.0).abs() < 2.0);
             });

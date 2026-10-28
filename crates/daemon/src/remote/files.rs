@@ -29,12 +29,20 @@ fn within(root: &str, actual: &str) -> bool {
     let root = root.trim_end_matches('/');
     actual == root || actual.starts_with(&format!("{root}/"))
 }
-pub(super) async fn read(
-    sftp: &Sftp,
-    fs: &mut Fs,
-    project: &RemoteProject,
-    path: &str,
-) -> Result<Vec<u8>> {
+pub(super) struct ReadInput<'a> {
+    pub(super) sftp: &'a Sftp,
+    pub(super) fs: &'a mut Fs,
+    pub(super) project: &'a RemoteProject,
+    pub(super) path: &'a str,
+}
+
+pub(super) async fn read(input: ReadInput<'_>) -> Result<Vec<u8>> {
+    let ReadInput {
+        sftp,
+        fs,
+        project,
+        path,
+    } = input;
     let actual = contained(fs, project, path).await?;
     let mut file = sftp.open(actual).await?;
     let metadata = file.metadata().await?;
@@ -98,60 +106,12 @@ pub(super) fn operation(
                 }
             };
             let mut fs = sftp.fs();
-            let result = async {
-                match operation {
-                    Operation::List { path } => {
-                        let actual = contained(&mut fs, project, &path).await?;
-                        let directory = fs.open_dir(actual).await?;
-                        let mut stream = Box::pin(directory.read_dir());
-                        let mut entries = Vec::new();
-                        while let Some(entry) = stream.next().await {
-                            let entry = entry?;
-                            let name = entry
-                                .filename()
-                                .to_str()
-                                .context("Remote file names must be UTF-8")?
-                                .to_owned();
-                            if name == "." || name == ".." {
-                                continue;
-                            }
-                            ensure!(
-                                !name.contains('/'),
-                                "Remote server returned a non-child directory entry"
-                            );
-                            let child = if path.is_empty() {
-                                name.clone()
-                            } else {
-                                format!("{path}/{name}")
-                            };
-                            terminator_core::remote::validate_relative(&child)?;
-                            ensure!(
-                                entries.len() < MAX_ENTRIES,
-                                "Remote directory exceeds 1000 entries"
-                            );
-                            entries.push(Entry {
-                                name,
-                                path: child,
-                                directory: entry.file_type().is_some_and(|t| t.is_dir()),
-                                symlink: entry.file_type().is_some_and(|t| t.is_symlink()),
-                                bytes: entry.metadata().len(),
-                            });
-                        }
-                        entries.sort_by(|a, b| {
-                            b.directory.cmp(&a.directory).then(a.name.cmp(&b.name))
-                        });
-                        Ok(Reply::Directory { path, entries })
-                    }
-                    Operation::Read { path } => {
-                        let bytes = read(&sftp, &mut fs, project, &path).await?;
-                        Ok(Reply::File {
-                            path,
-                            base64: B64.encode(bytes),
-                        })
-                    }
-                    _ => anyhow::bail!("Not a remote filesystem operation"),
-                }
-            }
+            let result = dispatch_operation(DispatchOperationInput {
+                sftp: &sftp,
+                fs: &mut fs,
+                project,
+                operation,
+            })
             .await;
             drop(fs);
             let close = sftp.close().await;
@@ -166,6 +126,79 @@ pub(super) fn operation(
         .await
         .context("SSH file operation timed out")?
     })
+}
+
+async fn list_directory(fs: &mut Fs, project: &RemoteProject, path: String) -> Result<Reply> {
+    let actual = contained(fs, project, &path).await?;
+    let directory = fs.open_dir(actual).await?;
+    let mut stream = Box::pin(directory.read_dir());
+    let mut entries = Vec::new();
+    while let Some(entry) = stream.next().await {
+        let entry = entry?;
+        let name = entry
+            .filename()
+            .to_str()
+            .context("Remote file names must be UTF-8")?
+            .to_owned();
+        if name == "." || name == ".." {
+            continue;
+        }
+        ensure!(
+            !name.contains('/'),
+            "Remote server returned a non-child directory entry"
+        );
+        let child = if path.is_empty() {
+            name.clone()
+        } else {
+            format!("{path}/{name}")
+        };
+        terminator_core::remote::validate_relative(&child)?;
+        ensure!(
+            entries.len() < MAX_ENTRIES,
+            "Remote directory exceeds 1000 entries"
+        );
+        entries.push(Entry {
+            name,
+            path: child,
+            directory: entry.file_type().is_some_and(|t| t.is_dir()),
+            symlink: entry.file_type().is_some_and(|t| t.is_symlink()),
+            bytes: entry.metadata().len(),
+        });
+    }
+    entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.name.cmp(&b.name)));
+    Ok(Reply::Directory { path, entries })
+}
+struct DispatchOperationInput<'a> {
+    sftp: &'a Sftp,
+    fs: &'a mut Fs,
+    project: &'a RemoteProject,
+    operation: Operation,
+}
+
+async fn dispatch_operation(input: DispatchOperationInput<'_>) -> Result<Reply> {
+    let DispatchOperationInput {
+        sftp,
+        fs,
+        project,
+        operation,
+    } = input;
+    match operation {
+        Operation::List { path } => list_directory(fs, project, path).await,
+        Operation::Read { path } => {
+            let bytes = read(ReadInput {
+                sftp,
+                fs,
+                project,
+                path: &path,
+            })
+            .await?;
+            Ok(Reply::File {
+                path,
+                base64: B64.encode(bytes),
+            })
+        }
+        _ => anyhow::bail!("Not a remote filesystem operation"),
+    }
 }
 
 #[cfg(test)]

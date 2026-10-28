@@ -1,19 +1,45 @@
 //! Git diff, worktree, and commit-log/blame jobs.
 use super::super::submit::Services;
+use crate::diff::ExpandGapInput;
 use crate::{Tab, Update, diff, worktree_ui};
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
 
+pub(crate) struct DiffActionInput<'a> {
+    pub(in crate::gui_services) tab: Tab,
+    pub(in crate::gui_services) request: Box<diff::actions::Request>,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct DiffContextInput<'a> {
+    pub(in crate::gui_services) tab: Tab,
+    pub(in crate::gui_services) view: diff::DiffView,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(in crate::gui_services) struct DiffExpandInput<'a> {
+    pub(in crate::gui_services) tab: Tab,
+    pub(in crate::gui_services) doc: Arc<diff::DiffDocument>,
+    pub(in crate::gui_services) gap: usize,
+    pub(in crate::gui_services) part: diff::GapPart,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
 impl Services {
     pub(in crate::gui_services) async fn diff_action(
         &self,
-        tab: Tab,
-        request: Box<diff::actions::Request>,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: DiffActionInput<'_>,
     ) -> Result<()> {
+        let DiffActionInput {
+            tab,
+            request,
+            cancel,
+            updates,
+        } = input;
         anyhow::ensure!(
             !matches!(
                 &tab,
@@ -26,9 +52,14 @@ impl Services {
         );
         let undo = matches!(request.as_ref(), diff::actions::Request::Undo(_));
         let staged = matches!(&tab, Tab::Diff { staged: true, .. });
-        let result = diff::actions::execute(self, *request, staged, &cancel)
-            .await
-            .map_err(|error| format!("{error:#}"));
+        let result = diff::actions::execute(diff::actions::ExecuteInput {
+            service: self,
+            request: *request,
+            staged,
+            cancel: &cancel,
+        })
+        .await
+        .map_err(|error| format!("{error:#}"));
         updates.push(Update::DiffAction(tab, undo, result));
         Ok(())
     }
@@ -44,11 +75,13 @@ impl Services {
         let bytes = terminator_git::run(
             self.processes(),
             self.fs(),
-            dir,
-            vec!["show".into(), format!("HEAD:./{name}").into()],
-            terminator_core::CommandOptions {
-                stdout_limit: 4 * 1024 * 1024,
-                ..Default::default()
+            terminator_git::RunInput {
+                cwd: dir,
+                args: vec!["show".into(), format!("HEAD:./{name}").into()],
+                options: terminator_core::CommandOptions {
+                    stdout_limit: 4 * 1024 * 1024,
+                    ..Default::default()
+                },
             },
         )
         .await
@@ -58,11 +91,14 @@ impl Services {
 
     pub(in crate::gui_services) async fn diff_context(
         &self,
-        tab: Tab,
-        view: diff::DiffView,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: DiffContextInput<'_>,
     ) -> Result<()> {
+        let DiffContextInput {
+            tab,
+            view,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let context = view.context;
         if let Tab::Diff {
@@ -76,16 +112,23 @@ impl Services {
                     ..
                 }
             ) {
-                diff::remote_document(self, client, &tab, context, &cancel).await
-            } else {
-                diff::document_with_context(
-                    self,
-                    cwd.clone(),
-                    path.clone(),
-                    *staged,
+                diff::remote_document(diff::RemoteDocumentInput {
+                    service: self,
+                    client,
+                    tab: &tab,
                     context,
-                    &cancel,
-                )
+                    cancel: &cancel,
+                })
+                .await
+            } else {
+                diff::document_with_context(diff::DocumentWithContextInput {
+                    service: self,
+                    cwd: cwd.clone(),
+                    path: path.clone(),
+                    staged: *staged,
+                    context,
+                    cancel: &cancel,
+                })
                 .await
             };
             // Expanded ranges and the whitespace mode survive a refresh.
@@ -106,18 +149,29 @@ impl Services {
 
     pub(in crate::gui_services) async fn diff_expand(
         &self,
-        tab: Tab,
-        doc: Arc<diff::DiffDocument>,
-        (gap, part): (usize, diff::GapPart),
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: DiffExpandInput<'_>,
     ) -> Result<()> {
+        let DiffExpandInput {
+            tab,
+            doc,
+            gap,
+            part,
+            cancel,
+            updates,
+        } = input;
         if let Tab::Diff { path, staged, .. } = &tab {
             let path = path.clone();
             let staged = *staged;
             let result = self
                 .cpu()
-                .run(&cancel, move || doc.expand_gap(&path, gap, part, staged))
+                .run(&cancel, move || {
+                    doc.expand_gap(ExpandGapInput {
+                        path: &path,
+                        gap,
+                        part,
+                        staged,
+                    })
+                })
                 .await
                 .map_err(|error| format!("{error:#}"));
             updates.push(Update::Diff(tab.key(), result));
@@ -143,9 +197,23 @@ impl Services {
                     ..
                 }
             ) {
-                diff::remote_document(self, client, &tab, 6, &cancel).await
+                diff::remote_document(diff::RemoteDocumentInput {
+                    service: self,
+                    client,
+                    tab: &tab,
+                    context: 6,
+                    cancel: &cancel,
+                })
+                .await
             } else {
-                diff::document_async(self, cwd.clone(), path.clone(), *staged, &cancel).await
+                diff::document_async(diff::DocumentAsyncInput {
+                    service: self,
+                    cwd: cwd.clone(),
+                    path: path.clone(),
+                    staged: *staged,
+                    cancel: &cancel,
+                })
+                .await
             }
             .map_err(|e| format!("{e:#}"));
             updates.push(Update::Diff(tab.key(), result));
@@ -176,7 +244,7 @@ impl Services {
         );
         let canonical = self
             .fs()
-            .run(&cancel, move || Ok(draft.dest.canonicalize()?))
+            .run(&cancel, move || anyhow::Ok(draft.dest.canonicalize()?))
             .await?;
         let Response::State(state) = client.rpc(Request::Snapshot).await? else {
             anyhow::bail!("Expected worktree snapshot")
@@ -202,7 +270,7 @@ impl Services {
         let task = tab.clone();
         let view = self
             .fs()
-            .run(&cancel, move || Ok(crate::GitView::load(&task)))
+            .run(&cancel, move || anyhow::Ok(crate::GitView::load(&task)))
             .await
             .unwrap_or_else(|error| crate::GitView::failed(&tab, format!("{error:#}")));
         updates.push(Update::GitView(key, view));

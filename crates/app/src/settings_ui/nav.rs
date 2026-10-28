@@ -21,15 +21,15 @@ impl App {
                 if !self.section_visible(section) {
                     continue;
                 }
-                let row = appearance::row(
+                let row = appearance::row(appearance::RowInput {
+                    tint: ui.visuals().weak_text_color(),
                     ui,
-                    section.title(),
-                    section.icon(),
-                    self.settings_section == section,
-                    30.0,
-                    "",
-                    ui.visuals().weak_text_color(),
-                );
+                    label: section.title(),
+                    icon: section.icon(),
+                    selected: self.settings_section == section,
+                    height: 30.0,
+                    trailing: "",
+                });
                 #[cfg(feature = "test-support")]
                 diagnostics::record(
                     ui.ctx(),

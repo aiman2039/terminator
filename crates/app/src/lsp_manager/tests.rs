@@ -1,4 +1,6 @@
 use super::*;
+use crate::lsp_manager::SubmitTextInput;
+use crate::lsp_manager::responses::OnResponseInput;
 
 #[test]
 fn root_prefers_language_marker_over_git() {
@@ -112,7 +114,12 @@ fn a_missing_server_stops_per_frame_resubmits() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("main.rs");
     assert!(manager.sync_doc(&path, Language::Rust, 1));
-    manager.submit_text(&path, Language::Rust, 1, "fn main() {}");
+    manager.submit_text(SubmitTextInput {
+        path: &path,
+        language: Language::Rust,
+        revision: 1,
+        text: "fn main() {}",
+    });
     assert!(manager.unavailable.contains_key("rust"));
     // Without a server there is nothing to open: frames must not ask
     // for another text clone.
@@ -269,6 +276,7 @@ fn parked_text_opens_at_handshake_completion() {
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: Some(7),
+            capabilities: serde_json::Value::Null,
             ready: false,
         },
     );
@@ -354,6 +362,7 @@ fn rename_response_is_preview_only_and_rejects_stale_buffer() {
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: None,
+            capabilities: serde_json::Value::Null,
             ready: true,
         },
     );
@@ -410,6 +419,7 @@ fn workspace_symbol_results_follow_the_latest_query() {
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: None,
+            capabilities: serde_json::Value::Null,
             ready: true,
         },
     );
@@ -514,7 +524,9 @@ fn prune_closes_docs_and_clears_state() {
 #[tokio::test]
 async fn live_typescript_server_diagnostics_and_symbols() {
     if terminator_core::find_executable("typescript-language-server").is_none() {
-        eprintln!("SKIP: typescript-language-server not installed");
+        crate::console::Console::err(format_args!(
+            "SKIP: typescript-language-server not installed"
+        ));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -536,13 +548,18 @@ async fn live_typescript_server_diagnostics_and_symbols() {
 
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::TypeScript, 1));
-    manager.submit_text(&file, Language::TypeScript, 1, source);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::TypeScript,
+        revision: 1,
+        text: source,
+    });
     let start = Instant::now();
     while manager.problems_for(&file).is_empty() {
         if let Some(note) = manager.server_note(&file)
             && note.starts_with("Language server failed to start")
         {
-            eprintln!("SKIP: {note}");
+            crate::console::Console::err(format_args!("SKIP: {note}"));
             return;
         }
         assert!(
@@ -585,7 +602,7 @@ async fn live_rust_analyzer_diagnostics() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -602,7 +619,12 @@ async fn live_rust_analyzer_diagnostics() {
 
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     // Handshake + analysis need seconds; poll until diagnostics land.
     let start = Instant::now();
     while manager.problems_for(&file).is_empty() {
@@ -672,6 +694,7 @@ fn ready_server(
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: None,
+            capabilities: serde_json::Value::Null,
             ready: true,
         },
     );
@@ -696,12 +719,12 @@ fn empty_outline_retries_on_a_delay_instead_of_caching_forever() {
         .copied()
         .next()
         .expect("pending symbols");
-    manager.on_response(
-        &key,
-        L::RequestId::Number(id),
-        Some(serde_json::json!([])),
-        None,
-    );
+    manager.on_response(OnResponseInput {
+        key: &key,
+        id: L::RequestId::Number(id),
+        result: Some(serde_json::json!([])),
+        error: None,
+    });
     assert!(manager.symbols_for(&path).is_empty());
 
     // Immediately after an empty answer the gate holds...
@@ -742,15 +765,15 @@ fn failed_initialize_reports_the_server_message() {
     let (key, _sent) = ready_server(&mut manager, &path);
     manager.servers.get_mut(&key).expect("server").init_id = Some(7);
 
-    manager.on_response(
-        &key,
-        L::RequestId::Number(7),
-        None,
-        Some(L::ResponseError {
+    manager.on_response(OnResponseInput {
+        key: &key,
+        id: L::RequestId::Number(7),
+        result: None,
+        error: Some(L::ResponseError {
             code: -32603,
             message: "Could not find a valid TypeScript installation.".into(),
         }),
-    );
+    });
 
     let note = manager.server_note(&path).expect("note");
     assert!(note.contains("Could not find a valid TypeScript"), "{note}");
@@ -790,7 +813,7 @@ async fn live_rust_analyzer_completion() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -806,7 +829,12 @@ async fn live_rust_analyzer_completion() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     let at = L::Position {
         line: 2,
         character: 8,
@@ -842,7 +870,7 @@ async fn live_rust_analyzer_signature_help() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -859,7 +887,12 @@ async fn live_rust_analyzer_signature_help() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     let at = L::Position {
         line: 2,
         character: 11,
@@ -902,7 +935,7 @@ async fn live_rust_analyzer_format_and_code_action() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -918,12 +951,12 @@ async fn live_rust_analyzer_format_and_code_action() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(
-        &file,
-        Language::Rust,
-        1,
-        "fn main(){\n    let x=1;\n    let _ = x;\n}\n",
-    );
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: "fn main(){\n    let x=1;\n    let _ = x;\n}\n",
+    });
     let start = Instant::now();
     // Formatting the cramped text proposes edits.
     let mut formatted = None;
@@ -944,7 +977,12 @@ async fn live_rust_analyzer_format_and_code_action() {
         }
     }
     assert!(!formatted.unwrap_or_default().is_empty(), "format edits");
-    manager.submit_text(&file, Language::Rust, 2, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 2,
+        text: main,
+    });
     let at = L::Position {
         line: 1,
         character: 8,
@@ -1009,7 +1047,7 @@ async fn live_rust_analyzer_inlay_hints() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1025,7 +1063,12 @@ async fn live_rust_analyzer_inlay_hints() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     let start = Instant::now();
     let hints = loop {
         assert!(start.elapsed() < Duration::from_secs(90), "no inlay hints");
@@ -1056,4 +1099,198 @@ async fn live_rust_analyzer_inlay_hints() {
         "{hints:?}"
     );
     manager.prune(&std::collections::HashSet::new());
+}
+
+/// Live call hierarchy against rust-analyzer (self-skips): `add` is called
+/// by `main`, and `main` calls `add`.
+#[tokio::test]
+async fn live_rust_analyzer_call_hierarchy() {
+    let path_env = std::env::var_os("PATH")
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if L::find_server(&["rust-analyzer"], &path_env).is_none() {
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"proj\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .expect("manifest");
+    let main = "fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {\n    let _ = add(1, 2);\n}\n";
+    let file = root.join("src/main.rs");
+    std::fs::write(&file, main).expect("main");
+    let mut manager = LspManager::new();
+    assert!(manager.sync_doc(&file, Language::Rust, 1));
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
+    let mut live = LiveHierarchy {
+        manager: &mut manager,
+        file: &file,
+        start: Instant::now(),
+    };
+    // Prepare until the server is ready and names the function.
+    let (generation, root_item) = live
+        .first_root(L::Position {
+            line: 0,
+            character: 4,
+        })
+        .await;
+    assert_eq!(root_item.name, "add");
+    for (direction, expected) in [
+        (L::HierarchyDirection::Up, "main"),
+        (L::HierarchyDirection::Down, "add"),
+    ] {
+        // Callees start from `main`: prepare it the same way.
+        let item = if direction == L::HierarchyDirection::Up {
+            root_item.clone()
+        } else {
+            live.root(L::Position {
+                line: 1,
+                character: 4,
+            })
+            .await
+        };
+        let items = live.children(&item, direction, generation).await;
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            [expected],
+            "{direction:?}"
+        );
+    }
+    manager.prune(&std::collections::HashSet::new());
+}
+
+/// Polling helpers for the live call hierarchy scenario.
+struct LiveHierarchy<'a> {
+    manager: &'a mut LspManager,
+    file: &'a Path,
+    start: Instant,
+}
+
+impl LiveHierarchy<'_> {
+    /// Prepare at `position` until the server is ready and answers a root.
+    async fn first_root(&mut self, position: L::Position) -> (u64, L::HierarchyItem) {
+        loop {
+            assert!(
+                self.start.elapsed() < Duration::from_secs(90),
+                "no hierarchy"
+            );
+            self.manager.poll();
+            let Ok(generation) =
+                self.manager
+                    .request_hierarchy(self.file, position, L::HierarchyKind::Call)
+            else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            if let Some(item) = self.poll_roots(generation).await {
+                return (generation, item);
+            }
+        }
+    }
+
+    /// Up to 50 polls for the roots answer to `generation`.
+    async fn poll_roots(&mut self, generation: u64) -> Option<L::HierarchyItem> {
+        for _ in 0..50 {
+            self.manager.poll();
+            if let Some(HierarchyAnswer::Roots {
+                generation: g,
+                items,
+            }) = self.manager.hierarchy_answers.pop()
+                && g == generation
+            {
+                return items.into_iter().next();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        None
+    }
+
+    /// Prepare answers empty too while indexing: ask again until a root.
+    async fn root(&mut self, position: L::Position) -> L::HierarchyItem {
+        loop {
+            let generation = self
+                .manager
+                .request_hierarchy(self.file, position, L::HierarchyKind::Call)
+                .expect("ready");
+            if let Some(item) = self.wait_roots(generation).await {
+                return item;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Poll until the roots answer to `generation`; its first item.
+    async fn wait_roots(&mut self, generation: u64) -> Option<L::HierarchyItem> {
+        loop {
+            assert!(
+                self.start.elapsed() < Duration::from_secs(90),
+                "no main root"
+            );
+            self.manager.poll();
+            if let Some(HierarchyAnswer::Roots {
+                generation: g,
+                items,
+            }) = self.manager.hierarchy_answers.pop()
+                && g == generation
+            {
+                return items.into_iter().next();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// An indexing server answers empty at first: ask until it knows.
+    async fn children(
+        &mut self,
+        item: &L::HierarchyItem,
+        direction: L::HierarchyDirection,
+        generation: u64,
+    ) -> Vec<L::HierarchyItem> {
+        loop {
+            assert!(
+                self.manager
+                    .request_hierarchy_children(RequestHierarchyChildrenInput {
+                        path: self.file,
+                        item: &item.raw,
+                        kind: L::HierarchyKind::Call,
+                        direction,
+                        generation,
+                        node: 0
+                    })
+            );
+            let items = self.wait_children().await;
+            if !items.is_empty() {
+                return items;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    async fn wait_children(&mut self) -> Vec<L::HierarchyItem> {
+        loop {
+            assert!(
+                self.start.elapsed() < Duration::from_secs(90),
+                "no children"
+            );
+            self.manager.poll();
+            if let Some(HierarchyAnswer::Children { items, .. }) =
+                self.manager.hierarchy_answers.pop()
+            {
+                return items;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }

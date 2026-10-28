@@ -57,7 +57,12 @@ pub fn run() -> Result<()> {
             "Run native fixtures first; missing {}",
             source.display()
         );
-        render(&source, title, subtitle, &staging.path().join(file))?;
+        render(RenderInput {
+            source: &source,
+            title,
+            subtitle,
+            destination: &staging.path().join(file),
+        })?;
     }
     for entry in fs::read_dir(staging.path())? {
         let entry = entry?;
@@ -73,7 +78,19 @@ pub fn run() -> Result<()> {
     println!("Launch assets: {}", kit.display());
     Ok(())
 }
-fn render(source: &Path, title: &str, subtitle: &str, destination: &Path) -> Result<()> {
+struct RenderInput<'a> {
+    source: &'a Path,
+    title: &'a str,
+    subtitle: &'a str,
+    destination: &'a Path,
+}
+fn render(input: RenderInput<'_>) -> Result<()> {
+    let RenderInput {
+        source,
+        title,
+        subtitle,
+        destination,
+    } = input;
     let encoded = STANDARD.encode(fs::read(source)?);
     let svg = format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1270" height="760" viewBox="0 0 1270 760">

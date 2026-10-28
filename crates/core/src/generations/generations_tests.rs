@@ -200,7 +200,11 @@ mod tests {
         }
     }
 
-    fn broadcast(paths: &Paths, request: Request, asynchronous: bool) -> anyhow::Result<Response> {
+    fn broadcast(
+        paths: &Paths,
+        request: Request,
+        asynchronous: bool,
+    ) -> Result<Response, Box<dyn std::error::Error + Send + Sync>> {
         if asynchronous {
             #[cfg(feature = "async-client")]
             {
@@ -210,12 +214,12 @@ mod tests {
                     crate::async_service::NativePool::new("heartbeat-catalog", 1).unwrap(),
                     crate::async_service::NativePool::new("heartbeat-cpu", 1).unwrap(),
                 );
-                return runtime.block_on(client.rpc(request));
+                return Ok(runtime.block_on(client.rpc(request))?);
             }
             #[cfg(not(feature = "async-client"))]
             panic!("async-client feature is required");
         }
-        rpc(paths, request)
+        Ok(rpc(paths, request)?)
     }
 
     fn broadcast_modes() -> &'static [bool] {
@@ -992,39 +996,39 @@ mod tests {
     fn presence_merges_only_from_live_capable_owners() {
         let capable = vec![crate::AGENT_PRESENCE_CAPABILITY.into()];
         // Live owner advertising the capability merges.
-        assert!(mergeable_presence(
-            &presence_generation(Status::Active),
-            &capable,
-            &None,
-            "active",
-        ));
-        assert!(mergeable_presence(
-            &presence_generation(Status::Draining),
-            &capable,
-            &None,
-            "active",
-        ));
+        assert!(mergeable_presence(MergeablePresenceInput {
+            owner: &presence_generation(Status::Active),
+            capabilities: &capable,
+            error: &None,
+            active: "active"
+        }));
+        assert!(mergeable_presence(MergeablePresenceInput {
+            owner: &presence_generation(Status::Draining),
+            capabilities: &capable,
+            error: &None,
+            active: "active"
+        }));
         // Historical fallback never merges, even when capable.
-        assert!(!mergeable_presence(
-            &presence_generation(Status::Retired),
-            &capable,
-            &None,
-            "active",
-        ));
+        assert!(!mergeable_presence(MergeablePresenceInput {
+            owner: &presence_generation(Status::Retired),
+            capabilities: &capable,
+            error: &None,
+            active: "active"
+        }));
         // Unavailable owners never merge.
-        assert!(!mergeable_presence(
-            &presence_generation(Status::Active),
-            &capable,
-            &Some("Owner unavailable".into()),
-            "active",
-        ));
+        assert!(!mergeable_presence(MergeablePresenceInput {
+            owner: &presence_generation(Status::Active),
+            capabilities: &capable,
+            error: &Some("Owner unavailable".into()),
+            active: "active"
+        }));
         // Older daemons without the capability never merge.
-        assert!(!mergeable_presence(
-            &presence_generation(Status::Active),
-            &[],
-            &None,
-            "active",
-        ));
+        assert!(!mergeable_presence(MergeablePresenceInput {
+            owner: &presence_generation(Status::Active),
+            capabilities: &[],
+            error: &None,
+            active: "active"
+        }));
     }
 
     #[test]

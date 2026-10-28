@@ -224,6 +224,15 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
         },
         ..Default::default()
     };
+    apply_text_styles(&mut style);
+    apply_visuals(&mut style.visuals, theme);
+    style.spacing.scroll = overlay_scroll();
+    apply_spacing(&mut style.spacing, theme.compact());
+    ctx.set_style_of(egui::Theme::Dark, style);
+    ctx.set_theme(egui::Theme::Dark);
+}
+
+fn apply_text_styles(style: &mut egui::Style) {
     for role in [TextStyle::Body, TextStyle::Button] {
         style.text_styles.insert(role, FontId::proportional(13.0));
     }
@@ -241,24 +250,27 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     style
         .text_styles
         .insert(TextStyle::Monospace, FontId::monospace(13.0));
-    style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
-    style.visuals.panel_fill = color(&theme.surface);
-    style.visuals.window_fill = color(&theme.window);
-    style.visuals.extreme_bg_color = color(&theme.surface);
-    style.visuals.faint_bg_color = color(&theme.hover);
-    style.visuals.override_text_color = Some(color(&theme.text));
-    style.visuals.error_fg_color = color(&theme.status_failed);
-    style.visuals.weak_text_color = Some(color(&theme.secondary));
-    style.visuals.selection.bg_fill = color(&theme.selection);
-    style.visuals.selection.stroke = egui::Stroke::new(1.0, color(&theme.accent));
-    style.visuals.window_stroke = egui::Stroke::new(theme.border_width, color(&theme.border));
-    style.visuals.window_corner_radius = egui::CornerRadius::same(PANEL_RADIUS);
+}
+
+fn apply_visuals(visuals: &mut egui::Visuals, theme: &AppearanceConfig) {
+    visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
+    visuals.panel_fill = color(&theme.surface);
+    visuals.window_fill = color(&theme.window);
+    visuals.extreme_bg_color = color(&theme.surface);
+    visuals.faint_bg_color = color(&theme.hover);
+    visuals.override_text_color = Some(color(&theme.text));
+    visuals.error_fg_color = color(&theme.status_failed);
+    visuals.weak_text_color = Some(color(&theme.secondary));
+    visuals.selection.bg_fill = color(&theme.selection);
+    visuals.selection.stroke = egui::Stroke::new(1.0, color(&theme.accent));
+    visuals.window_stroke = egui::Stroke::new(theme.border_width, color(&theme.border));
+    visuals.window_corner_radius = egui::CornerRadius::same(PANEL_RADIUS);
     for widget in [
-        &mut style.visuals.widgets.noninteractive,
-        &mut style.visuals.widgets.inactive,
-        &mut style.visuals.widgets.hovered,
-        &mut style.visuals.widgets.active,
-        &mut style.visuals.widgets.open,
+        &mut visuals.widgets.noninteractive,
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
     ] {
         widget.bg_fill = color(&theme.surface);
         widget.weak_bg_fill = color(&theme.surface);
@@ -266,20 +278,23 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
         widget.fg_stroke = egui::Stroke::new(1.0, color(&theme.text));
         widget.corner_radius = egui::CornerRadius::same(WIDGET_RADIUS);
     }
-    style.visuals.widgets.hovered.bg_fill = color(&theme.hover);
-    style.visuals.widgets.hovered.weak_bg_fill = color(&theme.hover);
-    style.visuals.widgets.active.bg_stroke.color = color(&theme.accent);
-    style.visuals.window_shadow = egui::epaint::Shadow {
+    visuals.widgets.hovered.bg_fill = color(&theme.hover);
+    visuals.widgets.hovered.weak_bg_fill = color(&theme.hover);
+    visuals.widgets.active.bg_stroke.color = color(&theme.accent);
+    visuals.window_shadow = egui::epaint::Shadow {
         offset: [0, 8],
         blur: 24,
         spread: 0,
-        color: Color32::from_black_alpha(if light { 30 } else { 80 }),
+        color: Color32::from_black_alpha(if theme.is_light() { 30 } else { 80 }),
     };
-    style.visuals.popup_shadow = style.visuals.window_shadow;
-    style.visuals.indent_has_left_vline = false;
-    style.visuals.menu_corner_radius = egui::CornerRadius::same(MENU_RADIUS);
-    // Shared by every app-owned ScrollArea: overlay handles stay hidden at rest.
-    style.spacing.scroll = egui::style::ScrollStyle {
+    visuals.popup_shadow = visuals.window_shadow;
+    visuals.indent_has_left_vline = false;
+    visuals.menu_corner_radius = egui::CornerRadius::same(MENU_RADIUS);
+}
+
+/// Shared by every app-owned ScrollArea: overlay handles stay hidden at rest.
+fn overlay_scroll() -> egui::style::ScrollStyle {
+    egui::style::ScrollStyle {
         floating: true,
         bar_width: 8.0,
         floating_width: 4.0,
@@ -295,23 +310,23 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
         active_handle_opacity: 0.0,
         interact_handle_opacity: 0.0,
         ..Default::default()
-    };
-    let compact = theme.compact();
-    style.spacing.button_padding = if compact {
+    }
+}
+
+fn apply_spacing(spacing: &mut egui::Spacing, compact: bool) {
+    spacing.button_padding = if compact {
         egui::vec2(6.0, 4.0)
     } else {
         egui::vec2(8.0, 5.0)
     };
-    style.spacing.text_edit_width = 220.0;
-    style.spacing.indent = 14.0;
-    style.spacing.item_spacing = if compact {
+    spacing.text_edit_width = 220.0;
+    spacing.indent = 14.0;
+    spacing.item_spacing = if compact {
         egui::vec2(6.0, 6.0)
     } else {
         egui::vec2(8.0, 8.0)
     };
-    style.spacing.interact_size.y = if compact { 24.0 } else { 28.0 };
-    ctx.set_style_of(egui::Theme::Dark, style);
-    ctx.set_theme(egui::Theme::Dark);
+    spacing.interact_size.y = if compact { 24.0 } else { 28.0 };
 }
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 use super::super::harness::{Harness, id};
+use super::dispatch::CaptureInput;
 use super::dispatch::{Options, capture};
 use anyhow::{Context, Result, ensure};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{fs, thread, time::Duration};
 pub(crate) fn scrolling(opts: &Options) -> Result<()> {
     let h = Harness::new()?;
@@ -15,38 +16,55 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
         h.write(&mut stream, "i=0; while [ $i -lt 500 ]; do printf 'Sample retained line %s\\n' \"$i\"; i=$((i+1)); done\n")?;
     }
     thread::sleep(Duration::from_millis(500));
-    let left_target = format!("terminal:{}", id(&left));
-    let right_target = format!("terminal:{}", id(&right));
-    let logs = capture(
-        &h,
-        opts,
-        "hover-history",
-        json!([
-            {"at_ms":900,"target":left_target},
-            {"at_ms":1300,"target":right_target,"hover":true},
-            {"at_ms":1500,"target":right_target,"scroll":4.0,"wheel_phase":"start"},
-            {"at_ms":1600,"target":right_target,"scroll":4.0},
-            {"at_ms":1700,"target":right_target,"scroll":4.0},
-            {"at_ms":1800,"target":right_target,"scroll":100.0},
-            {"at_ms":2200,"target":right_target,"scroll":2.0,"wheel_unit":"line"},
-            {"at_ms":2400,"target":right_target,"scroll":0.0,"wheel_phase":"cancel"},
-            {"at_ms":3700,"target":right_target,"scroll":-1000.0,"wheel_unit":"line"}
-        ]),
-        4500,
+    let logs = capture_hover_history(&h, opts, (&left, &right))?;
+    fs::create_dir_all(&opts.output)?;
+    fs::write(opts.output.join("scroll-evidence.log"), &logs)?;
+    check_scroll_evidence(&logs, (&left, &right))?;
+    h.assert_pids(&[left, right])?;
+    Ok(())
+}
+
+fn capture_hover_history(
+    h: &Harness,
+    opts: &Options,
+    (left, right): (&Value, &Value),
+) -> Result<String> {
+    let left_target = format!("terminal:{}", id(left));
+    let right_target = format!("terminal:{}", id(right));
+    capture(
+        CaptureInput {
+            h,
+            opts,
+            name: "hover-history",
+            actions: json!([
+                {"at_ms":900,"target":left_target},
+                {"at_ms":1300,"target":right_target,"hover":true},
+                {"at_ms":1500,"target":right_target,"scroll":4.0,"wheel_phase":"start"},
+                {"at_ms":1600,"target":right_target,"scroll":4.0},
+                {"at_ms":1700,"target":right_target,"scroll":4.0},
+                {"at_ms":1800,"target":right_target,"scroll":100.0},
+                {"at_ms":2200,"target":right_target,"scroll":2.0,"wheel_unit":"line"},
+                {"at_ms":2400,"target":right_target,"scroll":0.0,"wheel_phase":"cancel"},
+                {"at_ms":3700,"target":right_target,"scroll":-1000.0,"wheel_unit":"line"}
+            ]),
+            after: 4500,
+        },
         |_| {
             thread::sleep(Duration::from_millis(2800));
             h.write(
-                &mut h.attach(&right)?,
+                &mut h.attach(right)?,
                 "printf 'Sample arriving output\\n'\n",
             )?;
             Ok(())
         },
-    )?;
-    fs::create_dir_all(&opts.output)?;
-    fs::write(opts.output.join("scroll-evidence.log"), &logs)?;
+    )
+}
+
+/// The hovered right pane scrolled back and returned; the focused left pane stayed put.
+fn check_scroll_evidence(logs: &str, (left, right): (&Value, &Value)) -> Result<()> {
     let prefix = format!(
         "Scroll evidence: session={} focused=false offset=",
-        id(&right)
+        id(right)
     );
     ensure!(
         logs.lines()
@@ -71,10 +89,7 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
         offsets.iter().filter(|offset| **offset > 0).count() >= 2,
         "Missing retained-history observations during output"
     );
-    let left_prefix = format!(
-        "Scroll evidence: session={} focused=true offset=",
-        id(&left)
-    );
+    let left_prefix = format!("Scroll evidence: session={} focused=true offset=", id(left));
     ensure!(
         !logs
             .lines()
@@ -82,7 +97,6 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
             .any(|s| !s.starts_with("0 ")),
         "Focused pane scrolled with hovered pane: {logs}"
     );
-    h.assert_pids(&[left, right])?;
     Ok(())
 }
 
@@ -111,17 +125,19 @@ pub(crate) fn scrolling_bounded(opts: &Options) -> Result<()> {
     thread::sleep(Duration::from_millis(500));
     let target = format!("terminal:{}", id(&sample));
     let logs = capture(
-        &h,
-        opts,
-        "bounded-reconnect",
-        json!([
-            {"at_ms":1000,"target":target,"scroll":8.0,"wheel_unit":"line"},
-            {"at_ms":1600,"target":"workspace-tab:Other"},
-            {"at_ms":2200,"target":"workspace-tab:Muse sample"},
-            {"at_ms":2900,"target":target,"scroll":8.0,"wheel_unit":"line"},
-            {"at_ms":3400,"target":target,"scroll":-1000.0,"wheel_unit":"line"}
-        ]),
-        4000,
+        CaptureInput {
+            h: &h,
+            opts,
+            name: "bounded-reconnect",
+            actions: json!([
+                {"at_ms":1000,"target":target,"scroll":8.0,"wheel_unit":"line"},
+                {"at_ms":1600,"target":"workspace-tab:Other"},
+                {"at_ms":2200,"target":"workspace-tab:Muse sample"},
+                {"at_ms":2900,"target":target,"scroll":8.0,"wheel_unit":"line"},
+                {"at_ms":3400,"target":target,"scroll":-1000.0,"wheel_unit":"line"}
+            ]),
+            after: 4000,
+        },
         |_| Ok(()),
     )?;
     let prefix = format!("Scroll evidence: session={} ", id(&sample));
@@ -159,17 +175,28 @@ pub(crate) fn scrolling_bounded(opts: &Options) -> Result<()> {
 /// input byte it receives. `start_before_attach` covers the reattach
 /// snapshot path; otherwise the agent starts while the GUI is attached
 /// (live-bytes path). Pass the SGR (or legacy) report markers to expect.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn agent_wheel_case(
-    opts: &Options,
-    name: &str,
-    init: &str,
-    up_marker: &str,
-    down_marker: &str,
-    start_before_attach: bool,
-    wheel_at_ms: u64,
-    after_ms: u64,
-) -> Result<()> {
+pub(crate) struct AgentWheelCaseInput<'a> {
+    pub(crate) opts: &'a Options,
+    pub(crate) name: &'a str,
+    pub(crate) init: &'a str,
+    pub(crate) up_marker: &'a str,
+    pub(crate) down_marker: &'a str,
+    pub(crate) start_before_attach: bool,
+    pub(crate) wheel_at_ms: u64,
+    pub(crate) after_ms: u64,
+}
+
+pub(crate) fn agent_wheel_case(input: AgentWheelCaseInput<'_>) -> Result<()> {
+    let AgentWheelCaseInput {
+        opts,
+        name,
+        init,
+        up_marker,
+        down_marker,
+        start_before_attach,
+        wheel_at_ms,
+        after_ms,
+    } = input;
     let h = Harness::new()?;
     h.setup()?;
     let project = h.project(&format!("{name}-sample"))?;
@@ -194,18 +221,20 @@ pub(crate) fn agent_wheel_case(
     let target = format!("terminal:{sid}");
     let wheel = |at_ms: u64, delta: f64, phase: &str| serde_json::json!({"at_ms":at_ms,"target":target,"scroll":delta,"wheel_unit":"line","wheel_phase":phase});
     let logs = capture(
-        &h,
-        opts,
-        name,
-        json!([
-            {"at_ms":900,"target":target},
-            {"at_ms":1300,"target":target,"hover":true},
-            wheel(wheel_at_ms, 2.0, "start"),
-            wheel(wheel_at_ms.saturating_add(200), 2.0, "move"),
-            wheel(wheel_at_ms.saturating_add(400), -1.0, "move"),
-            wheel(wheel_at_ms.saturating_add(600), 0.0, "cancel"),
-        ]),
-        after_ms,
+        CaptureInput {
+            h: &h,
+            opts,
+            name,
+            actions: json!([
+                {"at_ms":900,"target":target},
+                {"at_ms":1300,"target":target,"hover":true},
+                wheel(wheel_at_ms, 2.0, "start"),
+                wheel(wheel_at_ms.saturating_add(200), 2.0, "move"),
+                wheel(wheel_at_ms.saturating_add(400), -1.0, "move"),
+                wheel(wheel_at_ms.saturating_add(600), 0.0, "cancel"),
+            ]),
+            after: after_ms,
+        },
         |_| {
             if !start_before_attach {
                 thread::sleep(Duration::from_millis(500));
@@ -239,44 +268,44 @@ pub(crate) fn agent_wheel_case(
 /// modes as real agent TUIs (alt-screen plus SGR mouse) before the GUI
 /// attaches, so this also covers the reattach snapshot path.
 pub(crate) fn agent_wheel(opts: &Options) -> Result<()> {
-    agent_wheel_case(
+    agent_wheel_case(AgentWheelCaseInput {
         opts,
-        "agent-wheel",
-        "\\033[?1049h\\033[?1000h\\033[?1006h",
-        "[<64;",
-        "[<65;",
-        true,
-        1500,
-        4500,
-    )
+        name: "agent-wheel",
+        init: "\\033[?1049h\\033[?1000h\\033[?1006h",
+        up_marker: "[<64;",
+        down_marker: "[<65;",
+        start_before_attach: true,
+        wheel_at_ms: 1500,
+        after_ms: 4500,
+    })
 }
 
 /// A legacy (non-SGR) mouse agent must receive `ESC [ M` reports with the
 /// single-byte coordinates instead of local scrollback or arrow keys.
 pub(crate) fn agent_wheel_legacy(opts: &Options) -> Result<()> {
-    agent_wheel_case(
+    agent_wheel_case(AgentWheelCaseInput {
         opts,
-        "agent-wheel-legacy",
-        "\\033[?1049h\\033[?1000h",
-        "\u{1b}[M`",
-        "\u{1b}[Ma",
-        true,
-        1500,
-        4500,
-    )
+        name: "agent-wheel-legacy",
+        init: "\\033[?1049h\\033[?1000h",
+        up_marker: "\u{1b}[M`",
+        down_marker: "\u{1b}[Ma",
+        start_before_attach: true,
+        wheel_at_ms: 1500,
+        after_ms: 4500,
+    })
 }
 
 /// An agent that starts while the GUI is already attached exercises the
 /// live-bytes path instead of the reattach snapshot.
 pub(crate) fn agent_wheel_live(opts: &Options) -> Result<()> {
-    agent_wheel_case(
+    agent_wheel_case(AgentWheelCaseInput {
         opts,
-        "agent-wheel-live",
-        "\\033[?1049h\\033[?1000h\\033[?1006h",
-        "[<64;",
-        "[<65;",
-        false,
-        3000,
-        6500,
-    )
+        name: "agent-wheel-live",
+        init: "\\033[?1049h\\033[?1000h\\033[?1006h",
+        up_marker: "[<64;",
+        down_marker: "[<65;",
+        start_before_attach: false,
+        wheel_at_ms: 3000,
+        after_ms: 6500,
+    })
 }

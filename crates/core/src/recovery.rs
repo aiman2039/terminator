@@ -1,5 +1,18 @@
 //! The inventory approved by the user, carried unchanged to detached recovery.
-use crate::{BTreeSet, Deserialize, Result, Serialize, State, ensure};
+use crate::{BTreeSet, Deserialize, Serialize, State};
+
+/// Why a confirmed restart inventory no longer matches the service.
+#[derive(Debug, thiserror::Error)]
+pub enum InventoryError {
+    #[error(
+        "Service changed after confirmation; no sessions were stopped. Review the current service and retry"
+    )]
+    ServiceChanged { confirmed: String, current: String },
+    #[error(
+        "Session inventory changed after confirmation; no sessions were stopped. Review the current sessions and retry"
+    )]
+    SessionsChanged { generation: String },
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RestartInventory {
@@ -21,19 +34,23 @@ impl RestartInventory {
         }
     }
 
-    pub fn validate(&self, state: &State) -> Result<()> {
-        ensure!(
-            self.generation == state.generation,
-            "Service changed after confirmation; no sessions were stopped. Review the current service and retry"
-        );
-        ensure!(
-            state
-                .sessions
-                .iter()
-                .filter(|s| s.lifecycle.live())
-                .all(|s| self.sessions.contains(&s.id)),
-            "Session inventory changed after confirmation; no sessions were stopped. Review the current sessions and retry"
-        );
+    pub fn validate(&self, state: &State) -> Result<(), InventoryError> {
+        if self.generation != state.generation {
+            return Err(InventoryError::ServiceChanged {
+                confirmed: self.generation.clone(),
+                current: state.generation.clone(),
+            });
+        }
+        if !state
+            .sessions
+            .iter()
+            .filter(|s| s.lifecycle.live())
+            .all(|s| self.sessions.contains(&s.id))
+        {
+            return Err(InventoryError::SessionsChanged {
+                generation: state.generation.clone(),
+            });
+        }
         Ok(())
     }
 }

@@ -1,7 +1,19 @@
 //! Local port forwarding (`ssh -L`) through a project's OpenSSH master.
 //! Listeners always bind `127.0.0.1`, never a wildcard address.
-use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+
+/// Why a port forward or a project's forward list is invalid.
+#[derive(Debug, thiserror::Error)]
+pub enum ForwardError {
+    #[error("Forwarded ports must be between 1 and 65535")]
+    InvalidPort { local_port: u16, remote_port: u16 },
+    #[error("Invalid forward destination host")]
+    InvalidDestination { host: String },
+    #[error("At most {MAX_FORWARDS} port forwards per SSH project")]
+    TooMany { count: usize },
+    #[error("Local port {local_port} is forwarded twice")]
+    DuplicateLocalPort { local_port: u16 },
+}
 
 /// `StartForward`, `StopForward`, `ForwardStatus` and
 /// `SetRemoteProjectForwards`.
@@ -22,13 +34,18 @@ pub struct Forward {
     pub auto_start: bool,
 }
 impl Forward {
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.local_port != 0 && self.remote_port != 0,
-            "Forwarded ports must be between 1 and 65535"
-        );
-        crate::ssh::validate_host(&self.remote_host)
-            .map_err(|_| anyhow::anyhow!("Invalid forward destination host"))?;
+    pub fn validate(&self) -> Result<(), ForwardError> {
+        if self.local_port == 0 || self.remote_port == 0 {
+            return Err(ForwardError::InvalidPort {
+                local_port: self.local_port,
+                remote_port: self.remote_port,
+            });
+        }
+        crate::ssh::validate_host(&self.remote_host).map_err(|_| {
+            ForwardError::InvalidDestination {
+                host: self.remote_host.clone(),
+            }
+        })?;
         Ok(())
     }
     /// The `-L` operand. The bind address is fixed to [`BIND_ADDRESS`]; an
@@ -63,22 +80,24 @@ impl Forward {
 
 /// A project's list: each entry valid, at most [`MAX_FORWARDS`], and no two
 /// sharing a local port.
-pub fn validate_forwards(forwards: &[Forward]) -> Result<()> {
-    ensure!(
-        forwards.len() <= MAX_FORWARDS,
-        "At most {MAX_FORWARDS} port forwards per SSH project"
-    );
+pub fn validate_forwards(forwards: &[Forward]) -> Result<(), ForwardError> {
+    if forwards.len() > MAX_FORWARDS {
+        return Err(ForwardError::TooMany {
+            count: forwards.len(),
+        });
+    }
     for (index, forward) in forwards.iter().enumerate() {
         forward.validate()?;
-        ensure!(
-            !forwards
-                .get(..index)
-                .unwrap_or_default()
-                .iter()
-                .any(|f| f.local_port == forward.local_port),
-            "Local port {} is forwarded twice",
-            forward.local_port
-        );
+        if forwards
+            .get(..index)
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.local_port == forward.local_port)
+        {
+            return Err(ForwardError::DuplicateLocalPort {
+                local_port: forward.local_port,
+            });
+        }
     }
     Ok(())
 }

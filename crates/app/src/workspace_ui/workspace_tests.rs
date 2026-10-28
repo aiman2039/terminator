@@ -1,6 +1,6 @@
 use super::super::*;
-use super::diff_paint::{DiffColors, paint_diff_document};
-use super::diff_tests::tests::long_doc;
+use super::diff_paint::{DiffColors, PaintDiffDocumentInput, paint_diff_document};
+use super::diff_tests::long_doc;
 use super::header::{
     HEADER_ACTIONS, ProjectHeaderChrome, filter_history_lines, header_row_width,
     header_visible_count, project_header_chrome,
@@ -155,12 +155,20 @@ mod tests {
         assert_eq!(header_visible_count(0.0, count), 0);
     }
 
-    fn split_frame(
-        ctx: &egui::Context,
-        doc: &diff::DiffDocument,
-        sync: &mut f32,
+    struct SplitFrameInput<'a> {
+        ctx: &'a egui::Context,
+        doc: &'a diff::DiffDocument,
+        sync: &'a mut f32,
         events: Vec<egui::Event>,
-    ) -> Vec<(egui::Pos2, String)> {
+    }
+
+    fn split_frame(input: SplitFrameInput<'_>) -> Vec<(egui::Pos2, String)> {
+        let SplitFrameInput {
+            ctx,
+            doc,
+            sync,
+            events,
+        } = input;
         let colors = DiffColors {
             added: Color32::GREEN,
             deleted: Color32::RED,
@@ -178,7 +186,15 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
-                paint_diff_document(ui, doc, true, colors, "sync-regression", &mut ratio, sync);
+                paint_diff_document(PaintDiffDocumentInput {
+                    ui,
+                    doc,
+                    split: true,
+                    colors,
+                    scroll_key: "sync-regression",
+                    ratio: &mut ratio,
+                    sync,
+                });
             },
         );
         output.textures_delta.clear();
@@ -224,31 +240,36 @@ mod tests {
         let doc = long_doc();
         let mut sync = 0.0;
         let over_left = egui::pos2(150.0, 150.0);
-        split_frame(&ctx, &doc, &mut sync, vec![]);
-        split_frame(
-            &ctx,
-            &doc,
-            &mut sync,
-            vec![egui::Event::PointerMoved(over_left)],
-        );
+        split_frame(SplitFrameInput {
+            ctx: &ctx,
+            doc: &doc,
+            sync: &mut sync,
+            events: vec![],
+        });
+        split_frame(SplitFrameInput {
+            ctx: &ctx,
+            doc: &doc,
+            sync: &mut sync,
+            events: vec![egui::Event::PointerMoved(over_left)],
+        });
         for _ in 0..4 {
-            split_frame(
-                &ctx,
-                &doc,
-                &mut sync,
-                vec![egui::Event::PointerMoved(over_left), wheel(-60.0)],
-            );
+            split_frame(SplitFrameInput {
+                ctx: &ctx,
+                doc: &doc,
+                sync: &mut sync,
+                events: vec![egui::Event::PointerMoved(over_left), wheel(-60.0)],
+            });
         }
         assert!(
             sync > 0.0,
             "wheel over the left pane must move the shared offset: {sync}"
         );
-        let painted = split_frame(
-            &ctx,
-            &doc,
-            &mut sync,
-            vec![egui::Event::PointerMoved(over_left)],
-        );
+        let painted = split_frame(SplitFrameInput {
+            ctx: &ctx,
+            doc: &doc,
+            sync: &mut sync,
+            events: vec![egui::Event::PointerMoved(over_left)],
+        });
         assert_split_rows_aligned(&painted);
     }
 
@@ -258,19 +279,19 @@ mod tests {
         let doc = long_doc();
         let mut sync = 0.0;
         let over_left = egui::pos2(150.0, 150.0);
-        split_frame(
-            &ctx,
-            &doc,
-            &mut sync,
-            vec![egui::Event::PointerMoved(over_left)],
-        );
+        split_frame(SplitFrameInput {
+            ctx: &ctx,
+            doc: &doc,
+            sync: &mut sync,
+            events: vec![egui::Event::PointerMoved(over_left)],
+        });
         for _ in 0..8 {
-            split_frame(
-                &ctx,
-                &doc,
-                &mut sync,
-                vec![egui::Event::PointerMoved(over_left), wheel(-0.2)],
-            );
+            split_frame(SplitFrameInput {
+                ctx: &ctx,
+                doc: &doc,
+                sync: &mut sync,
+                events: vec![egui::Event::PointerMoved(over_left), wheel(-0.2)],
+            });
         }
         assert!(
             sync > 0.0,

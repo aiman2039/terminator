@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::OpenFileInput;
 
 #[test]
 fn closing_a_file_from_the_leftmost_tab_restores_its_origin() {
@@ -274,7 +275,12 @@ fn image_open_creates_no_editor_and_keeps_original_project() {
     let (mut app, ctx, _dir) = fixture();
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
-    app.open_file(crate::test_path("/a/image.PNG"), None, None, false);
+    app.open_file(OpenFileInput {
+        path: crate::test_path("/a/image.PNG"),
+        line: None,
+        split: None,
+        external: false,
+    });
     app.select_project("b".into());
     pump_until(&mut app, &ctx, |app| {
         app.layouts["a"].contains(&Tab::Image {
@@ -295,7 +301,12 @@ fn html_open_creates_no_editor_and_keeps_original_project() {
     let (mut app, ctx, _dir) = fixture();
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
-    app.open_file(crate::test_path("/a/index.HTML"), None, None, false);
+    app.open_file(OpenFileInput {
+        path: crate::test_path("/a/index.HTML"),
+        line: None,
+        split: None,
+        external: false,
+    });
     app.select_project("b".into());
     pump_until(&mut app, &ctx, |app| {
         app.layouts["a"].contains(&Tab::browser_file(crate::test_path("/a/index.HTML")))

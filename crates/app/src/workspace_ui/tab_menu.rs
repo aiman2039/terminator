@@ -27,7 +27,13 @@ pub(super) fn split_action(direction: Option<&str>) -> Action {
 }
 
 pub(super) fn click_menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
-    let clicked = appearance::menu_item(ui, label, icon, "").clicked();
+    let clicked = appearance::menu_item(appearance::MenuItemInput {
+        ui,
+        label,
+        icon,
+        shortcut: "",
+    })
+    .clicked();
     if clicked {
         ui.close();
     }

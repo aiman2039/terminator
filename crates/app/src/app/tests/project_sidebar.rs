@@ -126,12 +126,14 @@ fn sidebar_notice_cache_updates_on_read_dismiss_and_snooze_expiry() {
     app.state
         .sessions
         .push(session_fixture("shell", SessionKind::Shell));
-    app.state.notifications.push(notice_fixture(
-        "notice",
-        "shell",
-        AgentState::WaitingInput,
-        1,
-    ));
+    app.state
+        .notifications
+        .push(notice_fixture(NoticeFixtureInput {
+            id: "notice",
+            session: "shell",
+            state: AgentState::WaitingInput,
+            created: 1,
+        }));
     app.reconcile_presentations();
     assert_eq!(app.attention_counts(), (1, 1));
     let unread = app.cached_unread_groups();
@@ -204,7 +206,12 @@ fn opening_or_creating_a_project_ranks_it_by_latest_activity() {
             app.selection_generation,
         ))
         .unwrap();
-    drain_until_project_activity(&mut app, &ctx, "a", 2);
+    drain_until_project_activity(DrainUntilProjectActivityInput {
+        app: &mut app,
+        ctx: &ctx,
+        project: "a",
+        at_least: 2,
+    });
     assert_eq!(visible_ids(&app), ["a", "b"]);
     assert!(app.preferences.project_activity["a"] >= 2);
     app.preferences.project_activity.insert("a".into(), 1);
@@ -215,7 +222,12 @@ fn opening_or_creating_a_project_ranks_it_by_latest_activity() {
             false,
         ))
         .unwrap();
-    drain_until_project_activity(&mut app, &ctx, "a", 2);
+    drain_until_project_activity(DrainUntilProjectActivityInput {
+        app: &mut app,
+        ctx: &ctx,
+        project: "a",
+        at_least: 2,
+    });
     assert_eq!(visible_ids(&app), ["a", "b"]);
     assert!(app.preferences.project_activity["a"] >= 2);
 }
@@ -317,40 +329,54 @@ fn expanded_project_terminals_stay_indented_at_all_sidebar_sizes() {
                 app.selected = Some(selected.into());
                 // Include the first frame and settled layout frames.
                 for _ in 0..3 {
-                    let mut expected_indent = 0.0;
-                    let mut output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(width, 800.0),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| {
-                            expected_indent = ui.spacing().indent;
-                            app.projects(ui);
-                        },
+                    let expected_indent = paint_projects_sidebar(&mut app, &ctx, width);
+                    assert_session_rows_indented(
+                        &ctx,
+                        expected_indent,
+                        &format!("width={width}, scale={scale}"),
                     );
-                    output.textures_delta.clear();
-                    let target = |name: &str| {
-                        ctx.data(|data| {
-                            data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name)))
-                        })
-                        .unwrap()
-                    };
-                    for (project, session) in [("a", "first-shell"), ("b", "second-shell")] {
-                        let parent = target(&format!("project-row:{project}"));
-                        let child = target(&format!("session-row:{session}"));
-                        let indent = child.left() - parent.left();
-                        assert!(
-                            indent >= expected_indent - 0.1,
-                            "width={width}, scale={scale}, project={project}: indent={indent}"
-                        );
-                        assert!(child.top() >= parent.bottom());
-                    }
                 }
             }
         }
+    }
+}
+
+/// Paints the projects sidebar `width` wide; returns egui's indent.
+#[cfg(feature = "test-support")]
+fn paint_projects_sidebar(app: &mut App, ctx: &egui::Context, width: f32) -> f32 {
+    let mut expected_indent = 0.0;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 800.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            expected_indent = ui.spacing().indent;
+            app.projects(ui);
+        },
+    );
+    output.textures_delta.clear();
+    expected_indent
+}
+
+#[cfg(feature = "test-support")]
+fn assert_session_rows_indented(ctx: &egui::Context, expected_indent: f32, label: &str) {
+    let target = |name: &str| {
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
+            .unwrap()
+    };
+    for (project, session) in [("a", "first-shell"), ("b", "second-shell")] {
+        let parent = target(&format!("project-row:{project}"));
+        let child = target(&format!("session-row:{session}"));
+        let indent = child.left() - parent.left();
+        assert!(
+            indent >= expected_indent - 0.1,
+            "{label}, project={project}: indent={indent}"
+        );
+        assert!(child.top() >= parent.bottom());
     }
 }
 

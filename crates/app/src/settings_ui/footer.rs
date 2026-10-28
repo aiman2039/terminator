@@ -10,25 +10,25 @@ impl App {
             .any(|c| c == DIFF_CLOSE_SETTINGS_CAPABILITY);
         let response = ui.add_enabled_ui(supported, |ui| {
             if self.field_visible("Diff default layout", "unified split side by side") {
-                settings_controls::settings_row(
+                settings_controls::settings_row(settings_controls::SettingsRowInput {
                     ui,
-                    "Diff default layout",
-                    "Default view for new native Git diffs.",
-                    |ui| {
+                    label: "Diff default layout",
+                    description: "Default view for new native Git diffs.",
+                    add_control: |ui| {
                         settings_controls::segmented(
                             ui,
                             &mut self.settings_draft.diff_split_default,
                             &[("Unified", false), ("Side by side", true)],
                         );
                     },
-                );
+                });
             }
             if self.field_visible("Editor close timeout", "seconds delay quit") {
-                settings_controls::settings_row(
+                settings_controls::settings_row(settings_controls::SettingsRowInput {
                     ui,
-                    "Editor close timeout",
-                    "How long to wait for Neovim to close before force-stopping.",
-                    |ui| {
+                    label: "Editor close timeout",
+                    description: "How long to wait for Neovim to close before force-stopping.",
+                    add_control: |ui| {
                         ui.add(
                             egui::Slider::new(
                                 &mut self.settings_draft.editor_close_timeout_secs,
@@ -37,7 +37,7 @@ impl App {
                             .suffix(" s"),
                         );
                     },
-                );
+                });
             }
         });
         response.response.on_disabled_hover_text(

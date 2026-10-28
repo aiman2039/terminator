@@ -26,6 +26,18 @@ pub(crate) struct AttentionCounts {
 }
 
 impl AttentionCounts {
+    /// Counts one pending notice; states other than input, permission,
+    /// and failure are not attention.
+    pub fn count(&mut self, state: AgentState) {
+        match state {
+            AgentState::WaitingInput => self.input = self.input.saturating_add(1),
+            AgentState::WaitingPermission => {
+                self.permission = self.permission.saturating_add(1);
+            }
+            AgentState::Failed => self.failed = self.failed.saturating_add(1),
+            _ => {}
+        }
+    }
     #[must_use]
     pub fn waiting(self) -> usize {
         self.input.saturating_add(self.permission)

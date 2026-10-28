@@ -1,6 +1,6 @@
 //! Read-only snapshots for diff review: blob pairs with symlink, submodule,
 //! size, and text checks shared by the native viewer and `CodeDiff` reviews.
-use anyhow::{Context, Result, bail, ensure};
+use crate::{Error, Result};
 use std::{
     ffi::OsStr,
     io::Read,
@@ -33,10 +33,11 @@ pub fn relative_path(root: &Path, path: &Path) -> Result<PathBuf> {
     // Resolve directory aliases, but retain the Git entry's own identity.
     // Resolving the final component could silently review a symlink's target.
     match std::fs::symlink_metadata(&absolute) {
-        Ok(meta) => ensure!(
-            !meta.file_type().is_symlink(),
-            "Diff review supports regular files, not symlinks or submodules"
-        ),
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return Err(Error::NotRegularFile { path: absolute });
+            }
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
@@ -48,13 +49,18 @@ pub fn relative_path(root: &Path, path: &Path) -> Result<PathBuf> {
     let relative = absolute
         .strip_prefix(root)
         .or_else(|_| path.strip_prefix(root))
-        .context("Diff file is outside the repository")?;
-    ensure!(
-        relative
-            .components()
-            .all(|c| matches!(c, Component::Normal(_))),
-        "Review path must be inside the repository"
-    );
+        .map_err(|source| Error::OutsideRepository {
+            context: "Diff file is outside the repository",
+            source,
+        })?;
+    if !(relative
+        .components()
+        .all(|c| matches!(c, Component::Normal(_))))
+    {
+        return Err(Error::PathEscapes {
+            path: relative.to_path_buf(),
+        });
+    }
     Ok(relative.to_path_buf())
 }
 
@@ -66,20 +72,26 @@ pub fn worktree_file(path: &Path) -> Result<Vec<u8>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(error) => return Err(error.into()),
     };
-    ensure!(
-        meta.is_file(),
-        "Diff review supports regular files, not symlinks or submodules"
-    );
-    ensure!(
-        meta.len() <= SNAPSHOT_LIMIT as u64,
-        "Diff file exceeds 1 MiB"
-    );
+    if !meta.is_file() {
+        return Err(Error::NotRegularFile { path: path.into() });
+    }
+    if meta.len() > SNAPSHOT_LIMIT as u64 {
+        return Err(Error::TooLarge { bytes: meta.len() });
+    }
     let mut bytes = vec![];
     std::fs::File::open(path)?
         .take((SNAPSHOT_LIMIT + 1) as u64)
         .read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= SNAPSHOT_LIMIT, "Diff file exceeds 1 MiB");
+    if bytes.len() > SNAPSHOT_LIMIT {
+        return Err(too_large(&bytes));
+    }
     Ok(bytes)
+}
+
+fn too_large(bytes: &[u8]) -> Error {
+    Error::TooLarge {
+        bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+    }
 }
 
 /// Snapshot bytes must be NUL-free UTF-8 before rendering. Callers report
@@ -96,32 +108,38 @@ pub fn find_record(raw: &[u8], path: &Path) -> Result<Option<(String, String)>> 
     while let Some(header) = fields.next() {
         let header = std::str::from_utf8(header)?;
         let parts: Vec<_> = header.split_whitespace().collect();
+        let invalid = || Error::InvalidDiffRecord {
+            header: header.to_owned(),
+        };
         let Some(&[old_mode, new_mode, before, after, status]) = parts.get(..5) else {
-            bail!("Invalid Git diff record");
+            return Err(invalid());
         };
         if parts.len() != 5 {
-            bail!("Invalid Git diff record");
+            return Err(invalid());
         }
-        let first = fields.next().context("Missing Git path")?;
+        let first = fields.next().ok_or_else(|| Error::MissingPath {
+            header: header.to_owned(),
+        })?;
         let target = if status.starts_with(['R', 'C']) {
-            fields.next().context("Missing rename target")?
+            fields.next().ok_or_else(|| Error::MissingRenameTarget {
+                header: header.to_owned(),
+            })?
         } else {
             first
         };
         if target != terminator_core::os_bytes(path.as_os_str()).as_ref() {
             continue;
         }
-        ensure!(
-            !status.starts_with('U'),
-            "Resolve this file's merge conflict in your editor before opening a two-way diff"
-        );
-        ensure!(
-            old_mode != ":160000"
-                && new_mode != "160000"
-                && old_mode != ":120000"
-                && new_mode != "120000",
-            "Diff review supports regular files, not symlinks or submodules"
-        );
+        if status.starts_with('U') {
+            return Err(Error::Conflicted { path: path.into() });
+        }
+        if !(old_mode != ":160000"
+            && new_mode != "160000"
+            && old_mode != ":120000"
+            && new_mode != "120000")
+        {
+            return Err(Error::NotRegularFile { path: path.into() });
+        }
         return Ok(Some((before.to_owned(), after.to_owned())));
     }
     Ok(None)
@@ -149,46 +167,64 @@ pub fn blob(root: &Path, oid: &str, options: &CommandOptions) -> Result<Vec<u8>>
         return Ok(vec![]);
     }
     let bytes = git::run_blocking(root, &["cat-file", "blob", oid], fork_options(options))?;
-    ensure!(bytes.len() <= SNAPSHOT_LIMIT, "Diff file exceeds 1 MiB");
+    if bytes.len() > SNAPSHOT_LIMIT {
+        return Err(too_large(&bytes));
+    }
     Ok(bytes)
 }
 
 /// Async [`blob`] through the shared pools.
+pub struct BlobAsyncInput<'a> {
+    pub root: &'a Path,
+    pub oid: &'a str,
+    pub options: CommandOptions,
+}
+
 pub async fn blob_async(
     processes: &terminator_core::async_process::Processes,
     files: &terminator_core::async_service::NativePool,
-    root: &Path,
-    oid: &str,
-    options: CommandOptions,
+    input: BlobAsyncInput<'_>,
 ) -> Result<Vec<u8>> {
+    let BlobAsyncInput { root, oid, options } = input;
     if oid.bytes().all(|b| b == b'0') {
         return Ok(Vec::new());
     }
     let bytes = git::run(
         processes,
         files,
-        root,
-        vec!["cat-file".into(), "blob".into(), oid.into()],
-        options,
+        git::RunInput {
+            cwd: root,
+            args: vec!["cat-file".into(), "blob".into(), oid.into()],
+            options,
+        },
     )
     .await?;
-    ensure!(bytes.len() <= SNAPSHOT_LIMIT, "Diff file exceeds 1 MiB");
+    if bytes.len() > SNAPSHOT_LIMIT {
+        return Err(too_large(&bytes));
+    }
     Ok(bytes)
 }
 
 /// Capture the before/after bytes for `path` (repository-relative). Staged
 /// snapshots compare index sides; working snapshots compare the index side
 /// against the worktree file. Untracked files snapshot as empty vs content.
-pub fn snapshots(
-    root: &Path,
-    path: &Path,
-    staged: bool,
-    options: &CommandOptions,
-) -> Result<(Vec<u8>, Vec<u8>)> {
-    ensure!(
-        !path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_))),
-        "Review path must be inside the repository"
-    );
+pub struct SnapshotsInput<'a> {
+    pub root: &'a Path,
+    pub path: &'a Path,
+    pub staged: bool,
+    pub options: &'a CommandOptions,
+}
+
+pub fn snapshots(input: SnapshotsInput<'_>) -> Result<(Vec<u8>, Vec<u8>)> {
+    let SnapshotsInput {
+        root,
+        path,
+        staged,
+        options,
+    } = input;
+    if !(!path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_)))) {
+        return Err(Error::PathEscapes { path: path.into() });
+    }
     let raw = git::run_blocking(root, &raw_args(staged), fork_options(options))?;
     match find_record(&raw, path)? {
         Some((before, after)) => {
@@ -200,7 +236,7 @@ pub fn snapshots(
             };
             Ok((left, right))
         }
-        None if staged => bail!("This file has no staged changes; refresh Git status"),
+        None if staged => Err(Error::NoStagedChanges { path: path.into() }),
         None => {
             let tracked = git::run_blocking(
                 root,
@@ -212,14 +248,12 @@ pub fn snapshots(
                 ],
                 fork_options(options),
             )?;
-            ensure!(
-                tracked.is_empty(),
-                "This file has no working-tree changes; refresh Git status"
-            );
-            ensure!(
-                root.join(path).exists(),
-                "File no longer exists; refresh Git status"
-            );
+            if !tracked.is_empty() {
+                return Err(Error::NoWorkingChanges { path: path.into() });
+            }
+            if !root.join(path).exists() {
+                return Err(Error::Deleted { path: path.into() });
+            }
             Ok((vec![], worktree_file(&root.join(path))?))
         }
     }
@@ -274,10 +308,22 @@ mod tests {
         git_cmd(root, &["add", "."]);
         std::fs::write(root.join(name), "working\n").unwrap();
         let options = options();
-        let (left, right) = snapshots(root, name, true, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: name,
+            staged: true,
+            options: &options,
+        })
+        .unwrap();
         assert_eq!(left, b"base\n");
         assert_eq!(right, b"staged\n");
-        let (left, right) = snapshots(root, name, false, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: name,
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert_eq!(left, b"staged\n");
         assert_eq!(right, b"working\n");
     }
@@ -322,7 +368,13 @@ mod tests {
         let relative = relative_path(&alias, &alias.join("file.rs")).unwrap();
         assert_eq!(relative, PathBuf::from("file.rs"));
         let options = options();
-        let (left, right) = snapshots(root, &relative, false, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: &relative,
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert_eq!(left, b"old\n");
         assert!(right.is_empty());
     }
@@ -333,12 +385,32 @@ mod tests {
         let root = dir.path();
         let options = options();
         std::fs::write(root.join("new.rs"), "fn new() {}\n").unwrap();
-        let (left, right) = snapshots(root, Path::new("new.rs"), false, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: Path::new("new.rs"),
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert!(left.is_empty());
         assert!(check_text(&left) && check_text(&right));
         std::fs::write(root.join("new.rs"), b"binary\0").unwrap();
-        let (_, right) = snapshots(root, Path::new("new.rs"), false, &options).unwrap();
+        let (_, right) = snapshots(SnapshotsInput {
+            root,
+            path: Path::new("new.rs"),
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert!(!check_text(&right));
-        assert!(snapshots(root, Path::new("../outside.rs"), false, &options).is_err());
+        assert!(
+            snapshots(SnapshotsInput {
+                root,
+                path: Path::new("../outside.rs"),
+                staged: false,
+                options: &options
+            })
+            .is_err()
+        );
     }
 }

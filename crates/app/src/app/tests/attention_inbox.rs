@@ -114,12 +114,12 @@ fn inline_attention_preserves_input_but_missing_session_details_remain_modal() {
     let (mut app, _, _dir) = fixture();
     app.preferences.left_agents = true;
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     app.detail = Some("wait".into());
     assert!(!app.notice_detail_modal_open());
     app.preferences.left_agents = false;
@@ -151,12 +151,12 @@ fn attention_bell_lives_on_the_left_sidebar_only() {
     app.state.settings.notifications_side = true;
     app.preferences.visible = true;
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     let target = |name: &str| {
         ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
     };
@@ -202,12 +202,12 @@ fn attention_actions_fit_minimum_sidebar_widths() {
             resume: None,
             process: None,
         }];
-        app.state.notifications = vec![notice_fixture(
-            "wait",
-            "live-shell",
-            AgentState::WaitingPermission,
-            now(),
-        )];
+        app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+            id: "wait",
+            session: "live-shell",
+            state: AgentState::WaitingPermission,
+            created: now(),
+        })];
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -294,12 +294,12 @@ fn attention_row_glyphs_share_one_center_line() {
         resume: None,
         process: None,
     }];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -419,11 +419,21 @@ fn resolved_waiting_notice_is_not_listed() {
         session_fixture("done", SessionKind::Shell),
         session_fixture("resolved", SessionKind::Shell),
     ];
-    let mut resolved = notice_fixture("old-wait", "resolved", AgentState::WaitingPermission, now());
+    let mut resolved = notice_fixture(NoticeFixtureInput {
+        id: "old-wait",
+        session: "resolved",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    });
     resolved.resolved = true;
     app.state.notifications = vec![
         resolved,
-        notice_fixture("done", "done", AgentState::Completed, 1),
+        notice_fixture(NoticeFixtureInput {
+            id: "done",
+            session: "done",
+            state: AgentState::Completed,
+            created: 1,
+        }),
     ];
     render_agents(&mut app, &ctx, vec![]);
     assert!(agent_target(&ctx, "agent-row:done").is_some());
@@ -467,12 +477,12 @@ fn agents_inbox_lists_pending_notices_not_stopped_agents() {
         resume: None,
         process: None,
     }];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     render_agents(&mut app, &ctx, vec![]);
     assert!(agent_target(&ctx, "agent-row:stopped-shell").is_none());
     assert!(agent_target(&ctx, "agent-row:live-shell").is_some());
@@ -490,8 +500,18 @@ fn agents_inbox_puts_waiting_above_completed() {
         session_fixture("live-shell", SessionKind::Shell),
     ];
     app.state.notifications = vec![
-        notice_fixture("done", "done-shell", AgentState::Completed, now()),
-        notice_fixture("wait", "live-shell", AgentState::WaitingPermission, 1),
+        notice_fixture(NoticeFixtureInput {
+            id: "done",
+            session: "done-shell",
+            state: AgentState::Completed,
+            created: now(),
+        }),
+        notice_fixture(NoticeFixtureInput {
+            id: "wait",
+            session: "live-shell",
+            state: AgentState::WaitingPermission,
+            created: 1,
+        }),
     ];
     render_agents(&mut app, &ctx, vec![]);
     let waiting = agent_target(&ctx, "agent-row:live-shell").unwrap();
@@ -504,12 +524,12 @@ fn agents_inbox_puts_waiting_above_completed() {
 fn agents_inbox_go_focuses_session_and_dismiss_hides_card() {
     let (mut app, ctx, _dir) = fixture();
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     let (jobs, received) = mpsc::channel();
     app.jobs = jobs.into();
     app.apply_notice_action("wait".into(), AttentionAction::Go);
@@ -548,8 +568,18 @@ fn status_menu_lists_pending_notices_in_inbox_order() {
         session_fixture("live-shell", SessionKind::Shell),
     ];
     app.state.notifications = vec![
-        notice_fixture("done", "done-shell", AgentState::Completed, now()),
-        notice_fixture("wait", "live-shell", AgentState::WaitingPermission, 1),
+        notice_fixture(NoticeFixtureInput {
+            id: "done",
+            session: "done-shell",
+            state: AgentState::Completed,
+            created: now(),
+        }),
+        notice_fixture(NoticeFixtureInput {
+            id: "wait",
+            session: "live-shell",
+            state: AgentState::WaitingPermission,
+            created: 1,
+        }),
     ];
     let items = app.status_menu_items();
     assert_eq!(items.len(), 2);
@@ -563,22 +593,42 @@ fn status_menu_lists_pending_notices_in_inbox_order() {
 fn status_menu_skips_settled_notices_and_caps_single_line_titles() {
     let (mut app, _ctx, _dir) = fixture();
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    let mut long = notice_fixture("long", "live-shell", AgentState::WaitingInput, now());
+    let mut long = notice_fixture(NoticeFixtureInput {
+        id: "long",
+        session: "live-shell",
+        state: AgentState::WaitingInput,
+        created: now(),
+    });
     long.summary = "line one\nline two ".to_string() + &"word ".repeat(40);
-    let mut dismissed = notice_fixture("dismissed", "live-shell", AgentState::WaitingInput, now());
+    let mut dismissed = notice_fixture(NoticeFixtureInput {
+        id: "dismissed",
+        session: "live-shell",
+        state: AgentState::WaitingInput,
+        created: now(),
+    });
     dismissed.dismissed = true;
-    let mut resolved = notice_fixture("resolved", "live-shell", AgentState::WaitingInput, now());
+    let mut resolved = notice_fixture(NoticeFixtureInput {
+        id: "resolved",
+        session: "live-shell",
+        state: AgentState::WaitingInput,
+        created: now(),
+    });
     resolved.resolved = true;
-    let mut snoozed = notice_fixture("snoozed", "live-shell", AgentState::WaitingInput, now());
+    let mut snoozed = notice_fixture(NoticeFixtureInput {
+        id: "snoozed",
+        session: "live-shell",
+        state: AgentState::WaitingInput,
+        created: now(),
+    });
     snoozed.snoozed_until = now() + 600;
     let mut overflow: Vec<_> = (0..13)
         .map(|index| {
-            notice_fixture(
-                &format!("extra-{index}"),
-                "live-shell",
-                AgentState::Completed,
-                now(),
-            )
+            notice_fixture(NoticeFixtureInput {
+                id: &format!("extra-{index}"),
+                session: "live-shell",
+                state: AgentState::Completed,
+                created: now(),
+            })
         })
         .collect();
     let mut notices = vec![long, dismissed, resolved, snoozed];
@@ -598,12 +648,12 @@ fn status_menu_skips_settled_notices_and_caps_single_line_titles() {
 fn status_menu_pick_focuses_the_waiting_agent() {
     let (mut app, ctx, _dir) = fixture();
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     let (jobs, _received) = mpsc::channel();
     app.jobs = jobs.into();
     app.preferences.tool = SidebarTool::Explorer;
@@ -636,11 +686,21 @@ fn attention_counts_share_waiting_and_unread_with_both_bells() {
         session_fixture("one", SessionKind::Shell),
         session_fixture("two", SessionKind::Shell),
     ];
-    let mut waiting = notice_fixture("wait", "one", AgentState::WaitingPermission, now());
+    let mut waiting = notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "one",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    });
     waiting.read = true;
     app.state.notifications = vec![
         waiting,
-        notice_fixture("done", "two", AgentState::Completed, now()),
+        notice_fixture(NoticeFixtureInput {
+            id: "done",
+            session: "two",
+            state: AgentState::Completed,
+            created: now(),
+        }),
     ];
     assert_eq!(app.attention_counts(), (1, 1));
 }
@@ -659,20 +719,60 @@ fn next_attention_cycles_waiting_then_failed_oldest_first() {
         ended,
     ];
     let mut notices = vec![
-        notice_fixture("w-early", "early", AgentState::WaitingPermission, 10),
-        notice_fixture("w-late", "late", AgentState::WaitingInput, 20),
+        notice_fixture(NoticeFixtureInput {
+            id: "w-early",
+            session: "early",
+            state: AgentState::WaitingPermission,
+            created: 10,
+        }),
+        notice_fixture(NoticeFixtureInput {
+            id: "w-late",
+            session: "late",
+            state: AgentState::WaitingInput,
+            created: 20,
+        }),
         // Older than every waiting notice, still sorted after the group.
-        notice_fixture("f-failed", "failed", AgentState::Failed, 5),
+        notice_fixture(NoticeFixtureInput {
+            id: "f-failed",
+            session: "failed",
+            state: AgentState::Failed,
+            created: 5,
+        }),
         // A session with both appears once, in the waiting group.
-        notice_fixture("f-early-too", "early", AgentState::Failed, 1),
+        notice_fixture(NoticeFixtureInput {
+            id: "f-early-too",
+            session: "early",
+            state: AgentState::Failed,
+            created: 1,
+        }),
     ];
-    let mut dismissed = notice_fixture("dismissed", "late", AgentState::WaitingInput, 0);
+    let mut dismissed = notice_fixture(NoticeFixtureInput {
+        id: "dismissed",
+        session: "late",
+        state: AgentState::WaitingInput,
+        created: 0,
+    });
     dismissed.dismissed = true;
-    let mut snoozed = notice_fixture("snoozed", "late", AgentState::WaitingInput, 0);
+    let mut snoozed = notice_fixture(NoticeFixtureInput {
+        id: "snoozed",
+        session: "late",
+        state: AgentState::WaitingInput,
+        created: 0,
+    });
     snoozed.snoozed_until = now() + 600;
-    let mut resolved = notice_fixture("resolved", "late", AgentState::WaitingInput, 0);
+    let mut resolved = notice_fixture(NoticeFixtureInput {
+        id: "resolved",
+        session: "late",
+        state: AgentState::WaitingInput,
+        created: 0,
+    });
     resolved.resolved = true;
-    let gone = notice_fixture("gone", "ended", AgentState::WaitingInput, 0);
+    let gone = notice_fixture(NoticeFixtureInput {
+        id: "gone",
+        session: "ended",
+        state: AgentState::WaitingInput,
+        created: 0,
+    });
     notices.extend([dismissed, snoozed, resolved, gone]);
     app.state.notifications = notices;
     assert_eq!(app.attention_order(), vec!["early", "late", "failed"]);
@@ -708,8 +808,18 @@ fn reading_newest_unread_row_keeps_its_position() {
     let (mut app, _ctx, _dir) = fixture();
     app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
     app.state.notifications = vec![
-        notice_fixture("old", "s", AgentState::WaitingInput, 1),
-        notice_fixture("new", "s", AgentState::WaitingInput, 2),
+        notice_fixture(NoticeFixtureInput {
+            id: "old",
+            session: "s",
+            state: AgentState::WaitingInput,
+            created: 1,
+        }),
+        notice_fixture(NoticeFixtureInput {
+            id: "new",
+            session: "s",
+            state: AgentState::WaitingInput,
+            created: 2,
+        }),
     ];
     app.apply_notice_action("new".into(), AttentionAction::Read);
     assert_eq!(
@@ -737,8 +847,18 @@ fn unread_selection_survives_marking_read_without_touching_lifecycle() {
         process: None,
     }];
     app.state.notifications = vec![
-        notice_fixture("n1", "s", AgentState::WaitingInput, 1),
-        notice_fixture("n2", "s", AgentState::WaitingInput, 2),
+        notice_fixture(NoticeFixtureInput {
+            id: "n1",
+            session: "s",
+            state: AgentState::WaitingInput,
+            created: 1,
+        }),
+        notice_fixture(NoticeFixtureInput {
+            id: "n2",
+            session: "s",
+            state: AgentState::WaitingInput,
+            created: 2,
+        }),
     ];
     assert_eq!(app.unread_notices().len(), 2);
     app.apply_notice_action("n1".into(), AttentionAction::Read);
@@ -841,8 +961,18 @@ fn workspace_tab_shows_focused_identity_with_aggregate_attention() {
         session_fixture("two", SessionKind::Shell),
     ];
     app.state.notifications = vec![
-        notice_fixture("wait", "two", AgentState::WaitingPermission, 1),
-        notice_fixture("broke", "one", AgentState::Failed, 2),
+        notice_fixture(NoticeFixtureInput {
+            id: "wait",
+            session: "two",
+            state: AgentState::WaitingPermission,
+            created: 1,
+        }),
+        notice_fixture(NoticeFixtureInput {
+            id: "broke",
+            session: "one",
+            state: AgentState::Failed,
+            created: 2,
+        }),
     ];
     app.layouts.insert(
         "a".into(),

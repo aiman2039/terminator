@@ -3,6 +3,29 @@ use super::model::Workspace;
 use crate::{PaneSource, Tab};
 use egui_dock::{Node, NodePath, TabInsert};
 
+pub(crate) struct MoveViewToLeafInput<'a> {
+    pub(crate) source: &'a PaneSource,
+    pub(crate) pane: &'a Tab,
+    pub(crate) group: &'a str,
+    pub(crate) dest: NodePath,
+    pub(crate) insertion: TabInsert,
+}
+
+pub(crate) struct MoveViewSameGroupInput<'a> {
+    pub(crate) src: usize,
+    pub(crate) source: &'a PaneSource,
+    pub(crate) dest: NodePath,
+    pub(crate) insertion: TabInsert,
+}
+pub(crate) struct MoveViewCrossGroupInput<'a> {
+    pub(crate) source: &'a PaneSource,
+    pub(crate) pane: &'a Tab,
+    pub(crate) dest: NodePath,
+    pub(crate) insertion: TabInsert,
+    pub(crate) src: usize,
+    pub(crate) dst: usize,
+}
+
 impl Workspace {
     pub(crate) fn view_exists(&self, source: &PaneSource, pane: &Tab) -> bool {
         self.tabs
@@ -65,18 +88,25 @@ impl Workspace {
             .filter(|path| target.layout.leaf(*path).is_ok())
             .or_else(|| target.layout.iter_leaves().next().map(|(path, _)| path));
         dest.is_some_and(|dest| {
-            self.move_view_to_leaf(source, pane, group, dest, TabInsert::Append)
+            self.move_view_to_leaf(crate::workspace::MoveViewToLeafInput {
+                source,
+                pane,
+                group,
+                dest,
+                insertion: TabInsert::Append,
+            })
         })
     }
 
-    pub(crate) fn move_view_to_leaf(
-        &mut self,
-        source: &PaneSource,
-        pane: &Tab,
-        group: &str,
-        dest: NodePath,
-        mut insertion: TabInsert,
-    ) -> bool {
+    pub(crate) fn move_view_to_leaf(&mut self, input: MoveViewToLeafInput<'_>) -> bool {
+        let MoveViewToLeafInput {
+            source,
+            pane,
+            group,
+            dest,
+            insertion,
+        } = input;
+
         if !self.view_exists(source, pane) {
             return false;
         }
@@ -91,52 +121,86 @@ impl Workspace {
             return false;
         };
         if src == dst {
-            let Some(tab) = self.tabs.get_mut(src) else {
-                return false;
-            };
-            if source.path.node_path() == dest
-                && let TabInsert::Insert(index) = &mut insertion
-                && source.path.tab.0 < index.0
-            {
-                index.0 = index.0.saturating_sub(1);
-            }
-            tab.layout.set_focused_node_and_surface(dest);
-            tab.layout.move_tab(source.path, (dest, insertion));
+            self.move_view_same_group(MoveViewSameGroupInput {
+                src,
+                source,
+                dest,
+                insertion,
+            });
         } else {
-            // Insert before pruning the source group so destination indices
-            // stay valid. All target/source addresses were checked above.
-            if let Some(tab) = self.tabs.get_mut(src) {
-                tab.layout.remove_tab(source.path);
-                tab.primary = tab
-                    .layout
-                    .iter_all_tabs()
-                    .next()
-                    .map(|(_, pane)| pane.clone());
-            }
-            if let Some(tab) = self.tabs.get_mut(dst) {
-                if let TabInsert::Split(split) = insertion {
-                    let placed = tab.layout.split(dest, split, 0.5, Node::leaf(pane.clone()));
-                    tab.layout.set_focused_node_and_surface(NodePath {
-                        surface: dest.surface,
-                        node: placed[1],
-                    });
-                } else {
-                    if let Ok(leaf) = tab.layout.leaf_mut(dest) {
-                        match insertion {
-                            TabInsert::Insert(index) => {
-                                leaf.insert_tab(index.0.min(leaf.tabs.len()), pane.clone())
-                            }
-                            _ => leaf.append_tab(pane.clone()),
-                        }
-                    }
-                    tab.layout.set_focused_node_and_surface(dest);
-                }
-            }
+            self.move_view_cross_group(MoveViewCrossGroupInput {
+                source,
+                pane,
+                dest,
+                insertion,
+                src,
+                dst,
+            });
         }
         self.version = self.version.max(pane.layout_version());
         group.clone_into(&mut self.active);
         self.drop_empty_tabs();
         true
+    }
+
+    fn move_view_same_group(&mut self, input: MoveViewSameGroupInput<'_>) {
+        let MoveViewSameGroupInput {
+            src,
+            source,
+            dest,
+            mut insertion,
+        } = input;
+        let Some(tab) = self.tabs.get_mut(src) else {
+            return;
+        };
+        if source.path.node_path() == dest
+            && let TabInsert::Insert(index) = &mut insertion
+            && source.path.tab.0 < index.0
+        {
+            index.0 = index.0.saturating_sub(1);
+        }
+        tab.layout.set_focused_node_and_surface(dest);
+        tab.layout.move_tab(source.path, (dest, insertion));
+    }
+
+    fn move_view_cross_group(&mut self, input: MoveViewCrossGroupInput<'_>) {
+        let MoveViewCrossGroupInput {
+            source,
+            pane,
+            dest,
+            insertion,
+            src,
+            dst,
+        } = input;
+        // Insert before pruning the source group so destination indices
+        // stay valid. All target/source addresses were checked above.
+        if let Some(tab) = self.tabs.get_mut(src) {
+            tab.layout.remove_tab(source.path);
+            tab.primary = tab
+                .layout
+                .iter_all_tabs()
+                .next()
+                .map(|(_, pane)| pane.clone());
+        }
+        if let Some(tab) = self.tabs.get_mut(dst) {
+            if let TabInsert::Split(split) = insertion {
+                let placed = tab.layout.split(dest, split, 0.5, Node::leaf(pane.clone()));
+                tab.layout.set_focused_node_and_surface(NodePath {
+                    surface: dest.surface,
+                    node: placed[1],
+                });
+            } else {
+                if let Ok(leaf) = tab.layout.leaf_mut(dest) {
+                    match insertion {
+                        TabInsert::Insert(index) => {
+                            leaf.insert_tab(index.0.min(leaf.tabs.len()), pane.clone())
+                        }
+                        _ => leaf.append_tab(pane.clone()),
+                    }
+                }
+                tab.layout.set_focused_node_and_surface(dest);
+            }
+        }
     }
 
     pub(crate) fn move_view_to_new_group(

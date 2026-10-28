@@ -269,6 +269,8 @@ pub(crate) enum Job {
     CommitFiles(PathBuf, String),
     /// Read a file's `HEAD` text for gutter markers (refresh generation).
     GitBase(PathBuf, u64),
+    /// Blame a native buffer's text `(path, buffer revision, text)`.
+    EditorBlame(PathBuf, u64, String),
     TestExternal(PathBuf, String, Vec<String>),
     Workspace(PathBuf, workspace_ops::Op),
     Search {
@@ -461,6 +463,7 @@ pub(crate) enum Update {
     Search(u64, Result<Vec<search::Hit>, String>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),
     GitBase(PathBuf, u64, Option<String>),
+    EditorBlame(PathBuf, u64, Result<Vec<git_log::BlameEntry>, String>),
     CommitFiles(String, Result<Vec<(char, PathBuf)>, String>),
     GitView(String, GitView),
     DirectoryPreview(

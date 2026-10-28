@@ -44,10 +44,8 @@ pub(super) struct HeaderIconButton<'a> {
 
 pub(super) fn header_row_width(buttons: usize, menu: bool) -> f32 {
     // Header width is a UI coordinate; the button count can exceed the f32 mantissa.
-    #[allow(clippy::cast_precision_loss)]
     let mut width = buttons as f32 * HEADER_SLOT;
     if buttons > 1 {
-        #[allow(clippy::cast_precision_loss)]
         {
             width += buttons.saturating_sub(1) as f32 * HEADER_GAP;
         }
@@ -268,14 +266,29 @@ pub fn filter_history_lines<'a>(text: &'a str, query: &str) -> Vec<&'a str> {
         .collect()
 }
 
-pub(super) fn click_enabled_menu_item(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    label: &str,
-    icon: &str,
-) -> bool {
+pub(super) struct ClickEnabledMenuItemInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) enabled: bool,
+    pub(super) label: &'a str,
+    pub(super) icon: &'a str,
+}
+
+pub(super) fn click_enabled_menu_item(input: ClickEnabledMenuItemInput<'_>) -> bool {
+    let ClickEnabledMenuItemInput {
+        ui,
+        enabled,
+        label,
+        icon,
+    } = input;
     let clicked = ui
-        .add_enabled_ui(enabled, |ui| appearance::menu_item(ui, label, icon, ""))
+        .add_enabled_ui(enabled, |ui| {
+            appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label,
+                icon,
+                shortcut: "",
+            })
+        })
         .inner
         .clicked();
     if clicked {

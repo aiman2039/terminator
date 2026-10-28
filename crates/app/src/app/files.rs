@@ -1,8 +1,25 @@
+use crate::native_editor::OpenNativeInput;
+use crate::remote_ui::OpenRemoteFileInput;
 use anyhow::Result;
 use std::{collections::HashSet, path::PathBuf};
 use terminator_core::*;
 
 use super::super::*;
+
+pub(crate) struct OpenFileInput<'a> {
+    pub(crate) path: PathBuf,
+    pub(crate) line: Option<u32>,
+    pub(crate) split: Option<&'a str>,
+    pub(crate) external: bool,
+}
+
+pub(crate) struct OpenFileModeInput<'a> {
+    pub(crate) path: PathBuf,
+    pub(crate) line: Option<u32>,
+    pub(crate) split: Option<&'a str>,
+    pub(crate) external: bool,
+    pub(crate) text: bool,
+}
 
 fn same_file_view(left: &Tab, right: &Tab) -> bool {
     match (left, right) {
@@ -131,35 +148,40 @@ impl App {
             false
         }
     }
-    pub(crate) fn open_file(
-        &mut self,
-        path: PathBuf,
-        line: Option<u32>,
-        split: Option<&str>,
-        external: bool,
-    ) {
-        self.open_file_mode(path, line, split, external, false);
+
+    pub(crate) fn open_file(&mut self, input: OpenFileInput<'_>) {
+        let OpenFileInput {
+            path,
+            line,
+            split,
+            external,
+        } = input;
+        self.open_file_mode(OpenFileModeInput {
+            path,
+            line,
+            split,
+            external,
+            text: false,
+        });
     }
-    pub(crate) fn open_file_mode(
-        &mut self,
-        path: PathBuf,
-        line: Option<u32>,
-        split: Option<&str>,
-        external: bool,
-        text: bool,
-    ) {
+
+    pub(crate) fn open_file_mode(&mut self, input: OpenFileModeInput<'_>) {
+        let OpenFileModeInput {
+            path,
+            line,
+            split,
+            external,
+            text,
+        } = input;
         if let Some(remote) = self.selected_remote_project().cloned() {
-            let cache = crate::remote_ui::snapshot_root(&self.paths.data, &remote.id);
-            let relative = path
-                .strip_prefix(&cache)
-                .or_else(|_| path.strip_prefix(remote.identity_path()))
-                .or_else(|_| path.strip_prefix(&remote.root))
-                .map_or_else(
-                    |_| path.to_str().map(str::to_owned),
-                    |p| p.to_str().map(str::to_owned),
-                );
-            if let Some(relative) = relative {
-                self.open_remote_file(&remote, relative, line, split, text || external);
+            if let Some(relative) = self.remote_relative_path(&remote, &path) {
+                self.open_remote_file(OpenRemoteFileInput {
+                    project: &remote,
+                    path: relative,
+                    line,
+                    split,
+                    text: text || external,
+                });
             } else {
                 self.error = Some("Remote file paths must be UTF-8".into());
             }
@@ -190,7 +212,12 @@ impl App {
         if self.state.settings.editor_mode == EditorMode::Native
             && let Some(project) = self.selected.clone()
         {
-            self.open_native(&project, path, line, split);
+            self.open_native(OpenNativeInput {
+                project: &project,
+                path,
+                line,
+                split,
+            });
             return;
         }
         if split.is_none()
@@ -214,6 +241,23 @@ impl App {
             ));
         }
     }
+    /// `path` relative to the remote project, whether it points into the
+    /// local snapshot cache or at the remote root; `None` when not UTF-8.
+    fn remote_relative_path(
+        &self,
+        remote: &terminator_core::remote::RemoteProject,
+        path: &std::path::Path,
+    ) -> Option<String> {
+        let cache = crate::remote_ui::snapshot_root(&self.paths.data, &remote.id);
+        path.strip_prefix(&cache)
+            .or_else(|_| path.strip_prefix(remote.identity_path()))
+            .or_else(|_| path.strip_prefix(&remote.root))
+            .map_or_else(
+                |_| path.to_str().map(str::to_owned),
+                |p| p.to_str().map(str::to_owned),
+            )
+    }
+
     pub(crate) fn open_image(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
         self.hide_center_overlay();
         let origin = self

@@ -69,13 +69,22 @@ pub(super) fn cached_variable_card(
 
 /// Names | Contents segmented control for the Explorer search bar.
 /// Small text toggle used by the Contents search bar (`Aa`, whole word, `.*`).
-pub(super) fn explorer_toggle(
-    ui: &mut egui::Ui,
-    text: &str,
-    tip: &str,
-    selected: bool,
-    target: &str,
-) -> egui::Response {
+pub(crate) struct ExplorerToggleInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) text: &'a str,
+    pub(crate) tip: &'a str,
+    pub(crate) selected: bool,
+    pub(crate) target: &'a str,
+}
+
+pub(super) fn explorer_toggle(input: ExplorerToggleInput<'_>) -> egui::Response {
+    let ExplorerToggleInput {
+        ui,
+        text,
+        tip,
+        selected,
+        target,
+    } = input;
     let response = ui
         .add_sized(
             [22.0, 22.0],
@@ -203,35 +212,47 @@ pub(crate) fn explorer_query_keeps_file(
     needle.is_none_or(|needle| label.to_lowercase().contains(needle))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn explorer_file_row(
-    ui: &mut egui::Ui,
-    path: &Path,
-    label: &str,
-    status: char,
-    ignored: bool,
-    theme: &AppearanceConfig,
-    open_shortcut: &str,
-    split_shortcut: &str,
-    selected: bool,
-    perforce: bool,
-    git_branches: Option<&[String]>,
-) -> ExplorerRowOutcome {
+pub(crate) struct ExplorerFileRowInput<'a> {
+    pub path: &'a Path,
+    pub label: &'a str,
+    pub status: char,
+    pub ignored: bool,
+    pub theme: &'a AppearanceConfig,
+    pub open_shortcut: &'a str,
+    pub split_shortcut: &'a str,
+    pub selected: bool,
+    pub perforce: bool,
+    pub git_branches: Option<&'a [String]>,
+}
+
+pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> ExplorerRowOutcome {
+    let ExplorerFileRowInput {
+        path,
+        label,
+        status,
+        ignored,
+        theme,
+        open_shortcut,
+        split_shortcut,
+        selected,
+        perforce,
+        git_branches,
+    } = input;
     let mut outcome = ExplorerRowOutcome::default();
     let color = if ignored {
         appearance::color(&theme.git_ignored)
     } else {
         git_color(theme, status)
     };
-    let r = appearance::file_row(
+    let r = appearance::file_row(appearance::FileRowInput {
         ui,
         label,
-        icons::file_icon(path),
+        icon: icons::file_icon(path),
         selected,
-        24.0,
-        &status.to_string(),
-        color,
-    )
+        height: 24.0,
+        trailing: &status.to_string(),
+        tint: color,
+    })
     .interact(egui::Sense::drag());
     // Tooltip text is only needed for the hovered row; formatting it for
     // every row on every scroll frame allocates heavily.
@@ -253,83 +274,149 @@ pub fn explorer_file_row(
     if r.clicked() || r.double_clicked() {
         outcome.clicked = Some(FileAction::Open);
     }
-    appearance::context_menu(&r, |ui| {
-        if let Some(action) = file_actions::menu_with(
+    let menu = FileRowMenu {
+        path,
+        open_shortcut,
+        split_shortcut,
+        perforce,
+        git_branches,
+    };
+    appearance::context_menu(&r, |ui| menu.show(ui, &mut outcome));
+    outcome.response = Some(r);
+    outcome
+}
+
+/// The file row's context menu.
+struct FileRowMenu<'a> {
+    path: &'a Path,
+    open_shortcut: &'a str,
+    split_shortcut: &'a str,
+    perforce: bool,
+    git_branches: Option<&'a [String]>,
+}
+
+impl FileRowMenu<'_> {
+    fn show(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
+        if let Some(action) = file_actions::menu_with(file_actions::MenuWithInput {
             ui,
-            file_actions::FileMenu {
+            spec: file_actions::FileMenu {
                 file: true,
-                browser: file_actions::browser_document(path),
+                browser: file_actions::browser_document(self.path),
                 git: None,
                 neovim: false,
             },
-            open_shortcut,
-            split_shortcut,
-        ) {
+            open: self.open_shortcut,
+            split: self.split_shortcut,
+        }) {
             outcome.menu = Some(action);
         }
-        if perforce {
+        if self.perforce {
             ui.separator();
-            if appearance::menu_item(ui, "Perforce: Open for edit", "Pencil", "").clicked() {
-                outcome.perforce = Some(crate::perforce::Op::Edit(path.into()));
-                ui.close();
-            }
-            if appearance::menu_item(ui, "Perforce: Reconcile file", "RefreshCw", "").clicked() {
-                outcome.perforce = Some(crate::perforce::Op::Reconcile(path.into()));
-                ui.close();
-            }
-            if appearance::menu_item(ui, "Perforce: Diff", "FileDiff", "").clicked() {
-                outcome.menu = Some(FileAction::NativeWorkingDiff);
-                ui.close();
-            }
+            self.perforce_items(ui, outcome);
         }
-        if let Some(branches) = git_branches {
+        if let Some(branches) = self.git_branches {
             ui.separator();
-            if appearance::menu_item(ui, "Show history", "History", "").clicked() {
-                outcome.local = Some(ExplorerLocal::History);
+            Self::git_items(ui, branches, outcome);
+        }
+        ui.separator();
+        Self::local_items(ui, outcome);
+    }
+
+    fn perforce_items(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Perforce: Open for edit",
+            icon: "Pencil",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            outcome.perforce = Some(crate::perforce::Op::Edit(self.path.into()));
+            ui.close();
+        }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Perforce: Reconcile file",
+            icon: "RefreshCw",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            outcome.perforce = Some(crate::perforce::Op::Reconcile(self.path.into()));
+            ui.close();
+        }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Perforce: Diff",
+            icon: "FileDiff",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            outcome.menu = Some(FileAction::NativeWorkingDiff);
+            ui.close();
+        }
+    }
+
+    fn git_items(ui: &mut egui::Ui, branches: &[String], outcome: &mut ExplorerRowOutcome) {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Show history",
+            icon: "History",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            outcome.local = Some(ExplorerLocal::History);
+            ui.close();
+        }
+        ui.menu_button("Compare with branch", |ui| {
+            if branches.is_empty() {
+                ui.weak("Loading branches…");
+            }
+            for branch in branches {
+                if ui.button(branch).clicked() {
+                    outcome.local = Some(ExplorerLocal::CompareWith(branch.clone()));
+                    ui.close();
+                }
+            }
+        });
+    }
+
+    /// Reveal, copy, rename, duplicate, and delete.
+    fn local_items(ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
+        let mut item = |ui: &mut egui::Ui, label: &str, icon: &str, local: ExplorerLocal| {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label,
+                icon,
+                shortcut: "",
+            })
+            .clicked()
+            {
+                outcome.local = Some(local);
                 ui.close();
             }
-            ui.menu_button("Compare with branch", |ui| {
-                if branches.is_empty() {
-                    ui.weak("Loading branches…");
-                }
-                for branch in branches {
-                    if ui.button(branch).clicked() {
-                        outcome.local = Some(ExplorerLocal::CompareWith(branch.clone()));
-                        ui.close();
-                    }
-                }
-            });
-        }
+        };
+        item(
+            ui,
+            "Reveal in file manager",
+            "FolderOpen",
+            ExplorerLocal::Reveal,
+        );
+        item(
+            ui,
+            "Copy relative path",
+            "Copy",
+            ExplorerLocal::CopyRelative,
+        );
+        item(ui, "Copy file name", "Copy", ExplorerLocal::CopyName);
         ui.separator();
-        if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Reveal);
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked() {
-            outcome.local = Some(ExplorerLocal::CopyRelative);
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Copy file name", "Copy", "").clicked() {
-            outcome.local = Some(ExplorerLocal::CopyName);
-            ui.close();
-        }
+        item(ui, "Rename", "Pencil", ExplorerLocal::Rename);
+        item(ui, "Duplicate", "Copy", ExplorerLocal::Duplicate);
         ui.separator();
-        if appearance::menu_item(ui, "Rename", "Pencil", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Rename);
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Duplicate", "Copy", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Duplicate);
-            ui.close();
-        }
-        ui.separator();
-        if appearance::menu_item(ui, "Delete", "X", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Delete);
-            ui.close();
-        }
-    });
-    outcome.response = Some(r);
-    outcome
+        item(ui, "Delete", "X", ExplorerLocal::Delete);
+    }
 }
 
 pub(super) fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {
@@ -343,7 +430,20 @@ pub(super) fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {
     padded.max(ui.spacing().interact_size.x) + 6.0
 }
 
-pub(super) fn paint_header_count(ui: &egui::Ui, rect: egui::Rect, count: usize, color: Color32) {
+pub(super) struct PaintHeaderCountInput<'a> {
+    pub(super) ui: &'a egui::Ui,
+    pub(super) rect: egui::Rect,
+    pub(super) count: usize,
+    pub(super) color: Color32,
+}
+
+pub(super) fn paint_header_count(input: PaintHeaderCountInput<'_>) {
+    let PaintHeaderCountInput {
+        ui,
+        rect,
+        count,
+        color,
+    } = input;
     let label = if count > 9 {
         "9+".to_string()
     } else {

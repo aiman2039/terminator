@@ -1,7 +1,7 @@
 use super::super::*;
 use super::counts::AttentionCounts;
 use super::owner::OwnerSupport;
-use super::queries::diagnostics_text;
+use super::queries::{DiagnosticsTextInput, diagnostics_text};
 use terminator_core::agents::{self};
 /// Complete presentation for one terminal session.
 #[derive(Clone, Debug)]
@@ -46,17 +46,17 @@ impl AgentPresentation {
         let Some(d) = &self.diagnostics else {
             return "Unknown session".into();
         };
-        diagnostics_text(
-            &d.session,
-            d.presence.as_ref(),
-            &d.detected,
-            d.hook.as_ref(),
-            d.support,
-            self.verified,
-            d.hook_linked,
-            &self.status_label,
-            self.unread,
+        diagnostics_text(DiagnosticsTextInput {
+            session: &d.session,
+            presence: d.presence.as_ref(),
+            detected: &d.detected,
+            hook: d.hook.as_ref(),
+            support: d.support,
+            verified: self.verified,
+            hook_linked: d.hook_linked,
+            status_label: &self.status_label,
+            unread: self.unread,
             now,
-        )
+        })
     }
 }

@@ -566,12 +566,14 @@ mod tests {
             .unwrap()
             .node_path();
         let group = workspace.active.clone();
-        assert!(workspace.move_pane_to_split(
-            &Tab::Terminal("left".into()),
-            group.as_str(),
-            target,
-            egui_dock::Split::Right,
-        ));
+        assert!(
+            workspace.move_pane_to_split(crate::workspace::MovePaneToSplitInput {
+                pane: &Tab::Terminal("left".into()),
+                dest_group: group.as_str(),
+                dest: target,
+                split: egui_dock::Split::Right
+            })
+        );
         // The emptied source leaf collapses: right splits into right+left
         // in separate leaves with the moved pane focused. (Leaf rectangles
         // only exist after rendering; geometric order is covered by the
@@ -598,22 +600,26 @@ mod tests {
             .find_tab(&Tab::Terminal("two".into()))
             .unwrap()
             .node_path();
-        assert!(workspace.move_pane_to_split(
-            &Tab::Terminal("one".into()),
-            "second",
-            target,
-            egui_dock::Split::Below,
-        ));
+        assert!(
+            workspace.move_pane_to_split(crate::workspace::MovePaneToSplitInput {
+                pane: &Tab::Terminal("one".into()),
+                dest_group: "second",
+                dest: target,
+                split: egui_dock::Split::Below
+            })
+        );
         assert_eq!(workspace.tabs.len(), 1);
         assert_eq!(workspace.active, "second");
         assert_eq!(workspace.iter_leaves().count(), 2);
         assert!(workspace.contains(&Tab::Terminal("one".into())));
-        assert!(!workspace.move_pane_to_split(
-            &Tab::Terminal("ghost".into()),
-            "second",
-            target,
-            egui_dock::Split::Below,
-        ));
+        assert!(
+            !workspace.move_pane_to_split(crate::workspace::MovePaneToSplitInput {
+                pane: &Tab::Terminal("ghost".into()),
+                dest_group: "second",
+                dest: target,
+                split: egui_dock::Split::Below
+            })
+        );
     }
 
     #[test]

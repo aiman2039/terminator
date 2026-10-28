@@ -32,7 +32,19 @@ case "${1:-all}" in
     fmt) cargo fmt --all --check ;;
     lint) cargo check --workspace --all-targets --all-features --locked ;;
     build) cargo build --workspace --all-targets --all-features --locked ;;
-    clippy) cargo clippy --workspace --all-targets --all-features --locked -- -D warnings ;;
+    clippy)
+        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        # Release builds have no test-support; keep that feature set lint-clean too.
+        cargo clippy --workspace --all-targets --locked -- -D warnings
+        ;;
+    sarah)
+        # Size and structure limits from sarah.toml (https://github.com/aiman2039/sarah).
+        if ! command -v sarah >/dev/null 2>&1; then
+            echo "missing sarah; install with: cargo install --git https://github.com/aiman2039/sarah --locked" >&2
+            exit 1
+        fi
+        sarah --fail-on-warn -f md .
+        ;;
     test)
         need_plugin nextest
         cargo nextest run --workspace --all-features --locked --profile ci
@@ -56,5 +68,5 @@ case "${1:-all}" in
             sh "$0" "$check"
         done
         ;;
-    *) echo "Usage: $0 [all|async-boundary|fmt|lint|build|clippy|test|audit|deny|windows-check|windows-clippy]" >&2; exit 2 ;;
+    *) echo "Usage: $0 [all|async-boundary|fmt|lint|build|clippy|sarah|test|audit|deny|windows-check|windows-clippy]" >&2; exit 2 ;;
 esac

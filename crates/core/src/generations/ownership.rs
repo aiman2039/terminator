@@ -1,4 +1,5 @@
-use crate::{Context, Paths, Request, Result, bail, ensure, fs};
+use super::{GenerationsError, Result};
+use crate::{Paths, Request, fs};
 use fs2::FileExt;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -57,6 +58,46 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
     }
     let catalog = Catalog::open(paths)?;
     let owners = catalog.generations()?;
+    let (session, vnc_session) = request_sessions(request);
+    if let Some(paths) = find_session_owner(FindSessionOwnerInput {
+        owners: &owners,
+        request,
+        session,
+        vnc_session,
+    })? {
+        return Ok(paths);
+    }
+    if session.is_some()
+        || vnc_session.is_some()
+        || matches!(
+            request,
+            Request::Notice { .. } | Request::DismissTerminalNotice { .. }
+        )
+    {
+        return Err(GenerationsError::OwnerUnavailable {
+            request: request.name(),
+        });
+    }
+    if let Request::CloseIdleSessions { generation, .. } = request {
+        return owners
+            .into_iter()
+            .find(|g| &g.id == generation)
+            .map(|g| g.paths())
+            .ok_or_else(|| GenerationsError::UnknownCloseOwner {
+                generation: generation.clone(),
+            });
+    }
+    let active = catalog
+        .active()?
+        .ok_or(GenerationsError::NoActiveGeneration)?;
+    owners
+        .into_iter()
+        .find(|g| g.id == active)
+        .map(|g| g.paths())
+        .ok_or(GenerationsError::ActiveUnregistered { generation: active })
+}
+
+fn request_sessions(request: &Request) -> (Option<&str>, Option<&str>) {
     let session = match request {
         Request::Stop { session }
         | Request::Rename { session, .. }
@@ -86,83 +127,92 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
         | Request::VncTransferStatus { session, .. } => Some(session.as_str()),
         _ => None,
     };
-    if session.is_some()
-        || vnc_session.is_some()
-        || matches!(
+    (session, vnc_session)
+}
+
+struct FindSessionOwnerInput<'a> {
+    owners: &'a [Generation],
+    request: &'a Request,
+    session: Option<&'a str>,
+    vnc_session: Option<&'a str>,
+}
+
+fn find_session_owner(input: FindSessionOwnerInput<'_>) -> Result<Option<Paths>> {
+    let FindSessionOwnerInput {
+        owners,
+        request,
+        session,
+        vnc_session,
+    } = input;
+    if session.is_none()
+        && vnc_session.is_none()
+        && !matches!(
             request,
             Request::Notice { .. } | Request::DismissTerminalNotice { .. }
         )
     {
-        // One unreadable store (pruned mid-scan, missing, corrupt) must not
-        // stop routing to the owners that are readable; report it only when
-        // no readable owner has the target.
-        let mut unreadable = None;
-        for owner in owners {
-            if owner.status == Status::Prepared {
+        return Ok(None);
+    }
+    // One unreadable store (pruned mid-scan, missing, corrupt) must not
+    // stop routing to the owners that are readable; report it only when
+    // no readable owner has the target.
+    let mut unreadable = None;
+    for owner in owners {
+        if owner.status == Status::Prepared {
+            continue;
+        }
+        let state = match saved(&owner.paths()) {
+            Ok(state) => state,
+            Err(error) => {
+                unreadable.get_or_insert((owner.id.clone(), error));
                 continue;
             }
-            let state = match saved(&owner.paths()) {
-                Ok(state) => state,
-                Err(error) => {
-                    unreadable.get_or_insert((owner.id, error));
-                    continue;
-                }
-            };
-            let matches = match request {
-                Request::Notice { id, .. } => state.notifications.iter().any(|n| &n.id == id),
-                Request::DismissTerminalNotice { id } => {
-                    state.terminal_notices.iter().any(|n| &n.id == id)
-                }
-                Request::VncDisconnect { .. }
-                | Request::VncInput { .. }
-                | Request::VncFrame { .. }
-                | Request::VncTransfer { .. }
-                | Request::VncTransferStatus { .. } => state
-                    .vnc_sessions
-                    .iter()
-                    .any(|s| Some(s.id.as_str()) == vnc_session),
-                _ => state
-                    .sessions
-                    .iter()
-                    .any(|s| Some(s.id.as_str()) == session),
-            };
-            if matches {
-                return Ok(owner.paths());
+        };
+        let matches = match request {
+            Request::Notice { id, .. } => state.notifications.iter().any(|n| &n.id == id),
+            Request::DismissTerminalNotice { id } => {
+                state.terminal_notices.iter().any(|n| &n.id == id)
             }
+            Request::VncDisconnect { .. }
+            | Request::VncInput { .. }
+            | Request::VncFrame { .. }
+            | Request::VncTransfer { .. }
+            | Request::VncTransferStatus { .. } => state
+                .vnc_sessions
+                .iter()
+                .any(|s| Some(s.id.as_str()) == vnc_session),
+            _ => state
+                .sessions
+                .iter()
+                .any(|s| Some(s.id.as_str()) == session),
+        };
+        if matches {
+            return Ok(Some(owner.paths()));
         }
-        if let Some((generation, error)) = unreadable {
-            return Err(error.context(format!(
-                "Session owner is unavailable; generation {generation} store is unreadable"
-            )));
-        }
-        bail!("Session owner is unavailable");
     }
-    if let Request::CloseIdleSessions { generation, .. } = request {
-        return owners
-            .into_iter()
-            .find(|g| &g.id == generation)
-            .map(|g| g.paths())
-            .context("Unknown close owner");
+    if let Some((generation, error)) = unreadable {
+        return Err(GenerationsError::UnreadableStore {
+            generation,
+            source: Box::new(error),
+        });
     }
-    let active = catalog.active()?.context("No active generation")?;
-    owners
-        .into_iter()
-        .find(|g| g.id == active)
-        .map(|g| g.paths())
-        .context("Active owner is unregistered")
+    Ok(None)
 }
 
-/// Reject inherited owner routing before a daemon can write another catalog.
 pub fn validate_endpoint(root: &Paths, paths: &Paths, generation: &str) -> Result<()> {
     let owner = Catalog::open(root)?
         .generations()?
         .into_iter()
         .find(|g| g.id == generation)
-        .context("Generation is not registered in this catalog")?;
-    ensure!(
-        owner.data.canonicalize()? == paths.data.canonicalize()?
-            && owner.runtime.canonicalize()? == paths.runtime.canonicalize()?,
-        "Inherited generation/catalog routing does not match this data/runtime directory; clear inherited TERMINATOR_CATALOG_DATA, TERMINATOR_CATALOG_RUNTIME and TERMINATOR_GENERATION for isolated development"
-    );
+        .ok_or_else(|| GenerationsError::Unregistered {
+            generation: generation.to_owned(),
+        })?;
+    if owner.data.canonicalize()? != paths.data.canonicalize()?
+        || owner.runtime.canonicalize()? != paths.runtime.canonicalize()?
+    {
+        return Err(GenerationsError::RoutingMismatch {
+            generation: generation.to_owned(),
+        });
+    }
     Ok(())
 }

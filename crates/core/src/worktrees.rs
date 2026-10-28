@@ -1,12 +1,69 @@
 //! Git remains the authority. These helpers add validation and a small registry
 //! boundary; they never force removal, overwrite a checkout, or delete a branch.
 use crate::{CommandOptions, run_command};
-use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+
+/// Why a worktree could not be listed, added, or safely removed.
+#[derive(Debug, thiserror::Error)]
+pub enum WorktreeError {
+    #[error("Git executable not found")]
+    GitExecutableNotFound,
+    #[error("Git not found")]
+    GitNotFound,
+    #[error("Git directory is not UTF-8")]
+    CommonDirNotUtf8 {
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+    #[error("Worktree path is not UTF-8")]
+    ListNotUtf8 {
+        #[source]
+        source: std::str::Utf8Error,
+    },
+    #[error("Invalid starting revision")]
+    InvalidStart { revision: String },
+    #[error("Worktree path must be absolute")]
+    RelativePath { path: PathBuf },
+    #[error("Worktree path must be UTF-8")]
+    PathNotUtf8 { path: PathBuf },
+    #[error("Worktree destination already exists")]
+    DestinationExists { path: PathBuf },
+    #[error("Invalid branch name")]
+    InvalidBranch { branch: String },
+    #[error("Git created checkout but did not return it in worktree list")]
+    MissingAfterAdd { path: PathBuf },
+    #[error("Worktree no longer registered in Git")]
+    Unregistered { path: PathBuf },
+    #[error("Cannot remove a bare or locked worktree")]
+    BareOrLocked { path: PathBuf },
+    #[error("Stop sessions using this worktree before removing the checkout")]
+    SessionInside { session: String },
+    #[error("Cannot verify a live session's process")]
+    NoSessionPid { session: String },
+    #[error("Live session process changed; retry removal")]
+    SessionProcessGone { session: String },
+    #[error("Live session process identity changed; cannot safely remove checkout")]
+    SessionIdentityChanged { session: String },
+    #[error("Cannot inspect a live session process directory; retry after it exits")]
+    ProcessCwdUnknown { pid: u32 },
+    #[error("Stop processes using this worktree before removing the checkout")]
+    ProcessInside { pid: u32 },
+    #[error(transparent)]
+    Process(#[from] crate::ProcessError),
+    #[error(transparent)]
+    Utf8(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+type Result<T, E = WorktreeError> = std::result::Result<T, E>;
+
+fn git_executable() -> Result<PathBuf> {
+    crate::find_executable("git").ok_or(WorktreeError::GitExecutableNotFound)
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GitWorktree {
     pub path: PathBuf,
@@ -25,8 +82,7 @@ pub struct Registration {
     pub removed: bool,
 }
 fn run(common: &Path, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
-    let mut command =
-        Command::new(crate::find_executable("git").context("Git executable not found")?);
+    let mut command = Command::new(git_executable()?);
     command
         .arg("--git-dir")
         .arg(dunce::simplified(common))
@@ -41,22 +97,23 @@ fn run(common: &Path, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
     .stdout)
 }
 pub fn common_dir(cwd: &Path) -> Result<PathBuf> {
-    let mut command =
-        Command::new(crate::find_executable("git").context("Git executable not found")?);
+    let mut command = Command::new(git_executable()?);
     command
         .arg("-C")
         .arg(cwd)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     let out = run_command(command, CommandOptions::default())?.stdout;
-    let path = String::from_utf8(out).context("Git directory is not UTF-8")?;
+    let path =
+        String::from_utf8(out).map_err(|source| WorktreeError::CommonDirNotUtf8 { source })?;
     Ok(PathBuf::from(path.trim_end()).canonicalize()?)
 }
 pub fn resolve_start(cwd: &Path, reference: &str) -> Result<String> {
-    ensure!(
-        !reference.is_empty() && !reference.starts_with('-'),
-        "Invalid starting revision"
-    );
-    let mut c = Command::new(crate::find_executable("git").context("Git not found")?);
+    if reference.is_empty() || reference.starts_with('-') {
+        return Err(WorktreeError::InvalidStart {
+            revision: reference.to_owned(),
+        });
+    }
+    let mut c = Command::new(crate::find_executable("git").ok_or(WorktreeError::GitNotFound)?);
     c.arg("-C")
         .arg(cwd)
         .args(["rev-parse", "--verify", "--end-of-options"])
@@ -89,7 +146,8 @@ fn parse(bytes: &[u8]) -> Result<Vec<GitWorktree>> {
             }
             continue;
         }
-        let field = std::str::from_utf8(part).context("Worktree path is not UTF-8")?;
+        let field =
+            std::str::from_utf8(part).map_err(|source| WorktreeError::ListNotUtf8 { source })?;
         if let Some(path) = field.strip_prefix("worktree ") {
             record = Some(GitWorktree {
                 path: path.into(),
@@ -116,15 +174,35 @@ fn parse(bytes: &[u8]) -> Result<Vec<GitWorktree>> {
     }
     Ok(result)
 }
-pub fn add(common: &Path, path: &Path, branch: Option<&str>, start: &str) -> Result<GitWorktree> {
+pub struct AddInput<'a> {
+    pub common: &'a Path,
+    pub path: &'a Path,
+    pub branch: Option<&'a str>,
+    pub start: &'a str,
+}
+
+pub fn add(input: AddInput<'_>) -> Result<GitWorktree> {
+    let AddInput {
+        common,
+        path,
+        branch,
+        start,
+    } = input;
     let path = dunce::simplified(path);
-    ensure!(path.is_absolute(), "Worktree path must be absolute");
-    ensure!(path.to_str().is_some(), "Worktree path must be UTF-8");
-    ensure!(!path.exists(), "Worktree destination already exists");
-    ensure!(
-        !start.starts_with('-') && !start.is_empty(),
-        "Invalid starting revision"
-    );
+    if !path.is_absolute() {
+        return Err(WorktreeError::RelativePath { path: path.into() });
+    }
+    if path.to_str().is_none() {
+        return Err(WorktreeError::PathNotUtf8 { path: path.into() });
+    }
+    if path.exists() {
+        return Err(WorktreeError::DestinationExists { path: path.into() });
+    }
+    if start.starts_with('-') || start.is_empty() {
+        return Err(WorktreeError::InvalidStart {
+            revision: start.to_owned(),
+        });
+    }
     let revision = format!("{start}^{{commit}}");
     run(
         common,
@@ -137,10 +215,11 @@ pub fn add(common: &Path, path: &Path, branch: Option<&str>, start: &str) -> Res
     )?;
     let mut args = vec!["worktree".as_ref(), "add".as_ref()];
     if let Some(branch) = branch {
-        ensure!(
-            !branch.starts_with('-') && !branch.is_empty(),
-            "Invalid branch name"
-        );
+        if branch.starts_with('-') || branch.is_empty() {
+            return Err(WorktreeError::InvalidBranch {
+                branch: branch.to_owned(),
+            });
+        }
         run(
             common,
             &[
@@ -160,7 +239,7 @@ pub fn add(common: &Path, path: &Path, branch: Option<&str>, start: &str) -> Res
     list(common)?
         .into_iter()
         .find(|w| w.path == canonical)
-        .context("Git created checkout but did not return it in worktree list")
+        .ok_or(WorktreeError::MissingAfterAdd { path: canonical })
 }
 pub fn remove(common: &Path, path: &Path) -> Result<()> {
     let path = dunce::simplified(path);
@@ -168,11 +247,10 @@ pub fn remove(common: &Path, path: &Path) -> Result<()> {
     let record = list
         .iter()
         .find(|w| w.path == path)
-        .context("Worktree no longer registered in Git")?;
-    ensure!(
-        !record.bare && !record.locked,
-        "Cannot remove a bare or locked worktree"
-    );
+        .ok_or_else(|| WorktreeError::Unregistered { path: path.into() })?;
+    if record.bare || record.locked {
+        return Err(WorktreeError::BareOrLocked { path: path.into() });
+    }
     run(
         common,
         &[
@@ -194,18 +272,20 @@ pub fn ensure_unused(path: &Path, project: &str, sessions: &[crate::Session]) ->
     };
     let live: Vec<_> = sessions.iter().filter(|s| s.lifecycle.live()).collect();
     for session in &live {
-        ensure!(
-            session.project_id != project
-                && !inside(&session.cwd)
-                && !session.file.as_ref().is_some_and(|file| {
-                    inside(&if file.is_absolute() {
-                        file.clone()
-                    } else {
-                        session.cwd.join(file)
-                    })
-                }),
-            "Stop sessions using this worktree before removing the checkout"
-        );
+        let uses = session.project_id == project
+            || inside(&session.cwd)
+            || session.file.as_ref().is_some_and(|file| {
+                inside(&if file.is_absolute() {
+                    file.clone()
+                } else {
+                    session.cwd.join(file)
+                })
+            });
+        if uses {
+            return Err(WorktreeError::SessionInside {
+                session: session.id.clone(),
+            });
+        }
     }
     if live.is_empty() {
         return Ok(());
@@ -216,18 +296,19 @@ pub fn ensure_unused(path: &Path, project: &str, sessions: &[crate::Session]) ->
     );
     let mut owned = std::collections::HashSet::new();
     for session in live {
-        let pid = Pid::from_u32(
-            session
-                .pid
-                .context("Cannot verify a live session's process")?,
-        );
+        let pid = Pid::from_u32(session.pid.ok_or_else(|| WorktreeError::NoSessionPid {
+            session: session.id.clone(),
+        })?);
         let process = system
             .process(pid)
-            .context("Live session process changed; retry removal")?;
-        ensure!(
-            process.start_time().abs_diff(session.created) <= 2,
-            "Live session process identity changed; cannot safely remove checkout"
-        );
+            .ok_or_else(|| WorktreeError::SessionProcessGone {
+                session: session.id.clone(),
+            })?;
+        if process.start_time().abs_diff(session.created) > 2 {
+            return Err(WorktreeError::SessionIdentityChanged {
+                session: session.id.clone(),
+            });
+        }
         owned.insert(pid);
     }
     loop {
@@ -245,11 +326,10 @@ pub fn ensure_unused(path: &Path, project: &str, sessions: &[crate::Session]) ->
         let cwd = system
             .process(pid)
             .and_then(|p| p.cwd())
-            .context("Cannot inspect a live session process directory; retry after it exits")?;
-        ensure!(
-            !inside(cwd),
-            "Stop processes using this worktree before removing the checkout"
-        );
+            .ok_or(WorktreeError::ProcessCwdUnknown { pid: pid.as_u32() })?;
+        if inside(cwd) {
+            return Err(WorktreeError::ProcessInside { pid: pid.as_u32() });
+        }
     }
     Ok(())
 }
@@ -288,7 +368,13 @@ mod tests {
             .unwrap()
             .join("space checkout");
         let requested = dir.path().canonicalize().unwrap().join("space checkout");
-        let record = add(&common, &requested, Some("task-fixture"), "HEAD").unwrap();
+        let record = add(AddInput {
+            common: &common,
+            path: &requested,
+            branch: Some("task-fixture"),
+            start: "HEAD",
+        })
+        .unwrap();
         assert_eq!(record.path, path);
         assert_eq!(record.branch.as_deref(), Some("task-fixture"));
         assert_eq!(list(&common).unwrap().len(), 2);
@@ -299,8 +385,24 @@ mod tests {
         remove(&common, &requested).unwrap();
         assert!(!path.exists());
         git(&repo, &["show-ref", "--verify", "refs/heads/task-fixture"]);
-        assert!(add(&common, &repo, Some("other"), "HEAD").is_err());
-        assert!(add(&common, &path, Some("--bad"), "HEAD").is_err());
+        assert!(
+            add(AddInput {
+                common: &common,
+                path: &repo,
+                branch: Some("other"),
+                start: "HEAD"
+            })
+            .is_err()
+        );
+        assert!(
+            add(AddInput {
+                common: &common,
+                path: &path,
+                branch: Some("--bad"),
+                start: "HEAD"
+            })
+            .is_err()
+        );
     }
     #[test]
     fn locked_clean_checkout_is_preserved_until_unlocked() {
@@ -319,7 +421,13 @@ mod tests {
         let path = dunce::canonicalize(dir.path())
             .unwrap()
             .join("locked checkout");
-        add(&common, &path, Some("locked-fixture"), "HEAD").unwrap();
+        add(AddInput {
+            common: &common,
+            path: &path,
+            branch: Some("locked-fixture"),
+            start: "HEAD",
+        })
+        .unwrap();
         let head = resolve_start(&repo, "refs/heads/locked-fixture").unwrap();
         git(
             &repo,

@@ -138,17 +138,26 @@ pub enum IdeEdit {
     JoinLines,
 }
 
+/// Inputs for [`ide_edit_key`].
+pub struct IdeEditKeyInput {
+    pub key: egui::Key,
+    pub modifiers: egui::Modifiers,
+    pub mac: bool,
+    pub page_rows: usize,
+}
+
 /// Resolve an IDE navigation or line-edit chord. `mac` picks the macOS
 /// keymap (Option for words, Command for line and document edges); the
 /// others use Ctrl for words and Home/End with Ctrl for document edges.
 /// `page_rows` is the visible row count for Page Up/Down.
 #[must_use]
-pub fn ide_edit_key(
-    key: egui::Key,
-    modifiers: egui::Modifiers,
-    mac: bool,
-    page_rows: usize,
-) -> Option<IdeEdit> {
+pub fn ide_edit_key(input: IdeEditKeyInput) -> Option<IdeEdit> {
+    let IdeEditKeyInput {
+        key,
+        modifiers,
+        mac,
+        page_rows,
+    } = input;
     let select = modifiers.shift;
     let word = if mac {
         modifiers.alt && !modifiers.command && !modifiers.ctrl

@@ -2,6 +2,7 @@
 //! go through the ordinary file-open path, so focus, splits, and the
 //! pending-line handoff behave exactly like an Explorer open.
 
+use crate::app::OpenFileInput;
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
 use crate::{App, appearance};
@@ -91,7 +92,12 @@ impl App {
                 }
             });
         if let Some((path, line)) = jump {
-            self.open_file(path, Some(line), None, false);
+            self.open_file(OpenFileInput {
+                path,
+                line: Some(line),
+                split: None,
+                external: false,
+            });
         }
     }
 }

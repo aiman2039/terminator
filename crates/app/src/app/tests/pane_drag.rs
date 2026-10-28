@@ -28,7 +28,13 @@ fn single_native_editor_panes_have_working_dock_drag_handles() {
     let end = app.layouts["a"].leaf(target).unwrap().rect.center();
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, end, 8);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: end,
+        steps: 8,
+    });
     combined_frame(&mut app, &ctx, vec![frame_press(end, false)]);
     combined_frame(&mut app, &ctx, vec![]);
     let dock = &app.layouts["a"];
@@ -104,7 +110,13 @@ fn pane_drag_preview_switches_tab_and_drops_into_its_leaf() {
     let dest = frame_center(&app, &ctx, "workspace-tab:two");
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, dest, 4);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: dest,
+        steps: 4,
+    });
     // The destination tab content is previewed while hovering its strip
     // tab, remembering the origin tab.
     assert_eq!(app.layouts["a"].active, "tB");
@@ -116,7 +128,13 @@ fn pane_drag_preview_switches_tab_and_drops_into_its_leaf() {
     // Aim at the middle of the previewed split: its caption sits in the
     // top edge band, which would split instead of swapping.
     let leaf = egui::pos2(leaf_caption.x, 320.0);
-    frame_glide(&mut app, &ctx, dest, leaf, 3);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: dest,
+        to: leaf,
+        steps: 3,
+    });
     combined_frame(&mut app, &ctx, vec![frame_press(leaf, false)]);
     assert!(app.drag.pane.is_none());
     assert!(app.drag.preview_origin.is_none());
@@ -177,7 +195,13 @@ fn pane_drag_edge_drop_opens_a_split() {
     let edge = egui::pos2(right[0] + right[2] - 4.0, right[1] + right[3] / 2.0);
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, edge, 4);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: edge,
+        steps: 4,
+    });
     assert_eq!(
         app.drag.pane,
         Some(Tab::Terminal("left".into())),
@@ -235,7 +259,13 @@ fn strip_tab_drag_lands_in_the_main_pane() {
     let drop_at = egui::pos2(caption.x, (caption.y + strip[1]) * 0.5);
     cross_dock_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     cross_dock_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    cross_glide(&mut app, &ctx, start, drop_at, 8);
+    cross_glide(CrossGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: drop_at,
+        steps: 8,
+    });
     assert!(
         app.drag.pane_from_strip,
         "leaving the strip did not promote the tab drag"
@@ -276,7 +306,13 @@ fn main_caption_drag_lands_in_the_strip() {
     let drop_at = egui::pos2(strip[0] + strip[2] * 0.5, strip[1] + strip[3] * 0.5);
     cross_dock_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     cross_dock_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    cross_glide(&mut app, &ctx, start, drop_at, 8);
+    cross_glide(CrossGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: drop_at,
+        steps: 8,
+    });
     assert_eq!(app.drag.pane, Some(Tab::Terminal("up".into())));
     assert!(!app.drag.pane_from_strip);
     cross_dock_frame(&mut app, &ctx, vec![frame_press(drop_at, false)]);
@@ -376,7 +412,13 @@ fn pane_drag_gap_drop_creates_tab_at_slot() {
     let start = frame_center(&app, &ctx, "pane-drag:one");
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, gap, 4);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: gap,
+        steps: 4,
+    });
     combined_frame(&mut app, &ctx, vec![frame_press(gap, false)]);
     assert!(app.drag.pane.is_none());
     assert!(app.drag.preview_origin.is_none());
@@ -429,7 +471,13 @@ fn strip_tab_drag_reorders_top_level_tabs() {
     let dest = egui::pos2(first[0] + 5.0, first[1] + first[3] / 2.0);
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, dest, 4);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: dest,
+        steps: 4,
+    });
     assert_eq!(app.drag.tab, Some("tB".to_owned()));
     combined_frame(&mut app, &ctx, vec![frame_press(dest, false)]);
     assert!(app.drag.tab.is_none());
@@ -466,7 +514,13 @@ fn pane_drag_strip_hover_washes_the_landing_leaf() {
     let dest = frame_center(&app, &ctx, "workspace-tab:two");
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, dest, 4);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: dest,
+        steps: 4,
+    });
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
     // Still dragging: the destination tab is previewed, nothing moved.
@@ -507,7 +561,13 @@ fn pane_drag_onto_strip_plus_opens_new_tab() {
     let dest = frame_center(&app, &ctx, "workspace-plus");
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, dest, 4);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: dest,
+        steps: 4,
+    });
     assert_eq!(app.drag.pane, Some(Tab::Terminal("one".into())));
     combined_frame(&mut app, &ctx, vec![frame_press(dest, false)]);
     assert!(app.drag.pane.is_none());
@@ -646,7 +706,13 @@ fn pane_drag_strip_gap_shows_tab_ghost() {
     let start = frame_center(&app, &ctx, "pane-drag:one");
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
-    frame_glide(&mut app, &ctx, start, gap, 4);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: gap,
+        steps: 4,
+    });
     assert!(!app.drag.strip_tab_hover);
     assert!(app.drag.strip_new_tab_hover);
     let mut output = ctx.run_ui(

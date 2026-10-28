@@ -1,4 +1,5 @@
-use crate::{AgentState, Context, Lifecycle, Paths, Request, Response, Result, State, fs};
+use super::{GenerationsError, Result};
+use crate::{AgentState, Lifecycle, Paths, Request, Response, State, fs};
 use rusqlite::{Connection, OpenFlags};
 
 use super::catalog::{Catalog, Generation, Health, Status, coordinate};
@@ -45,7 +46,10 @@ pub(crate) fn unavailable_snapshot(
                 generation: owner.id.clone(),
                 ..State::default()
             },
-            Some(format!("{error}; saved state unavailable: {saved_error:#}")),
+            Some(format!(
+                "{error}; saved state unavailable: {}",
+                crate::ErrorChain(&saved_error)
+            )),
         )),
         Err(error) => Err(error),
     }
@@ -58,17 +62,25 @@ pub fn historical(owner: &Generation, active: Option<&str>) -> bool {
     owner.status == Status::Retired && active != Some(owner.id.as_str())
 }
 
+pub struct MergeablePresenceInput<'a> {
+    pub owner: &'a Generation,
+    pub capabilities: &'a [String],
+    pub error: &'a Option<String>,
+    pub active: &'a str,
+}
+
 /// True when an owner's presence observations may merge into an aggregate
 /// snapshot: the owner is live (not historical fallback, no health error)
 /// and advertises the presence capability. Shared by the synchronous and
 /// asynchronous generation clients.
 #[must_use]
-pub fn mergeable_presence(
-    owner: &Generation,
-    capabilities: &[String],
-    error: &Option<String>,
-    active: &str,
-) -> bool {
+pub fn mergeable_presence(input: MergeablePresenceInput<'_>) -> bool {
+    let MergeablePresenceInput {
+        owner,
+        capabilities,
+        error,
+        active,
+    } = input;
     error.is_none()
         && !historical(owner, Some(active))
         && capabilities
@@ -173,7 +185,9 @@ pub fn prune_retired(root: &Paths, keep: usize) -> Result<usize> {
 
 pub fn snapshot(paths: &Paths) -> Result<State> {
     let catalog = Catalog::open(paths)?;
-    let active = catalog.active()?.context("No active generation")?;
+    let active = catalog
+        .active()?
+        .ok_or(GenerationsError::NoActiveGeneration)?;
     let mut aggregate = State::default();
     let mut inventories = Vec::new();
     for owner in catalog.generations()? {
@@ -190,9 +204,14 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         } else {
             match crate::rpc(&owner.paths(), Request::Snapshot) {
                 Ok(Response::State(s)) => (*s, None),
-                result => {
-                    unavailable_snapshot(&owner, &active, format!("Owner unavailable: {result:?}"))?
-                }
+                result => unavailable_snapshot(
+                    &owner,
+                    &active,
+                    format!(
+                        "Owner unavailable: {:?}",
+                        result.as_ref().map_err(|e| crate::ErrorReport(e))
+                    ),
+                )?,
             }
         };
         if owner.id == active {
@@ -207,8 +226,12 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         // Presence merges only from live owners advertising the capability.
         // Historical fallback and unavailable owners stay presence-free, so
         // their hook records render as unverified presence.
-        let present =
-            mergeable_presence(&owner, &state.capabilities, &error, &aggregate.generation);
+        let present = mergeable_presence(MergeablePresenceInput {
+            owner: &owner,
+            capabilities: &state.capabilities,
+            error: &error,
+            active: &aggregate.generation,
+        });
         aggregate.generations.push(Health {
             live_sessions: state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
             owner,

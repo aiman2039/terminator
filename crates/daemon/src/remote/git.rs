@@ -1,12 +1,20 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use terminator_core::remote::{Change, MAX_FILE_BYTES};
-fn git(
-    project: &RemoteProject,
-    control: Option<&Path>,
-    args: &[String],
+struct GitInput<'a> {
+    project: &'a RemoteProject,
+    control: Option<&'a Path>,
+    args: &'a [String],
     limit: usize,
-) -> Result<Vec<u8>> {
+}
+
+fn git(input: GitInput<'_>) -> Result<Vec<u8>> {
+    let GitInput {
+        project,
+        control,
+        args,
+        limit,
+    } = input;
     let mut parts = vec![
         "git".into(),
         "--no-pager".into(),
@@ -21,10 +29,10 @@ fn git(
         project.root.clone(),
     ];
     parts.extend_from_slice(args);
-    execute(
+    execute(ExecuteInput {
         project,
         control,
-        &format!(
+        script: &format!(
             "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES; exec {}",
             parts
                 .iter()
@@ -33,22 +41,22 @@ fn git(
                 .join(" ")
         ),
         limit,
-    )
+    })
 }
 fn changes(project: &RemoteProject, control: Option<&Path>) -> Result<Vec<Change>> {
-    let prefix = git(
+    let prefix = git(GitInput {
         project,
         control,
-        &["rev-parse".into(), "--show-prefix".into()],
-        8192,
-    )?;
+        args: &["rev-parse".into(), "--show-prefix".into()],
+        limit: 8192,
+    })?;
     let prefix = std::str::from_utf8(&prefix)?
         .trim_end_matches('\n')
         .to_owned();
-    let output = git(
+    let output = git(GitInput {
         project,
         control,
-        &[
+        args: &[
             "status".into(),
             "--porcelain=v1".into(),
             "-z".into(),
@@ -56,8 +64,8 @@ fn changes(project: &RemoteProject, control: Option<&Path>) -> Result<Vec<Change
             "--".into(),
             ".".into(),
         ],
-        1024 * 1024,
-    )?;
+        limit: 1024 * 1024,
+    })?;
     std::str::from_utf8(&output).context("Remote Git paths must be UTF-8")?;
     let changes = terminator_git::parse_porcelain(std::path::Path::new(""), &output);
     ensure!(
@@ -84,12 +92,12 @@ fn changes(project: &RemoteProject, control: Option<&Path>) -> Result<Vec<Change
         .collect()
 }
 pub(super) fn status(project: &RemoteProject, control: Option<&Path>) -> Result<Reply> {
-    let branch = git(
+    let branch = git(GitInput {
         project,
         control,
-        &["branch".into(), "--show-current".into()],
-        8192,
-    )?;
+        args: &["branch".into(), "--show-current".into()],
+        limit: 8192,
+    })?;
     Ok(Reply::Git {
         branch: {
             let name = std::str::from_utf8(&branch)?.trim();
@@ -102,12 +110,20 @@ pub(super) fn status(project: &RemoteProject, control: Option<&Path>) -> Result<
         changes: changes(project, control)?,
     })
 }
-pub(super) fn diff(
-    project: &RemoteProject,
-    control: Option<&Path>,
-    path: &str,
-    staged: bool,
-) -> Result<Reply> {
+pub(super) struct DiffInput<'a> {
+    pub(super) project: &'a RemoteProject,
+    pub(super) control: Option<&'a Path>,
+    pub(super) path: &'a str,
+    pub(super) staged: bool,
+}
+
+pub(super) fn diff(input: DiffInput<'_>) -> Result<Reply> {
+    let DiffInput {
+        project,
+        control,
+        path,
+        staged,
+    } = input;
     terminator_core::remote::validate_relative(path)?;
     let status = changes(project, control)?
         .into_iter()
@@ -115,25 +131,25 @@ pub(super) fn diff(
         .context("Remote file is no longer modified; refresh Git status")?;
     let x = status.status.as_bytes().first().copied().unwrap_or(b' ');
     let y = status.status.as_bytes().get(1).copied().unwrap_or(b' ');
-    let prefix = git(
+    let prefix = git(GitInput {
         project,
         control,
-        &["rev-parse".into(), "--show-prefix".into()],
-        8192,
-    )?;
+        args: &["rev-parse".into(), "--show-prefix".into()],
+        limit: 8192,
+    })?;
     let prefix = std::str::from_utf8(&prefix)?.trim_end_matches('\n');
     let blob = |revision: &str| {
-        git(
+        git(GitInput {
             project,
             control,
-            &[
+            args: &[
                 "show".into(),
                 "--no-ext-diff".into(),
                 "--no-textconv".into(),
                 format!("{revision}:{prefix}{path}"),
             ],
-            MAX_FILE_BYTES,
-        )
+            limit: MAX_FILE_BYTES,
+        })
     };
     let (left, right) = if staged {
         ensure!(x != b'?' && x != b' ', "File has no staged change");

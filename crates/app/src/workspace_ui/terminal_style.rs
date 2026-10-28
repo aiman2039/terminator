@@ -54,7 +54,14 @@ impl App {
             ui.separator();
             ui.label("Terminal icon");
             for &icon in ICONS {
-                if appearance::menu_item(ui, icon, icon, "").clicked() {
+                if appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: icon,
+                    icon,
+                    shortcut: "",
+                })
+                .clicked()
+                {
                     self.preferences
                         .terminal_styles
                         .entry(sid.to_owned())

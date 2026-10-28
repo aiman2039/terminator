@@ -66,12 +66,19 @@ pub(super) fn ssh_command(ssh: &SshOptions, control: Option<&Path>) -> Result<Co
     }
     Ok(command)
 }
-pub(super) async fn connect(
-    host: &str,
-    port: u16,
-    options: &VncOptions,
-    control: Option<&Path>,
-) -> Result<Stream> {
+pub(super) struct ConnectInput<'a> {
+    pub(super) host: &'a str,
+    pub(super) port: u16,
+    pub(super) options: &'a VncOptions,
+    pub(super) control: Option<&'a Path>,
+}
+pub(super) async fn connect(input: ConnectInput<'_>) -> Result<Stream> {
+    let ConnectInput {
+        host,
+        port,
+        options,
+        control,
+    } = input;
     validate_host(host)?;
     options.validate()?;
     if options.transport == Transport::Ssh {

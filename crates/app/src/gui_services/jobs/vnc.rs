@@ -5,15 +5,34 @@ use anyhow::Result;
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
 
+pub(crate) struct VncPickTransferInput<'a> {
+    pub(in crate::gui_services) session: String,
+    pub(in crate::gui_services) direction: terminator_core::vnc::TransferDirection,
+    pub(in crate::gui_services) remote: String,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct VncFrameInput<'a> {
+    pub(in crate::gui_services) session: String,
+    pub(in crate::gui_services) since: u64,
+    pub(in crate::gui_services) regions: bool,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
 impl Services {
     pub(in crate::gui_services) async fn vnc_pick_transfer(
         &self,
-        session: String,
-        direction: terminator_core::vnc::TransferDirection,
-        remote: String,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: VncPickTransferInput<'_>,
     ) -> Result<()> {
+        let VncPickTransferInput {
+            session,
+            direction,
+            remote,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let upload = direction == terminator_core::vnc::TransferDirection::Upload;
         let picked = self
@@ -24,7 +43,7 @@ impl Services {
                 } else {
                     "Save SFTP download to a new file"
                 });
-                Ok(if upload {
+                anyhow::Ok(if upload {
                     dialog.pick_file()
                 } else {
                     dialog.save_file()
@@ -51,7 +70,7 @@ impl Services {
                         error: None,
                     })),
                     Ok(_) => Err("Unexpected SFTP transfer response".into()),
-                    Err(e) => Err(format!("{e:#}")),
+                    Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
                 }
             }
             Ok(None) => Ok(None),
@@ -77,7 +96,7 @@ impl Services {
         {
             Ok(Response::VncTransferStatus(status)) => Ok(Some(status)),
             Ok(_) => Err("Unexpected SFTP transfer status".into()),
-            Err(e) => Err(format!("{e:#}")),
+            Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
         };
         updates.push(Update::VncTransfer(session, result));
         Ok(())
@@ -98,20 +117,20 @@ impl Services {
                 Ok(session)
             }
             Ok(_) => Err("Unexpected VNC connection response".into()),
-            Err(err) => Err(format!("{err:#}")),
+            Err(err) => Err(format!("{err}", err = terminator_core::ErrorChain(&err))),
         };
         updates.push(Update::VncTabConnected(tab_id, result));
         Ok(())
     }
 
-    pub(in crate::gui_services) async fn vnc_frame(
-        &self,
-        session: String,
-        since: u64,
-        regions: bool,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
-    ) -> Result<()> {
+    pub(in crate::gui_services) async fn vnc_frame(&self, input: VncFrameInput<'_>) -> Result<()> {
+        let VncFrameInput {
+            session,
+            since,
+            regions,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let result = match client
             .rpc(Request::VncFrame {
@@ -129,7 +148,7 @@ impl Services {
                 .map_err(|e| format!("{e:#}")),
             Ok(Response::Unchanged) => Ok(None),
             Ok(_) => Err("Unexpected VNC frame response".into()),
-            Err(err) => Err(format!("{err:#}")),
+            Err(err) => Err(format!("{err}", err = terminator_core::ErrorChain(&err))),
         };
         updates.push(Update::VncFrame(session, result));
         Ok(())

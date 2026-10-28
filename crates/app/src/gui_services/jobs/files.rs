@@ -6,19 +6,53 @@ use std::path::PathBuf;
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
 
+pub(crate) struct ResolveTargetInput<'a> {
+    pub(in crate::gui_services) key: String,
+    pub(in crate::gui_services) text: String,
+    pub(in crate::gui_services) cwd: PathBuf,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct OpenProjectInput<'a> {
+    pub(in crate::gui_services) path: PathBuf,
+    pub(in crate::gui_services) generation: u64,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct WorkspaceOpInput<'a> {
+    pub(in crate::gui_services) root: PathBuf,
+    pub(in crate::gui_services) op: workspace_ops::Op,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct SearchInput<'a> {
+    pub(in crate::gui_services) id: u64,
+    pub(in crate::gui_services) root: PathBuf,
+    pub(in crate::gui_services) query: search::Query,
+    pub(in crate::gui_services) show_ignored: bool,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
 impl Services {
     pub(in crate::gui_services) async fn resolve_target(
         &self,
-        key: String,
-        text: String,
-        cwd: PathBuf,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: ResolveTargetInput<'_>,
     ) -> Result<()> {
+        let ResolveTargetInput {
+            key,
+            text,
+            cwd,
+            cancel,
+            updates,
+        } = input;
         let target = self
             .fs()
             .run(&cancel, move || {
-                Ok(services::resolve_target(&text, &cwd).ok())
+                anyhow::Ok(services::resolve_target(&text, &cwd).ok())
             })
             .await?;
         updates.push(Update::ResolvedTarget(key, target));
@@ -27,11 +61,14 @@ impl Services {
 
     pub(in crate::gui_services) async fn open_project(
         &self,
-        path: PathBuf,
-        generation: u64,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: OpenProjectInput<'_>,
     ) -> Result<()> {
+        let OpenProjectInput {
+            path,
+            generation,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let path = self
             .fs()
@@ -50,7 +87,7 @@ impl Services {
             .run(&cancel, move || {
                 let project =
                     services::project_for_directory(&state.projects, &lookup).map(|p| p.id.clone());
-                Ok((state, project))
+                anyhow::Ok((state, project))
             })
             .await?;
         let (state, project) = if let Some(project) = project {
@@ -68,7 +105,7 @@ impl Services {
                         .context("Opened project missing from inventory")?
                         .id
                         .clone();
-                    Ok((state, project))
+                    anyhow::Ok((state, project))
                 })
                 .await?
         };
@@ -78,15 +115,24 @@ impl Services {
 
     pub(in crate::gui_services) async fn workspace_op(
         &self,
-        root: PathBuf,
-        op: workspace_ops::Op,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: WorkspaceOpInput<'_>,
     ) -> Result<()> {
+        let WorkspaceOpInput {
+            root,
+            op,
+            cancel,
+            updates,
+        } = input;
         let reply = op.clone();
         let result = match op {
             workspace_ops::Op::Perforce(op) => {
-                crate::perforce::perform(self, &root, op, &cancel).await
+                crate::perforce::perform(crate::perforce::PerformInput {
+                    service: self,
+                    cwd: &root,
+                    op,
+                    cancel: &cancel,
+                })
+                .await
             }
             op => {
                 self.fs()
@@ -99,19 +145,19 @@ impl Services {
         Ok(())
     }
 
-    pub(in crate::gui_services) async fn search(
-        &self,
-        id: u64,
-        root: PathBuf,
-        query: search::Query,
-        show_ignored: bool,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
-    ) -> Result<()> {
+    pub(in crate::gui_services) async fn search(&self, input: SearchInput<'_>) -> Result<()> {
+        let SearchInput {
+            id,
+            root,
+            query,
+            show_ignored,
+            cancel,
+            updates,
+        } = input;
         let result = self
             .fs()
             .run(&cancel, move || {
-                Ok(search::run(&root, &query, show_ignored))
+                anyhow::Ok(search::run(&root, &query, show_ignored))
             })
             .await;
         let result = match result {

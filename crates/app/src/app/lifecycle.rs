@@ -32,6 +32,7 @@ impl App {
         }
         app
     }
+    // sarah-allow(large_function): one struct literal naming every App field's initial value, a pure data table
     pub(crate) fn with_context(ctx: &egui::Context, paths: Paths) -> Self {
         appearance::install(ctx);
         let loaded = UiPreferences::load(&paths.data);
@@ -46,7 +47,7 @@ impl App {
         let (services, service_owner) =
             gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone()).unwrap_or_else(
                 |error| {
-                    eprintln!("start GUI services: {error:#}");
+                    crate::console::Console::err(format_args!("start GUI services: {error:#}"));
                     std::process::exit(1);
                 },
             );
@@ -285,6 +286,7 @@ impl App {
             pending_native_splits: Vec::new(),
             pending_goto: Vec::new(),
             usages: None,
+            hierarchy: None,
             find_bar: None,
             completion: None,
             signature: None,
@@ -295,6 +297,7 @@ impl App {
             git_base_pending: std::collections::HashSet::new(),
             git_base_generation: 0,
             gutter_popup: None,
+            editor_blame: std::collections::HashMap::new(),
             merge: None,
             commit_files: HashMap::new(),
             nav_back: Vec::new(),

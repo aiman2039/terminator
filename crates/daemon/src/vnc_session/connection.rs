@@ -17,16 +17,21 @@ pub(super) struct ConnectionSpec {
     pub shared: bool,
     pub options: VncOptions,
 }
-pub(super) async fn run(
+pub(super) struct RunInput<'a> {
+    pub shared: &'a Arc<Shared>,
+    pub runtime: &'a Arc<Mutex<VncRuntime>>,
+    pub sid: &'a str,
+    pub spec: &'a ConnectionSpec,
+    pub input_rx: &'a mut mpsc::Receiver<VncInputEvent>,
+}
+async fn connect_client(
     shared: &Arc<Shared>,
-    runtime: &Arc<Mutex<VncRuntime>>,
-    sid: &str,
     spec: &ConnectionSpec,
     input_rx: &mut mpsc::Receiver<VncInputEvent>,
-) -> Result<(), Failure> {
+) -> Result<vnc::VncClient, Failure> {
     let control = shared.ssh_control(&spec.options.ssh);
     let connected = tokio::select! {
-        result=transport::connect(&spec.host,spec.port,&spec.options,control.as_deref())=>result,
+        result=transport::connect(transport::ConnectInput { host: &spec.host, port: spec.port, options: &spec.options, control: control.as_deref() })=>result,
         _=input_rx.recv()=>return Err(Failure::Cancelled),
     };
     let stream = connected.map_err(|e| {
@@ -61,6 +66,63 @@ pub(super) async fn run(
     let client = state
         .finish()
         .map_err(|e| Failure::Permanent(format!("VNC setup failed: {e}")))?;
+    Ok(client)
+}
+struct TypeTextInput<'a> {
+    client: &'a vnc::VncClient,
+    shared: &'a Arc<Shared>,
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    sid: &'a str,
+    text: &'a str,
+    input_rx: &'a mut mpsc::Receiver<VncInputEvent>,
+}
+
+async fn type_text(input: TypeTextInput<'_>) -> Result<(), Failure> {
+    let TypeTextInput {
+        client,
+        shared,
+        runtime,
+        sid,
+        text,
+        input_rx,
+    } = input;
+    for keycode in text.chars().filter_map(input::keysym) {
+        if input_rx.is_closed() {
+            return Err(Failure::Cancelled);
+        }
+        for down in [true, false] {
+            if let Err(e) = client
+                .input(X11Event::KeyEvent(ClientKeyEvent { keycode, down }))
+                .await
+            {
+                return Err(Failure::Network(e.to_string()));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        while let Ok(Some(event)) = client.poll_event().await {
+            if !apply_vnc_event(ApplyVncEventInput {
+                shared,
+                runtime,
+                session_id: sid,
+                event,
+            }) {
+                return Err(Failure::Permanent(
+                    "VNC protocol update was rejected".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
+    let RunInput {
+        shared,
+        runtime,
+        sid,
+        spec,
+        input_rx,
+    } = input;
+    let client = connect_client(shared, spec, input_rx).await?;
     mark_connected(shared, runtime, sid);
     let mut tick = tokio::time::interval(Duration::from_millis(33));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -72,9 +134,9 @@ pub(super) async fn run(
         tokio::select! {
             event=client.recv_event()=>match event {
                 Ok(event)=>{
-                    if !apply_vnc_event(shared,runtime,sid,event){break Err(Failure::Permanent(relock(runtime).error.clone().unwrap_or_else(||"VNC protocol update was rejected".into())));}
+                    if !apply_vnc_event(ApplyVncEventInput { shared, runtime, session_id: sid, event }){break Err(Failure::Permanent(relock(runtime).error.clone().unwrap_or_else(||"VNC protocol update was rejected".into())));}
                     while let Ok(Some(event))=client.poll_event().await {
-                        if !apply_vnc_event(shared,runtime,sid,event){break;}
+                        if !apply_vnc_event(ApplyVncEventInput { shared, runtime, session_id: sid, event }){break;}
                     }
                 }
                 Err(e)=>break Err(Failure::Network(e.to_string())),
@@ -90,18 +152,7 @@ pub(super) async fn run(
                         }));
                     }
                     VncInputEvent::TypeText(text)=>{
-                        for keycode in text.chars().filter_map(input::keysym){
-                            if input_rx.is_closed(){break 'connection Err(Failure::Cancelled);}
-                            for down in [true,false]{
-                                if let Err(e)=client.input(X11Event::KeyEvent(ClientKeyEvent{keycode,down})).await{break 'connection Err(Failure::Network(e.to_string()));}
-                            }
-                            // X servers can reuse a temporary Unicode key mapping. Let the
-                            // remote application consume it before mapping the next character.
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                            while let Ok(Some(event))=client.poll_event().await{
-                                if !apply_vnc_event(shared,runtime,sid,event){break 'connection Err(Failure::Permanent("VNC protocol update was rejected".into()));}
-                            }
-                        }
+                        if let Err(e)=type_text(TypeTextInput { client: &client, shared, runtime, sid, text: &text, input_rx }).await{break 'connection Err(e);}
                     }
                     event=>{
                         let printable_release=matches!(&event,VncInputEvent::Key{keycode,down:false} if *keycode<=255||*keycode>=0x0100_0000);

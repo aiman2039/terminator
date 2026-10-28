@@ -1,0 +1,279 @@
+//! Markdown images use the same bounded background decoder as image tabs.
+use eframe::egui::{
+    self,
+    load::{ImageLoader, ImagePoll, LoadError},
+};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
+
+type Decoded = Result<Arc<egui::ColorImage>, String>;
+struct Entry {
+    ticket: u64,
+    result: Option<Decoded>,
+    cancel: terminator_core::async_service::CancellationToken,
+}
+pub struct Images {
+    entries: Arc<Mutex<HashMap<String, Entry>>>,
+    submit: crate::gui_services::Submit,
+    #[cfg(test)]
+    _owner: Option<Mutex<crate::gui_services::Owner>>,
+    next: std::sync::atomic::AtomicU64,
+}
+impl Images {
+    #[cfg(test)]
+    pub fn install(ctx: &egui::Context) -> Arc<Self> {
+        let paths = terminator_core::Paths::at(std::env::temp_dir().join(terminator_core::id()));
+        let (tx, _) = std::sync::mpsc::channel();
+        let (services, owner) = crate::gui_services::Services::new(paths, ctx.clone(), tx).unwrap();
+        let loader = Arc::new(Self {
+            entries: Arc::default(),
+            submit: services.submit(),
+            next: std::sync::atomic::AtomicU64::default(),
+            _owner: Some(Mutex::new(owner)),
+        });
+        ctx.add_image_loader(Arc::<Self>::clone(&loader));
+        loader
+    }
+    pub fn with_submit(ctx: &egui::Context, submit: crate::gui_services::Submit) -> Arc<Self> {
+        let loader = Arc::new(Self {
+            entries: Arc::default(),
+            submit,
+            next: std::sync::atomic::AtomicU64::default(),
+            #[cfg(test)]
+            _owner: None,
+        });
+        ctx.add_image_loader(Arc::<Self>::clone(&loader));
+        loader
+    }
+    pub fn clear(&self, ctx: &egui::Context) {
+        self.retain(ctx, &HashSet::new());
+    }
+    pub fn retain(&self, ctx: &egui::Context, used: &HashSet<String>) {
+        let unused: Vec<_> = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .filter(|uri| !used.contains(*uri))
+            .cloned()
+            .collect();
+        for uri in unused {
+            ctx.forget_image(&uri);
+        }
+    }
+}
+impl Entry {
+    fn poll(&self) -> egui::load::ImageLoadResult {
+        match &self.result {
+            Some(Ok(image)) => Ok(ImagePoll::Ready {
+                image: Arc::clone(image),
+            }),
+            Some(Err(error)) => Err(LoadError::Loading(error.clone())),
+            None => Ok(ImagePoll::Pending { size: None }),
+        }
+    }
+}
+
+/// Background decode of one `markdown-image:` URI into the shared cache.
+struct ImageJob {
+    cancelled: terminator_core::async_service::CancellationToken,
+    cache: Arc<Mutex<HashMap<String, Entry>>>,
+    submit: crate::gui_services::Submit,
+    target: String,
+    repaint: egui::Context,
+    ticket: u64,
+}
+
+impl ImageJob {
+    async fn run(self) {
+        let result = self.decode().await;
+        let mut entries = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let used: usize = entries
+            .values()
+            .filter_map(|e| e.result.as_ref())
+            .filter_map(|r| r.as_ref().ok())
+            .map(|i| i.pixels.len().saturating_mul(4))
+            .sum();
+        if let Some(entry) = entries
+            .get_mut(&self.target)
+            .filter(|e| e.ticket == self.ticket)
+        {
+            entry.result = Some(result.and_then(|image| {
+                if used.saturating_add(image.pixels.len().saturating_mul(4)) > 64 * 1024 * 1024 {
+                    Err("Markdown images exceed the 64 MiB preview limit".into())
+                } else {
+                    Ok(image)
+                }
+            }));
+        }
+        self.repaint.request_repaint();
+    }
+
+    async fn decode(&self) -> Decoded {
+        let path = self
+            .target
+            .strip_prefix("markdown-image:")
+            .and_then(|s| url::Url::parse(s).ok())
+            .and_then(|u| u.to_file_path().ok());
+        match path {
+            Some(path) => crate::image_preview::load_pools(crate::image_preview::LoadPoolsInput {
+                fs: self.submit.fs(),
+                cpu: self.submit.cpu(),
+                path,
+                cancel: &self.cancelled,
+            })
+            .await
+            .map(Arc::new)
+            .map_err(|e| format!("{e:#}")),
+            None => Err("Invalid local image path".into()),
+        }
+    }
+}
+
+impl ImageLoader for Images {
+    fn id(&self) -> &str {
+        concat!(module_path!(), "::Images")
+    }
+    fn load(
+        &self,
+        ctx: &egui::Context,
+        uri: &str,
+        _: egui::SizeHint,
+    ) -> egui::load::ImageLoadResult {
+        if !uri.starts_with("markdown-image:") {
+            return Err(LoadError::NotSupported);
+        }
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = entries.get(uri) {
+            return entry.poll();
+        }
+        if entries.len() >= 32 {
+            return Err(LoadError::Loading(
+                "Markdown preview supports up to 32 local images".into(),
+            ));
+        }
+        let ticket = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+        let token = CancellationToken::new();
+        let job = ImageJob {
+            cancelled: token.clone(),
+            cache: Arc::clone(&self.entries),
+            submit: self.submit.clone(),
+            target: uri.to_owned(),
+            repaint: ctx.clone(),
+            ticket,
+        };
+        let context =
+            OperationContext::new("markdown-image", uri.to_owned(), Policy::ReplaceableRead);
+        let result = self
+            .submit
+            .handle()
+            .submit(context, token.clone(), async move {
+                job.run().await;
+                Ok(Vec::new())
+            });
+        if result.is_ok() {
+            entries.insert(
+                uri.into(),
+                Entry {
+                    ticket,
+                    result: None,
+                    cancel: token,
+                },
+            );
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        Ok(ImagePoll::Pending { size: None })
+    }
+    fn forget(&self, uri: &str) {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(uri);
+    }
+    fn forget_all(&self) {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+    fn byte_size(&self) -> usize {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter_map(|v| v.result.as_ref())
+            .filter_map(|r| r.as_ref().ok())
+            .map(|i| i.pixels.len().saturating_mul(4))
+            .sum()
+    }
+    fn has_pending(&self) -> bool {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .any(|v| v.result.is_none())
+    }
+}
+
+impl Drop for Entry {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_images_decode_off_thread_and_can_be_reloaded_and_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("picture.png");
+        image::RgbaImage::from_pixel(12, 8, image::Rgba([210, 60, 40, 255]))
+            .save(&path)
+            .unwrap();
+        let ctx = egui::Context::default();
+        let images = Images::install(&ctx);
+        let uri = format!(
+            "markdown-image:{}",
+            url::Url::from_file_path(&path).unwrap()
+        );
+        let wait = || {
+            let start = std::time::Instant::now();
+            loop {
+                match images.load(&ctx, &uri, egui::SizeHint::default()) {
+                    Ok(ImagePoll::Pending { .. }) => {
+                        assert!(start.elapsed() < std::time::Duration::from_secs(3));
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    result => return result,
+                }
+            }
+        };
+        let ImagePoll::Ready { image } = wait().unwrap() else {
+            panic!("Image not decoded")
+        };
+        assert_eq!(image.size, [12, 8]);
+        assert_eq!(images.byte_size(), 12 * 8 * 4);
+        std::fs::write(&path, "broken image").unwrap();
+        images.clear(&ctx);
+        assert!(matches!(wait(), Err(LoadError::Loading(_))));
+        assert!(matches!(
+            images.load(&ctx, "https://example.com/a.png", egui::SizeHint::default()),
+            Err(LoadError::NotSupported)
+        ));
+        images.clear(&ctx);
+        assert_eq!(images.byte_size(), 0);
+    }
+}

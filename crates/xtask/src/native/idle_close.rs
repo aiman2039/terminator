@@ -1,3 +1,4 @@
+use super::CaptureInput;
 use super::{
     Duration, Harness, Options, Result, ensure, fs, id, json, plain, session, session_ids, thread,
 };
@@ -30,13 +31,13 @@ pub fn run(o: &Options) -> Result<()> {
     h.layout(&project, &[idle.clone(), busy.clone()])?;
     thread::sleep(Duration::from_millis(400));
     h.write(&mut h.attach(&busy)?, "sleep 30\r")?;
-    plain(
-        &h,
-        o,
-        "idle-pane-closed",
-        json!([{"at_ms":1300,"target":format!("pane-close:{}", id(&idle))}]),
-        3600,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "idle-pane-closed",
+        actions: json!([{"at_ms":1300,"target":format!("pane-close:{}", id(&idle))}]),
+        after: 3600,
+    })?;
     let state = h.state()?;
     ensure!(
         !matches!(

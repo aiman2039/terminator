@@ -173,7 +173,16 @@ fn plain_close_keeps_other_docked_copies() {
     // A plain close issued in `a` removes one copy there; the other
     // split and project `b` keep theirs, and the buffer survives.
     let tab = app.layouts.get("a").expect("workspace").active.clone();
-    app.close_native_tab(&path, false, docked_issuer("a", &tab, None, false));
+    app.close_native_tab(
+        &path,
+        false,
+        docked_issuer(DockedIssuerInput {
+            project: "a",
+            tab: &tab,
+            node: None,
+            delayed: false,
+        }),
+    );
     assert_eq!(docked_copies(&app, "a", &path), 1);
     assert_eq!(docked_copies(&app, "b", &path), 1);
     assert!(app.native_docs.contains_key(&path));
@@ -216,7 +225,16 @@ fn plain_close_takes_focused_split_not_first_match() {
     // keeps only the other tab, the first leaf keeps the file. No
     // recorded pane here, so the focused copy goes.
     let tab = app.layouts.get("a").expect("workspace").active.clone();
-    app.close_native_tab(&path, false, docked_issuer("a", &tab, None, false));
+    app.close_native_tab(
+        &path,
+        false,
+        docked_issuer(DockedIssuerInput {
+            project: "a",
+            tab: &tab,
+            node: None,
+            delayed: false,
+        }),
+    );
     let workspace = app.layouts.get("a").expect("workspace");
     let mut focused_tabs = Vec::new();
     let mut copies = 0;
@@ -259,7 +277,16 @@ fn plain_close_keeps_twin_tab_copies() {
     app.layouts.insert("a".into(), workspace);
     // `:q` in the second tab removes only that copy: the first tab
     // keeps the file, and the buffer survives.
-    app.close_native_tab(&path, false, docked_issuer("a", "second", None, false));
+    app.close_native_tab(
+        &path,
+        false,
+        docked_issuer(DockedIssuerInput {
+            project: "a",
+            tab: "second",
+            node: None,
+            delayed: false,
+        }),
+    );
     assert_eq!(tab_native_paths(&app, "a", &first), vec![path.clone()]);
     assert!(tab_native_paths(&app, "a", "second").is_empty());
     assert!(app.native_docs.contains_key(&path));
@@ -307,7 +334,12 @@ fn plain_close_prefers_recorded_pane_over_current_focus() {
     app.close_native_tab(
         &path,
         false,
-        docked_issuer("a", &tab, Some(recorded), false),
+        docked_issuer(DockedIssuerInput {
+            project: "a",
+            tab: &tab,
+            node: Some(recorded),
+            delayed: false,
+        }),
     );
     // The recorded right leaf loses the file and keeps the other tab;
     // the focused left leaf is untouched.
@@ -353,7 +385,16 @@ fn delayed_wq_with_live_pane_closes_only_it() {
         surface: egui_dock::SurfaceIndex::main(),
         node: right,
     };
-    app.close_native_tab(&path, false, docked_issuer("a", &tab, Some(recorded), true));
+    app.close_native_tab(
+        &path,
+        false,
+        docked_issuer(DockedIssuerInput {
+            project: "a",
+            tab: &tab,
+            node: Some(recorded),
+            delayed: true,
+        }),
+    );
     assert_eq!(docked_copies(&app, "a", &path), 1);
     assert!(app.native_docs.contains_key(&path));
 }
@@ -382,7 +423,16 @@ fn stale_delayed_wq_closes_nothing() {
         surface: egui_dock::SurfaceIndex::main(),
         node: egui_dock::NodeIndex(999),
     };
-    app.close_native_tab(&path, false, docked_issuer("a", &tab, Some(stale), true));
+    app.close_native_tab(
+        &path,
+        false,
+        docked_issuer(DockedIssuerInput {
+            project: "a",
+            tab: &tab,
+            node: Some(stale),
+            delayed: true,
+        }),
+    );
     // No fallback may take a copy that never asked to close: both
     // stay open with the buffer.
     assert_eq!(docked_copies(&app, "a", &path), 2);
@@ -467,12 +517,12 @@ fn wq_close_uses_view_issuing_the_save() {
         crate::native_editor::NativeDoc::new(path.clone(), false),
     );
     let float = egui::ViewportId::from_hash_of("wq-float");
-    app.floating.push(float_window(
-        "wq-float",
-        "a",
-        "home",
-        vec![Tab::NativeEditor { path: path.clone() }],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "wq-float",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::NativeEditor { path: path.clone() }],
+    }));
     app.layouts.insert(
         "a".into(),
         Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
@@ -512,12 +562,12 @@ fn pending_closes_drain_with_no_project_selected() {
         path.clone(),
         crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
     );
-    app.floating.push(float_window(
-        "hidden-float",
-        "a",
-        "home",
-        vec![Tab::NativeEditor { path: path.clone() }],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "hidden-float",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::NativeEditor { path: path.clone() }],
+    }));
     // Hiding the last project must not stall floating closes: with
     // nothing checked out, the drain still runs.
     app.pending_native_close.push((path.clone(), true, None));

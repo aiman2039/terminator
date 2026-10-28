@@ -40,12 +40,12 @@ pub(super) fn format_clock(duration: Duration) -> String {
 pub(crate) async fn fixture_download(url: String) -> Result<()> {
     let client = reqwest::Client::builder().no_proxy().build()?;
     let (sender, _receiver) = tokio::sync::mpsc::channel(14);
-    engine::analysis::download(
-        &client,
+    engine::analysis::download(engine::analysis::DownloadInput {
+        client: &client,
         url,
         sender,
-        Duration::from_secs(8),
-        Duration::from_secs(10),
-    )
+        headers: Duration::from_secs(8),
+        read_timeout: Duration::from_secs(10),
+    })
     .await
 }

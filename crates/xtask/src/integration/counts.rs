@@ -13,6 +13,50 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
     );
     let mut h = Harness::new()?;
     h.setup()?;
+    let log = install_shims(&mut h)?;
+    let project = h.project("command-counts")?;
+    git(
+        Path::new(
+            project
+                .get("path")
+                .ok_or_else(|| anyhow!("missing project path"))?
+                .as_str()
+                .unwrap(),
+        ),
+        &["init", "-q"],
+    )?;
+    let session = h.shell(&project)?;
+    h.layout(&project, std::slice::from_ref(&session))?;
+    let opts = crate::native::Options {
+        seconds,
+        output: artifacts().join("commands"),
+        ..Default::default()
+    };
+    let mut counts = serde_json::Map::new();
+    for visible in [true, false] {
+        let git_count = gui_git_count(&h, (&opts, &log), visible)?;
+        counts.insert(
+            if visible { "visible_git" } else { "hidden_git" }.into(),
+            json!(git_count),
+        );
+    }
+    counts.insert(
+        "ancestry_ps".into(),
+        json!(ancestry_ps_count(&h, &session, &log)?),
+    );
+    let report = json!({"seconds":seconds,"counts":counts,"scope":"Actual helper invocations in isolated visible/hidden GUI fixtures and one ancestry lookup; selected-context metadata remains active when Explorer is hidden"});
+    if let Some(path) = destination {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, serde_json::to_vec_pretty(&report)?)?;
+    }
+    println!("{report}");
+    Ok(())
+}
+
+/// Route `git` and `ps` through logging shims; returns the command log path.
+fn install_shims(h: &mut Harness) -> Result<PathBuf> {
     let shim = h.root.join("bin");
     fs::create_dir_all(&shim)?;
     for program in ["git", "ps"] {
@@ -37,49 +81,41 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
         "TERMINATOR_FIXTURE_COMMAND_LOG".into(),
         log.to_string_lossy().into_owned(),
     );
-    let project = h.project("command-counts")?;
-    git(
-        Path::new(
-            project
-                .get("path")
-                .ok_or_else(|| anyhow!("missing project path"))?
-                .as_str()
-                .unwrap(),
-        ),
-        &["init", "-q"],
+    Ok(log)
+}
+
+/// Count helper `git` runs while the GUI shows or hides Explorer.
+fn gui_git_count(
+    h: &Harness,
+    (opts, log): (&crate::native::Options, &Path),
+    visible: bool,
+) -> Result<usize> {
+    let seconds = opts.seconds;
+    fs::write(h.root.join("ui-preferences.json"),json!({"version":1,"tool":"Explorer","visible":visible,"typography_migrated":true,"attention_migrated":true}).to_string())?;
+    fs::write(log, "")?;
+    crate::native::capture(
+        crate::native::CaptureInput {
+            h,
+            opts,
+            name: if visible { "visible" } else { "hidden" },
+            actions: json!([]),
+            after: seconds.saturating_mul(1000),
+        },
+        |_| Ok(()),
     )?;
-    let session = h.shell(&project)?;
-    h.layout(&project, std::slice::from_ref(&session))?;
-    let opts = crate::native::Options {
-        seconds,
-        output: artifacts().join("commands"),
-        ..Default::default()
-    };
-    let mut counts = serde_json::Map::new();
-    for visible in [true, false] {
-        fs::write(h.root.join("ui-preferences.json"),json!({"version":1,"tool":"Explorer","visible":visible,"typography_migrated":true,"attention_migrated":true}).to_string())?;
-        fs::write(&log, "")?;
-        crate::native::capture(
-            &h,
-            &opts,
-            if visible { "visible" } else { "hidden" },
-            json!([]),
-            seconds.saturating_mul(1000),
-            |_| Ok(()),
-        )?;
-        let commands = fs::read_to_string(&log)?
-            .lines()
-            .map(serde_json::from_str::<Value>)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        counts.insert(
-            if visible { "visible_git" } else { "hidden_git" }.into(),
-            json!(commands.iter().filter(|c| c["program"] == "git").count()),
-        );
-    }
-    fs::write(&log, "")?;
+    let commands = fs::read_to_string(log)?
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(commands.iter().filter(|c| c["program"] == "git").count())
+}
+
+/// Count `ps` runs for one hook ancestry lookup.
+fn ancestry_ps_count(h: &Harness, session: &Value, log: &Path) -> Result<usize> {
+    fs::write(log, "")?;
     let mut hook = h.command("terminator-hook");
     hook.args(["event", "codex"])
-        .env("TERMINATOR_SESSION_ID", id(&session))
+        .env("TERMINATOR_SESSION_ID", id(session))
         .env(
             "TERMINATOR_SESSION_TOKEN",
             fs::read_to_string(h.root.join("run/auth"))?.trim(),
@@ -91,25 +127,11 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
             ..Default::default()
         },
     )?;
-    counts.insert(
-        "ancestry_ps".into(),
-        json!(
-            fs::read_to_string(&log)?
-                .lines()
-                .filter(|l| {
-                    serde_json::from_str::<Value>(l)
-                        .is_ok_and(|v| v.get("program").is_some_and(|program| program == "ps"))
-                })
-                .count()
-        ),
-    );
-    let report = json!({"seconds":seconds,"counts":counts,"scope":"Actual helper invocations in isolated visible/hidden GUI fixtures and one ancestry lookup; selected-context metadata remains active when Explorer is hidden"});
-    if let Some(path) = destination {
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, serde_json::to_vec_pretty(&report)?)?;
-    }
-    println!("{report}");
-    Ok(())
+    Ok(fs::read_to_string(log)?
+        .lines()
+        .filter(|l| {
+            serde_json::from_str::<Value>(l)
+                .is_ok_and(|v| v.get("program").is_some_and(|program| program == "ps"))
+        })
+        .count())
 }

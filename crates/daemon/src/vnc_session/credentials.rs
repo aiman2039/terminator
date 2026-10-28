@@ -62,30 +62,54 @@ pub(crate) fn save(paths: &Paths, profile: &VncProfile, password: &str) -> Resul
     );
     Ok(())
 }
+pub(crate) struct SaveReplacingInput<'a> {
+    pub(crate) paths: &'a Paths,
+    pub(crate) previous: Option<&'a VncProfile>,
+    pub(crate) profile: &'a VncProfile,
+    pub(crate) password: &'a str,
+}
+
 /// Publish a verified credential under the new identity, then remove the old
 /// identity. If removal fails, retain the old profile and undo the new entry.
-pub(crate) fn save_replacing(
-    paths: &Paths,
-    previous: Option<&VncProfile>,
-    profile: &VncProfile,
-    password: &str,
-) -> Result<()> {
-    replace_with(
+pub(crate) fn save_replacing(input: SaveReplacingInput<'_>) -> Result<()> {
+    let SaveReplacingInput {
+        paths,
         previous,
         profile,
         password,
-        |p, secret| save(paths, p, secret),
-        |p| forget(paths, p),
-    )
+    } = input;
+    replace_with(ReplaceWithInput {
+        previous,
+        profile,
+        password,
+        save: |p, secret| save(paths, p, secret),
+        forget: |p| forget(paths, p),
+    })
 }
 
-fn replace_with(
-    previous: Option<&VncProfile>,
-    profile: &VncProfile,
-    password: &str,
-    mut save: impl FnMut(&VncProfile, &str) -> Result<()>,
-    mut forget: impl FnMut(&VncProfile) -> Result<()>,
-) -> Result<()> {
+struct ReplaceWithInput<'a, S, F>
+where
+    S: FnMut(&VncProfile, &str) -> Result<()>,
+    F: FnMut(&VncProfile) -> Result<()>,
+{
+    previous: Option<&'a VncProfile>,
+    profile: &'a VncProfile,
+    password: &'a str,
+    save: S,
+    forget: F,
+}
+fn replace_with<S, F>(input: ReplaceWithInput<'_, S, F>) -> Result<()>
+where
+    S: FnMut(&VncProfile, &str) -> Result<()>,
+    F: FnMut(&VncProfile) -> Result<()>,
+{
+    let ReplaceWithInput {
+        previous,
+        profile,
+        password,
+        mut save,
+        mut forget,
+    } = input;
     let previous = previous.filter(|p| p.credential_saved);
     let changed = previous
         .map(|p| Ok::<_, anyhow::Error>(credential_account(p)? != credential_account(profile)?))
@@ -222,24 +246,24 @@ mod tests {
                 let old = credential_account(&previous).unwrap();
                 let new = credential_account(&next).unwrap();
                 let store = RefCell::new(HashMap::from([(old.clone(), "old".to_owned())]));
-                let result = replace_with(
-                    Some(&previous),
-                    &next,
-                    "new",
-                    |p, secret| {
+                let result = replace_with(ReplaceWithInput {
+                    previous: Some(&previous),
+                    profile: &next,
+                    password: "new",
+                    save: |p, secret| {
                         store
                             .borrow_mut()
                             .insert(credential_account(p)?, secret.into());
                         ensure!(!fail_save, "Verification failed after write");
                         Ok(())
                     },
-                    |p| {
+                    forget: |p| {
                         let account = credential_account(p)?;
                         ensure!(!(fail_remove && account == old), "Delete failed");
                         store.borrow_mut().remove(&account);
                         Ok(())
                     },
-                );
+                });
                 let store = store.into_inner();
                 if fail_save || fail_remove {
                     assert!(result.is_err());
@@ -258,16 +282,16 @@ mod tests {
     fn updating_password_at_same_endpoint_does_not_delete_the_credential() {
         let p = profile();
         let mut saves = 0;
-        replace_with(
-            Some(&p),
-            &p,
-            "new",
-            |_, _| {
+        replace_with(ReplaceWithInput {
+            previous: Some(&p),
+            profile: &p,
+            password: "new",
+            save: |_, _| {
                 saves += 1;
                 Ok(())
             },
-            |_| panic!("The current credential must not be deleted"),
-        )
+            forget: |_| panic!("The current credential must not be deleted"),
+        })
         .unwrap();
         assert_eq!(saves, 1);
     }

@@ -2,10 +2,26 @@ use super::counts::{AttentionCounts, notice_pending};
 use super::owner::OwnerSupport;
 use super::presentation::AgentPresentation;
 use super::queries::{build_presentation, notice_preview, unknown_presentation};
+use std::collections::{HashMap, HashSet};
 use terminator_core::{
-    AGENT_PRESENCE_CAPABILITY, AgentState, Session, State,
+    AGENT_PRESENCE_CAPABILITY, Session, State,
     agents::{self},
 };
+
+pub(crate) struct GetInput<'a> {
+    pub state: &'a State,
+    pub id: &'a str,
+    pub now: u64,
+    pub fresh: Option<bool>,
+}
+
+pub(crate) struct AttentionInput<'a> {
+    pub state: &'a State,
+    pub session_ids: &'a [String],
+    pub now: u64,
+    pub fresh: Option<bool>,
+}
+
 /// Rebuilt on snapshot/local mutation, freshness changes, and snooze expiry.
 /// Time alone does not rebuild stable presentations on every frame.
 ///
@@ -73,13 +89,13 @@ impl PresentationCache {
         self.rebuild(state, now, fresh);
     }
 
-    pub fn get(
-        &mut self,
-        state: &State,
-        id: &str,
-        now: u64,
-        fresh: Option<bool>,
-    ) -> std::sync::Arc<AgentPresentation> {
+    pub fn get(&mut self, input: GetInput<'_>) -> std::sync::Arc<AgentPresentation> {
+        let GetInput {
+            state,
+            id,
+            now,
+            fresh,
+        } = input;
         self.ensure(state, now, fresh);
         self.entries
             .get(id)
@@ -95,13 +111,13 @@ impl PresentationCache {
     /// Sum precomputed attention. Duplicate session ids count once.
     /// Ended sessions contribute nothing. Pending input, permission, and
     /// failure stay distinct.
-    pub fn attention(
-        &mut self,
-        state: &State,
-        session_ids: &[String],
-        now: u64,
-        fresh: Option<bool>,
-    ) -> AttentionCounts {
+    pub fn attention(&mut self, input: AttentionInput<'_>) -> AttentionCounts {
+        let AttentionInput {
+            state,
+            session_ids,
+            now,
+            fresh,
+        } = input;
         self.ensure(state, now, fresh);
         let mut seen = std::collections::HashSet::with_capacity(session_ids.len());
         let mut counts = AttentionCounts::default();
@@ -140,177 +156,32 @@ impl PresentationCache {
         self.notifications_visited = self
             .notifications_visited
             .saturating_add(state.notifications.len() as u64);
-        let mut live = std::collections::HashSet::with_capacity(state.sessions.len());
-        for session in &state.sessions {
-            if session.lifecycle.live() {
-                live.insert(session.id.as_str());
-            }
-        }
-        let generations_empty = state.generations.is_empty();
-        let legacy = OwnerSupport {
-            supported: state
-                .capabilities
-                .iter()
-                .any(|c| c == AGENT_PRESENCE_CAPABILITY),
-            available: true,
+        let index = SnapshotIndex::new(state);
+        let (folds, expires) = fold_notices(state, &index.live, now);
+        let expires = if fresh.is_none() {
+            presence_expiry(state, now, expires)
+        } else {
+            expires
         };
-        let mut owners = std::collections::HashMap::with_capacity(state.generations.len());
-        if !generations_empty {
-            for health in &state.generations {
-                owners
-                    .entry(health.owner.id.as_str())
-                    .or_insert(OwnerSupport {
-                        supported: health
-                            .capabilities
-                            .iter()
-                            .any(|c| c == AGENT_PRESENCE_CAPABILITY),
-                        available: health.error.is_none(),
-                    });
-            }
-        }
-        let mut presence_by_id = std::collections::HashMap::with_capacity(state.presence.len());
-        for item in &state.presence {
-            presence_by_id
-                .entry(item.session_id.as_str())
-                .or_insert(item);
-        }
-        let mut grouped: std::collections::HashMap<&str, Vec<&terminator_core::Agent>> =
-            std::collections::HashMap::new();
-        for agent in &state.agents {
-            grouped
-                .entry(agent.session_id.as_str())
-                .or_default()
-                .push(agent);
-        }
-        let mut selected = std::collections::HashMap::with_capacity(grouped.len());
-        for (id, group) in &grouped {
-            if let Some(agent) = agents::select_matched_agent(group.iter().copied()) {
-                selected.insert(*id, agent);
-            }
-        }
-        let mut folds: std::collections::HashMap<&str, NoticeFold> =
-            std::collections::HashMap::new();
-        let mut expires = u64::MAX;
-        for (index, notice) in state.notifications.iter().enumerate() {
-            if notice.snoozed_until > now {
-                expires = expires.min(notice.snoozed_until);
-            }
-            let fold = folds.entry(notice.session_id.as_str()).or_default();
-            if live.contains(notice.session_id.as_str()) && notice_pending(notice, now) {
-                match notice.state {
-                    AgentState::WaitingInput => {
-                        fold.attention.input = fold.attention.input.saturating_add(1);
-                    }
-                    AgentState::WaitingPermission => {
-                        fold.attention.permission = fold.attention.permission.saturating_add(1);
-                    }
-                    AgentState::Failed => {
-                        fold.attention.failed = fold.attention.failed.saturating_add(1);
-                    }
-                    _ => {}
-                }
-            }
-            if !notice.read && notice_pending(notice, now) {
-                fold.unread = fold.unread.saturating_add(1);
-            }
-            if !notice.dismissed
-                && (fold.preview_index.is_none() || notice.created >= fold.preview_at)
-            {
-                fold.preview_at = notice.created;
-                fold.preview_index = Some(index);
-            }
-        }
-        if fresh.is_none() {
-            for item in &state.presence {
-                let at = item
-                    .observed_at
-                    .saturating_add(agents::STALE_AFTER_SECS + 1);
-                if at > now {
-                    expires = expires.min(at);
-                }
-            }
-        }
         self.attention.clear();
         for (id, fold) in &folds {
             if !fold.attention.is_empty() {
                 self.attention.insert((*id).to_string(), fold.attention);
             }
         }
-        let mut seen = std::collections::HashSet::with_capacity(state.sessions.len());
+        let mut seen = HashSet::with_capacity(state.sessions.len());
         for session in &state.sessions {
             if !seen.insert(session.id.as_str()) {
                 continue;
             }
-            let support = if generations_empty {
-                legacy
-            } else {
-                owners
-                    .get(session.generation.as_str())
-                    .copied()
-                    .unwrap_or(OwnerSupport {
-                        supported: false,
-                        available: false,
-                    })
-            };
-            let presence = presence_by_id.get(session.id.as_str()).copied().cloned();
-            let hook = selected.get(session.id.as_str()).copied().cloned();
-            let fold = folds.get(session.id.as_str());
-            let attention = fold.map(|item| item.attention).unwrap_or_default();
-            let unread = fold.map(|item| item.unread).unwrap_or(0);
-            let presence_current =
-                fresh.unwrap_or_else(|| agents::presence_verified(presence.as_ref(), now));
-            let notice_preview = hook.as_ref().and_then(|_| {
-                fold.and_then(|item| item.preview_index).and_then(|index| {
-                    let notice = state.notifications.get(index)?;
-                    let text = notice_preview(&notice.summary);
-                    (!text.is_empty() && text != notice.state.label()).then_some(text)
-                })
+            self.refresh_session(SessionRefresh {
+                state,
+                session,
+                index: &index,
+                fold: folds.get(session.id.as_str()),
+                now,
+                fresh,
             });
-            let (unchanged, presentation) = {
-                let view = SessionView {
-                    session,
-                    support,
-                    presence: presence.as_ref(),
-                    hook: hook.as_ref(),
-                    attention,
-                    unread,
-                    fresh,
-                    presence_current,
-                    notice_preview: &notice_preview,
-                };
-                let unchanged = self
-                    .entries
-                    .get(&session.id)
-                    .is_some_and(|entry| entry.deps.matches(&view));
-                let presentation =
-                    (!unchanged).then(|| std::sync::Arc::new(build_presentation(&view, now)));
-                (unchanged, presentation)
-            };
-            if unchanged {
-                self.presentations_reused = self.presentations_reused.saturating_add(1);
-                continue;
-            }
-            let Some(presentation) = presentation else {
-                continue;
-            };
-            self.entries.insert(
-                session.id.clone(),
-                CacheEntry {
-                    deps: PresentationDeps {
-                        session: session.clone(),
-                        support,
-                        presence,
-                        hook,
-                        attention,
-                        unread,
-                        fresh,
-                        presence_current,
-                        notice_preview,
-                    },
-                    presentation,
-                },
-            );
-            self.presentations_rebuilt = self.presentations_rebuilt.saturating_add(1);
         }
         self.entries.retain(|id, _| seen.contains(id.as_str()));
         self.fresh = fresh;
@@ -318,6 +189,211 @@ impl PresentationCache {
         self.inputs = InputStamp::from_state(state);
         self.ready = true;
     }
+
+    /// Reuses the session's presentation when its inputs are unchanged,
+    /// otherwise builds and stores a new one.
+    fn refresh_session(&mut self, input: SessionRefresh<'_>) {
+        let SessionRefresh {
+            state,
+            session,
+            index,
+            fold,
+            now,
+            fresh,
+        } = input;
+        let support = index.support(session);
+        let presence = index
+            .presence_by_id
+            .get(session.id.as_str())
+            .copied()
+            .cloned();
+        let hook = index.selected.get(session.id.as_str()).copied().cloned();
+        let attention = fold.map(|item| item.attention).unwrap_or_default();
+        let unread = fold.map(|item| item.unread).unwrap_or(0);
+        let presence_current =
+            fresh.unwrap_or_else(|| agents::presence_verified(presence.as_ref(), now));
+        let notice_preview = hook.as_ref().and_then(|_| {
+            fold.and_then(|item| item.preview_index).and_then(|index| {
+                let notice = state.notifications.get(index)?;
+                let text = notice_preview(&notice.summary);
+                (!text.is_empty() && text != notice.state.label()).then_some(text)
+            })
+        });
+        let view = SessionView {
+            session,
+            support,
+            presence: presence.as_ref(),
+            hook: hook.as_ref(),
+            attention,
+            unread,
+            fresh,
+            presence_current,
+            notice_preview: &notice_preview,
+        };
+        if self
+            .entries
+            .get(&session.id)
+            .is_some_and(|entry| entry.deps.matches(&view))
+        {
+            self.presentations_reused = self.presentations_reused.saturating_add(1);
+            return;
+        }
+        let presentation = std::sync::Arc::new(build_presentation(&view, now));
+        self.entries.insert(
+            session.id.clone(),
+            CacheEntry {
+                deps: PresentationDeps {
+                    session: session.clone(),
+                    support,
+                    presence,
+                    hook,
+                    attention,
+                    unread,
+                    fresh,
+                    presence_current,
+                    notice_preview,
+                },
+                presentation,
+            },
+        );
+        self.presentations_rebuilt = self.presentations_rebuilt.saturating_add(1);
+    }
+}
+
+struct SessionRefresh<'a> {
+    state: &'a State,
+    session: &'a Session,
+    index: &'a SnapshotIndex<'a>,
+    fold: Option<&'a NoticeFold>,
+    now: u64,
+    fresh: Option<bool>,
+}
+
+/// Lookups built once per reconciliation over one snapshot.
+struct SnapshotIndex<'a> {
+    live: HashSet<&'a str>,
+    /// Pre-catalog daemons report no generations; one legacy owner applies.
+    legacy: Option<OwnerSupport>,
+    owners: HashMap<&'a str, OwnerSupport>,
+    presence_by_id: HashMap<&'a str, &'a agents::TerminalPresence>,
+    /// The matched hook agent per session.
+    selected: HashMap<&'a str, &'a terminator_core::Agent>,
+}
+
+impl<'a> SnapshotIndex<'a> {
+    fn new(state: &'a State) -> Self {
+        let mut live = HashSet::with_capacity(state.sessions.len());
+        for session in &state.sessions {
+            if session.lifecycle.live() {
+                live.insert(session.id.as_str());
+            }
+        }
+        let legacy = state.generations.is_empty().then(|| OwnerSupport {
+            supported: state
+                .capabilities
+                .iter()
+                .any(|c| c == AGENT_PRESENCE_CAPABILITY),
+            available: true,
+        });
+        let mut owners = HashMap::with_capacity(state.generations.len());
+        for health in &state.generations {
+            owners
+                .entry(health.owner.id.as_str())
+                .or_insert(OwnerSupport {
+                    supported: health
+                        .capabilities
+                        .iter()
+                        .any(|c| c == AGENT_PRESENCE_CAPABILITY),
+                    available: health.error.is_none(),
+                });
+        }
+        let mut presence_by_id = HashMap::with_capacity(state.presence.len());
+        for item in &state.presence {
+            presence_by_id
+                .entry(item.session_id.as_str())
+                .or_insert(item);
+        }
+        Self {
+            live,
+            legacy,
+            owners,
+            presence_by_id,
+            selected: selected_agents(state),
+        }
+    }
+
+    fn support(&self, session: &Session) -> OwnerSupport {
+        self.legacy.unwrap_or_else(|| {
+            self.owners
+                .get(session.generation.as_str())
+                .copied()
+                .unwrap_or(OwnerSupport {
+                    supported: false,
+                    available: false,
+                })
+        })
+    }
+}
+
+fn selected_agents(state: &State) -> HashMap<&str, &terminator_core::Agent> {
+    let mut grouped: HashMap<&str, Vec<&terminator_core::Agent>> = HashMap::new();
+    for agent in &state.agents {
+        grouped
+            .entry(agent.session_id.as_str())
+            .or_default()
+            .push(agent);
+    }
+    let mut selected = HashMap::with_capacity(grouped.len());
+    for (id, group) in &grouped {
+        if let Some(agent) = agents::select_matched_agent(group.iter().copied()) {
+            selected.insert(*id, agent);
+        }
+    }
+    selected
+}
+
+/// Per-session notice counts and latest preview, plus the earliest snooze
+/// expiry (`u64::MAX` when none).
+fn fold_notices<'a>(
+    state: &'a State,
+    live: &HashSet<&str>,
+    now: u64,
+) -> (HashMap<&'a str, NoticeFold>, u64) {
+    let mut folds: HashMap<&str, NoticeFold> = HashMap::new();
+    let mut expires = u64::MAX;
+    for (index, notice) in state.notifications.iter().enumerate() {
+        if notice.snoozed_until > now {
+            expires = expires.min(notice.snoozed_until);
+        }
+        let fold = folds.entry(notice.session_id.as_str()).or_default();
+        if live.contains(notice.session_id.as_str()) && notice_pending(notice, now) {
+            fold.attention.count(notice.state);
+        }
+        if !notice.read && notice_pending(notice, now) {
+            fold.unread = fold.unread.saturating_add(1);
+        }
+        if !notice.dismissed && (fold.preview_index.is_none() || notice.created >= fold.preview_at)
+        {
+            fold.preview_at = notice.created;
+            fold.preview_index = Some(index);
+        }
+    }
+    (folds, expires)
+}
+
+/// Without connection freshness, presence goes stale on a timer: the
+/// earliest upcoming staleness deadline bounds the cache.
+fn presence_expiry(state: &State, now: u64, expires: u64) -> u64 {
+    let mut expires = expires;
+    for item in &state.presence {
+        let at = item
+            .observed_at
+            .saturating_add(agents::STALE_AFTER_SECS + 1);
+        if at > now {
+            expires = expires.min(at);
+        }
+    }
+    expires
 }
 
 /// Constant-time identity of one `Vec`: allocation, length, and capacity.

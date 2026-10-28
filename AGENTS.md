@@ -14,7 +14,7 @@ The native macOS/Linux, a Rust 2024 workspace requiring Rust 1.97.1+. Root docum
 
 Rust tests are colocated in `#[cfg(test)]` modules. Rust integration tests and packaging tasks live in `crates/xtask/`; GUI fixtures include `crates/app/examples/layout.rs`.
 
-Key GUI modules include `workspace.rs` for project tabs/layouts, `editor_close.rs` for editor-close handling, `appearance.rs` for theme configuration, `preferences.rs` for navigation preferences, and `services.rs`/`refresh.rs` for filesystem and Git work. Read `docs/ARCHITECTURE.md` before changing GUI/daemon ownership and `docs/INTEGRATIONS.md` before changing agent hooks.
+Key GUI modules include `workspace/` for project tabs/layouts, `files/editor_close.rs` for editor-close handling, `appearance/` for theme configuration, `preferences/` for navigation preferences, and `daemon_link/services.rs`/`daemon_link/refresh.rs` for filesystem and Git work. Size and structure limits live in `sarah.toml` (`sh scripts/check.sh sarah`). Read `docs/ARCHITECTURE.md` before changing GUI/daemon ownership and `docs/INTEGRATIONS.md` before changing agent hooks.
 
 Vendored dependencies include `vendor/egui_term/` (terminal widget), `vendor/egui_dock/` (docking), and `vendor/codediff.nvim/` (Neovim Git reviews). Document changes in the corresponding `UPSTREAM.md` and retain license notices.
 

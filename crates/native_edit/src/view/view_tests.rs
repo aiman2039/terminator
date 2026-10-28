@@ -2,10 +2,10 @@ use super::super::doc::Buffer;
 use super::super::highlight::{HighlightCache, Language};
 use super::super::vim::{Effect, Key as VKey, ModalEngine, Mode, VimEngine};
 use super::keys::{
-    IdeAction, IdeEdit, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key,
-    egui_key, ide_edit_key, ide_shortcut, mode_name, source_focus_id,
+    IdeAction, IdeEdit, IdeEditKeyInput, command_prompt, ctrl_h_is_motion, ctrl_v_is_block,
+    echo_of_handled_key, egui_key, ide_edit_key, ide_shortcut, mode_name, source_focus_id,
 };
-use super::render::{SourceOptions, show_source};
+use super::render::{ShowSourceInput, SourceOptions, show_source};
 use super::{char_display_width, col_at_display_x, display_x};
 use egui;
 #[cfg(test)]
@@ -38,7 +38,7 @@ mod tests {
                 events, ..Default::default()
             }, |ui| {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))), |ui| {
-                    show_source(ui, &mut doc, &mut engine, &SourceOptions { vim: false, ..Default::default() }, &mut highlight, Language::Rust, "file.rs#project.tab.split");
+                    show_source(ShowSourceInput { ui, doc: &mut doc, engine: &mut engine, options: &SourceOptions { vim: false, ..Default::default() }, highlight: &mut highlight, language: Language::Rust, id: "file.rs#project.tab.split" } );
                 });
                 assert!(crate::view::source_has_focus(ui.ctx()));
                 if frame == 1 {
@@ -59,15 +59,15 @@ mod tests {
         let mut highlight = HighlightCache::default();
         for _ in 0..2 {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                show_source(
+                show_source(ShowSourceInput {
                     ui,
-                    &mut doc,
-                    &mut engine,
-                    &SourceOptions::default(),
-                    &mut highlight,
-                    Language::Plain,
-                    "accessibility-editor",
-                );
+                    doc: &mut doc,
+                    engine: &mut engine,
+                    options: &SourceOptions::default(),
+                    highlight: &mut highlight,
+                    language: Language::Plain,
+                    id: "accessibility-editor",
+                });
             });
             output.textures_delta.clear();
             let update = output.platform_output.accesskit_update.unwrap();
@@ -221,27 +221,27 @@ mod tests {
         let mut highlight = super::HighlightCache::default();
         // Escape is a no-op in Normal mode: it only pumps frames.
         let idle = [(egui::Key::Escape, egui::Modifiers::NONE)];
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &super::SourceOptions::default(),
-            super::Language::Rust,
-            &mut highlight,
-            &idle,
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &idle,
+        });
         assert!(!highlight.line(0).is_empty());
         // A second frame with no edits reuses the cache.
         let revision = doc.revision();
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &super::SourceOptions::default(),
-            super::Language::Rust,
-            &mut highlight,
-            &idle,
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &idle,
+        });
         assert!(highlight.is_current(super::Language::Rust, true, revision));
     }
 
@@ -256,15 +256,15 @@ mod tests {
             let mut footer = 0.0;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let result = show_source(
+                    let result = show_source(ShowSourceInput {
                         ui,
-                        &mut doc,
-                        &mut engine,
-                        &SourceOptions::default(),
-                        &mut highlight,
-                        Language::Plain,
-                        "footer-test",
-                    );
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        options: &SourceOptions::default(),
+                        highlight: &mut highlight,
+                        language: Language::Plain,
+                        id: "footer-test",
+                    });
                     footer = result.footer_rect.expect("footer").top();
                 });
             });
@@ -291,15 +291,15 @@ mod tests {
             let mut outcome = None;
             let mut output = ctx.run_ui(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    outcome = Some(show_source(
+                    outcome = Some(show_source(ShowSourceInput {
                         ui,
                         doc,
                         engine,
-                        &SourceOptions::default(),
+                        options: &SourceOptions::default(),
                         highlight,
-                        Language::Plain,
-                        "context-menu-test",
-                    ));
+                        language: Language::Plain,
+                        id: "context-menu-test",
+                    }));
                 });
             });
             output.textures_delta.clear();
@@ -343,18 +343,18 @@ mod tests {
             read_only: true,
             ..SourceOptions::default()
         };
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            Language::Plain,
-            &mut HighlightCache::default(),
-            &[
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: Language::Plain,
+            highlight: &mut HighlightCache::default(),
+            keys: &[
                 (egui::Key::I, egui::Modifiers::NONE),
                 (egui::Key::A, egui::Modifiers::NONE),
             ],
-        );
+        });
         assert_eq!(doc.text(), "before");
     }
 
@@ -400,39 +400,58 @@ mod tests {
         assert_eq!(command_prompt(&engine), Some("/h".to_string()));
     }
 
+    struct DriveKeysInput<'a> {
+        ctx: &'a egui::Context,
+        doc: &'a mut crate::doc::Doc,
+        engine: &'a mut VimEngine,
+        keys: &'a [egui::Key],
+    }
+
     /// Drive the real widget headless: one synthetic keypress per frame.
-    fn drive_keys(
-        ctx: &egui::Context,
-        doc: &mut crate::doc::Doc,
-        engine: &mut VimEngine,
-        keys: &[egui::Key],
-    ) -> Vec<Effect> {
-        drive_mods(
+    fn drive_keys(input: DriveKeysInput<'_>) -> Vec<Effect> {
+        let DriveKeysInput {
             ctx,
             doc,
             engine,
-            &super::SourceOptions::default(),
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &keys
+            keys,
+        } = input;
+        drive_mods(DriveModsInput {
+            ctx,
+            doc,
+            engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &keys
                 .iter()
                 .map(|key| (*key, egui::Modifiers::NONE))
                 .collect::<Vec<_>>(),
-        )
+        })
     }
 
     /// [`drive_keys`] with modifiers, options, language, and a highlight
     /// cache: Ctrl chords, the vim/modeless switch, and highlighting
     /// exercise the real routing.
-    fn drive_mods(
-        ctx: &egui::Context,
-        doc: &mut crate::doc::Doc,
-        engine: &mut VimEngine,
-        options: &super::SourceOptions,
+    struct DriveModsInput<'a> {
+        ctx: &'a egui::Context,
+        doc: &'a mut crate::doc::Doc,
+        engine: &'a mut VimEngine,
+        options: &'a super::SourceOptions,
         language: super::Language,
-        highlight: &mut super::HighlightCache,
-        keys: &[(egui::Key, egui::Modifiers)],
-    ) -> Vec<Effect> {
+        highlight: &'a mut super::HighlightCache,
+        keys: &'a [(egui::Key, egui::Modifiers)],
+    }
+
+    fn drive_mods(input: DriveModsInput<'_>) -> Vec<Effect> {
+        let DriveModsInput {
+            ctx,
+            doc,
+            engine,
+            options,
+            language,
+            highlight,
+            keys,
+        } = input;
         fn key_event(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
             egui::Event::Key {
                 key,
@@ -458,9 +477,15 @@ mod tests {
             }
             let mut output = ctx.run_ui(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let outcome = super::show_source(
-                        ui, doc, engine, options, highlight, language, "headless",
-                    );
+                    let outcome = super::show_source(ShowSourceInput {
+                        ui,
+                        doc,
+                        engine,
+                        options,
+                        highlight,
+                        language,
+                        id: "headless",
+                    });
                     effects = outcome.effects;
                 });
             });
@@ -476,12 +501,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
-        let effects = drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[egui::Key::Colon, egui::Key::Q, egui::Key::Enter],
-        );
+        let effects = drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[egui::Key::Colon, egui::Key::Q, egui::Key::Enter],
+        });
         assert!(effects.contains(&Effect::Quit));
         assert_eq!(engine.mode(), Mode::Normal);
     }
@@ -492,11 +517,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
-        let effects = drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[
+        let effects = drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[
                 egui::Key::Colon,
                 egui::Key::S,
                 egui::Key::P,
@@ -505,13 +530,13 @@ mod tests {
                 egui::Key::T,
                 egui::Key::Enter,
             ],
-        );
+        });
         assert_eq!(effects, vec![Effect::Split]);
-        let effects = drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[
+        let effects = drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[
                 egui::Key::Colon,
                 egui::Key::T,
                 egui::Key::A,
@@ -521,7 +546,7 @@ mod tests {
                 egui::Key::W,
                 egui::Key::Enter,
             ],
-        );
+        });
         assert_eq!(effects, vec![Effect::TabNew]);
     }
 
@@ -532,11 +557,11 @@ mod tests {
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
         assert_eq!(engine.wrap(), None);
-        drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[
+        drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[
                 egui::Key::Colon,
                 egui::Key::S,
                 egui::Key::E,
@@ -548,7 +573,7 @@ mod tests {
                 egui::Key::P,
                 egui::Key::Enter,
             ],
-        );
+        });
         assert_eq!(engine.wrap(), Some(true));
     }
 
@@ -558,7 +583,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
-        drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::I]);
+        drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[egui::Key::I],
+        });
         assert_eq!(engine.mode(), Mode::Insert);
         assert_eq!(doc.text(), "hi");
     }
@@ -600,31 +630,31 @@ mod tests {
                 };
                 let mut highlight = HighlightCache::default();
                 // Establish focus before Tab, as a user click does.
-                drive_mods(
-                    &ctx,
-                    &mut doc,
-                    &mut engine,
-                    &options,
-                    Language::Markdown,
-                    &mut highlight,
-                    &[
+                drive_mods(DriveModsInput {
+                    ctx: &ctx,
+                    doc: &mut doc,
+                    engine: &mut engine,
+                    options: &options,
+                    language: Language::Markdown,
+                    highlight: &mut highlight,
+                    keys: &[
                         (egui::Key::F5, egui::Modifiers::NONE),
                         (egui::Key::F5, egui::Modifiers::NONE),
                     ],
-                );
+                });
                 for (modifiers, expected) in [
                     (egui::Modifiers::NONE, "    - one\n    - two\nlast\n"),
                     (egui::Modifiers::SHIFT, "- one\n- two\nlast\n"),
                 ] {
-                    drive_mods(
-                        &ctx,
-                        &mut doc,
-                        &mut engine,
-                        &options,
-                        Language::Markdown,
-                        &mut highlight,
-                        &[(egui::Key::Tab, modifiers)],
-                    );
+                    drive_mods(DriveModsInput {
+                        ctx: &ctx,
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        options: &options,
+                        language: Language::Markdown,
+                        highlight: &mut highlight,
+                        keys: &[(egui::Key::Tab, modifiers)],
+                    });
                     assert_eq!(doc.text(), expected);
                     assert_eq!(engine.mode(), mode);
                     assert!(ctx.memory(|memory| memory.has_focus(source_focus_id("headless"))));
@@ -645,7 +675,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = crate::doc::Doc::new("text");
         let mut engine = VimEngine::new();
-        drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::I, egui::Key::Tab]);
+        drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[egui::Key::I, egui::Key::Tab],
+        });
         assert_eq!(doc.text(), "\ttext");
         assert_eq!(engine.mode(), Mode::Insert);
     }
@@ -671,15 +706,15 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("ab\ncd\n");
         let mut engine = VimEngine::new();
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &super::SourceOptions::default(),
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::V, egui::Modifiers::CTRL)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::V, egui::Modifiers::CTRL)],
+        });
         assert_eq!(engine.mode(), Mode::VisualBlock);
     }
 
@@ -720,18 +755,23 @@ mod tests {
                         keys.push((egui::Key::X, egui::Modifiers::SHIFT));
                         keys.push((egui::Key::Escape, egui::Modifiers::NONE));
                     }
-                    drive_mods(
-                        &ctx,
-                        &mut doc,
-                        &mut engine,
-                        &SourceOptions::default(),
-                        Language::Plain,
-                        &mut HighlightCache::default(),
-                        &keys,
-                    );
+                    drive_mods(DriveModsInput {
+                        ctx: &ctx,
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        options: &SourceOptions::default(),
+                        language: Language::Plain,
+                        highlight: &mut HighlightCache::default(),
+                        keys: &keys,
+                    });
                     assert_eq!(doc.text(), expected, "{control:?} {toggle:?} {action:?}");
                     assert_eq!(engine.mode(), Mode::Normal);
-                    drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::U]);
+                    drive_keys(DriveKeysInput {
+                        ctx: &ctx,
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        keys: &[egui::Key::U],
+                    });
                     assert_eq!(doc.text(), "abcd\nefgh\n");
                 }
             }
@@ -771,15 +811,15 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        show_source(
+                        show_source(ShowSourceInput {
                             ui,
-                            &mut doc,
-                            &mut engine,
-                            &SourceOptions::default(),
-                            &mut HighlightCache::default(),
-                            Language::Plain,
-                            "headless",
-                        );
+                            doc: &mut doc,
+                            engine: &mut engine,
+                            options: &SourceOptions::default(),
+                            highlight: &mut HighlightCache::default(),
+                            language: Language::Plain,
+                            id: "headless",
+                        });
                     });
                 },
             );
@@ -799,15 +839,15 @@ mod tests {
             vim: false,
             ..super::SourceOptions::default()
         };
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::V, egui::Modifiers::COMMAND)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::V, egui::Modifiers::COMMAND)],
+        });
         assert_ne!(engine.mode(), Mode::VisualBlock);
         assert_eq!(doc.text(), "ab\ncd\n");
     }
@@ -818,25 +858,25 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
-        let effects = drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &super::SourceOptions::default(),
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::S, egui::Modifiers::COMMAND)],
-        );
+        let effects = drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::S, egui::Modifiers::COMMAND)],
+        });
         assert!(effects.contains(&Effect::Save));
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &super::SourceOptions::default(),
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::F, egui::Modifiers::COMMAND)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::F, egui::Modifiers::COMMAND)],
+        });
         assert_eq!(engine.mode(), Mode::Command);
         assert_eq!(engine.command_line(), "/");
     }
@@ -849,15 +889,15 @@ mod tests {
         let mut doc = Doc::new("ab");
         let mut engine = VimEngine::new();
         engine.press_key(&mut doc, VKey::Char('l'));
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &super::SourceOptions::default(),
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::H, egui::Modifiers::COMMAND)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::H, egui::Modifiers::COMMAND)],
+        });
         assert_eq!(engine.cursor(), crate::vim::Cursor { line: 0, col: 0 });
         // Vim off: the GUI find bar in replace mode, not a vim prompt.
         let mut doc = Doc::new("ab");
@@ -866,15 +906,15 @@ mod tests {
             vim: false,
             ..super::SourceOptions::default()
         };
-        let effects = drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::H, egui::Modifiers::COMMAND)],
-        );
+        let effects = drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::H, egui::Modifiers::COMMAND)],
+        });
         assert!(effects.contains(&Effect::FindBar { replace: true }));
         assert_ne!(engine.mode(), Mode::Command);
     }
@@ -889,15 +929,15 @@ mod tests {
             vim: false,
             ..super::SourceOptions::default()
         };
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::A, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::A, egui::Modifiers::NONE)],
+        });
         assert_eq!(doc.text(), "ahi");
         assert_eq!(engine.mode(), Mode::Insert);
     }
@@ -912,15 +952,15 @@ mod tests {
             vim: false,
             ..super::SourceOptions::default()
         };
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[(egui::Key::Enter, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[(egui::Key::Enter, egui::Modifiers::NONE)],
+        });
         assert_eq!(doc.text(), "\nhi");
     }
 
@@ -940,19 +980,39 @@ mod tests {
         let ctrl = egui::Modifiers::CTRL;
         // macOS: Option moves by word, Command by line edge.
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowLeft, egui::Modifiers::ALT, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowLeft,
+                modifiers: egui::Modifiers::ALT,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::WordLeft, false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowRight, mac_cmd, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowRight,
+                modifiers: mac_cmd,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::LineEnd, false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::D, mac_cmd, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::D,
+                modifiers: mac_cmd,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Duplicate)
         );
         assert_eq!(
-            ide_edit_key(egui::Key::Backspace, mac_cmd, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::Backspace,
+                modifiers: mac_cmd,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::DeleteLines)
         );
         // Linux/Windows: Ctrl moves by word, Ctrl+Y deletes the line.
@@ -961,28 +1021,58 @@ mod tests {
             ..ctrl
         };
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowLeft, linux_ctrl, false, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowLeft,
+                modifiers: linux_ctrl,
+                mac: false,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::WordLeft, false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::Y, linux_ctrl, false, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::Y,
+                modifiers: linux_ctrl,
+                mac: false,
+                page_rows: 30
+            }),
             Some(IdeEdit::DeleteLines)
         );
         // Shared: Shift selects, Alt+Shift moves lines, paging uses rows.
         assert_eq!(
-            ide_edit_key(egui::Key::End, egui::Modifiers::SHIFT, false, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::End,
+                modifiers: egui::Modifiers::SHIFT,
+                mac: false,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::LineEnd, true))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowUp, alt_shift, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowUp,
+                modifiers: alt_shift,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::MoveLines { up: true })
         );
         assert_eq!(
-            ide_edit_key(egui::Key::PageDown, egui::Modifiers::NONE, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::PageDown,
+                modifiers: egui::Modifiers::NONE,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::PageDown(30), false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::A, egui::Modifiers::NONE, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::A,
+                modifiers: egui::Modifiers::NONE,
+                mac: true,
+                page_rows: 30
+            }),
             None
         );
     }
@@ -998,14 +1088,14 @@ mod tests {
             ..super::SourceOptions::default()
         };
         let shift = egui::Modifiers::SHIFT;
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut super::HighlightCache::default(),
-            &[
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[
                 (egui::Key::ArrowRight, shift),
                 (egui::Key::ArrowRight, shift),
                 (egui::Key::ArrowRight, shift),
@@ -1013,7 +1103,7 @@ mod tests {
                 (egui::Key::ArrowRight, shift),
                 (egui::Key::X, egui::Modifiers::NONE),
             ],
-        );
+        });
         assert_eq!(doc.text(), "x world");
         assert_eq!(engine.mode(), Mode::Insert);
     }
@@ -1024,18 +1114,18 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("let a = 1;\n");
         let mut engine = VimEngine::new();
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &super::SourceOptions::default(),
-            super::Language::Rust,
-            &mut super::HighlightCache::default(),
-            &[
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Rust,
+            highlight: &mut super::HighlightCache::default(),
+            keys: &[
                 (egui::Key::D, egui::Modifiers::COMMAND),
                 (egui::Key::Slash, egui::Modifiers::COMMAND),
             ],
-        );
+        });
         assert_eq!(doc.text(), "let a = 1;\n// let a = 1;\n");
     }
 
@@ -1091,58 +1181,58 @@ mod tests {
             ..super::SourceOptions::default()
         };
         let mut highlight = super::HighlightCache::default();
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut highlight,
-            &[(egui::Key::F8, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::F8, egui::Modifiers::NONE)],
+        });
         assert_eq!(engine.cursor().line, 1);
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut highlight,
-            &[(egui::Key::F8, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::F8, egui::Modifiers::NONE)],
+        });
         assert_eq!(engine.cursor().line, 2);
         // Past the last problem F8 wraps to the first.
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut highlight,
-            &[(egui::Key::F8, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::F8, egui::Modifiers::NONE)],
+        });
         assert_eq!(engine.cursor().line, 1);
-        let effects = drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Plain,
-            &mut highlight,
-            &[(egui::Key::F, egui::Modifiers::COMMAND)],
-        );
+        let effects = drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Plain,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::F, egui::Modifiers::COMMAND)],
+        });
         assert!(effects.contains(&Effect::FindBar { replace: false }));
         // Vim keeps its own `/` prompt.
         let mut vim_engine = VimEngine::new();
-        let effects = drive_mods(
-            &ctx,
-            &mut doc,
-            &mut vim_engine,
-            &super::SourceOptions::default(),
-            super::Language::Plain,
-            &mut highlight,
-            &[(egui::Key::F, egui::Modifiers::COMMAND)],
-        );
+        let effects = drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut vim_engine,
+            options: &super::SourceOptions::default(),
+            language: super::Language::Plain,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::F, egui::Modifiers::COMMAND)],
+        });
         assert!(!effects.contains(&Effect::FindBar { replace: false }));
         assert_eq!(vim_engine.mode(), Mode::Command);
     }
@@ -1159,40 +1249,40 @@ mod tests {
             ..super::SourceOptions::default()
         };
         let mut highlight = super::HighlightCache::default();
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Rust,
-            &mut highlight,
-            &[(egui::Key::Minus, egui::Modifiers::COMMAND)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::Minus, egui::Modifiers::COMMAND)],
+        });
         assert!(highlight.folds().is_folded(0));
         assert_eq!(engine.cursor().line, 0);
         // The next frame lays out without the hidden lines.
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Rust,
-            &mut highlight,
-            &[(egui::Key::F5, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::F5, egui::Modifiers::NONE)],
+        });
         let lines: Vec<usize> = highlight.rows().iter().map(|row| row.line).collect();
         assert!(!lines.contains(&1) && !lines.contains(&2), "{lines:?}");
         assert!(highlight.rows().first().is_some_and(|row| row.folded));
         // Cmd+= opens it again.
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Rust,
-            &mut highlight,
-            &[(egui::Key::Equals, egui::Modifiers::COMMAND)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::Equals, egui::Modifiers::COMMAND)],
+        });
         assert!(!highlight.folds().is_folded(0));
     }
 
@@ -1207,36 +1297,36 @@ mod tests {
             ..super::SourceOptions::default()
         };
         let mut highlight = super::HighlightCache::default();
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Rust,
-            &mut highlight,
-            &[(egui::Key::Minus, egui::Modifiers::COMMAND)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::Minus, egui::Modifiers::COMMAND)],
+        });
         assert!(highlight.folds().is_folded(0));
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Rust,
-            &mut highlight,
-            &[(egui::Key::ArrowDown, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::ArrowDown, egui::Modifiers::NONE)],
+        });
         assert_eq!(engine.cursor().line, 3);
         assert!(highlight.folds().is_folded(0));
-        drive_mods(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &options,
-            super::Language::Rust,
-            &mut highlight,
-            &[(egui::Key::ArrowUp, egui::Modifiers::NONE)],
-        );
+        drive_mods(DriveModsInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            language: super::Language::Rust,
+            highlight: &mut highlight,
+            keys: &[(egui::Key::ArrowUp, egui::Modifiers::NONE)],
+        });
         assert_eq!(engine.cursor().line, 0);
         assert!(highlight.folds().is_folded(0));
     }
@@ -1260,15 +1350,15 @@ mod tests {
             let mut caret = None;
             for _ in 0..2 {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    caret = show_source(
+                    caret = show_source(ShowSourceInput {
                         ui,
-                        &mut doc,
-                        &mut engine,
-                        &options,
-                        &mut highlight,
-                        Language::Rust,
-                        "hints.rs",
-                    )
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        options: &options,
+                        highlight: &mut highlight,
+                        language: Language::Rust,
+                        id: "hints.rs",
+                    })
                     .caret_rect;
                 });
                 output.textures_delta.clear();
@@ -1301,13 +1391,85 @@ mod tests {
         engine.set_modeless(true);
         let _ = engine.place_cursor(&mut doc, 1, 0);
         assert_eq!(
-            super::super::render::caret_reference("src/lib.rs", &engine),
+            super::super::render::RenderHelpers::caret_reference("src/lib.rs", &engine),
             "src/lib.rs:2"
         );
         engine.extend_selection_to(&mut doc, 2, 1);
         assert_eq!(
-            super::super::render::caret_reference("src/lib.rs", &engine),
+            super::super::render::RenderHelpers::caret_reference("src/lib.rs", &engine),
             "src/lib.rs:2-3"
         );
+    }
+
+    #[test]
+    fn multiple_carets_type_paste_and_escape_through_view() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("a\nb\n");
+        let mut engine = VimEngine::new();
+        engine.set_modeless(true);
+        let _ = engine.place_cursor(&mut doc, 0, 1);
+        engine.toggle_caret_at(&doc, 1, 1);
+        let mut highlight = super::HighlightCache::default();
+        let options = super::SourceOptions {
+            vim: false,
+            autofocus: true,
+            ..super::SourceOptions::default()
+        };
+        let mut frame = |doc: &mut Doc, engine: &mut VimEngine, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    show_source(ShowSourceInput {
+                        ui,
+                        doc,
+                        engine,
+                        options: &options,
+                        highlight: &mut highlight,
+                        language: Language::Plain,
+                        id: "carets.txt",
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(&mut doc, &mut engine, vec![]);
+        frame(
+            &mut doc,
+            &mut engine,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Text("z".into()),
+            ],
+        );
+        assert_eq!(doc.text(), "az\nbz\n");
+        // One clipboard line per caret: each caret gets its own line.
+        frame(
+            &mut doc,
+            &mut engine,
+            vec![egui::Event::Paste("1\n2".into())],
+        );
+        assert_eq!(doc.text(), "az1\nbz2\n");
+        frame(
+            &mut doc,
+            &mut engine,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(engine.extra_carets().is_empty());
     }
 }

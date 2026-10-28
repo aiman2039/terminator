@@ -13,7 +13,21 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use terminator_core::read_frame;
+use terminator_core::{read_frame, transport};
+
+/// Counters gathered by the snapshot polling loop.
+#[derive(Default)]
+struct Samples {
+    hint: Option<Value>,
+    wire_bytes: usize,
+    unchanged: usize,
+    seen: std::collections::HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>,
+    history_creations: usize,
+    history_changes: usize,
+    times: Vec<f64>,
+    rss: Vec<u64>,
+}
+
 pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool) -> Result<()> {
     ensure!(
         (1..=3600).contains(&duration.as_secs()),
@@ -36,100 +50,38 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
         .collect::<Result<Vec<_>>>()?;
     let stop = Arc::new(AtomicBool::new(false));
     let bytes = Arc::new(AtomicU64::new(0));
-    let mut drains = Vec::new();
-    for (i, s) in sessions.iter().take(12).enumerate() {
-        let mut stream = h.attach(s)?;
-        h.write(&mut stream,"i=0; while [ $i -lt 10000 ]; do printf 'load %s: sample terminal output\\n' \"$i\"; i=$((i+1)); sleep 0.1; done\n")?;
-        if i < 6 {
-            let stop = Arc::clone(&stop);
-            let bytes = Arc::clone(&bytes);
-            stream.set_read_timeout(Some(Duration::from_millis(500)))?;
-            drains.push(thread::spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
-                    match read_frame::<Value>(&mut stream) {
-                        Ok(v) => {
-                            if let Some(data) = v.get("Data").and_then(Value::as_str)
-                                && let Ok(data) = B64.decode(data)
-                            {
-                                bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            }));
-        }
-    }
+    let drains = start_output(&h, &sessions, (&stop, &bytes))?;
     let start = Instant::now();
-    let mut hint = None::<Value>;
+    let mut samples = Samples::default();
     let mut last_state = h.state()?;
-    let mut wire_bytes = 0usize;
-    let mut unchanged = 0usize;
-    let mut seen = std::collections::HashMap::new();
-    let mut history_creations = 0usize;
-    let mut history_changes = 0usize;
-    let mut times = Vec::new();
-    let mut rss = Vec::new();
     while start.elapsed() < duration {
         let t = Instant::now();
-        let response: Value = read_frame(&mut h.connect(
-            json!("Snapshot"),
-            None,
-            if conditional { hint.clone() } else { None },
-        )?)?;
-        times.push(t.elapsed().as_secs_f64() * 1000.0);
-        wire_bytes =
-            wire_bytes.saturating_add(serde_json::to_vec(&response)?.len().saturating_add(4));
-        if let Some(state) = response.get("State") {
-            last_state = state.clone();
-            hint = Some(json!({"revision":state["revision"],"generation":state["generation"]}));
-        } else {
-            ensure!(response == "Unchanged", "Invalid load snapshot");
-            unchanged = unchanged.saturating_add(1);
-        }
-        let state = &last_state;
-        for entry in fs::read_dir(h.root.join("history"))? {
-            let entry = entry?;
-            if entry.path().extension().is_none_or(|e| e != "pty") {
-                continue;
-            }
-            if let Ok(meta) = entry.metadata() {
-                let value = (meta.len(), meta.modified().ok());
-                match seen.insert(entry.path(), value) {
-                    None => history_creations = history_creations.saturating_add(1),
-                    Some(old) if old != value => {
-                        history_changes = history_changes.saturating_add(1);
-                    }
-                    _ => {}
-                }
-            }
-        }
+        samples.snapshot(&h, conditional, &mut last_state)?;
+        samples.scan_history(&h)?;
         ensure!(
-            crate::harness::sessions(state)
+            crate::harness::sessions(&last_state)
                 .iter()
                 .filter(|s| s["lifecycle"] == "running")
                 .count()
                 >= 50,
             "Load session ended"
         );
-        let mut cmd = Command::new("ps");
-        cmd.args([
-            "-o",
-            "rss=",
-            "-p",
-            &h.daemon.as_ref().unwrap().0.id().to_string(),
-        ]);
-        if let Ok(raw) = output(cmd)
-            && let Ok(value) = String::from_utf8_lossy(&raw).trim().parse::<u64>()
-        {
-            rss.push(value);
-        }
+        samples.record_rss(&h);
         thread::sleep(Duration::from_millis(100).saturating_sub(t.elapsed()));
     }
     stop.store(true, Ordering::Relaxed);
     for task in drains {
         let _ = task.join();
     }
+    let Samples {
+        wire_bytes,
+        unchanged,
+        history_creations,
+        history_changes,
+        mut times,
+        rss,
+        ..
+    } = samples;
     times.sort_by(f64::total_cmp);
     let sample_count = times.len();
     let p50_index = sample_count.checked_div(2).unwrap_or(0);
@@ -155,4 +107,102 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
     }
     println!("{report}");
     Ok(())
+}
+
+/// Start output loops in 12 shells and drain six of them; returns the drain threads.
+fn start_output(
+    h: &Harness,
+    sessions: &[Value],
+    (stop, bytes): (&Arc<AtomicBool>, &Arc<AtomicU64>),
+) -> Result<Vec<thread::JoinHandle<()>>> {
+    let mut drains = Vec::new();
+    for (i, s) in sessions.iter().take(12).enumerate() {
+        let mut stream = h.attach(s)?;
+        h.write(&mut stream,"i=0; while [ $i -lt 10000 ]; do printf 'load %s: sample terminal output\\n' \"$i\"; i=$((i+1)); sleep 0.1; done\n")?;
+        if i < 6 {
+            stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+            drains.push(drain(stream, Arc::clone(stop), Arc::clone(bytes)));
+        }
+    }
+    Ok(drains)
+}
+
+/// Count output bytes on one attached stream until `stop`.
+fn drain(
+    mut stream: transport::Stream,
+    stop: Arc<AtomicBool>,
+    bytes: Arc<AtomicU64>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let Ok(v) = read_frame::<Value>(&mut stream) else {
+                break;
+            };
+            if let Some(data) = v.get("Data").and_then(Value::as_str)
+                && let Ok(data) = B64.decode(data)
+            {
+                bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+            }
+        }
+    })
+}
+
+impl Samples {
+    /// Request one (optionally conditional) snapshot and time it.
+    fn snapshot(&mut self, h: &Harness, conditional: bool, last_state: &mut Value) -> Result<()> {
+        let t = Instant::now();
+        let response: Value = read_frame(&mut h.connect(
+            json!("Snapshot"),
+            None,
+            if conditional { self.hint.clone() } else { None },
+        )?)?;
+        self.times.push(t.elapsed().as_secs_f64() * 1000.0);
+        self.wire_bytes = self
+            .wire_bytes
+            .saturating_add(serde_json::to_vec(&response)?.len().saturating_add(4));
+        if let Some(state) = response.get("State") {
+            *last_state = state.clone();
+            self.hint =
+                Some(json!({"revision":state["revision"],"generation":state["generation"]}));
+        } else {
+            ensure!(response == "Unchanged", "Invalid load snapshot");
+            self.unchanged = self.unchanged.saturating_add(1);
+        }
+        Ok(())
+    }
+    /// Track scrollback file creation and metadata changes.
+    fn scan_history(&mut self, h: &Harness) -> Result<()> {
+        for entry in fs::read_dir(h.root.join("history"))? {
+            let entry = entry?;
+            if entry.path().extension().is_none_or(|e| e != "pty") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let value = (meta.len(), meta.modified().ok());
+            match self.seen.insert(entry.path(), value) {
+                None => self.history_creations = self.history_creations.saturating_add(1),
+                Some(old) if old != value => {
+                    self.history_changes = self.history_changes.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    fn record_rss(&mut self, h: &Harness) {
+        let mut cmd = Command::new("ps");
+        cmd.args([
+            "-o",
+            "rss=",
+            "-p",
+            &h.daemon.as_ref().unwrap().0.id().to_string(),
+        ]);
+        if let Ok(raw) = output(cmd)
+            && let Ok(value) = String::from_utf8_lossy(&raw).trim().parse::<u64>()
+        {
+            self.rss.push(value);
+        }
+    }
 }

@@ -7,6 +7,49 @@ use std::{fs, time::Duration};
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use terminator_core::{Request, Response, sanitize_layout};
 
+pub(crate) struct PrepareLayoutsInput<'a> {
+    pub(in crate::gui_services) generation: u64,
+    pub(in crate::gui_services) layouts: Vec<(String, Workspace)>,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct SaveLayoutInput<'a> {
+    pub(in crate::gui_services) project: String,
+    pub(in crate::gui_services) layout: serde_json::Value,
+    pub(in crate::gui_services) text: String,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct CloseIdleInput<'a> {
+    pub(in crate::gui_services) target: editor_close::Target,
+    pub(in crate::gui_services) generation: String,
+    pub(in crate::gui_services) ids: Vec<String>,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct CloseEditorsInput<'a> {
+    pub(in crate::gui_services) target: editor_close::Target,
+    pub(in crate::gui_services) ids: Vec<String>,
+    pub(in crate::gui_services) mode: editor_close::Mode,
+    pub(in crate::gui_services) timeout: Duration,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct ExitSaveInput<'a> {
+    pub(in crate::gui_services) id: u64,
+    pub(in crate::gui_services) checkpoint: exit::Checkpoint,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct RepairInstallationInput<'a> {
+    pub(in crate::gui_services) generation: String,
+    pub(in crate::gui_services) checkpoint: exit::Checkpoint,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
 impl Services {
     /// Reuse a live review session for the same file and side instead of
     /// creating another: returns the updates that reveal it, if any.
@@ -69,7 +112,7 @@ impl Services {
                             .and_then(serde_json::Value::as_str)
                             == Some(if staged { "Index" } else { "Working tree" })
                     {
-                        return Ok(Some(session));
+                        return anyhow::Ok(Some(session));
                     }
                 }
                 Ok(None)
@@ -86,11 +129,14 @@ impl Services {
 
     pub(in crate::gui_services) async fn prepare_layouts(
         &self,
-        generation: u64,
-        layouts: Vec<(String, Workspace)>,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: PrepareLayoutsInput<'_>,
     ) -> Result<()> {
+        let PrepareLayoutsInput {
+            generation,
+            layouts,
+            cancel,
+            updates,
+        } = input;
         let layouts = self
             .cpu()
             .run(&cancel, move || {
@@ -110,11 +156,14 @@ impl Services {
 
     pub(in crate::gui_services) async fn save_layout(
         &self,
-        project: String,
-        layout: serde_json::Value,
-        text: String,
-        updates: &mut Vec<Update>,
+        input: SaveLayoutInput<'_>,
     ) -> Result<()> {
+        let SaveLayoutInput {
+            project,
+            layout,
+            text,
+            updates,
+        } = input;
         let client = self.client();
         let result = client
             .rpc(Request::SaveLayout {
@@ -122,6 +171,7 @@ impl Services {
                 layout,
             })
             .await
+            .map_err(anyhow::Error::from)
             .and_then(|response| {
                 anyhow::ensure!(
                     matches!(response, Response::Ok),
@@ -184,11 +234,14 @@ impl Services {
 
     pub(in crate::gui_services) async fn close_idle(
         &self,
-        target: editor_close::Target,
-        generation: String,
-        ids: Vec<String>,
-        updates: &mut Vec<Update>,
+        input: CloseIdleInput<'_>,
     ) -> Result<()> {
+        let CloseIdleInput {
+            target,
+            generation,
+            ids,
+            updates,
+        } = input;
         let client = self.client();
         let result = client
             .rpc(Request::CloseIdleSessions {
@@ -196,6 +249,7 @@ impl Services {
                 sessions: ids.clone(),
             })
             .await
+            .map_err(anyhow::Error::from)
             .and_then(|response| match response {
                 Response::IdleSessionsClosed(outcomes) => Ok(outcomes),
                 _ => anyhow::bail!("Unexpected idle-close response"),
@@ -207,27 +261,35 @@ impl Services {
 
     pub(in crate::gui_services) async fn close_editors(
         &self,
-        target: editor_close::Target,
-        ids: Vec<String>,
-        mode: editor_close::Mode,
-        timeout: Duration,
-        updates: &mut Vec<Update>,
+        input: CloseEditorsInput<'_>,
     ) -> Result<()> {
+        let CloseEditorsInput {
+            target,
+            ids,
+            mode,
+            timeout,
+            updates,
+        } = input;
         let client = self.client();
-        let result = editor_close::close_async(client, &ids, mode, timeout)
-            .await
-            .map_err(|e| format!("{e:#}"));
+        let result = editor_close::close_async(editor_close::CloseAsyncInput {
+            client,
+            ids: &ids,
+            mode,
+            timeout,
+        })
+        .await
+        .map_err(|e| format!("{e:#}"));
         updates.push(Update::EditorsClosed(target, ids, result));
         Ok(())
     }
 
-    pub(in crate::gui_services) async fn exit_save(
-        &self,
-        id: u64,
-        checkpoint: exit::Checkpoint,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
-    ) -> Result<()> {
+    pub(in crate::gui_services) async fn exit_save(&self, input: ExitSaveInput<'_>) -> Result<()> {
+        let ExitSaveInput {
+            id,
+            checkpoint,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let result = async {
             // Quit pauses polling. Recheck owners here as the daemon can
@@ -248,11 +310,14 @@ impl Services {
 
     pub(in crate::gui_services) async fn repair_installation(
         &self,
-        generation: String,
-        checkpoint: exit::Checkpoint,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: RepairInstallationInput<'_>,
     ) -> Result<()> {
+        let RepairInstallationInput {
+            generation,
+            checkpoint,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let result = async {
             checkpoint.save_async(client).await?;
@@ -311,7 +376,7 @@ impl Services {
             let message = service
                 .fs()
                 .run(&token, move || {
-                    Ok(installation::restart_message(
+                    anyhow::Ok(installation::restart_message(
                         watched.log_path,
                         watched.log_start,
                     ))

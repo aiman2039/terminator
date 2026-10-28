@@ -1,4 +1,5 @@
 //! GUI-only CPU/RSS measurements; fixture repaint polling stops after warmup.
+use super::CaptureInput;
 use super::{Options, capture};
 use crate::harness::{Harness, output};
 use crate::notification_perf::parse_cpu_time;
@@ -54,11 +55,13 @@ pub fn run(opts: &Options) -> Result<()> {
             let name = format!("{workload}-{trial}");
             let mut measurement = None;
             let logs = capture(
-                &h,
-                opts,
-                &name,
-                json!([]),
-                opts.seconds.saturating_add(7).saturating_mul(1000),
+                CaptureInput {
+                    h: &h,
+                    opts,
+                    name: &name,
+                    actions: json!([]),
+                    after: opts.seconds.saturating_add(7).saturating_mul(1000),
+                },
                 |child| {
                     thread::sleep(Duration::from_secs(5));
                     ensure!(child.try_wait()?.is_none(), "GUI exited during warmup");

@@ -52,6 +52,164 @@ mod tests {
     use terminator_core::CommandOptions;
     #[cfg(unix)]
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    /// Accepts one peer, waits for its first request, signals `started`,
+    /// then never replies until `token` is cancelled.
+    #[cfg(unix)]
+    async fn hold_after_first_read<S: tokio::io::AsyncRead + Unpin>(
+        mut peer: S,
+        started: tokio::sync::oneshot::Sender<()>,
+        token: CancellationToken,
+    ) {
+        let mut bytes = [0; 4096];
+        assert!(peer.read(&mut bytes).await.unwrap() > 0);
+        let _ = started.send(());
+        token.cancelled().await;
+    }
+
+    #[cfg(unix)]
+    fn spawn_stalled_http(
+        http: tokio::net::TcpListener,
+        token: CancellationToken,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (peer, _) = http.accept().await.unwrap();
+            hold_after_first_read(peer, started, token).await;
+        });
+        (server, ready)
+    }
+
+    #[cfg(unix)]
+    fn spawn_stalled_nvim(
+        listener: tokio::net::UnixListener,
+        token: CancellationToken,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (peer, _) = listener.accept().await.unwrap();
+            hold_after_first_read(peer, started, token).await;
+        });
+        (server, ready)
+    }
+
+    #[cfg(unix)]
+    fn spawn_good_nvim(listener: tokio::net::UnixListener) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let (mut peer, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(peer.read(&mut bytes).await.unwrap() > 0);
+            peer.write_all(
+                &rmp_serde::to_vec(&(
+                    1,
+                    1,
+                    serde_json::Value::Null,
+                    serde_json::json!({"blocking":false}),
+                ))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        })
+    }
+
+    #[cfg(unix)]
+    struct SubmitFixtureInput<
+        'a,
+        F: std::future::Future<Output = anyhow::Result<Vec<Update>>> + Send + 'static,
+    > {
+        service: &'a Services,
+        resource: &'a str,
+        token: CancellationToken,
+        work: F,
+    }
+
+    #[cfg(unix)]
+    fn submit_fixture(
+        input: SubmitFixtureInput<
+            '_,
+            impl std::future::Future<Output = anyhow::Result<Vec<Update>>> + Send + 'static,
+        >,
+    ) {
+        let SubmitFixtureInput {
+            service,
+            resource,
+            token,
+            work,
+        } = input;
+        service
+            .handle()
+            .submit(
+                OperationContext::new("fixture", resource.into(), Policy::ReplaceableRead),
+                token,
+                work,
+            )
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn submit_stalled_git(service: &Services, token: CancellationToken) {
+        let processes = service.processes().clone();
+        submit_fixture(SubmitFixtureInput {
+            service,
+            resource: "git",
+            token,
+            work: async move {
+                let mut command = std::process::Command::new("sh");
+                command.args(["-c", "sleep 10"]);
+                processes
+                    .run(
+                        command,
+                        CommandOptions::default(),
+                        Some("stalled-repo".into()),
+                    )
+                    .await?;
+                Ok(Vec::new())
+            },
+        });
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_other_editor(owner: &mut crate::gui_services::Owner) {
+        let deadline = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "Unrelated editor stalled behind radio/Git/Neovim"
+            );
+            if let Some(mut completion) = owner.supervisor.try_recv()
+                && let Some(Ok(updates)) = completion.result.take()
+                && updates
+                    .iter()
+                    .any(|u| matches!(u, Update::Info(s) if s == "other editor progressed"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait_until_reaped(service: &Services, owner: &mut crate::gui_services::Owner) {
+        let deadline = Instant::now().checked_add(Duration::from_secs(2)).unwrap();
+        loop {
+            while owner.supervisor.try_recv().is_some() {}
+            if service.processes().children() == 0 && service.handle().diagnostics().active == 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Cancelled fixture work was not reaped"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     #[tokio::test]
     #[cfg(unix)]
     async fn stalled_radio_git_and_neovim_do_not_block_another_editor() {
@@ -73,133 +231,59 @@ mod tests {
         let slow = tokio::net::UnixListener::bind(&slow_path).unwrap();
         let good = tokio::net::UnixListener::bind(&good_path).unwrap();
         let stop = CancellationToken::new();
-        let (http_started, http_ready) = tokio::sync::oneshot::channel();
-        let token = stop.clone();
-        let http_server = tokio::spawn(async move {
-            let (mut peer, _) = http.accept().await.unwrap();
-            let mut bytes = [0; 4096];
-            assert!(peer.read(&mut bytes).await.unwrap() > 0);
-            let _ = http_started.send(());
-            token.cancelled().await;
-        });
-        let (nvim_started, nvim_ready) = tokio::sync::oneshot::channel();
-        let token = stop.clone();
-        let slow_server = tokio::spawn(async move {
-            let (mut peer, _) = slow.accept().await.unwrap();
-            let mut bytes = [0; 4096];
-            assert!(peer.read(&mut bytes).await.unwrap() > 0);
-            let _ = nvim_started.send(());
-            token.cancelled().await;
-        });
-        let good_server = tokio::spawn(async move {
-            let (mut peer, _) = good.accept().await.unwrap();
-            let mut bytes = [0; 4096];
-            assert!(peer.read(&mut bytes).await.unwrap() > 0);
-            peer.write_all(
-                &rmp_serde::to_vec(&(
-                    1,
-                    1,
-                    serde_json::Value::Null,
-                    serde_json::json!({"blocking":false}),
-                ))
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-        });
+        let (http_server, http_ready) = spawn_stalled_http(http, stop.clone());
+        let (slow_server, nvim_ready) = spawn_stalled_nvim(slow, stop.clone());
+        let good_server = spawn_good_nvim(good);
         let radio = CancellationToken::new();
-        service
-            .handle()
-            .submit(
-                OperationContext::new("fixture", "radio".into(), Policy::ReplaceableRead),
-                radio.clone(),
-                async move {
-                    player::fixture_download(url).await?;
-                    Ok(Vec::new())
-                },
-            )
-            .unwrap();
+        submit_fixture(SubmitFixtureInput {
+            service: &service,
+            resource: "radio",
+            token: radio.clone(),
+            work: async move {
+                player::fixture_download(url).await?;
+                Ok(Vec::new())
+            },
+        });
         let nvim = CancellationToken::new();
         let cpu = service.cpu().clone();
-        service
-            .handle()
-            .submit(
-                OperationContext::new("fixture", "nvim".into(), Policy::ReplaceableRead),
-                nvim.clone(),
-                async move {
-                    let mut connection =
-                        nvim_rpc::AsyncConnection::connect(&slow_path, Duration::from_secs(3), cpu)
-                            .await?;
-                    connection
-                        .call("nvim_get_mode", serde_json::json!([]), 4096)
+        submit_fixture(SubmitFixtureInput {
+            service: &service,
+            resource: "nvim",
+            token: nvim.clone(),
+            work: async move {
+                let mut connection =
+                    nvim_rpc::AsyncConnection::connect(&slow_path, Duration::from_secs(3), cpu)
                         .await?;
-                    Ok(Vec::new())
-                },
-            )
-            .unwrap();
+                connection
+                    .call("nvim_get_mode", serde_json::json!([]), 4096)
+                    .await?;
+                Ok(Vec::new())
+            },
+        });
         let git = CancellationToken::new();
-        let processes = service.processes().clone();
-        service
-            .handle()
-            .submit(
-                OperationContext::new("fixture", "git".into(), Policy::ReplaceableRead),
-                git.clone(),
-                async move {
-                    let mut command = std::process::Command::new("sh");
-                    command.args(["-c", "sleep 10"]);
-                    processes
-                        .run(
-                            command,
-                            CommandOptions::default(),
-                            Some("stalled-repo".into()),
-                        )
-                        .await?;
-                    Ok(Vec::new())
-                },
-            )
-            .unwrap();
+        submit_stalled_git(&service, git.clone());
         http_ready.await.unwrap();
         nvim_ready.await.unwrap();
         let cpu = service.cpu().clone();
-        service
-            .handle()
-            .submit(
-                OperationContext::new("fixture", "other-editor".into(), Policy::ReplaceableRead),
-                CancellationToken::new(),
-                async move {
-                    let mut connection = nvim_rpc::AsyncConnection::connect(
-                        &good_path,
-                        Duration::from_millis(400),
-                        cpu,
-                    )
-                    .await?;
-                    let value = connection
-                        .call("nvim_get_mode", serde_json::json!([]), 4096)
+        submit_fixture(SubmitFixtureInput {
+            service: &service,
+            resource: "other-editor",
+            token: CancellationToken::new(),
+            work: async move {
+                let mut connection =
+                    nvim_rpc::AsyncConnection::connect(&good_path, Duration::from_millis(400), cpu)
                         .await?;
-                    anyhow::ensure!(
-                        value["blocking"] == false,
-                        "other editor returned invalid state"
-                    );
-                    Ok(vec![Update::Info("other editor progressed".into())])
-                },
-            )
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            assert!(
-                Instant::now() < deadline,
-                "Unrelated editor stalled behind radio/Git/Neovim"
-            );
-            if let Some(mut completion) = owner.supervisor.try_recv()
-                && let Some(Ok(updates)) = completion.result.take()
-                && updates
-                    .iter()
-                    .any(|u| matches!(u, Update::Info(s) if s == "other editor progressed"))
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
+                let value = connection
+                    .call("nvim_get_mode", serde_json::json!([]), 4096)
+                    .await?;
+                anyhow::ensure!(
+                    value["blocking"] == false,
+                    "other editor returned invalid state"
+                );
+                Ok(vec![Update::Info("other editor progressed".into())])
+            },
+        });
+        wait_for_other_editor(&mut owner).await;
         radio.cancel();
         nvim.cancel();
         git.cancel();
@@ -207,18 +291,7 @@ mod tests {
         http_server.await.unwrap();
         slow_server.await.unwrap();
         good_server.await.unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            while owner.supervisor.try_recv().is_some() {}
-            if service.processes().children() == 0 && service.handle().diagnostics().active == 0 {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "Cancelled fixture work was not reaped"
-            );
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        wait_until_reaped(&service, &mut owner).await;
     }
 
     #[test]

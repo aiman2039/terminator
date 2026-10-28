@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::LandStripShellOnLeafInput;
 
 #[test]
 fn ide_sidebar_toggles_reclaim_layout_space_and_restore_it() {
@@ -905,7 +906,13 @@ fn strip_drag_lands_on_the_main_leaf() {
         .unwrap()
         .node_path();
     let group = dock.active.clone();
-    assert!(app.land_strip_shell_on_leaf(&mut dock, "left", &group, path, PaneDropZone::Center));
+    assert!(app.land_strip_shell_on_leaf(LandStripShellOnLeafInput {
+        dock: &mut dock,
+        sid: "left",
+        group: &group,
+        path,
+        zone: PaneDropZone::Center
+    }));
     assert!(app.preferences.ide_mode);
     assert!(!app.is_strip_session("a", "left"));
     assert!(dock.contains(&Tab::Terminal("left".into())));
@@ -1011,7 +1018,7 @@ fn ide_strip_trailing_controls_share_one_row() {
             .unwrap_or_else(|| panic!("missing {name}"));
         centers.push((name, rect[1] + rect[3] / 2.0, rect[2], rect[3]));
     }
-    eprintln!("{centers:#?}");
+    crate::console::Console::err(format_args!("{centers:#?}"));
     let (_, base, _, _) = centers[0];
     for (name, center, _, _) in &centers {
         assert!(

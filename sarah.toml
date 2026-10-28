@@ -1,0 +1,31 @@
+# Size and structure limits checked by `sarah` (scripts/check.sh sarah).
+# Policy: ~/RustroverProjects/sarah/rust.md
+include = ["crates/**"]
+exclude = ["crates/*/assets/**", "crates/*/examples/**"]
+
+[[files]]
+path = "**"
+max_file_lines = 500
+max_file_tokens = 8000
+max_fn_lines = 80
+max_fn_depth = 4
+
+# Scenario tests read top to bottom; give them more room.
+[[files]]
+path = "**/{tests,*_tests,tests/**}{.rs,/**}"
+max_file_lines = 1500
+max_file_tokens = 16000
+max_fn_lines = 150
+
+[[folder]]
+path = "crates/*/src/**"
+require = ["mod.rs"]
+naming = "snake_case"
+no_sibling_module = true
+forbid = ["util", "util.*", "utils", "utils.*", "misc", "misc.*"]
+max_files = 30
+
+[[folder]]
+path = "crates/*/src"
+require = []
+max_files = 30

@@ -5,8 +5,7 @@
 //! `terminator-git` re-exports these runners alongside the status, ignore, and
 //! snapshot vocabulary. Every helper takes the caller's [`CommandOptions`];
 //! timeouts and stdout limits stay per caller.
-use crate::{CommandOptions, run_command};
-use anyhow::Result;
+use crate::{CommandOptions, ProcessError, run_command};
 #[cfg(feature = "async-client")]
 use std::ffi::OsString;
 use std::{ffi::OsStr, path::Path, process::Command};
@@ -33,25 +32,31 @@ pub fn run_blocking<A: AsRef<OsStr>>(
     cwd: &Path,
     args: &[A],
     options: CommandOptions,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>, ProcessError> {
     Ok(run_command(command(cwd, args), options)?.stdout)
 }
 
 /// Run a read-only Git command through the shared process pool. The
 /// repository key is computed on the filesystem pool, as before.
 #[cfg(feature = "async-client")]
+pub struct RunInput<'a> {
+    pub cwd: &'a Path,
+    pub args: Vec<OsString>,
+    pub options: CommandOptions,
+}
+
+#[cfg(feature = "async-client")]
 pub async fn run(
     processes: &crate::async_process::Processes,
     files: &crate::async_service::NativePool,
-    cwd: &Path,
-    args: Vec<OsString>,
-    options: CommandOptions,
-) -> Result<Vec<u8>> {
+    input: RunInput<'_>,
+) -> Result<Vec<u8>, crate::async_process::AsyncProcessError> {
+    let RunInput { cwd, args, options } = input;
     let command = command(cwd, &args);
     let directory = cwd.to_owned();
     let key = files
         .run(&crate::async_service::CancellationToken::new(), move || {
-            Ok(crate::async_process::git_key(&directory))
+            Ok::<_, crate::async_service::Failure>(crate::async_process::git_key(&directory))
         })
         .await?;
     Ok(processes.run(command, options, Some(key)).await?.stdout)

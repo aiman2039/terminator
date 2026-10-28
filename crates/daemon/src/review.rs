@@ -25,7 +25,12 @@ impl Drop for Files {
     }
 }
 pub fn snapshots(root: &Path, path: &Path, staged: bool) -> Result<(Vec<u8>, Vec<u8>)> {
-    let pair = terminator_git::snapshots(root, path, staged, &CommandOptions::default())?;
+    let pair = terminator_git::snapshots(terminator_git::SnapshotsInput {
+        root,
+        path,
+        staged,
+        options: &CommandOptions::default(),
+    })?;
     for bytes in [&pair.0, &pair.1] {
         ensure!(
             terminator_git::check_text(bytes),
@@ -66,13 +71,8 @@ fn runtime(paths: &Paths) -> Result<PathBuf> {
     }
     Ok(root)
 }
-pub fn prepare(
-    paths: &Paths,
-    sid: &str,
-    cwd: &Path,
-    file: &Path,
-    staged: bool,
-) -> Result<portable_pty::CommandBuilder> {
+/// Finds Neovim on PATH and checks it is 0.10 or newer.
+fn review_nvim() -> Result<PathBuf> {
     let nvim = find_executable("nvim").context(
         "Git review requires Neovim 0.10 or newer on PATH; the CodeDiff plugin is bundled",
     )?;
@@ -98,6 +98,10 @@ pub fn prepare(
         major > 0 || minor >= 10,
         "Git review requires Neovim 0.10 or newer"
     );
+    Ok(nvim)
+}
+/// The repository root containing `cwd` and `file`'s path inside it.
+fn repository_relative(cwd: &Path, file: &Path) -> Result<(PathBuf, PathBuf)> {
     let root = terminator_git::run_blocking(
         cwd,
         &["rev-parse", "--show-toplevel"],
@@ -111,7 +115,28 @@ pub fn prepare(
     };
     let relative = absolute
         .strip_prefix(&root)
-        .context("Review file is outside repository")?;
+        .context("Review file is outside repository")?
+        .to_path_buf();
+    Ok((root, relative))
+}
+pub struct PrepareInput<'a> {
+    pub paths: &'a Paths,
+    pub sid: &'a str,
+    pub cwd: &'a Path,
+    pub file: &'a Path,
+    pub staged: bool,
+}
+pub fn prepare(input: PrepareInput<'_>) -> Result<portable_pty::CommandBuilder> {
+    let PrepareInput {
+        paths,
+        sid,
+        cwd,
+        file,
+        staged,
+    } = input;
+    let nvim = review_nvim()?;
+    let (root, relative) = repository_relative(cwd, file)?;
+    let relative = relative.as_path();
     let (left, right) = snapshots(&root, relative, staged)?;
     let runtime = runtime(paths)?;
     let dir = paths.runtime.join(format!("review-{sid}"));

@@ -8,12 +8,12 @@ fn ide_status_badge_renders_without_sidebars() {
     app.preferences.left_visible = false;
     app.preferences.visible = false;
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -424,7 +424,12 @@ fn system_meter_bars_share_one_column() {
             ..Default::default()
         },
         |ui| {
-            session_info::show(ui, &model, &mut toggles, &theme);
+            session_info::show(session_info::ShowInput {
+                ui,
+                model: &model,
+                toggles: &mut toggles,
+                theme: &theme,
+            });
         },
     );
     output.textures_delta.clear();

@@ -3,7 +3,6 @@ use crate::{
     CommandOptions,
     async_service::{CancellationToken, Failure},
 };
-use anyhow::{Context, Result, ensure};
 use std::{
     collections::VecDeque,
     process::{Command, Output, Stdio},
@@ -17,6 +16,29 @@ use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
 };
+/// Why a pooled child process did not complete successfully.
+#[derive(Debug, thiserror::Error)]
+pub enum AsyncProcessError {
+    #[error("child pid missing")]
+    MissingPid,
+    #[error("{pipe} pipe missing")]
+    MissingPipe { pipe: &'static str },
+    #[error("Command output exceeds {limit} bytes")]
+    OutputTooLarge { limit: usize },
+    #[error("Command failed ({status}): {stderr}")]
+    Failed {
+        status: std::process::ExitStatus,
+        stderr: String,
+    },
+    #[error("Command timed out after {timeout:?}")]
+    TimedOut { timeout: std::time::Duration },
+    #[error(transparent)]
+    Stopped(#[from] Failure),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+type Result<T, E = AsyncProcessError> = std::result::Result<T, E>;
+
 struct Request {
     command: Command,
     options: CommandOptions,
@@ -137,10 +159,9 @@ async fn drain(mut reader: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u
         if n == 0 {
             return Ok(bytes);
         }
-        ensure!(
-            bytes.len().saturating_add(n) <= limit,
-            "Command output exceeds {limit} bytes"
-        );
+        if bytes.len().saturating_add(n) > limit {
+            return Err(AsyncProcessError::OutputTooLarge { limit });
+        }
         if let Some(chunk) = buffer.get(..n) {
             bytes.extend_from_slice(chunk);
         }
@@ -167,9 +188,15 @@ async fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
-    let group = child.id().context("child pid missing")?;
-    let stdout = child.stdout.take().context("stdout pipe missing")?;
-    let stderr = child.stderr.take().context("stderr pipe missing")?;
+    let group = child.id().ok_or(AsyncProcessError::MissingPid)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(AsyncProcessError::MissingPipe { pipe: "stdout" })?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or(AsyncProcessError::MissingPipe { pipe: "stderr" })?;
     let input = child.stdin.take();
     let transfer = async {
         let (stdout, stderr, (), status) = tokio::try_join!(
@@ -191,12 +218,13 @@ async fn execute(
             },
             async { Ok(child.wait().await?) }
         )?;
-        if let Some(accepted) = &options.accepted_exit_codes {
-            ensure!(
-                status.code().is_some_and(|c| accepted.contains(&c)),
-                "Command failed ({status}): {}",
-                String::from_utf8_lossy(&stderr)
-            );
+        if let Some(accepted) = &options.accepted_exit_codes
+            && !status.code().is_some_and(|c| accepted.contains(&c))
+        {
+            return Err(AsyncProcessError::Failed {
+                status,
+                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            });
         }
         Ok(Output {
             status,
@@ -207,7 +235,7 @@ async fn execute(
     let result: Result<Output> = tokio::select! {
         result = transfer => result,
         () = cancel.cancelled() => Err(Failure::Cancelled.into()),
-        () = tokio::time::sleep(options.timeout) => Err(anyhow::anyhow!("Command timed out after {:?}", options.timeout)),
+        () = tokio::time::sleep(options.timeout) => Err(AsyncProcessError::TimedOut { timeout: options.timeout }),
     };
     if result.is_err() {
         let _ = crate::signals::signal_group(group, crate::signals::ProcSignal::Kill);

@@ -1,9 +1,13 @@
 //! Unix access revocation in a disposable project. This is not a TCC policy test.
+use super::CaptureInput;
 use super::{Duration, Harness, Options, PathBuf, Result, capture, ensure, fs, json, thread};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    expect(dead_code, reason = "access is only restored on Unix")
+)]
 struct RestoreAccess(PathBuf);
 impl Drop for RestoreAccess {
     fn drop(&mut self) {
@@ -30,11 +34,13 @@ pub fn run(o: &Options) -> Result<()> {
     h.layout(&project, std::slice::from_ref(&shell))?;
     let _restore = RestoreAccess(path.clone());
     let logs = capture(
-        &h,
-        o,
-        "recovered",
-        json!([{"at_ms":5500,"target":"directory-retry"}]),
-        7000,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "recovered",
+            actions: json!([{"at_ms":5500,"target":"directory-retry"}]),
+            after: 7000,
+        },
         |_| {
             let deadline = std::time::Instant::now()
                 .checked_add(Duration::from_secs(4))

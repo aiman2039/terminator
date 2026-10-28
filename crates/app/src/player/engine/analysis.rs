@@ -1,7 +1,7 @@
 use super::super::tap;
 use super::decode::Permanent;
 use super::handle::{CHUNK, Controls, Desired, Event, Status};
-use super::pipeline::pipeline;
+use super::pipeline::{PipelineInput, pipeline};
 use anyhow::{Context, Result, ensure};
 use std::{
     sync::{
@@ -29,7 +29,9 @@ impl Analysis {
         let controls = Arc::clone(&self.controls);
         let _ = self.service.handle().submit(context, cancel, async move {
             let bars = cpu
-                .run(&token, move || Ok(tap::bars_from_samples(&samples, rate)))
+                .run(&token, move || {
+                    anyhow::Ok(tap::bars_from_samples(&samples, rate))
+                })
                 .await?;
             if controls.generation.load(Ordering::Acquire) == generation {
                 sender.send_replace(Some(bars));
@@ -38,15 +40,26 @@ impl Analysis {
         });
     }
 }
-pub(super) async fn playback(
-    client: &reqwest::Client,
-    decoder: &NativePool,
-    desired: Desired,
-    controls: Arc<Controls>,
-    status: watch::Sender<Event>,
-    spectrum: Analysis,
-    cancellation: CancellationToken,
-) -> Result<()> {
+pub(super) struct PlaybackInput<'a> {
+    pub(super) client: &'a reqwest::Client,
+    pub(super) decoder: &'a NativePool,
+    pub(super) desired: Desired,
+    pub(super) controls: Arc<Controls>,
+    pub(super) status: watch::Sender<Event>,
+    pub(super) spectrum: Analysis,
+    pub(super) cancellation: CancellationToken,
+}
+
+pub(super) async fn playback(input: PlaybackInput<'_>) -> Result<()> {
+    let PlaybackInput {
+        client,
+        decoder,
+        desired,
+        controls,
+        status,
+        spectrum,
+        cancellation,
+    } = input;
     let source = desired.source.as_ref().context("audio source missing")?;
     let mut retries: u8 = 0;
     loop {
@@ -66,15 +79,16 @@ pub(super) async fn playback(
             finished: false,
         });
         let healthy = Arc::new(AtomicBool::new(false));
-        let result = pipeline(
+        let result = pipeline(PipelineInput {
             client,
-            decoder,
-            desired.clone(),
-            Arc::clone(&controls),
-            status.clone(),
-            spectrum.clone(),
-            (cancellation.child_token(), Arc::clone(&healthy)),
-        )
+            pool: decoder,
+            desired: desired.clone(),
+            controls: Arc::clone(&controls),
+            status: status.clone(),
+            spectrum: spectrum.clone(),
+            cancel: cancellation.child_token(),
+            healthy: Arc::clone(&healthy),
+        })
         .await;
         if !source.radio() {
             return result;
@@ -104,13 +118,22 @@ pub(super) async fn playback(
         tokio::select! { () = cancellation.cancelled() => anyhow::bail!("Playback cancelled"), () = tokio::time::sleep(Duration::from_secs(delay)) => {} }
     }
 }
-pub(crate) async fn download(
-    client: &reqwest::Client,
-    url: String,
-    sender: mpsc::Sender<Vec<u8>>,
-    headers: Duration,
-    read_timeout: Duration,
-) -> Result<()> {
+pub(crate) struct DownloadInput<'a> {
+    pub(crate) client: &'a reqwest::Client,
+    pub(crate) url: String,
+    pub(crate) sender: mpsc::Sender<Vec<u8>>,
+    pub(crate) headers: Duration,
+    pub(crate) read_timeout: Duration,
+}
+
+pub(crate) async fn download(input: DownloadInput<'_>) -> Result<()> {
+    let DownloadInput {
+        client,
+        url,
+        sender,
+        headers,
+        read_timeout,
+    } = input;
     let mut response = tokio::time::timeout(headers, client.get(url).send())
         .await
         .context("Radio connection/header deadline exceeded")?

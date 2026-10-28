@@ -46,8 +46,12 @@ fn float_split_layout_docks_back_whole() {
 fn float_created_lands_in_originating_window() {
     let (mut app, ctx, _dir) = fixture();
     let old = Tab::Terminal("float-old".into());
-    app.floating
-        .push(float_window("float-origin", "a", "home", vec![old.clone()]));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-origin",
+        project: "a",
+        home: "home",
+        tabs: vec![old.clone()],
+    }));
     let viewport = app.floating[0].viewport;
     let mut session = session_fixture("float-new", SessionKind::Shell);
     session.project_id = "a".into();
@@ -105,12 +109,12 @@ fn float_native_split_stays_in_window() {
         crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
     );
     let editor = Tab::NativeEditor { path: path.clone() };
-    app.floating.push(float_window(
-        "float-split",
-        "a",
-        "home",
-        vec![editor.clone()],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-split",
+        project: "a",
+        home: "home",
+        tabs: vec![editor.clone()],
+    }));
     let viewport = app.floating[0].viewport;
     // `:vsplit` typed in the floating window defers through the same
     // drain as main-dock splits but lands in the issuing window.
@@ -142,8 +146,12 @@ fn float_plain_close_takes_issuing_copy_only() {
     let [_, right] =
         dock.main_surface_mut()
             .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
-    app.floating
-        .push(float_window("float-copies", "a", "home", vec![]));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-copies",
+        project: "a",
+        home: "home",
+        tabs: vec![],
+    }));
     app.floating[0].dock = Some(dock);
     let viewport = app.floating[0].viewport;
     // `:q` in the right split removes that copy: the left keeps the
@@ -174,8 +182,12 @@ fn float_stale_delayed_wq_closes_nothing() {
     let mut dock = DockState::new(vec![editor()]);
     dock.main_surface_mut()
         .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
-    app.floating
-        .push(float_window("float-stale", "a", "home", vec![]));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-stale",
+        project: "a",
+        home: "home",
+        tabs: vec![],
+    }));
     app.floating[0].dock = Some(dock);
     let viewport = app.floating[0].viewport;
     // The issuing view closed while the `:wq` save settled: no
@@ -200,12 +212,12 @@ fn remove_tab_drops_emptied_float_window() {
     app.state
         .sessions
         .push(session_fixture("float-solo", SessionKind::Shell));
-    app.floating.push(float_window(
-        "float-solo",
-        "a",
-        "home",
-        vec![Tab::Terminal("float-solo".into())],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-solo",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::Terminal("float-solo".into())],
+    }));
     app.remove_tab("float-solo");
     assert!(app.floating.is_empty());
 }
@@ -224,8 +236,12 @@ fn modal_choice_carries_issuing_float_pane() {
     let [_, right] =
         dock.main_surface_mut()
             .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
-    app.floating
-        .push(float_window("modal-float", "a", "home", vec![]));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "modal-float",
+        project: "a",
+        home: "home",
+        tabs: vec![],
+    }));
     app.floating[0].dock = Some(dock);
     let viewport = app.floating[0].viewport;
     let issuer = CloseIssuer::Floating {
@@ -281,8 +297,12 @@ fn float_delayed_close_with_live_pane_closes_only_it() {
     let [_, right] =
         dock.main_surface_mut()
             .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
-    app.floating
-        .push(float_window("float-live-delayed", "a", "home", vec![]));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-live-delayed",
+        project: "a",
+        home: "home",
+        tabs: vec![],
+    }));
     app.floating[0].dock = Some(dock);
     let viewport = app.floating[0].viewport;
     // A settled `:wq`-style close names a live pane: exactly that
@@ -354,12 +374,12 @@ fn go_session_keeps_floated_terminal() {
         path: PathBuf::from("/a"),
         layout: serde_json::Value::Null,
     });
-    app.floating.push(float_window(
-        "float-agent",
-        "a",
-        "home",
-        vec![Tab::Terminal("float-agent".into())],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-agent",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::Terminal("float-agent".into())],
+    }));
     app.go_session("float-agent");
     // No duplicate tab in the main dock; the window keeps the view.
     assert!(app.layouts.get("a").is_none_or(|workspace| {
@@ -421,16 +441,25 @@ fn prune_and_close_keep_floated_native_buffers() {
             path: path.clone(),
         }])),
     );
-    app.floating.push(float_window(
-        "float-native",
-        "a",
-        "home",
-        vec![Tab::NativeEditor { path: path.clone() }],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-native",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::NativeEditor { path: path.clone() }],
+    }));
     // A plain close issued from the dock removes that copy and keeps
     // the floated buffer: the floating window stays open.
     let tab = app.layouts.get("a").expect("workspace").active.clone();
-    app.close_native_tab(&path, false, docked_issuer("a", &tab, None, false));
+    app.close_native_tab(
+        &path,
+        false,
+        docked_issuer(DockedIssuerInput {
+            project: "a",
+            tab: &tab,
+            node: None,
+            delayed: false,
+        }),
+    );
     assert_eq!(app.floating.len(), 1);
     assert!(
         app.native_docs.contains_key(&path),
@@ -459,12 +488,12 @@ fn force_close_takes_floating_views_and_buffers() {
             path: path.clone(),
         }])),
     );
-    app.floating.push(float_window(
-        "float-forced",
-        "a",
-        "home",
-        vec![Tab::NativeEditor { path: path.clone() }],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-forced",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::NativeEditor { path: path.clone() }],
+    }));
     // `:q!` closes every view of the file, floating included.
     app.close_native_tab(&path, true, None);
     assert!(app.floating.is_empty());
@@ -482,12 +511,12 @@ fn plain_close_takes_issuing_float_and_keeps_other_views() {
     let first = egui::ViewportId::from_hash_of("float-first");
     let second = egui::ViewportId::from_hash_of("float-second");
     for (name, viewport) in [("float-first", first), ("float-second", second)] {
-        let mut window = float_window(
+        let mut window = float_window(FloatWindowInput {
             name,
-            "a",
-            "home",
-            vec![Tab::NativeEditor { path: path.clone() }],
-        );
+            project: "a",
+            home: "home",
+            tabs: vec![Tab::NativeEditor { path: path.clone() }],
+        });
         window.viewport = viewport;
         app.floating.push(window);
     }
@@ -517,12 +546,12 @@ fn quit_all_clean_closes_floating_only_editors() {
         crate::native_editor::NativeDoc::new(path.clone(), false),
     );
     assert!(!app.native_dirty(&path));
-    app.floating.push(float_window(
-        "float-qa",
-        "a",
-        "home",
-        vec![Tab::NativeEditor { path: path.clone() }],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-qa",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::NativeEditor { path: path.clone() }],
+    }));
     // Plain `:qa` on clean buffers leaves no floating window and no
     // buffer behind, even with no workspace tab showing the file.
     app.pending_quit_all = Some(false);
@@ -539,12 +568,12 @@ fn quit_all_force_closes_floating_only_editors() {
         path.clone(),
         crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
     );
-    app.floating.push(float_window(
-        "float-only",
-        "a",
-        "home",
-        vec![Tab::NativeEditor { path: path.clone() }],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-only",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::NativeEditor { path: path.clone() }],
+    }));
     // `:qa!` leaves no floating window and no buffer behind, even
     // when no workspace tab shows the file.
     app.pending_quit_all = Some(true);
@@ -557,29 +586,29 @@ fn quit_all_force_closes_floating_only_editors() {
 fn floated_panes_seed_visibility_before_prune() {
     let (mut app, _, _dir) = fixture();
     app.selected = Some("a".into());
-    app.floating.push(float_window(
-        "float-terminal",
-        "a",
-        "home",
-        vec![Tab::Terminal("one".into())],
-    ));
-    app.floating.push(float_window(
-        "float-image",
-        "a",
-        "home",
-        vec![Tab::Image {
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-terminal",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::Terminal("one".into())],
+    }));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-image",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::Image {
             path: "/tmp/a.png".into(),
         }],
-    ));
+    }));
     let mut doc = session_fixture("doc", SessionKind::Editor);
     doc.file = Some("/a/doc.md".into());
     app.state.sessions.push(doc);
-    app.floating.push(float_window(
-        "float-doc",
-        "a",
-        "home",
-        vec![Tab::Terminal("doc".into())],
-    ));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-doc",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::Terminal("doc".into())],
+    }));
     app.seed_floating_visibility();
     // The end-of-frame prunes keep exactly what these sets contain, so
     // a floated terminal keeps its backend instead of re-attaching

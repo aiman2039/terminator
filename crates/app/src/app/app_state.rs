@@ -322,6 +322,8 @@ pub struct App {
     /// Read-only reference list for the native editor.
     /// Find Usages / declaration chooser window.
     pub(crate) usages: Option<crate::native_editor::UsagesView>,
+    /// The call / type hierarchy window.
+    pub(crate) hierarchy: Option<crate::native_editor::HierarchyView>,
     /// Find/replace bar of one native editor.
     pub(crate) find_bar: Option<crate::native_editor::FindBar>,
     /// Completion popup of one native editor.
@@ -341,6 +343,8 @@ pub struct App {
     pub(crate) git_base_pending: std::collections::HashSet<PathBuf>,
     pub(crate) git_base_generation: u64,
     pub(crate) gutter_popup: Option<crate::native_editor::GutterPopup>,
+    /// Files showing blame in the gutter, with their annotations.
+    pub(crate) editor_blame: std::collections::HashMap<PathBuf, crate::native_editor::EditorBlame>,
     /// Merge conflict resolver window.
     pub(crate) merge: Option<crate::merge::MergeWindow>,
     /// Changed files per commit hash (`None` while loading).

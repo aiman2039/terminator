@@ -1,6 +1,7 @@
 use super::analysis::{Analysis, download};
-use super::decode::{Permanent, decode_audio};
+use super::decode::{DecodeAudioInput, Permanent, decode_audio};
 use super::handle::{COMPRESSED_SLOTS, Controls, Desired, Event, Playable, Status};
+use crate::player::engine::DownloadInput;
 use anyhow::{Context, Result, ensure};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use rodio::Source;
@@ -38,100 +39,153 @@ impl Drop for PipelineGuard {
         }
     }
 }
-pub(super) async fn pipeline(
-    client: &reqwest::Client,
-    pool: &NativePool,
-    desired: Desired,
-    controls: Arc<Controls>,
-    status: watch::Sender<Event>,
-    spectrum: Analysis,
-    (cancel, healthy): (CancellationToken, Arc<AtomicBool>),
-) -> Result<()> {
+pub(super) struct PipelineInput<'a> {
+    pub(super) client: &'a reqwest::Client,
+    pub(super) pool: &'a NativePool,
+    pub(super) desired: Desired,
+    pub(super) controls: Arc<Controls>,
+    pub(super) status: watch::Sender<Event>,
+    pub(super) spectrum: Analysis,
+    pub(super) cancel: CancellationToken,
+    pub(super) healthy: Arc<AtomicBool>,
+}
+
+pub(super) async fn pipeline(input: PipelineInput<'_>) -> Result<()> {
+    let PipelineInput {
+        client,
+        pool,
+        desired,
+        controls,
+        status,
+        spectrum,
+        cancel,
+        healthy,
+    } = input;
     let _cancel_on_drop = cancel.clone().drop_guard();
     let (sender, receiver) = mpsc::channel(COMPRESSED_SLOTS);
     let source = desired.source.clone().context("audio source missing")?;
-    let network_controls = Arc::clone(&controls);
-    let network = async {
-        if let Playable::Stream { url, .. } = source {
-            let _network = PipelineGuard::new(network_controls, true);
-            download(
-                client,
-                url,
-                sender,
-                Duration::from_secs(8),
-                Duration::from_secs(10),
-            )
-            .await
-        } else {
-            drop(sender);
-            Ok(())
-        }
-    };
+    let network = feed_network(FeedInput {
+        client,
+        source,
+        controls: Arc::clone(&controls),
+        sender,
+    });
     let ready = Arc::new(AtomicBool::new(false));
-    let started = Instant::now();
-    let monitor_ready = Arc::clone(&ready);
     let counters = Arc::new(PlaybackCounters::default());
-    let monitored = Arc::clone(&counters);
-    let monitor_status = status.clone();
-    let monitor_controls = Arc::clone(&controls);
-    let monitor_title = desired
-        .source
-        .as_ref()
-        .context("audio source missing")?
-        .title()
-        .to_owned();
-    let monitor_generation = desired.generation;
+    let startup = StartupMonitor {
+        started: Instant::now(),
+        ready: Arc::clone(&ready),
+        counters: Arc::clone(&counters),
+        status: status.clone(),
+        controls: Arc::clone(&controls),
+        title: desired
+            .source
+            .as_ref()
+            .context("audio source missing")?
+            .title()
+            .to_owned(),
+        generation: desired.generation,
+    };
     let decode_cancel = cancel.clone();
     let decode = pool.run(&cancel, move || {
-        decode_audio(
+        decode_audio(DecodeAudioInput {
             desired,
             controls,
             status,
             spectrum,
             receiver,
-            decode_cancel,
-            (ready, counters, healthy),
-        )
+            cancel: decode_cancel,
+            ready,
+            counters,
+            healthy,
+        })
     });
-    let startup = async move {
+    tokio::select! {
+        result = async { tokio::try_join!(network, decode)?; Ok(()) } => result,
+        result = startup.watch() => result,
+    }
+}
+
+struct FeedInput<'a> {
+    client: &'a reqwest::Client,
+    source: Playable,
+    controls: Arc<Controls>,
+    sender: mpsc::Sender<Vec<u8>>,
+}
+
+/// Download a stream source into the decoder's channel; file sources close
+/// the channel at once.
+async fn feed_network(input: FeedInput<'_>) -> Result<()> {
+    let FeedInput {
+        client,
+        source,
+        controls,
+        sender,
+    } = input;
+    let Playable::Stream { url, .. } = source else {
+        drop(sender);
+        return Ok(());
+    };
+    let _network = PipelineGuard::new(controls, true);
+    download(DownloadInput {
+        client,
+        url,
+        sender,
+        headers: Duration::from_secs(8),
+        read_timeout: Duration::from_secs(10),
+    })
+    .await
+}
+
+/// Fails playback that never starts, and reports buffering once it has.
+struct StartupMonitor {
+    started: Instant,
+    ready: Arc<AtomicBool>,
+    counters: Arc<PlaybackCounters>,
+    status: watch::Sender<Event>,
+    controls: Arc<Controls>,
+    title: String,
+    generation: u64,
+}
+
+impl StartupMonitor {
+    async fn watch(self) -> Result<()> {
         loop {
-            if monitor_ready.load(Ordering::Acquire) {
-                if monitored.buffering.load(Ordering::Relaxed)
-                    && !monitor_controls.paused.load(Ordering::Acquire)
-                {
-                    monitor_status.send_replace(Event {
-                        generation: monitor_generation,
-                        status: Status::Buffering {
-                            title: monitor_title.clone(),
-                        },
-                        finished: false,
-                    });
-                }
+            if self.ready.load(Ordering::Acquire) {
+                self.report_buffering();
             } else {
                 ensure!(
-                    started.elapsed() < Duration::from_secs(10),
+                    self.started.elapsed() < Duration::from_secs(10),
                     "Radio/audio startup deadline exceeded"
                 );
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        #[allow(unreachable_code)]
-        Ok::<(), anyhow::Error>(())
-    };
-    tokio::select! {
-        result = async { tokio::try_join!(network, decode)?; Ok(()) } => result,
-        result = startup => result,
+    }
+
+    fn report_buffering(&self) {
+        if self.counters.buffering.load(Ordering::Relaxed)
+            && !self.controls.paused.load(Ordering::Acquire)
+        {
+            self.status.send_replace(Event {
+                generation: self.generation,
+                status: Status::Buffering {
+                    title: self.title.clone(),
+                },
+                finished: false,
+            });
+        }
     }
 }
 
 pub(super) struct StreamReader {
     pub(super) inner: Mutex<StreamInput>,
 }
-pub(super) struct StreamInput {
-    pub(super) receiver: mpsc::Receiver<Vec<u8>>,
-    pub(super) current: std::io::Cursor<Vec<u8>>,
-    pub(super) position: u64,
-    pub(super) cancel: CancellationToken,
+pub(crate) struct StreamInput {
+    pub(crate) receiver: mpsc::Receiver<Vec<u8>>,
+    pub(crate) current: std::io::Cursor<Vec<u8>>,
+    pub(crate) position: u64,
+    pub(crate) cancel: CancellationToken,
 }
 impl Read for StreamReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -246,12 +300,22 @@ impl Source for PreparedSource {
         None
     }
 }
-fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    mut source: PreparedSource,
+struct OutputStreamInput<'a> {
+    device: &'a cpal::Device,
+    config: &'a cpal::StreamConfig,
+    source: PreparedSource,
     failed: Arc<AtomicBool>,
+}
+
+fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
+    input: OutputStreamInput<'_>,
 ) -> Result<cpal::Stream> {
+    let OutputStreamInput {
+        device,
+        config,
+        mut source,
+        failed,
+    } = input;
     Ok(device.build_output_stream(
         config,
         move |output: &mut [T], _| {
@@ -265,16 +329,29 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
         None,
     )?)
 }
-pub(super) fn start_output(
-    device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
-    source: PreparedSource,
-    failed: Arc<AtomicBool>,
-) -> Result<cpal::Stream> {
+pub(super) struct StartOutputInput<'a> {
+    pub(super) device: &'a cpal::Device,
+    pub(super) config: &'a cpal::SupportedStreamConfig,
+    pub(super) source: PreparedSource,
+    pub(super) failed: Arc<AtomicBool>,
+}
+
+pub(super) fn start_output(input: StartOutputInput<'_>) -> Result<cpal::Stream> {
+    let StartOutputInput {
+        device,
+        config,
+        source,
+        failed,
+    } = input;
     let settings = config.config();
     macro_rules! build {
         ($sample:ty) => {
-            output_stream::<$sample>(device, &settings, source, failed)?
+            output_stream::<$sample>(OutputStreamInput {
+                device,
+                config: &settings,
+                source,
+                failed,
+            })?
         };
     }
     let stream = match config.sample_format() {

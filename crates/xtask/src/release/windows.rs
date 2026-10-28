@@ -34,60 +34,141 @@ pub(super) fn powershell(root: &Path, host: &str, script: &str) -> Command {
     )
 }
 
-pub fn run(source: &Path, artifacts: &Path, host: &str, bash: &str) -> Result<()> {
-    run_with(source, artifacts, host, bash, &System)
+pub struct RunInput<'a> {
+    pub source: &'a Path,
+    pub artifacts: &'a Path,
+    pub host: &'a str,
+    pub bash: &'a str,
 }
 
-pub(super) fn run_with(
-    source: &Path,
-    artifacts: &Path,
-    host: &str,
-    bash: &str,
-    runner: &impl Runner,
-) -> Result<()> {
+pub fn run(input: RunInput<'_>) -> Result<()> {
+    let RunInput {
+        source,
+        artifacts,
+        host,
+        bash,
+    } = input;
+    run_with(
+        RunWithInput {
+            source,
+            artifacts,
+            host,
+            bash,
+        },
+        &System,
+    )
+}
+
+pub(super) struct RunWithInput<'a> {
+    pub(super) source: &'a Path,
+    pub(super) artifacts: &'a Path,
+    pub(super) host: &'a str,
+    pub(super) bash: &'a str,
+}
+
+/// One remote Windows check run over SSH.
+struct Remote<'a, R> {
+    runner: &'a R,
+    source: &'a Path,
+    host: &'a str,
+    relative: String,
+}
+
+pub(super) fn run_with(input: RunWithInput<'_>, runner: &impl Runner) -> Result<()> {
+    let RunWithInput {
+        source,
+        artifacts,
+        host,
+        bash,
+    } = input;
     validate_host(host)?;
     let source = source.canonicalize()?;
     fs::create_dir_all(artifacts)?;
     let artifacts = artifacts.canonicalize()?;
-    let relative = format!(".terminator-release/{}", uuid::Uuid::new_v4().simple());
-    let remote = runner.output(&mut powershell(
-        &source,
+    let session = Remote {
+        runner,
+        source: &source,
         host,
-        &format!(
-            r"
+        relative: format!(".terminator-release/{}", uuid::Uuid::new_v4().simple()),
+    };
+    let remote = session.create_directory()?;
+    let remote_literal = literal(&remote);
+    session.upload_source()?;
+    let result = session.run_checks(&remote_literal, bash);
+    let downloaded = session.download_artifacts(&remote_literal, &artifacts);
+    if result.is_err() && downloaded.is_err() {
+        eprintln!("Could not download artifacts. Remote logs: {remote}/artifacts");
+    }
+    result?;
+    downloaded
+}
+
+impl<R: Runner> Remote<'_, R> {
+    /// Create the remote work directory; returns its path.
+    fn create_directory(&self) -> Result<String> {
+        let Self {
+            runner,
+            source,
+            host,
+            relative,
+        } = self;
+        let remote = runner.output(&mut powershell(
+            source,
+            host,
+            &format!(
+                r"
 $ErrorActionPreference = 'Stop'
 $base = Join-Path $env:USERPROFILE '{relative}'
 New-Item -ItemType Directory -Force -Path (Join-Path $base 'artifacts') | Out-Null
 Write-Output ($base.Replace('\', '/'))
 "
-        ),
-    ))?;
-    let remote = remote
-        .lines()
-        .last()
-        .filter(|line| !line.trim().is_empty())
-        .context("Missing Windows artifact path")?;
-    let remote_literal = literal(remote);
-    let temporary = tempfile::Builder::new()
-        .prefix("windows-release-")
-        .tempdir()?;
-    let archive = temporary.path().join("source.tar.gz");
-    let encoder =
-        flate2::write::GzEncoder::new(fs::File::create(&archive)?, flate2::Compression::default());
-    let mut bundle = tar::Builder::new(encoder);
-    bundle.follow_symlinks(false);
-    bundle.append_dir_all("source", &source)?;
-    bundle.into_inner()?.finish()?;
-    runner.run(
-        cmd(&source, "scp", &["-B"])
-            .arg(&archive)
-            .arg(format!("{host}:{relative}/source.tar.gz")),
-    )?;
-    let result = runner.run(&mut powershell(
-        &source,
-        host,
-        &format!(
-            r"
+            ),
+        ))?;
+        Ok(remote
+            .lines()
+            .last()
+            .filter(|line| !line.trim().is_empty())
+            .context("Missing Windows artifact path")?
+            .to_owned())
+    }
+    fn upload_source(&self) -> Result<()> {
+        let Self {
+            runner,
+            source,
+            host,
+            relative,
+        } = self;
+        let temporary = tempfile::Builder::new()
+            .prefix("windows-release-")
+            .tempdir()?;
+        let archive = temporary.path().join("source.tar.gz");
+        let encoder = flate2::write::GzEncoder::new(
+            fs::File::create(&archive)?,
+            flate2::Compression::default(),
+        );
+        let mut bundle = tar::Builder::new(encoder);
+        bundle.follow_symlinks(false);
+        bundle.append_dir_all("source", source)?;
+        bundle.into_inner()?.finish()?;
+        runner.run(
+            cmd(source, "scp", &["-B"])
+                .arg(&archive)
+                .arg(format!("{host}:{relative}/source.tar.gz")),
+        )?;
+        Ok(())
+    }
+    fn run_checks(&self, remote_literal: &str, bash: &str) -> Result<()> {
+        let Self {
+            runner,
+            source,
+            host,
+            ..
+        } = self;
+        runner.run(&mut powershell(
+            source,
+            host,
+            &format!(
+                r"
 $ErrorActionPreference = 'Stop'
 $base = '{remote_literal}'
 tar -xzf (Join-Path $base 'source.tar.gz') -C $base
@@ -99,12 +180,19 @@ Set-Location (Join-Path $base 'source')
 & '{}' 'scripts/release-check.sh'
 exit $LASTEXITCODE
 ",
-            literal(bash)
-        ),
-    ));
-    let downloaded = (|| -> Result<()> {
+                literal(bash)
+            ),
+        ))
+    }
+    fn download_artifacts(&self, remote_literal: &str, artifacts: &Path) -> Result<()> {
+        let Self {
+            runner,
+            source,
+            host,
+            relative,
+        } = self;
         runner.run(&mut powershell(
-            &source,
+            source,
             host,
             &format!(
                 r"
@@ -116,18 +204,13 @@ exit $LASTEXITCODE
         ))?;
         runner.run(
             cmd(
-                &source,
+                source,
                 "scp",
                 &["-B", &format!("{host}:{relative}/artifacts.tar.gz")],
             )
             .arg(artifacts.join("artifacts.tar.gz")),
         )
-    })();
-    if result.is_err() && downloaded.is_err() {
-        eprintln!("Could not download artifacts. Remote logs: {remote}/artifacts");
     }
-    result?;
-    downloaded
 }
 
 #[cfg(test)]

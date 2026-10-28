@@ -10,78 +10,96 @@ pub(crate) fn begin_native_window_gesture(ctx: &egui::Context, command: egui::Vi
     ctx.input_mut(|input| input.pointer = egui::PointerState::default());
 }
 pub(crate) fn window_resize_edges(ui: &mut egui::Ui) {
-    use egui::{CursorIcon as C, ResizeDirection as D};
     if ui.input(|i| {
         i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
     }) {
         return;
     }
-    let r = ui.ctx().content_rect();
-    let edge = 4.0;
-    let corner = 8.0;
-    let regions = [
-        (
-            egui::Rect::from_min_max(r.min, egui::pos2(r.min.x + corner, r.min.y + corner)),
-            D::NorthWest,
-            C::ResizeNwSe,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(r.right() - corner, r.top()),
-                egui::pos2(r.right(), r.top() + corner),
-            ),
-            D::NorthEast,
-            C::ResizeNeSw,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(r.left(), r.bottom() - corner),
-                egui::pos2(r.left() + corner, r.bottom()),
-            ),
-            D::SouthWest,
-            C::ResizeNeSw,
-        ),
-        (
-            egui::Rect::from_min_max(egui::pos2(r.right() - corner, r.bottom() - corner), r.max),
-            D::SouthEast,
-            C::ResizeNwSe,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(r.left() + corner, r.top()),
-                egui::pos2(r.right() - corner, r.top() + edge),
-            ),
-            D::North,
-            C::ResizeVertical,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(r.left() + corner, r.bottom() - edge),
-                egui::pos2(r.right() - corner, r.bottom()),
-            ),
-            D::South,
-            C::ResizeVertical,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(r.left(), r.top() + corner),
-                egui::pos2(r.left() + edge, r.bottom() - corner),
-            ),
-            D::West,
-            C::ResizeHorizontal,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(r.right() - edge, r.top() + corner),
-                egui::pos2(r.right(), r.bottom() - corner),
-            ),
-            D::East,
-            C::ResizeHorizontal,
-        ),
-    ];
+    let regions = WindowEdgeHelpers::resize_regions(ui.ctx().content_rect());
     // Panels own their full rectangles. Put only the narrow resize hit regions
     // above them, so the status bar cannot swallow edge drags.
-    for (index, (rect, direction, cursor)) in regions.into_iter().enumerate() {
+    for (index, region) in regions.into_iter().enumerate() {
+        WindowEdgeHelpers::resize_area(ui, index, region);
+    }
+}
+
+/// One resize hit region: its rect, the edge it drags, and its cursor.
+type ResizeRegion = (egui::Rect, egui::ResizeDirection, egui::CursorIcon);
+
+struct WindowEdgeHelpers;
+
+impl WindowEdgeHelpers {
+    /// Corners first, then the four edges between them.
+    fn resize_regions(r: egui::Rect) -> [ResizeRegion; 8] {
+        use egui::{CursorIcon as C, ResizeDirection as D};
+        let edge = 4.0;
+        let corner = 8.0;
+        [
+            (
+                egui::Rect::from_min_max(r.min, egui::pos2(r.min.x + corner, r.min.y + corner)),
+                D::NorthWest,
+                C::ResizeNwSe,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(r.right() - corner, r.top()),
+                    egui::pos2(r.right(), r.top() + corner),
+                ),
+                D::NorthEast,
+                C::ResizeNeSw,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(r.left(), r.bottom() - corner),
+                    egui::pos2(r.left() + corner, r.bottom()),
+                ),
+                D::SouthWest,
+                C::ResizeNeSw,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(r.right() - corner, r.bottom() - corner),
+                    r.max,
+                ),
+                D::SouthEast,
+                C::ResizeNwSe,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(r.left() + corner, r.top()),
+                    egui::pos2(r.right() - corner, r.top() + edge),
+                ),
+                D::North,
+                C::ResizeVertical,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(r.left() + corner, r.bottom() - edge),
+                    egui::pos2(r.right() - corner, r.bottom()),
+                ),
+                D::South,
+                C::ResizeVertical,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(r.left(), r.top() + corner),
+                    egui::pos2(r.left() + edge, r.bottom() - corner),
+                ),
+                D::West,
+                C::ResizeHorizontal,
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(r.right() - edge, r.top() + corner),
+                    egui::pos2(r.right(), r.bottom() - corner),
+                ),
+                D::East,
+                C::ResizeHorizontal,
+            ),
+        ]
+    }
+
+    fn resize_area(ui: &egui::Ui, index: usize, (rect, direction, cursor): ResizeRegion) {
         egui::Area::new(egui::Id::unique(("window-resize", index)))
             .order(egui::Order::Foreground)
             .fixed_pos(rect.min)
@@ -97,11 +115,11 @@ pub(crate) fn window_resize_edges(ui: &mut egui::Ui) {
                         && response.hovered()
                         && ui.input(|i| i.pointer.any_down())
                     {
-                        eprintln!(
+                        crate::console::Console::err(format_args!(
                             "Fixture resize input {index}: started={} dragged={}",
                             response.drag_started(),
                             response.dragged()
-                        );
+                        ));
                     }
                 }
                 if response.drag_started() {

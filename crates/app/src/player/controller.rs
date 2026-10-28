@@ -4,6 +4,29 @@ use engine::{Handle, Outcome, Playable, Status};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
+
+pub(super) struct WithEngineInput {
+    pub(super) engine: Handle,
+    pub(super) status: Status,
+    pub(super) file_index: Option<usize>,
+    pub(super) project: Option<String>,
+    pub(super) rng: u64,
+}
+
+pub(crate) struct PlayStationInput<'a> {
+    pub project: &'a str,
+    pub name: String,
+    pub url: String,
+    pub index: usize,
+}
+
+pub(super) struct PlaySequentialInput<'a> {
+    pub(super) project: &'a str,
+    pub(super) playlist: &'a [PathBuf],
+    pub(super) delta: isize,
+    pub(super) repeat: bool,
+}
+
 /// Playlist edits that remove many tracks at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlaylistConfirm {
@@ -71,13 +94,14 @@ pub(crate) struct Controller {
 }
 
 impl Controller {
-    pub(super) fn with_engine(
-        engine: Handle,
-        status: Status,
-        file_index: Option<usize>,
-        project: Option<String>,
-        rng: u64,
-    ) -> Self {
+    pub(super) fn with_engine(input: WithEngineInput) -> Self {
+        let WithEngineInput {
+            engine,
+            status,
+            file_index,
+            project,
+            rng,
+        } = input;
         Self {
             engine,
             status,
@@ -118,13 +142,13 @@ impl Controller {
 
     #[cfg(test)]
     pub(crate) fn finished_fixture(project: &str, file_index: Option<usize>) -> Self {
-        Self::with_engine(
-            Handle::finished_fixture(),
-            Status::Stopped,
+        Self::with_engine(WithEngineInput {
+            engine: Handle::finished_fixture(),
+            status: Status::Stopped,
             file_index,
-            Some(project.into()),
-            0x9E37_79B9_7F4A_7C15,
-        )
+            project: Some(project.into()),
+            rng: 0x9E37_79B9_7F4A_7C15,
+        })
     }
 
     pub fn new(services: crate::gui_services::Services) -> Self {
@@ -133,14 +157,25 @@ impl Controller {
             .map(|elapsed| u64_from_u128(elapsed.as_nanos()))
             .unwrap_or(1)
             .max(1);
-        Self::with_engine(Handle::spawn(services), Status::Stopped, None, None, rng)
+        Self::with_engine(WithEngineInput {
+            engine: Handle::spawn(services),
+            status: Status::Stopped,
+            file_index: None,
+            project: None,
+            rng,
+        })
     }
 
     #[cfg(feature = "test-support")]
     pub fn fixture_play(&mut self, project: &str, url: String) {
         self.volume = 0.0;
         self.engine.volume(0.0);
-        self.play_station(project, "Fixture radio".into(), url, 0);
+        self.play_station(PlayStationInput {
+            project,
+            name: "Fixture radio".into(),
+            url,
+            index: 0,
+        });
     }
     #[cfg(feature = "test-support")]
     pub fn fixture_diagnostics(&self) -> serde_json::Value {
@@ -304,7 +339,13 @@ impl Controller {
         self.engine.play(Playable::File { path, title });
     }
 
-    pub fn play_station(&mut self, project: &str, name: String, url: String, index: usize) {
+    pub fn play_station(&mut self, input: PlayStationInput<'_>) {
+        let PlayStationInput {
+            project,
+            name,
+            url,
+            index,
+        } = input;
         self.project = Some(project.into());
         self.file_index = None;
         self.station_index = Some(index);
@@ -335,16 +376,21 @@ impl Controller {
         if shuffle {
             return self.play_shuffled(project, playlist, repeat);
         }
-        self.play_sequential(project, playlist, delta, repeat)
+        self.play_sequential(PlaySequentialInput {
+            project,
+            playlist,
+            delta,
+            repeat,
+        })
     }
 
-    pub(super) fn play_sequential(
-        &mut self,
-        project: &str,
-        playlist: &[PathBuf],
-        delta: isize,
-        repeat: bool,
-    ) -> Option<usize> {
+    pub(super) fn play_sequential(&mut self, input: PlaySequentialInput<'_>) -> Option<usize> {
+        let PlaySequentialInput {
+            project,
+            playlist,
+            delta,
+            repeat,
+        } = input;
         let current = if self.project.as_deref() == Some(project) {
             self.file_index.unwrap_or(0)
         } else {
@@ -404,7 +450,6 @@ impl Controller {
 
     pub fn seek_fraction(&mut self, fraction: f32, duration: Duration) {
         // Seek position. Durations above 2^24 ms do not fit in an f32 mantissa.
-        #[allow(clippy::cast_precision_loss)]
         let millis = duration.as_millis() as f32 * fraction.clamp(0.0, 1.0);
         self.engine
             .seek(Duration::from_millis(u64_from_f32(millis)));

@@ -28,7 +28,7 @@ fn resolve(options: &SshOptions) -> Result<ssh::Resolved> {
         },
     )
     .context("Cannot resolve the SSH host configuration")?;
-    ssh::parse_resolved(std::str::from_utf8(&output.stdout)?)
+    Ok(ssh::parse_resolved(std::str::from_utf8(&output.stdout)?)?)
 }
 pub(crate) fn scan(options: &SshOptions) -> Result<HostKeyScan> {
     let resolved = resolve(options)?;
@@ -93,6 +93,10 @@ fn known_hosts(options: &SshOptions) -> Result<PathBuf> {
     let path = ssh::default_known_hosts().context("Home directory is unavailable")?;
     let directory = path.parent().context("known_hosts has no parent")?;
     if !directory.exists() {
+        #[cfg_attr(
+            not(unix),
+            expect(unused_mut, reason = "only Unix sets the directory mode")
+        )]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);

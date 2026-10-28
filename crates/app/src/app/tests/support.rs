@@ -193,17 +193,25 @@ pub(crate) fn visible_ids(app: &App) -> Vec<String> {
         .collect()
 }
 
+pub(crate) struct DrainUntilProjectActivityInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) project: &'a str,
+    pub(crate) at_least: u64,
+}
+
 /// Pump `process_updates` until `project`'s activity stamp reaches
 /// `at_least`. One pass drains at most 64 updates or 2 ms
 /// (`ResultBudget`), so on a loaded machine a single pass may service
 /// background completions first and leave the test's own update queued.
 /// Production pumps every frame; tests must do the same.
-pub(crate) fn drain_until_project_activity(
-    app: &mut App,
-    ctx: &egui::Context,
-    project: &str,
-    at_least: u64,
-) {
+pub(crate) fn drain_until_project_activity(input: DrainUntilProjectActivityInput<'_>) {
+    let DrainUntilProjectActivityInput {
+        app,
+        ctx,
+        project,
+        at_least,
+    } = input;
     for _ in 0..1_000 {
         app.process_updates(ctx);
         if app
@@ -291,16 +299,25 @@ pub(crate) fn cross_dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<e
 }
 
 #[cfg(feature = "test-support")]
-pub(crate) fn cross_glide(
-    app: &mut App,
-    ctx: &egui::Context,
-    from: egui::Pos2,
-    to: egui::Pos2,
-    steps: usize,
-) {
+pub(crate) struct CrossGlideInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) from: egui::Pos2,
+    pub(crate) to: egui::Pos2,
+    pub(crate) steps: usize,
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn cross_glide(input: CrossGlideInput<'_>) {
+    let CrossGlideInput {
+        app,
+        ctx,
+        from,
+        to,
+        steps,
+    } = input;
     for step in 1..=steps {
         // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
-        #[allow(clippy::cast_precision_loss)]
         let k = step as f32 / steps as f32;
         cross_dock_frame(
             app,
@@ -356,16 +373,25 @@ pub(crate) fn frame_press(pos: egui::Pos2, pressed: bool) -> egui::Event {
 }
 
 #[cfg(feature = "test-support")]
-pub(crate) fn frame_glide(
-    app: &mut App,
-    ctx: &egui::Context,
-    from: egui::Pos2,
-    to: egui::Pos2,
-    steps: usize,
-) {
+pub(crate) struct FrameGlideInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) from: egui::Pos2,
+    pub(crate) to: egui::Pos2,
+    pub(crate) steps: usize,
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn frame_glide(input: FrameGlideInput<'_>) {
+    let FrameGlideInput {
+        app,
+        ctx,
+        from,
+        to,
+        steps,
+    } = input;
     for step in 1..=steps {
         // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
-        #[allow(clippy::cast_precision_loss)]
         let k = step as f32 / steps as f32;
         combined_frame(
             app,
@@ -378,12 +404,20 @@ pub(crate) fn frame_glide(
     }
 }
 
-pub(crate) fn notice_fixture(
-    id: &str,
-    session: &str,
-    state: AgentState,
-    created: u64,
-) -> Notification {
+pub(crate) struct NoticeFixtureInput<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) session: &'a str,
+    pub(crate) state: AgentState,
+    pub(crate) created: u64,
+}
+
+pub(crate) fn notice_fixture(input: NoticeFixtureInput<'_>) -> Notification {
+    let NoticeFixtureInput {
+        id,
+        session,
+        state,
+        created,
+    } = input;
     Notification {
         id: id.into(),
         session_id: session.into(),
@@ -421,12 +455,20 @@ pub(crate) fn render_agents(app: &mut App, ctx: &egui::Context, events: Vec<egui
     output.textures_delta.clear();
 }
 
-pub(crate) fn generation_health(
-    id: &str,
-    directory: &std::path::Path,
-    revision: u64,
-    status: generations::Status,
-) -> generations::Health {
+pub(crate) struct GenerationHealthInput<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) directory: &'a std::path::Path,
+    pub(crate) revision: u64,
+    pub(crate) status: generations::Status,
+}
+
+pub(crate) fn generation_health(input: GenerationHealthInput<'_>) -> generations::Health {
+    let GenerationHealthInput {
+        id,
+        directory,
+        revision,
+        status,
+    } = input;
     generations::Health {
         owner: generations::Generation {
             id: id.into(),
@@ -478,12 +520,12 @@ pub(crate) fn click_agent_target(app: &mut App, ctx: &egui::Context, name: &str)
 pub(crate) fn waiting_inbox() -> (App, egui::Context, tempfile::TempDir, mpsc::Receiver<Job>) {
     let (mut app, ctx, dir) = fixture();
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     let (jobs, received) = mpsc::channel();
     app.jobs = jobs.into();
     (app, ctx, dir, received)
@@ -504,12 +546,20 @@ pub(crate) fn control_actions(received: &mpsc::Receiver<Job>) -> Vec<String> {
     actions
 }
 
-pub(crate) fn float_window(
-    name: &str,
-    project: &str,
-    home: &str,
-    tabs: Vec<Tab>,
-) -> FloatingWindow {
+pub(crate) struct FloatWindowInput<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) project: &'a str,
+    pub(crate) home: &'a str,
+    pub(crate) tabs: Vec<Tab>,
+}
+
+pub(crate) fn float_window(input: FloatWindowInput<'_>) -> FloatingWindow {
+    let FloatWindowInput {
+        name,
+        project,
+        home,
+        tabs,
+    } = input;
     FloatingWindow {
         viewport: egui::ViewportId::from_hash_of(name),
         dock: Some(DockState::new(tabs)),
@@ -517,12 +567,22 @@ pub(crate) fn float_window(
     }
 }
 
+pub(crate) struct DockedIssuerInput<'a> {
+    pub(crate) project: &'a str,
+    pub(crate) tab: &'a str,
+    pub(crate) node: Option<egui_dock::NodePath>,
+    pub(crate) delayed: bool,
+}
+
 pub(crate) fn docked_issuer(
-    project: &str,
-    tab: &str,
-    node: Option<egui_dock::NodePath>,
-    delayed: bool,
+    input: DockedIssuerInput<'_>,
 ) -> Option<crate::native_editor::CloseIssuer> {
+    let DockedIssuerInput {
+        project,
+        tab,
+        node,
+        delayed,
+    } = input;
     Some(crate::native_editor::CloseIssuer::Docked {
         project: project.into(),
         tab: tab.into(),

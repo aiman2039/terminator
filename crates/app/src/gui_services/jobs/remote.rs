@@ -6,14 +6,40 @@ use std::{fs, path::PathBuf};
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
 
+pub(crate) struct RemoteAddInput<'a> {
+    pub(in crate::gui_services) project: terminator_core::remote::RemoteProject,
+    pub(in crate::gui_services) probe: bool,
+    pub(in crate::gui_services) generation: u64,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct RemoteTransferInput<'a> {
+    pub(in crate::gui_services) project: String,
+    pub(in crate::gui_services) pick: crate::transfers_ui::Pick,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct RemoteAssetInput<'a> {
+    pub(in crate::gui_services) project: String,
+    pub(in crate::gui_services) path: String,
+    pub(in crate::gui_services) cache_root: PathBuf,
+    pub(in crate::gui_services) after: After,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
 impl Services {
     pub(in crate::gui_services) async fn remote_add(
         &self,
-        project: terminator_core::remote::RemoteProject,
-        probe: bool,
-        generation: u64,
-        updates: &mut Vec<Update>,
+        input: RemoteAddInput<'_>,
     ) -> Result<()> {
+        let RemoteAddInput {
+            project,
+            probe,
+            generation,
+            updates,
+        } = input;
         let client = self.client();
         let request = if probe {
             Request::ProbeRemoteProject {
@@ -79,12 +105,18 @@ impl Services {
 
     pub(in crate::gui_services) async fn remote_transfer(
         &self,
-        project: String,
-        pick: crate::transfers_ui::Pick,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: RemoteTransferInput<'_>,
     ) -> Result<()> {
-        let picked = self.fs().run(&cancel, move || Ok(pick.resolve())).await;
+        let RemoteTransferInput {
+            project,
+            pick,
+            cancel,
+            updates,
+        } = input;
+        let picked = self
+            .fs()
+            .run(&cancel, move || anyhow::Ok(pick.resolve()))
+            .await;
         let result = match picked {
             Ok(Some(operation)) => self.remote_transfer_rpc(&project, operation).await,
             Ok(None) => Ok(None),
@@ -144,14 +176,14 @@ impl Services {
             {
                 Ok(Response::Ok) => Ok(()),
                 Ok(_) => Err("Unexpected host key response".into()),
-                Err(e) => Err(format!("{e:#}")),
+                Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
             };
             updates.push(Update::HostKeyTrusted(ssh, result));
         } else {
             let result = match client.rpc(Request::ScanHostKey { ssh: ssh.clone() }).await {
                 Ok(Response::HostKeys(scan)) => Ok(scan),
                 Ok(_) => Err("Unexpected host key response".into()),
-                Err(e) => Err(format!("{e:#}")),
+                Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
             };
             updates.push(Update::HostKeyScanned(ssh, result));
         }
@@ -167,7 +199,7 @@ impl Services {
     ) -> Result<()> {
         let hosts = self
             .cpu()
-            .run(&cancel, || Ok(terminator_core::ssh::config_hosts()))
+            .run(&cancel, || anyhow::Ok(terminator_core::ssh::config_hosts()))
             .await?;
         updates.push(Update::SshConfigHosts(generation, hosts));
         Ok(())
@@ -175,13 +207,16 @@ impl Services {
 
     pub(in crate::gui_services) async fn remote_asset(
         &self,
-        project: String,
-        path: String,
-        cache_root: PathBuf,
-        after: After,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: RemoteAssetInput<'_>,
     ) -> Result<()> {
+        let RemoteAssetInput {
+            project,
+            path,
+            cache_root,
+            after,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         terminator_core::remote::validate_relative(&path)?;
         let reply = client

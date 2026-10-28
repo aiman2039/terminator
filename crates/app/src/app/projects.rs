@@ -3,6 +3,14 @@ use std::{collections::HashSet, path::PathBuf};
 use terminator_core::*;
 
 use super::super::*;
+
+pub(crate) struct InsertFloatInput<'a> {
+    pub(crate) viewport: egui::ViewportId,
+    pub(crate) tab: Tab,
+    pub(crate) split: Option<&'a str>,
+    pub(crate) anchors: &'a [Tab],
+}
+
 impl App {
     pub(crate) fn select_project(&mut self, project: String) {
         self.apply_project_selection(project, false);
@@ -116,13 +124,13 @@ impl App {
     /// Place a tab into a floating window's dock: stacked for plain
     /// tabs, beside the anchored leaf for splits. Returns false when the
     /// window is gone, so callers can fall back to the project dock.
-    pub(crate) fn insert_float(
-        &mut self,
-        viewport: egui::ViewportId,
-        tab: Tab,
-        split: Option<&str>,
-        anchors: &[Tab],
-    ) -> bool {
+    pub(crate) fn insert_float(&mut self, input: InsertFloatInput<'_>) -> bool {
+        let InsertFloatInput {
+            viewport,
+            tab,
+            split,
+            anchors,
+        } = input;
         let Some(window) = self
             .floating
             .iter_mut()
