@@ -33,7 +33,6 @@ fn field_mut<'a>(document: &'a mut DocumentMut, path: &[&str]) -> Result<&'a mut
             .with_context(|| format!("Missing TOML field: {}", path.join(".")))
     })
 }
-
 pub fn bump(root: &Path) -> Result<String> {
     let mut manifest = document(&root.join("Cargo.toml"))?;
     let old = field(&manifest, &["workspace", "package", "version"])?
@@ -53,7 +52,26 @@ pub fn bump(root: &Path) -> Result<String> {
             .checked_add(1)
             .context("Workspace minor version overflow")?
     );
-    let workspace = field(&manifest, &["workspace"])?;
+    let names = inheriting_packages(root, &manifest)?;
+    ensure!(
+        !names.is_empty(),
+        "No workspace packages inherit the version"
+    );
+    let mut lock = document(&root.join("Cargo.lock"))?;
+    bump_lockfile(&mut lock, &names, (&old, &next))?;
+    replace(
+        field_mut(&mut manifest, &["workspace", "package", "version"])?,
+        &next,
+    )?;
+    fs::write(root.join("Cargo.toml"), manifest.to_string())?;
+    fs::write(root.join("Cargo.lock"), lock.to_string())?;
+    println!("Bumped workspace version: {old} -> {next}");
+    Ok(next)
+}
+
+/// Names of workspace member packages whose version is `version.workspace = true`.
+fn inheriting_packages(root: &Path, manifest: &DocumentMut) -> Result<BTreeSet<String>> {
+    let workspace = field(manifest, &["workspace"])?;
     let members = workspace
         .get("members")
         .context("Missing workspace members")?
@@ -89,32 +107,43 @@ pub fn bump(root: &Path) -> Result<String> {
             {
                 continue;
             }
-            let member = document(&directory.join("Cargo.toml"))?;
-            let package = field(&member, &["package"])?;
-            if package
-                .get("version")
-                .and_then(|v| v.get("workspace"))
-                .and_then(Item::as_bool)
-                == Some(true)
-            {
-                names.insert(
-                    package
-                        .get("name")
-                        .context("Missing package name")?
-                        .as_str()
-                        .context("Missing package name")?
-                        .to_owned(),
-                );
+            if let Some(name) = inheriting_package(&directory)? {
+                names.insert(name);
             }
         }
     }
-    ensure!(
-        !names.is_empty(),
-        "No workspace packages inherit the version"
-    );
-    let mut lock = document(&root.join("Cargo.lock"))?;
+    Ok(names)
+}
+
+fn inheriting_package(directory: &Path) -> Result<Option<String>> {
+    let member = document(&directory.join("Cargo.toml"))?;
+    let package = field(&member, &["package"])?;
+    if package
+        .get("version")
+        .and_then(|v| v.get("workspace"))
+        .and_then(Item::as_bool)
+        == Some(true)
+    {
+        return Ok(Some(
+            package
+                .get("name")
+                .context("Missing package name")?
+                .as_str()
+                .context("Missing package name")?
+                .to_owned(),
+        ));
+    }
+    Ok(None)
+}
+
+/// Move every local workspace entry in Cargo.lock from `old` to `next`.
+fn bump_lockfile(
+    lock: &mut DocumentMut,
+    names: &BTreeSet<String>,
+    (old, next): (&str, &str),
+) -> Result<()> {
     let mut seen = BTreeSet::new();
-    for package in field_mut(&mut lock, &["package"])?
+    for package in field_mut(lock, &["package"])?
         .as_array_of_tables_mut()
         .context("Missing lockfile packages")?
         .iter_mut()
@@ -129,27 +158,19 @@ pub fn bump(root: &Path) -> Result<String> {
             continue;
         }
         ensure!(
-            package.get("version").and_then(Item::as_str) == Some(old.as_str())
-                && seen.insert(name.clone()),
+            package.get("version").and_then(Item::as_str) == Some(old) && seen.insert(name.clone()),
             "Unexpected lockfile entry for {name}; no files changed"
         );
         replace(
             package
                 .get_mut("version")
                 .context("Missing lockfile version")?,
-            &next,
+            next,
         )?;
     }
     ensure!(
-        seen == names,
+        seen == *names,
         "Workspace packages missing from Cargo.lock; no files changed"
     );
-    replace(
-        field_mut(&mut manifest, &["workspace", "package", "version"])?,
-        &next,
-    )?;
-    fs::write(root.join("Cargo.toml"), manifest.to_string())?;
-    fs::write(root.join("Cargo.lock"), lock.to_string())?;
-    println!("Bumped workspace version: {old} -> {next}");
-    Ok(next)
+    Ok(())
 }
