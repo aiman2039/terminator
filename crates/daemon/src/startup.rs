@@ -69,6 +69,29 @@ pub(crate) fn open_state(
     catalog_paths: &Option<Paths>,
 ) -> Result<(storage::Store, State)> {
     let (mut store, mut state) = storage::Store::open(paths)?;
+    recover_loaded(&mut state);
+    drop_non_resumable(paths, &mut state);
+    if let Some(root) = &catalog_paths {
+        bind_generation(root, &mut store, &mut state)?;
+    }
+    advertise(&mut state, catalog_paths.is_some())?;
+    let credential_paths = catalog_paths.as_ref().unwrap_or(paths);
+    let pending = vnc_session::credentials::migrate(credential_paths, &mut state.vnc_profiles);
+    ensure!(
+        pending == 0,
+        "{pending} legacy VNC passwords could not be migrated; unlock the OS credential store before restarting. Existing saved state was not overwritten"
+    );
+    if let Some(root) = &catalog_paths {
+        let catalog = generations::Catalog::open(root)?;
+        if catalog.active()?.as_deref() == Some(&state.generation) {
+            catalog.save_workspace(&state)?;
+        }
+    }
+    store.save(&state)?;
+    Ok((store, state))
+}
+
+fn recover_loaded(state: &mut State) {
     // Store::open may report a quarantined store or reset settings via the
     // degraded flag; recover() clears runtime health, so keep that note.
     let load_note = state.degraded.clone();
@@ -76,8 +99,11 @@ pub(crate) fn open_state(
     if load_note.is_some() {
         state.degraded = load_note;
     }
-    // Migrate existing stores: drop historical sessions without an agent
-    // resume command so old plain shells/editors stop filling History.
+}
+
+/// Migrate existing stores: drop historical sessions without an agent
+/// resume command so old plain shells/editors stop filling History.
+fn drop_non_resumable(paths: &Paths, state: &mut State) {
     let removed = state.prune_non_resumable_ended();
     if !removed.is_empty()
         && let Ok(mut history) = storage::History::new(paths.clone())
@@ -87,16 +113,23 @@ pub(crate) fn open_state(
         }
         let _ = history.flush();
     }
-    if let Some(root) = &catalog_paths {
-        let owner = std::env::var("TERMINATOR_GENERATION")?;
-        ensure!(
-            state.sessions.is_empty(),
-            "Generation directory must be new; never restart owned processes"
-        );
-        state.generation.clone_from(&owner);
-        store.bind_owner(owner);
-        generations::Catalog::open(root)?.refresh(&mut state)?;
-    }
+}
+
+/// A catalog-managed daemon owns a brand-new generation directory.
+fn bind_generation(root: &Paths, store: &mut storage::Store, state: &mut State) -> Result<()> {
+    let owner = std::env::var("TERMINATOR_GENERATION")?;
+    ensure!(
+        state.sessions.is_empty(),
+        "Generation directory must be new; never restart owned processes"
+    );
+    state.generation.clone_from(&owner);
+    store.bind_owner(owner);
+    generations::Catalog::open(root)?.refresh(state)?;
+    Ok(())
+}
+
+/// Stamps the version, build and capabilities clients gate requests on.
+fn advertise(state: &mut State, catalog: bool) -> Result<()> {
     state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
     state.capabilities = vec![
         terminator_core::idle_close::CAPABILITY.into(),
@@ -121,7 +154,7 @@ pub(crate) fn open_state(
         terminator_core::remote::TRANSFER_CAPABILITY.into(),
         vnc::FEATURES_CAPABILITY.into(),
     ];
-    if catalog_paths.is_some() {
+    if catalog {
         state.daemon_build = Some(generations::build_identity(
             std::env::current_exe()?
                 .parent()
@@ -130,20 +163,7 @@ pub(crate) fn open_state(
         state.daemon_catalog_version = Some(generations::CATALOG_VERSION);
         state.capabilities.push(generations::CAPABILITY.into());
     }
-    let credential_paths = catalog_paths.as_ref().unwrap_or(paths);
-    let pending = vnc_session::credentials::migrate(credential_paths, &mut state.vnc_profiles);
-    ensure!(
-        pending == 0,
-        "{pending} legacy VNC passwords could not be migrated; unlock the OS credential store before restarting. Existing saved state was not overwritten"
-    );
-    if let Some(root) = &catalog_paths {
-        let catalog = generations::Catalog::open(root)?;
-        if catalog.active()?.as_deref() == Some(&state.generation) {
-            catalog.save_workspace(&state)?;
-        }
-    }
-    store.save(&state)?;
-    Ok((store, state))
+    Ok(())
 }
 
 /// Removes helpers left by crashed daemons and stages this one's.
