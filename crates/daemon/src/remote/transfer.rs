@@ -170,14 +170,22 @@ pub(crate) async fn upload(input: UploadInput<'_>) -> Result<u64> {
     result
 }
 
+pub(crate) struct DownloadInput<'a> {
+    pub(crate) sftp: &'a Sftp,
+    pub(crate) remote: &'a str,
+    pub(crate) local: &'a Path,
+    pub(crate) progress: &'a dyn Progress,
+}
+
 /// Downloads the regular remote file `remote` to the absolute local path
 /// `local`. Fails, without replacing anything, when `local` already exists.
-pub(crate) async fn download(
-    sftp: &Sftp,
-    remote: &str,
-    local: &Path,
-    progress: &dyn Progress,
-) -> Result<u64> {
+pub(crate) async fn download(input: DownloadInput<'_>) -> Result<u64> {
+    let DownloadInput {
+        sftp,
+        remote,
+        local,
+        progress,
+    } = input;
     let mut file = sftp.open(remote).await?;
     let metadata = file.metadata().await?;
     ensure!(

@@ -115,7 +115,20 @@ fn verify_macos_arch(library: &Path, ext: &str) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-fn write_assets(root: &Path, out: &Path, ext: &str, library: &Path) -> Result<(), Box<dyn Error>> {
+struct WriteAssetsInput<'a> {
+    root: &'a Path,
+    out: &'a Path,
+    ext: &'a str,
+    library: &'a Path,
+}
+
+fn write_assets(input: WriteAssetsInput<'_>) -> Result<(), Box<dyn Error>> {
+    let WriteAssetsInput {
+        root,
+        out,
+        ext,
+        library,
+    } = input;
     let mut entries = vec![];
     collect(root, &root.join("lua"), &mut entries)?;
     collect(root, &root.join("plugin"), &mut entries)?;
@@ -210,7 +223,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("CodeDiff native build failed".into());
     }
     verify_macos_arch(&library, ext)?;
-    write_assets(&root, &out, ext, &library)
+    write_assets(WriteAssetsInput {
+        root: &root,
+        out: &out,
+        ext,
+        library: &library,
+    })
 }
 
 fn main() {

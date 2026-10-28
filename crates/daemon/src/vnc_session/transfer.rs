@@ -136,7 +136,13 @@ async fn run(
                 .await?;
             }
             TransferDirection::Download => {
-                transfer::download(sftp, &transfer.remote, &transfer.local, &progress).await?;
+                transfer::download(transfer::DownloadInput {
+                    sftp,
+                    remote: &transfer.remote,
+                    local: &transfer.local,
+                    progress: &progress,
+                })
+                .await?;
             }
         }
         Ok(())

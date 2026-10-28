@@ -33,12 +33,20 @@ pub(super) fn command(
     command.arg("--").arg(&ssh.host);
     Ok(command)
 }
-pub(super) fn execute(
-    project: &RemoteProject,
-    control: Option<&Path>,
-    script: &str,
-    limit: usize,
-) -> Result<Vec<u8>> {
+pub(super) struct ExecuteInput<'a> {
+    pub(super) project: &'a RemoteProject,
+    pub(super) control: Option<&'a Path>,
+    pub(super) script: &'a str,
+    pub(super) limit: usize,
+}
+
+pub(super) fn execute(input: ExecuteInput<'_>) -> Result<Vec<u8>> {
+    let ExecuteInput {
+        project,
+        control,
+        script,
+        limit,
+    } = input;
     project.validate()?;
     let mut command = command(&project.ssh, control)?;
     command.arg(format!("exec sh -c {}", terminator_core::quote(script)));
@@ -261,7 +269,12 @@ impl Shared {
         let control = control.as_deref();
         match operation {
             Operation::GitStatus => git::status(&project, control),
-            Operation::GitDiff { path, staged } => git::diff(&project, control, &path, staged),
+            Operation::GitDiff { path, staged } => git::diff(git::DiffInput {
+                project: &project,
+                control,
+                path: &path,
+                staged,
+            }),
             operation => files::operation(&project, control, operation),
         }
     }
@@ -334,12 +347,12 @@ impl Shared {
         };
         let project = &project;
         project.validate()?;
-        let bytes = execute(
+        let bytes = execute(ExecuteInput {
             project,
-            self.ssh_control(&project.ssh).as_deref(),
-            &script,
-            8192,
-        )?;
+            control: self.ssh_control(&project.ssh).as_deref(),
+            script: &script,
+            limit: 8192,
+        })?;
         let root = std::str::from_utf8(&bytes)?
             .trim_end_matches('\n')
             .to_owned();
