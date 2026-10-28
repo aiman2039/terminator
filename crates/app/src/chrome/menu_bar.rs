@@ -185,20 +185,23 @@ fn blit_glyph(image: &mut image::RgbaImage, rows: &[&str], origin_x: u32, origin
             if bit != '1' {
                 continue;
             }
-            for dy in 0..SCALE {
-                for dx in 0..SCALE {
-                    let col = u32::try_from(col).unwrap_or(u32::MAX);
-                    let row = u32::try_from(row).unwrap_or(u32::MAX);
-                    let x = origin_x
-                        .saturating_add(col.saturating_mul(SCALE))
-                        .saturating_add(dx);
-                    let y = origin_y
-                        .saturating_add(row.saturating_mul(SCALE))
-                        .saturating_add(dy);
-                    if x < image.width() && y < image.height() {
-                        image.put_pixel(x, y, INK);
-                    }
-                }
+            let col = u32::try_from(col).unwrap_or(u32::MAX);
+            let row = u32::try_from(row).unwrap_or(u32::MAX);
+            let x = origin_x.saturating_add(col.saturating_mul(SCALE));
+            let y = origin_y.saturating_add(row.saturating_mul(SCALE));
+            fill_cell(image, x, y);
+        }
+    }
+}
+
+/// Paints one `SCALE`-sized glyph pixel, clipped to the image.
+fn fill_cell(image: &mut image::RgbaImage, cell_x: u32, cell_y: u32) {
+    for dy in 0..SCALE {
+        for dx in 0..SCALE {
+            let x = cell_x.saturating_add(dx);
+            let y = cell_y.saturating_add(dy);
+            if x < image.width() && y < image.height() {
+                image.put_pixel(x, y, INK);
             }
         }
     }

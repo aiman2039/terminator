@@ -1,4 +1,3 @@
-
 use super::*;
 use terminator_core::Paths;
 
