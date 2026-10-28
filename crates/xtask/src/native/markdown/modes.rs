@@ -18,7 +18,17 @@ impl Md<'_> {
                 after: 4500,
             },
             |_| {
-                h.wait(|_| view(h, editor, "# Unsaved preview", true), 8)?;
+                h.wait(
+                    |_| {
+                        view(ViewInput {
+                            h,
+                            editor,
+                            text: "# Unsaved preview",
+                            attached: true,
+                        })
+                    },
+                    8,
+                )?;
                 self.check_split_layout()
             },
         )?;
@@ -76,7 +86,17 @@ impl Md<'_> {
                 after: 3500,
             },
             |_| {
-                h.wait(|_| view(h, editor, "# Unsaved preview", false), 8)?;
+                h.wait(
+                    |_| {
+                        view(ViewInput {
+                            h,
+                            editor,
+                            text: "# Unsaved preview",
+                            attached: false,
+                        })
+                    },
+                    8,
+                )?;
                 Ok(())
             },
         )?;
@@ -101,7 +121,17 @@ impl Md<'_> {
                 after: 3500,
             },
             |_| {
-                h.wait(|_| view(h, editor, "# Unsaved preview", false), 8)?;
+                h.wait(
+                    |_| {
+                        view(ViewInput {
+                            h,
+                            editor,
+                            text: "# Unsaved preview",
+                            attached: false,
+                        })
+                    },
+                    8,
+                )?;
                 self.preview_follows_tab_file()
             },
         )?;
@@ -120,7 +150,17 @@ impl Md<'_> {
             editor,
             "luaeval('(function() local original = vim.api.nvim_get_current_buf(); vim.api.nvim_buf_set_lines(original, 0, 1, false, {\"# Original buffer preview\"}); local other = vim.api.nvim_create_buf(false, true); vim.api.nvim_buf_set_lines(other, 0, -1, false, {\"# Wrong buffer\"}); vim.bo[other].modified = false; vim.api.nvim_set_current_buf(other); return original end)()')",
         )?;
-        h.wait(|_| view(h, editor, "# Original buffer preview", false), 8)?;
+        h.wait(
+            |_| {
+                view(ViewInput {
+                    h,
+                    editor,
+                    text: "# Original buffer preview",
+                    attached: false,
+                })
+            },
+            8,
+        )?;
         expression(
             h,
             editor,
@@ -205,7 +245,17 @@ impl Md<'_> {
                 after: 4000,
             },
             |_| {
-                h.wait(|_| view(h, editor, "# Back in editor", false), 8)?;
+                h.wait(
+                    |_| {
+                        view(ViewInput {
+                            h,
+                            editor,
+                            text: "# Back in editor",
+                            attached: false,
+                        })
+                    },
+                    8,
+                )?;
                 h.write(
                     &mut h.attach(editor)?,
                     ":echo join(range(1, 200), \"\\n\")\r",

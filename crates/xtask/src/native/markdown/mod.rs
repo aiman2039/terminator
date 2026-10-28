@@ -34,7 +34,19 @@ fn expression(h: &Harness, editor: &Value, expression: &str) -> Result<String> {
         .args(["--remote-expr", expression]);
     Ok(String::from_utf8(output(command)?)?.trim().into())
 }
-fn view(h: &Harness, editor: &Value, text: &str, attached: bool) -> bool {
+struct ViewInput<'a> {
+    h: &'a Harness,
+    editor: &'a Value,
+    text: &'a str,
+    attached: bool,
+}
+fn view(input: ViewInput<'_>) -> bool {
+    let ViewInput {
+        h,
+        editor,
+        text,
+        attached,
+    } = input;
     gui(h).is_ok_and(|snapshot| {
         let Some(markdown) = snapshot
             .get("markdown")
@@ -163,7 +175,14 @@ fn default_preview(h: &Harness, o: &Options) -> Result<Value> {
                     sessions(state)
                         .iter()
                         .find(|s| s["kind"] == "editor")
-                        .is_some_and(|editor| view(h, editor, "# Native Markdown", false))
+                        .is_some_and(|editor| {
+                            view(ViewInput {
+                                h,
+                                editor,
+                                text: "# Native Markdown",
+                                attached: false,
+                            })
+                        })
                 },
                 8,
             )?;

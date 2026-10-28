@@ -15,7 +15,19 @@ fn wait_sidebar(h: &Harness, ids: &Value) -> Result<()> {
     )?;
     Ok(())
 }
-fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Result<()> {
+struct SortSidebarInput<'a> {
+    h: &'a Harness,
+    o: &'a Options,
+    first: &'a Value,
+    second: &'a Value,
+}
+fn sort_sidebar(input: SortSidebarInput<'_>) -> Result<()> {
+    let SortSidebarInput {
+        h,
+        o,
+        first,
+        second,
+    } = input;
     let asc = json!([first["id"].clone(), second["id"].clone()]);
     let desc = json!([second["id"].clone(), first["id"].clone()]);
     capture(
@@ -102,7 +114,12 @@ pub fn run(o: &Options) -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
     let p = seed(&h)?;
-    sort_sidebar(&h, o, &p.first, &p.second)?;
+    sort_sidebar(SortSidebarInput {
+        h: &h,
+        o,
+        first: &p.first,
+        second: &p.second,
+    })?;
     remove_active_project(&h, o, &p)?;
     remove_all_projects(&h, o, &p.second)?;
     restore_project(&h, o, &p.first)?;
