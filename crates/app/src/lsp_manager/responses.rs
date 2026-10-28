@@ -113,7 +113,12 @@ impl LspManager {
         for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
             if let Some(text) = doc.pending_text.take() {
                 doc.version = doc.version.saturating_add(1);
-                let _ = inbox.send(L::did_open(&doc.uri, doc.language_id, doc.version, &text));
+                let _ = inbox.send(L::did_open(L::DidOpenInput {
+                    uri: &doc.uri,
+                    language_id: doc.language_id,
+                    version: doc.version,
+                    text: &text,
+                }));
                 doc.opened = true;
             } else {
                 doc.opened = false;

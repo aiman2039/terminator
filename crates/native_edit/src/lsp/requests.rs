@@ -71,9 +71,23 @@ pub fn exit() -> Vec<u8> {
     notification("exit", Value::Null)
 }
 
+/// Inputs for [`did_open`].
+pub struct DidOpenInput<'a> {
+    pub uri: &'a Url,
+    pub language_id: &'a str,
+    pub version: i32,
+    pub text: &'a str,
+}
+
 /// Full-text `didOpen` for one buffer.
 #[must_use]
-pub fn did_open(uri: &Url, language_id: &str, version: i32, text: &str) -> Vec<u8> {
+pub fn did_open(input: DidOpenInput<'_>) -> Vec<u8> {
+    let DidOpenInput {
+        uri,
+        language_id,
+        version,
+        text,
+    } = input;
     notification(
         "textDocument/didOpen",
         serde_json::json!({

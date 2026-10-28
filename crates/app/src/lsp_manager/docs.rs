@@ -109,7 +109,12 @@ impl LspManager {
         doc.pending_text = None;
         if !doc.opened {
             doc.version = doc.version.saturating_add(1);
-            let bytes = L::did_open(&doc.uri, doc.language_id, doc.version, text);
+            let bytes = L::did_open(L::DidOpenInput {
+                uri: &doc.uri,
+                language_id: doc.language_id,
+                version: doc.version,
+                text,
+            });
             let _ = inbox.send(bytes);
             doc.opened = true;
         } else if was_submitted != revision {

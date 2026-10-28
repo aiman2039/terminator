@@ -143,12 +143,12 @@ impl LspManager {
         let generation = self.hierarchy_generation;
         server
             .inbox
-            .send(L::prepare_hierarchy(
-                &L::RequestId::Number(number),
-                &uri,
+            .send(L::prepare_hierarchy(L::PrepareHierarchyInput {
+                id: &L::RequestId::Number(number),
+                uri: &uri,
                 position,
                 kind,
-            ))
+            }))
             .map_err(|_| "Language server stopped".to_owned())?;
         server.pending.insert(
             number,
@@ -189,12 +189,12 @@ impl LspManager {
         };
         if server
             .inbox
-            .send(L::hierarchy_children(
-                &L::RequestId::Number(number),
+            .send(L::hierarchy_children(L::HierarchyChildrenInput {
+                id: &L::RequestId::Number(number),
                 item,
                 kind,
                 direction,
-            ))
+            }))
             .is_err()
         {
             return false;
@@ -234,12 +234,12 @@ impl LspManager {
         };
         server
             .inbox
-            .send(L::rename(
-                &L::RequestId::Number(number),
-                &uri,
+            .send(L::rename(L::RenameInput {
+                id: &L::RequestId::Number(number),
+                uri: &uri,
                 position,
                 new_name,
-            ))
+            }))
             .map_err(|_| "Language server connection closed".to_string())?;
         server.pending.insert(
             number,

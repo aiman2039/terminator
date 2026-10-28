@@ -40,15 +40,24 @@ pub fn supports_hierarchy(capabilities: &Value, kind: HierarchyKind) -> bool {
     }
 }
 
+/// Inputs for [`prepare_hierarchy`].
+pub struct PrepareHierarchyInput<'a> {
+    pub id: &'a RequestId,
+    pub uri: &'a Url,
+    pub position: Position,
+    pub kind: HierarchyKind,
+}
+
 /// `textDocument/prepareCallHierarchy` / `prepareTypeHierarchy` at a
 /// UTF-16 position.
 #[must_use]
-pub fn prepare_hierarchy(
-    id: &RequestId,
-    uri: &Url,
-    position: Position,
-    kind: HierarchyKind,
-) -> Vec<u8> {
+pub fn prepare_hierarchy(input: PrepareHierarchyInput<'_>) -> Vec<u8> {
+    let PrepareHierarchyInput {
+        id,
+        uri,
+        position,
+        kind,
+    } = input;
     let method = match kind {
         HierarchyKind::Call => "textDocument/prepareCallHierarchy",
         HierarchyKind::Type => "textDocument/prepareTypeHierarchy",
@@ -63,15 +72,24 @@ pub fn prepare_hierarchy(
     )
 }
 
+/// Inputs for [`hierarchy_children`].
+pub struct HierarchyChildrenInput<'a> {
+    pub id: &'a RequestId,
+    pub item: &'a Value,
+    pub kind: HierarchyKind,
+    pub direction: HierarchyDirection,
+}
+
 /// The children of a hierarchy item: incoming / outgoing calls, or
 /// super / sub types.
 #[must_use]
-pub fn hierarchy_children(
-    id: &RequestId,
-    item: &Value,
-    kind: HierarchyKind,
-    direction: HierarchyDirection,
-) -> Vec<u8> {
+pub fn hierarchy_children(input: HierarchyChildrenInput<'_>) -> Vec<u8> {
+    let HierarchyChildrenInput {
+        id,
+        item,
+        kind,
+        direction,
+    } = input;
     let method = match (kind, direction) {
         (HierarchyKind::Call, HierarchyDirection::Up) => "callHierarchy/incomingCalls",
         (HierarchyKind::Call, HierarchyDirection::Down) => "callHierarchy/outgoingCalls",
@@ -117,9 +135,23 @@ pub fn parse_hierarchy_items(result: &Value) -> Vec<HierarchyItem> {
         .collect()
 }
 
+/// Inputs for [`rename`].
+pub struct RenameInput<'a> {
+    pub id: &'a RequestId,
+    pub uri: &'a Url,
+    pub position: Position,
+    pub new_name: &'a str,
+}
+
 /// `textDocument/rename` at a UTF-16 position.
 #[must_use]
-pub fn rename(id: &RequestId, uri: &Url, position: Position, new_name: &str) -> Vec<u8> {
+pub fn rename(input: RenameInput<'_>) -> Vec<u8> {
+    let RenameInput {
+        id,
+        uri,
+        position,
+        new_name,
+    } = input;
     request(
         id,
         "textDocument/rename",

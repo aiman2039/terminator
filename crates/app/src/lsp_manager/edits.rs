@@ -111,7 +111,14 @@ impl LspManager {
         let generation = self.completion_generation;
         self.send_for(
             path,
-            |id, uri| L::code_action(id, uri, range, &diagnostics),
+            |id, uri| {
+                L::code_action(L::CodeActionInput {
+                    id,
+                    uri,
+                    range,
+                    diagnostics: &diagnostics,
+                })
+            },
             Pending::CodeActions {
                 path: path.to_owned(),
                 generation,

@@ -27,9 +27,23 @@ pub fn parse_text_edits(result: &Value) -> Vec<RenameTextEdit> {
         .collect()
 }
 
+/// Inputs for [`code_action`].
+pub struct CodeActionInput<'a> {
+    pub id: &'a RequestId,
+    pub uri: &'a Url,
+    pub range: Range,
+    pub diagnostics: &'a [Diagnostic],
+}
+
 /// `textDocument/codeAction` for a range, with the diagnostics touching it.
 #[must_use]
-pub fn code_action(id: &RequestId, uri: &Url, range: Range, diagnostics: &[Diagnostic]) -> Vec<u8> {
+pub fn code_action(input: CodeActionInput<'_>) -> Vec<u8> {
+    let CodeActionInput {
+        id,
+        uri,
+        range,
+        diagnostics,
+    } = input;
     let position = |p: Position| serde_json::json!({ "line": p.line, "character": p.character });
     let diagnostics: Vec<Value> = diagnostics
         .iter()

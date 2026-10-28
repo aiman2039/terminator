@@ -131,7 +131,12 @@ fn initialize_carries_root_and_utf16() {
 #[test]
 fn sync_notifications_carry_uri_version_text() {
     let uri = Url::parse("file:///repo/main.rs").expect("uri");
-    let opened = body_of(&did_open(&uri, "rust", 3, "fn f() {}"));
+    let opened = body_of(&did_open(DidOpenInput {
+        uri: &uri,
+        language_id: "rust",
+        version: 3,
+        text: "fn f() {}",
+    }));
     assert_eq!(text(&opened, "method"), "textDocument/didOpen");
     let document = field(field(&opened, "params"), "textDocument");
     assert_eq!(number(document, "version"), 3);
@@ -204,15 +209,15 @@ fn references_request_and_locations_keep_utf16_positions() {
 #[test]
 fn rename_parses_multifile_text_edits_and_rejects_file_operations() {
     let uri = Url::parse("file:///repo/main.rs").unwrap();
-    let request = body_of(&rename(
-        &RequestId::Number(4),
-        &uri,
-        Position {
+    let request = body_of(&rename(RenameInput {
+        id: &RequestId::Number(4),
+        uri: &uri,
+        position: Position {
             line: 1,
             character: 5,
         },
-        "new_name",
-    ));
+        new_name: "new_name",
+    }));
     assert_eq!(text(&request, "method"), "textDocument/rename");
     assert_eq!(text(field(&request, "params"), "newName"), "new_name");
 
@@ -487,12 +492,12 @@ fn hierarchy_requests_and_answers_round_trip_items() {
         line: 3,
         character: 4,
     };
-    let prepare = body_of(&prepare_hierarchy(
-        &RequestId::Number(1),
-        &uri,
-        at,
-        HierarchyKind::Call,
-    ));
+    let prepare = body_of(&prepare_hierarchy(PrepareHierarchyInput {
+        id: &RequestId::Number(1),
+        uri: &uri,
+        position: at,
+        kind: HierarchyKind::Call,
+    }));
     assert_eq!(
         text(&prepare, "method"),
         "textDocument/prepareCallHierarchy"
@@ -534,12 +539,12 @@ fn hierarchy_requests_and_answers_round_trip_items() {
             "typeHierarchy/subtypes",
         ),
     ] {
-        let body = body_of(&hierarchy_children(
-            &RequestId::Number(2),
-            &prepared[0].raw,
+        let body = body_of(&hierarchy_children(HierarchyChildrenInput {
+            id: &RequestId::Number(2),
+            item: &prepared[0].raw,
             kind,
             direction,
-        ));
+        }));
         assert_eq!(text(&body, "method"), method);
         assert_eq!(body["params"]["item"]["data"], 7);
     }
