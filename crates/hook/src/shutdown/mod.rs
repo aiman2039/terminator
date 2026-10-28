@@ -146,12 +146,20 @@ fn spawn_relaunch(paths: &Paths, exe: &Path) -> Result<()> {
     Ok(())
 }
 
-fn stop_session(
-    paths: &Paths,
-    generation: &str,
-    targets: &HashSet<String>,
-    sid: &str,
-) -> Result<()> {
+struct StopSessionInput<'a> {
+    paths: &'a Paths,
+    generation: &'a str,
+    targets: &'a HashSet<String>,
+    sid: &'a str,
+}
+
+fn stop_session(input: StopSessionInput<'_>) -> Result<()> {
+    let StopSessionInput {
+        paths,
+        generation,
+        targets,
+        sid,
+    } = input;
     let before = current(paths, generation)?;
     check_scope(&before, targets)?;
     if before
@@ -179,12 +187,20 @@ fn stop_session(
     Ok(())
 }
 
-fn wait_until_idle(
-    paths: &Paths,
-    generation: &str,
-    targets: &HashSet<String>,
+struct WaitUntilIdleInput<'a> {
+    paths: &'a Paths,
+    generation: &'a str,
+    targets: &'a HashSet<String>,
     timeout: Duration,
-) -> Result<()> {
+}
+
+fn wait_until_idle(input: WaitUntilIdleInput<'_>) -> Result<()> {
+    let WaitUntilIdleInput {
+        paths,
+        generation,
+        targets,
+        timeout,
+    } = input;
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(Instant::now);
@@ -226,7 +242,20 @@ fn wait_daemon_exit(paths: &Paths, timeout: Duration) -> Result<()> {
     }
 }
 
-fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Result<usize> {
+struct FinishCleanupInput<'a> {
+    paths: &'a Paths,
+    state: State,
+    stop_all: bool,
+    timeout: Duration,
+}
+
+fn finish_cleanup(input: FinishCleanupInput<'_>) -> Result<usize> {
+    let FinishCleanupInput {
+        paths,
+        state,
+        stop_all,
+        timeout,
+    } = input;
     let targets: HashSet<_> = state
         .sessions
         .iter()
@@ -255,9 +284,19 @@ fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration
         vec![]
     };
     for sid in &targets {
-        stop_session(paths, &state.generation, &targets, sid)?;
+        stop_session(StopSessionInput {
+            paths,
+            generation: &state.generation,
+            targets: &targets,
+            sid,
+        })?;
     }
-    wait_until_idle(paths, &state.generation, &targets, timeout)?;
+    wait_until_idle(WaitUntilIdleInput {
+        paths,
+        generation: &state.generation,
+        targets: &targets,
+        timeout,
+    })?;
     let request = if state
         .capabilities
         .iter()
@@ -330,7 +369,12 @@ pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
     let thaw = freeze(paths, &state, confirmed.as_ref())?;
     let lock = close_gui(paths, timeout)?;
     let generation = state.generation.clone();
-    let result = finish_cleanup(paths, state, stop_all, timeout);
+    let result = finish_cleanup(FinishCleanupInput {
+        paths,
+        state,
+        stop_all,
+        timeout,
+    });
     // Persist before reopening: the old GUI and its error receiver are already gone.
     let report_result = if relaunch.is_some() {
         write_restart_result(paths, &generation, &result)
