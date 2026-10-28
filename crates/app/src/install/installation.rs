@@ -427,7 +427,7 @@ mod tests {
         let status = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "chrome::installation::tests::helper_continues_and_logs_after_gui_process_exits",
+                "install::installation::tests::helper_continues_and_logs_after_gui_process_exits",
             ])
             .env(CHILD, dir.path())
             .status()
