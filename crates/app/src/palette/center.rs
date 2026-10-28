@@ -11,6 +11,41 @@ impl App {
             .selected_project()
             .map(|project| project.name.clone())
             .unwrap_or_default();
+        self.palette_title_row(ui, &project_name);
+        ui.add_space(8.0);
+        self.palette_filter_chips(ui);
+        self.palette_search_field(ui, &project_name);
+        self.palette_request_symbols(ui);
+        if self.lsp.workspace_symbols_pending() {
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
+        }
+        self.refresh_palette_cache();
+        let items = self
+            .palette
+            .cache
+            .as_ref()
+            .map_or_else(Vec::new, |cache| cache.items.clone());
+        if items.is_empty() {
+            ui.weak(if self.lsp.workspace_symbols_pending() {
+                "Searching symbols…"
+            } else {
+                "No matches."
+            });
+            return;
+        }
+        let keyboard_moved = self.palette_keyboard_nav(ui, items.len());
+        let mut chosen = self.palette_result_list(ui, &items, keyboard_moved);
+        if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+            chosen = Some(self.palette.index);
+        }
+        if let Some(index) = chosen
+            && let Some(item) = items.get(index).cloned()
+        {
+            self.run_palette(ui.ctx(), item);
+        }
+    }
+
+    fn palette_title_row(&mut self, ui: &mut egui::Ui, project_name: &str) {
         ui.horizontal(|ui| {
             ui.strong("Search");
             if !project_name.is_empty() {
@@ -22,7 +57,9 @@ impl App {
                 }
             });
         });
-        ui.add_space(8.0);
+    }
+
+    fn palette_filter_chips(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             for (name, bit) in PALETTE_FILTERS {
@@ -39,17 +76,24 @@ impl App {
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), &format!("palette-filter:{name}"), response.rect);
                 if response.clicked() {
-                    // A chip leaves File Structure for the full search.
-                    self.palette.file_scope = None;
-                    if on {
-                        self.palette.filters &= !bit;
-                    } else {
-                        self.palette.filters |= bit;
-                    }
-                    self.palette.index = 0;
+                    self.toggle_palette_filter(*bit, on);
                 }
             }
         });
+    }
+
+    fn toggle_palette_filter(&mut self, bit: u8, on: bool) {
+        // A chip leaves File Structure for the full search.
+        self.palette.file_scope = None;
+        if on {
+            self.palette.filters &= !bit;
+        } else {
+            self.palette.filters |= bit;
+        }
+        self.palette.index = 0;
+    }
+
+    fn palette_search_field(&mut self, ui: &mut egui::Ui, project_name: &str) {
         let scope_name = self
             .palette
             .file_scope
@@ -80,31 +124,37 @@ impl App {
         if !ui.input(|input| input.pointer.primary_down()) {
             search.request_focus();
         }
+    }
+
+    fn palette_request_symbols(&mut self, ui: &egui::Ui) {
         if let Some(scope) = self.palette.file_scope.clone() {
             // The outline is the file's own; no workspace query.
             if !crate::markdown::supported(&scope) {
                 self.lsp.request_symbols(&scope);
             }
-        } else if self.palette_wants(FILTER_SYMBOLS) {
-            if self.palette.query.trim().chars().count() >= 2 {
-                if self.palette.query_changed_at.elapsed() >= SYMBOL_QUERY_DELAY {
-                    let scoped_path = self.selected_project().map(|project| project.path.clone());
-                    if let Some(path) = scoped_path.as_deref() {
-                        self.lsp
-                            .request_scoped_symbols(&self.palette.query, Some(path));
-                    } else {
-                        self.lsp.clear_workspace_symbols();
-                    }
-                } else {
-                    ui.ctx().request_repaint_after(SYMBOL_QUERY_DELAY);
-                }
-            }
+            return;
+        }
+        if !self.palette_wants(FILTER_SYMBOLS) {
+            self.lsp.clear_workspace_symbols();
+            return;
+        }
+        if self.palette.query.trim().chars().count() < 2 {
+            return;
+        }
+        if self.palette.query_changed_at.elapsed() < SYMBOL_QUERY_DELAY {
+            ui.ctx().request_repaint_after(SYMBOL_QUERY_DELAY);
+            return;
+        }
+        let scoped_path = self.selected_project().map(|project| project.path.clone());
+        if let Some(path) = scoped_path.as_deref() {
+            self.lsp
+                .request_scoped_symbols(&self.palette.query, Some(path));
         } else {
             self.lsp.clear_workspace_symbols();
         }
-        if self.lsp.workspace_symbols_pending() {
-            ui.ctx().request_repaint_after(Duration::from_millis(50));
-        }
+    }
+
+    fn refresh_palette_cache(&mut self) {
         let project_id = self.selected_project().map(|project| project.id.clone());
         let stale = self.palette.cache.as_ref().is_none_or(|cache| {
             cache.query != self.palette.query
@@ -115,32 +165,23 @@ impl App {
                 || cache.project != project_id
                 || cache.scope != self.palette.file_scope
         });
-        if stale {
-            self.palette.cache = Some(PaletteCache {
-                query: self.palette.query.clone(),
-                state_revision: self.state.revision,
-                file_index_at: self.file_index_at,
-                lsp_revision: self.lsp.search_revision(),
-                filters: self.palette.filters,
-                project: project_id,
-                scope: self.palette.file_scope.clone(),
-                items: self.filtered_palette(),
-            });
-        }
-        let items = self
-            .palette
-            .cache
-            .as_ref()
-            .map_or_else(Vec::new, |cache| cache.items.clone());
-        if items.is_empty() {
-            ui.weak(if self.lsp.workspace_symbols_pending() {
-                "Searching symbols…"
-            } else {
-                "No matches."
-            });
+        if !stale {
             return;
         }
-        let len = items.len();
+        self.palette.cache = Some(PaletteCache {
+            query: self.palette.query.clone(),
+            state_revision: self.state.revision,
+            file_index_at: self.file_index_at,
+            lsp_revision: self.lsp.search_revision(),
+            filters: self.palette.filters,
+            project: project_id,
+            scope: self.palette.file_scope.clone(),
+            items: self.filtered_palette(),
+        });
+    }
+
+    /// Arrow keys move the selection, wrapping; returns whether it moved.
+    fn palette_keyboard_nav(&mut self, ui: &egui::Ui, len: usize) -> bool {
         self.palette.index = self.palette.index.min(len.saturating_sub(1));
         let mut keyboard_moved = false;
         if ui.input(|input| input.key_pressed(egui::Key::ArrowDown))
@@ -161,6 +202,16 @@ impl App {
                 .unwrap_or_else(|| len.saturating_sub(1));
             keyboard_moved = true;
         }
+        keyboard_moved
+    }
+
+    /// The result rows; returns the clicked index.
+    fn palette_result_list(
+        &self,
+        ui: &mut egui::Ui,
+        items: &[PaletteItem],
+        keyboard_moved: bool,
+    ) -> Option<usize> {
         let mut chosen = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -191,14 +242,7 @@ impl App {
                     }
                 }
             });
-        if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-            chosen = Some(self.palette.index);
-        }
-        if let Some(index) = chosen
-            && let Some(item) = items.get(index).cloned()
-        {
-            self.run_palette(ui.ctx(), item);
-        }
+        chosen
     }
 
     fn close_palette(&mut self) {
