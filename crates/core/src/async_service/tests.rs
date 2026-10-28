@@ -1,4 +1,6 @@
 use super::*;
+/// The fixtures fail with `Failure` itself.
+type Supervisor<T> = super::Supervisor<T, Failure>;
 async fn completion<T: Send + 'static>(supervisor: &mut Supervisor<T>) -> Completion<T> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(3))
@@ -223,7 +225,7 @@ async fn native_cancel_does_not_replace_a_blocked_worker() {
             .run(&task_token, move || {
                 let _ = entered.send(());
                 gate.recv().unwrap();
-                Ok(7)
+                Ok::<_, Failure>(7)
             })
             .await
     });
@@ -233,7 +235,7 @@ async fn native_cancel_does_not_replace_a_blocked_worker() {
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     assert!(
-        pool.run(&cancelled, || -> anyhow::Result<()> {
+        pool.run(&cancelled, || -> Result<(), Failure> {
             panic!("cancelled native job ran")
         })
         .await
@@ -256,7 +258,7 @@ async fn native_pool_waits_for_a_slot_instead_of_shedding() {
             .run(&blocked_token, move || {
                 let _ = entered.send(());
                 gate.recv().unwrap();
-                Ok(1_u8)
+                Ok::<_, Failure>(1_u8)
             })
             .await
     });
@@ -267,7 +269,7 @@ async fn native_pool_waits_for_a_slot_instead_of_shedding() {
         extra.push(tokio::spawn(async move {
             waiter
                 .run(&CancellationToken::new(), move || {
-                    Ok(u8::try_from(n).unwrap_or(u8::MAX))
+                    Ok::<_, Failure>(u8::try_from(n).unwrap_or(u8::MAX))
                 })
                 .await
         }));

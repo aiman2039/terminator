@@ -110,7 +110,7 @@ impl App {
                 let cwd = service
                     .fs()
                     .run(&async_service::CancellationToken::new(), move || {
-                        Ok(services::existing_directory(cwd))
+                        anyhow::Ok(services::existing_directory(cwd))
                     })
                     .await?;
                 let dialog = dialog.set_directory(cwd);
@@ -291,7 +291,7 @@ impl App {
                 let cwd = service
                     .fs()
                     .run(&async_service::CancellationToken::new(), move || {
-                        Ok(services::existing_directory(cwd))
+                        anyhow::Ok(services::existing_directory(cwd))
                     })
                     .await?;
                 let path = dialog.set_directory(cwd).pick_file().await;
@@ -319,7 +319,7 @@ impl App {
                 let cwd = service
                     .fs()
                     .run(&async_service::CancellationToken::new(), move || {
-                        Ok(services::existing_directory(cwd))
+                        anyhow::Ok(services::existing_directory(cwd))
                     })
                     .await?;
                 let dialog = dialog.set_directory(cwd);
@@ -346,7 +346,7 @@ impl App {
                 let cwd = service
                     .fs()
                     .run(&async_service::CancellationToken::new(), move || {
-                        Ok(services::existing_directory(cwd))
+                        anyhow::Ok(services::existing_directory(cwd))
                     })
                     .await?;
                 let dialog = dialog.set_directory(cwd);
@@ -354,9 +354,11 @@ impl App {
                 let paths = service
                     .fs()
                     .run(&async_service::CancellationToken::new(), move || {
-                        Ok(folder
-                            .map(|path| player::audio_from_dir(&path))
-                            .unwrap_or_default())
+                        anyhow::Ok(
+                            folder
+                                .map(|path| player::audio_from_dir(&path))
+                                .unwrap_or_default(),
+                        )
                     })
                     .await?;
                 service.emit(Update::PickedAudio(paths)).await?;
@@ -387,7 +389,7 @@ impl App {
                 let directory = service
                     .fs()
                     .run(&async_service::CancellationToken::new(), move || {
-                        Ok(services::existing_directory(selected))
+                        anyhow::Ok(services::existing_directory(selected))
                     })
                     .await?;
                 let dialog = dialog.set_directory(directory);
@@ -421,7 +423,7 @@ impl App {
                     let cwd = service
                         .fs()
                         .run(&async_service::CancellationToken::new(), move || {
-                            Ok(services::existing_directory(cwd))
+                            anyhow::Ok(services::existing_directory(cwd))
                         })
                         .await?;
                     let dialog = dialog.set_directory(cwd);

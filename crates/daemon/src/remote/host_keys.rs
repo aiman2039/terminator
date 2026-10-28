@@ -28,7 +28,7 @@ fn resolve(options: &SshOptions) -> Result<ssh::Resolved> {
         },
     )
     .context("Cannot resolve the SSH host configuration")?;
-    ssh::parse_resolved(std::str::from_utf8(&output.stdout)?)
+    Ok(ssh::parse_resolved(std::str::from_utf8(&output.stdout)?)?)
 }
 pub(crate) fn scan(options: &SshOptions) -> Result<HostKeyScan> {
     let resolved = resolve(options)?;

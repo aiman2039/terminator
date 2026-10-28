@@ -112,7 +112,7 @@ impl Services {
                             .and_then(serde_json::Value::as_str)
                             == Some(if staged { "Index" } else { "Working tree" })
                     {
-                        return Ok(Some(session));
+                        return anyhow::Ok(Some(session));
                     }
                 }
                 Ok(None)
@@ -171,6 +171,7 @@ impl Services {
                 layout,
             })
             .await
+            .map_err(anyhow::Error::from)
             .and_then(|response| {
                 anyhow::ensure!(
                     matches!(response, Response::Ok),
@@ -248,6 +249,7 @@ impl Services {
                 sessions: ids.clone(),
             })
             .await
+            .map_err(anyhow::Error::from)
             .and_then(|response| match response {
                 Response::IdleSessionsClosed(outcomes) => Ok(outcomes),
                 _ => anyhow::bail!("Unexpected idle-close response"),
@@ -369,7 +371,7 @@ impl Services {
             let message = service
                 .fs()
                 .run(&token, move || {
-                    Ok(installation::restart_message(
+                    anyhow::Ok(installation::restart_message(
                         watched.log_path,
                         watched.log_start,
                     ))

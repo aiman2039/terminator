@@ -34,14 +34,21 @@ fn process_inventory() -> sysinfo::System {
 }
 
 /// A fresh process inventory, never a cached GUI observation.
-pub fn verify_shell(session: &crate::Session, expected: &std::path::Path) -> anyhow::Result<u32> {
-    use anyhow::{Context, ensure};
+pub fn verify_shell(
+    session: &crate::Session,
+    expected: &std::path::Path,
+) -> Result<u32, ShellCheckError> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
-    ensure!(
-        session.kind == crate::SessionKind::Shell,
-        "Editors require their own close flow"
-    );
-    let pid = session.pid.context("Shell identity is unavailable")?;
+    let refuse = |reason| ShellCheckError {
+        session: session.id.clone(),
+        reason,
+    };
+    if session.kind != crate::SessionKind::Shell {
+        return Err(refuse(ShellRefusal::Editor));
+    }
+    let pid = session
+        .pid
+        .ok_or_else(|| refuse(ShellRefusal::NoIdentity))?;
     let mut system = process_inventory();
     // sysinfo's first macOS inventory has BSD process state only; refresh the
     // owned shell once more to obtain its actual thread wait state.
@@ -54,35 +61,59 @@ pub fn verify_shell(session: &crate::Session, expected: &std::path::Path) -> any
     );
     let process = system
         .process(Pid::from_u32(pid))
-        .context("Shell process is unavailable")?;
-    ensure!(
-        process.start_time().abs_diff(session.created) <= 2,
-        "Shell identity changed"
-    );
-    ensure!(
-        process.exe().and_then(|p| p.canonicalize().ok()).as_deref() == Some(expected),
-        "Shell executable changed"
-    );
+        .ok_or_else(|| refuse(ShellRefusal::NoProcess))?;
+    if process.start_time().abs_diff(session.created) > 2 {
+        return Err(refuse(ShellRefusal::IdentityChanged));
+    }
+    if process.exe().and_then(|p| p.canonicalize().ok()).as_deref() != Some(expected) {
+        return Err(refuse(ShellRefusal::ExecutableChanged));
+    }
     let name = process
         .exe()
         .and_then(|p| p.file_name())
         .and_then(|s| s.to_str());
-    ensure!(
-        matches!(name, Some("zsh" | "bash" | "fish")),
-        "Shell readiness is unsupported"
-    );
-    ensure!(
-        shell_waiting(pid, process.status()),
-        "Shell is not verifiably waiting"
-    );
-    ensure!(
-        !system
-            .processes()
-            .values()
-            .any(|p| p.parent() == Some(Pid::from_u32(pid))),
-        "Shell has live descendants or jobs"
-    );
+    if !matches!(name, Some("zsh" | "bash" | "fish")) {
+        return Err(refuse(ShellRefusal::Unsupported));
+    }
+    if !shell_waiting(pid, process.status()) {
+        return Err(refuse(ShellRefusal::NotWaiting));
+    }
+    if system
+        .processes()
+        .values()
+        .any(|p| p.parent() == Some(Pid::from_u32(pid)))
+    {
+        return Err(refuse(ShellRefusal::Busy));
+    }
     Ok(pid)
+}
+
+/// Why a shell session cannot be closed as idle.
+#[derive(Debug, thiserror::Error)]
+#[error("{reason}")]
+pub struct ShellCheckError {
+    pub session: String,
+    pub reason: ShellRefusal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ShellRefusal {
+    #[error("Editors require their own close flow")]
+    Editor,
+    #[error("Shell identity is unavailable")]
+    NoIdentity,
+    #[error("Shell process is unavailable")]
+    NoProcess,
+    #[error("Shell identity changed")]
+    IdentityChanged,
+    #[error("Shell executable changed")]
+    ExecutableChanged,
+    #[error("Shell readiness is unsupported")]
+    Unsupported,
+    #[error("Shell is not verifiably waiting")]
+    NotWaiting,
+    #[error("Shell has live descendants or jobs")]
+    Busy,
 }
 
 #[cfg(not(target_os = "macos"))]

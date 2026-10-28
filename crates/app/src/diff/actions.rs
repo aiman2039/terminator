@@ -35,7 +35,7 @@ async fn git(
     args: Vec<OsString>,
     input: Option<Vec<u8>>,
 ) -> Result<Vec<u8>> {
-    terminator_git::run(
+    Ok(terminator_git::run(
         service.processes(),
         service.fs(),
         terminator_git::RunInput {
@@ -48,7 +48,7 @@ async fn git(
             },
         },
     )
-    .await
+    .await?)
 }
 
 impl Source {
@@ -474,7 +474,7 @@ async fn apply(service: &Services, change: &Undo, cancel: &CancellationToken) ->
     let after = change.after.clone();
     let bytes = service
         .cpu()
-        .run(cancel, move || Ok(patch(&path, &before, &after)))
+        .run(cancel, move || anyhow::Ok(patch(&path, &before, &after)))
         .await?;
     let mut args: Vec<OsString> = vec!["apply".into(), "--whitespace=nowarn".into()];
     if change.index {

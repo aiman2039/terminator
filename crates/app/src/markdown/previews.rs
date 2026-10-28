@@ -335,7 +335,7 @@ impl Previews {
                                 Ok(Some(snapshot)) if !force && previous.as_deref() == Some(&snapshot) => return None,
                                 Ok(Some(snapshot)) => {
                                     let retained = Arc::new(snapshot.clone());
-                                    let result = service.cpu().run(&operation, move || Ok(prepare(snapshot))).await.map_err(|e| format!("{e:#}"));
+                                    let result = service.cpu().run(&operation, move || anyhow::Ok(prepare(snapshot))).await.map_err(|e| format!("{e:#}"));
                                     if result.is_ok() { snapshots.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(source.session.clone(), retained); failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&source.session); }
                                     else { failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(source.session.clone()); }
                                     result
@@ -451,7 +451,7 @@ impl Previews {
                 .submit(context, cancel, async move {
                     let result = service
                         .cpu()
-                        .run(&token, move || Ok(prepare(snapshot)))
+                        .run(&token, move || anyhow::Ok(prepare(snapshot)))
                         .await
                         .map_err(|e| format!("{e:#}"));
                     let _ = outgoing.send((generation, id, result)).await;
@@ -532,7 +532,7 @@ async fn read_source_async(input: ReadSourceAsyncInput<'_>) -> Result<Option<Sna
     #[cfg(unix)]
     let live = service
         .fs()
-        .run(cancel, move || Ok(socket.exists()))
+        .run(cancel, move || anyhow::Ok(socket.exists()))
         .await?;
     #[cfg(windows)]
     let live = {

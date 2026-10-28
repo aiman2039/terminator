@@ -1,4 +1,3 @@
-use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -16,6 +15,21 @@ pub enum Transport {
 }
 
 pub use crate::ssh::{SshOptions, validate_host};
+
+/// Why VNC connection options are invalid.
+#[derive(Debug, thiserror::Error)]
+pub enum VncOptionsError {
+    #[error("Reconnect attempts must not exceed 10")]
+    TooManyReconnectAttempts { attempts: u8 },
+    #[error("Reconnect requires at least one attempt")]
+    NoReconnectAttempts,
+    #[error("Invalid TLS server name")]
+    InvalidTlsServerName { name: String },
+    #[error("TLS CA file must be an absolute path")]
+    RelativeTlsCaFile { path: PathBuf },
+    #[error(transparent)]
+    Ssh(#[from] crate::ssh::SshOptionsError),
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,22 +92,24 @@ pub struct VncOptions {
     pub show_remote_cursor: bool,
 }
 impl VncOptions {
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.reconnect.max_attempts <= 10,
-            "Reconnect attempts must not exceed 10"
-        );
-        ensure!(
-            !self.reconnect.enabled || self.reconnect.max_attempts > 0,
-            "Reconnect requires at least one attempt"
-        );
-        ensure!(
-            self.tls_server_name.len() <= 255
-                && !self.tls_server_name.chars().any(char::is_control),
-            "Invalid TLS server name"
-        );
-        if let Some(path) = &self.tls_ca_file {
-            ensure!(path.is_absolute(), "TLS CA file must be an absolute path");
+    pub fn validate(&self) -> Result<(), VncOptionsError> {
+        if self.reconnect.max_attempts > 10 {
+            return Err(VncOptionsError::TooManyReconnectAttempts {
+                attempts: self.reconnect.max_attempts,
+            });
+        }
+        if self.reconnect.enabled && self.reconnect.max_attempts == 0 {
+            return Err(VncOptionsError::NoReconnectAttempts);
+        }
+        if self.tls_server_name.len() > 255 || self.tls_server_name.chars().any(char::is_control) {
+            return Err(VncOptionsError::InvalidTlsServerName {
+                name: self.tls_server_name.clone(),
+            });
+        }
+        if let Some(path) = &self.tls_ca_file
+            && !path.is_absolute()
+        {
+            return Err(VncOptionsError::RelativeTlsCaFile { path: path.clone() });
         }
         if self.transport == Transport::Ssh {
             self.ssh.validate()?;

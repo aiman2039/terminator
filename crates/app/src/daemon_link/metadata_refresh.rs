@@ -36,7 +36,7 @@ pub fn spawn(service: Services) -> tokio::sync::watch::Sender<Option<Request>> {
             let cwd = request.cwd.clone();
             let missing = service
                 .fs()
-                .run(&token, move || Ok(crate::retry_budget::path_missing(&cwd)))
+                .run(&token, move || anyhow::Ok(crate::retry_budget::path_missing(&cwd)))
                 .await
                 .unwrap_or(false);
             if missing {

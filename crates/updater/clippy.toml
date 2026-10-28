@@ -1,0 +1,8 @@
+# Tests index fixtures on purpose. Production code still warns.
+allow-indexing-slicing-in-tests = true
+# Fixture asserts use unwrap/expect. Production code still warns.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+too-many-arguments-threshold = 4
+disallowed-types = [{ path = "anyhow::Error", reason = "library errors must be thiserror enums" }, { path = "anyhow::Result", reason = "library errors must be thiserror enums" }]

@@ -1,34 +1,5 @@
 //! Managed hook configuration. Installers only run on explicit user action.
 #![forbid(unsafe_code)]
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{0}")]
-    Message(String),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Core(#[from] anyhow::Error),
-    #[error(transparent)]
-    Serde(#[from] serde_json::Error),
-    #[error("{context}")]
-    Json {
-        context: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("{context}")]
-    Toml {
-        context: &'static str,
-        #[source]
-        source: toml_edit::TomlError,
-    },
-}
-
-impl Error {
-    fn message(text: impl Into<String>) -> Self {
-        Self::Message(text.into())
-    }
-}
 
 pub type Result<T> = std::result::Result<T, Error>;
 use serde_json::{Value, json};
@@ -49,7 +20,11 @@ pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
         "muse" => ".muse/hooks.json",
         "grok" => ".grok/hooks/terminator.json",
         "cursor" => ".cursor/hooks.json",
-        _ => return Err(Error::message("Unknown built-in integration")),
+        _ => {
+            return Err(Error::UnknownIntegration {
+                kind: kind.to_owned(),
+            });
+        }
     }))
 }
 #[must_use]
@@ -134,17 +109,9 @@ pub fn install_at(input: InstallAtInput<'_>) -> Result<PathBuf> {
         paths,
     } = input;
     let path = config_path(home, kind)?;
-    let before = fs::read_to_string(&path).or_else(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Ok(String::new())
-        } else {
-            Err(e)
-        }
-    })?;
-    if !(!path.is_symlink()) {
-        return Err(Error::message(
-            "Refusing to rewrite a symlinked agent configuration",
-        ));
+    let before = read_existing(&path)?;
+    if path.is_symlink() {
+        return Err(Error::SymlinkedConfig { path });
     }
     let invocation = format!(
         "{} event {} --data-dir {} --runtime-dir {}",
@@ -154,76 +121,16 @@ pub fn install_at(input: InstallAtInput<'_>) -> Result<PathBuf> {
         quote(&paths.runtime.to_string_lossy())
     );
     let command = format!("{invocation} # {MARKER}");
-    let after = if kind == "opencode" {
-        if !(before.is_empty() || before.contains(MARKER)) {
-            return Err(Error::message(
-                "Existing plugin is not managed by Terminator",
-            ));
-        }
-        if remove {
-            String::new()
-        } else {
-            opencode_plugin(helper)
-        }
-    } else if kind == "codex" {
-        codex_config(&before, &command, remove)?
-    } else if kind == "cursor" {
-        if remove && before.trim().is_empty() {
-            String::new()
-        } else {
-            cursor_config(&before, &invocation, remove)?
-        }
-    } else {
-        let mut doc: Value = if before.trim().is_empty() {
-            json!({})
-        } else {
-            serde_json::from_str(&before).map_err(|source| Error::Json {
-                context: "Agent configuration is invalid JSON; left untouched",
-                source,
-            })?
-        };
-        if !(doc.is_object()) {
-            return Err(Error::message("Expected config object"));
-        }
-        if doc.get("hooks").is_none() {
-            doc.as_object_mut()
-                .ok_or_else(|| Error::message("Expected config object"))?
-                .insert("hooks".to_owned(), json!({}));
-        }
-        let hooks = doc
-            .get_mut("hooks")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| Error::message("hooks is not an object"))?;
-        for groups in hooks.values_mut() {
-            clean_json_groups(groups)?;
-        }
-        if !remove {
-            let events = if kind == "muse" {
-                muse_hook_events().to_vec()
-            } else {
-                vec![
-                    "SessionStart",
-                    "UserPromptSubmit",
-                    "PreToolUse",
-                    "PostToolUse",
-                    "PermissionRequest",
-                    "Notification",
-                    "Stop",
-                    "StopFailure",
-                    "SessionEnd",
-                ]
-            };
-            for event in events {
-                let list = hooks
-                    .entry(event)
-                    .or_insert(json!([]))
-                    .as_array_mut()
-                    .ok_or_else(|| Error::message("Hook groups must be arrays"))?;
-                list.push(json!({"hooks":[{"type":"command","command":command,"timeout":2}]}));
-            }
-        }
-        serde_json::to_string_pretty(&doc)? + "\n"
-    };
+    let after = Rewrite {
+        path: &path,
+        kind,
+        before: &before,
+        helper,
+        invocation: &invocation,
+        command: &command,
+        remove,
+    }
+    .after()?;
     if !before.is_empty() && before != after {
         atomic_write(&backup_path(&path), before.as_bytes())?;
     }
@@ -238,6 +145,53 @@ pub fn install_at(input: InstallAtInput<'_>) -> Result<PathBuf> {
         sync_muse_settings(home, &command, remove)?;
     }
     Ok(path)
+}
+
+/// One agent configuration rewrite: the current text and the managed hook to
+/// install, or to strip when `remove` is set.
+pub(crate) struct Rewrite<'a> {
+    path: &'a Path,
+    kind: &'a str,
+    before: &'a str,
+    helper: &'a Path,
+    invocation: &'a str,
+    command: &'a str,
+    remove: bool,
+}
+
+impl Rewrite<'_> {
+    /// The configuration text to write.
+    fn after(&self) -> Result<String> {
+        match self.kind {
+            "opencode" => self.opencode(),
+            "codex" => codex_config(self.before, self.command, self.remove),
+            "cursor" if self.remove && self.before.trim().is_empty() => Ok(String::new()),
+            "cursor" => cursor_config(self.before, self.invocation, self.remove),
+            _ => json_config(self),
+        }
+    }
+
+    fn opencode(&self) -> Result<String> {
+        if !(self.before.is_empty() || self.before.contains(MARKER)) {
+            return Err(Error::UnmanagedPlugin {
+                path: self.path.to_path_buf(),
+            });
+        }
+        Ok(if self.remove {
+            String::new()
+        } else {
+            opencode_plugin(self.helper)
+        })
+    }
+}
+
+/// The file's text, or empty when it does not exist.
+fn read_existing(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// A backup name no earlier backup uses: two installs within one second
@@ -267,313 +221,16 @@ fn write_config(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
-    let path = muse_settings_path(home);
-    if !(!path.is_symlink()) {
-        return Err(Error::message(
-            "Refusing to rewrite a symlinked Muse settings file",
-        ));
-    }
-    let before = fs::read_to_string(&path).or_else(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            Ok(String::new())
-        } else {
-            Err(error)
-        }
-    })?;
-    if before.is_empty() && remove {
-        return Ok(());
-    }
-    let mut doc: Value = if before.trim().is_empty() {
-        json!({"schema_version": 1})
-    } else {
-        serde_json::from_str(&before).map_err(|source| Error::Json {
-            context: "Muse settings are invalid JSON; left untouched",
-            source,
-        })?
-    };
-    if !(doc.is_object()) {
-        return Err(Error::message("Muse settings must be an object"));
-    }
-    match doc.get("schema_version") {
-        None => {
-            doc.as_object_mut()
-                .ok_or_else(|| Error::message("Muse settings must be an object"))?
-                .insert("schema_version".to_owned(), json!(1));
-        }
-        Some(version) if version.as_u64() == Some(1) => {}
-        Some(_) => {
-            return Err(Error::message(
-                "Muse settings schema is not version 1; left untouched",
-            ));
-        }
-    }
-    if doc.get("hooks").is_none() {
-        doc.as_object_mut()
-            .ok_or_else(|| Error::message("Muse settings must be an object"))?
-            .insert("hooks".to_owned(), json!({}));
-    }
-    let hooks = doc
-        .get_mut("hooks")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| Error::message("Muse hooks must be an object"))?;
-    for groups in hooks.values_mut() {
-        clean_json_groups(groups)?;
-    }
-    if !remove {
-        for event in muse_hook_events() {
-            let list = hooks
-                .entry(*event)
-                .or_insert(json!([]))
-                .as_array_mut()
-                .ok_or_else(|| Error::message("Hook groups must be arrays"))?;
-            list.push(json!({"hooks":[{"type":"command","command":command,"timeout":2}]}));
-        }
-    }
-    let after = serde_json::to_string_pretty(&doc)? + "\n";
-    if !before.is_empty() && before != after {
-        atomic_write(&backup_path(&path), before.as_bytes())?;
-    }
-    if before != after {
-        write_config(&path, after.as_bytes())?;
-    }
-    Ok(())
-}
-fn clean_json_groups(groups: &mut Value) -> Result<()> {
-    let groups = groups
-        .as_array_mut()
-        .ok_or_else(|| Error::message("Hook groups must be arrays"))?;
-    for group in groups.iter_mut() {
-        if let Some(hooks) = group.get_mut("hooks").and_then(Value::as_array_mut) {
-            hooks.retain(|h| {
-                !h.get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(|c| c.contains(MARKER))
-            });
-        }
-    }
-    groups.retain(|g| {
-        !g.get("hooks")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
-    });
-    Ok(())
-}
-fn cursor_config(before: &str, invocation: &str, remove: bool) -> Result<String> {
-    let mut doc: Value = if before.trim().is_empty() {
-        json!({"version": 1})
-    } else {
-        serde_json::from_str(before).map_err(|source| Error::Json {
-            context: "Cursor hooks.json is invalid JSON; left untouched",
-            source,
-        })?
-    };
-    if !(doc.is_object()) {
-        return Err(Error::message("Cursor hooks.json must be an object"));
-    }
-    match doc.get("version") {
-        None => {
-            doc.as_object_mut()
-                .ok_or_else(|| Error::message("Cursor hooks.json must be an object"))?
-                .insert("version".to_owned(), json!(1));
-        }
-        Some(version) if version.as_u64() == Some(1) => {}
-        Some(_) => {
-            return Err(Error::message(
-                "Cursor hooks.json version is not 1; left untouched",
-            ));
-        }
-    }
-    if doc.get("hooks").is_none() {
-        doc.as_object_mut()
-            .ok_or_else(|| Error::message("Cursor hooks.json must be an object"))?
-            .insert("hooks".to_owned(), json!({}));
-    }
-    let hooks = doc
-        .get_mut("hooks")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| Error::message("Cursor hooks must be an object"))?;
-    for &(event, response) in cursor_hook_events() {
-        let list = hooks
-            .entry(event)
-            .or_insert(json!([]))
-            .as_array_mut()
-            .ok_or_else(|| Error::message(format!("Cursor {event} hooks must be an array")))?;
-        if list.iter().any(|entry| {
-            entry.as_object().is_some_and(|object| {
-                object.contains_key("hooks") && !object.contains_key("command")
-            })
-        }) {
-            return Err(Error::message(
-                "Unsupported Cursor hook format for {event}; left untouched",
-            ));
-        }
-        list.retain(|entry| {
-            !entry
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| command.contains(MARKER))
-        });
-        if !remove {
-            list.push(json!({
-                "command": format!("{invocation} ; printf '%s\\n' '{response}' # {MARKER}"),
-                "timeout": 2
-            }));
-        }
-    }
-    if remove {
-        hooks.retain(|_, value| value.as_array().is_none_or(|list| !list.is_empty()));
-    }
-    Ok(serde_json::to_string_pretty(&doc)? + "\n")
-}
-
-fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
-    use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value as T};
-    let mut doc = before
-        .parse::<DocumentMut>()
-        .map_err(|source| Error::Toml {
-            context: "Invalid Codex TOML; left untouched",
-            source,
-        })?;
-    if doc.get("hooks").is_none() {
-        doc.insert("hooks", Item::Table(Table::new()));
-    }
-    let hooks = doc
-        .get_mut("hooks")
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| Error::message("Codex hooks must be a table"))?;
-    let events = [
-        "SessionStart",
-        "UserPromptSubmit",
-        "PreToolUse",
-        "PostToolUse",
-        "PermissionRequest",
-        "Notification",
-        "Stop",
-        "SessionEnd",
-        "Interrupt",
-    ];
-    for event in events {
-        if let Some(item) = hooks.get_mut(event) {
-            if let Some(groups) = item.as_array_of_tables_mut() {
-                for group in groups.iter_mut() {
-                    if let Some(h) = group.get_mut("hooks").and_then(Item::as_array_mut) {
-                        h.retain(|v| {
-                            !v.as_inline_table()
-                                .and_then(|t| t.get("command"))
-                                .and_then(T::as_str)
-                                .is_some_and(|c| c.contains(MARKER))
-                        });
-                    }
-                }
-                groups.retain(|g| {
-                    g.get("hooks")
-                        .and_then(Item::as_array)
-                        .is_none_or(|a| !a.is_empty())
-                });
-            } else if let Some(groups) = item.as_array_mut() {
-                for g in groups.iter_mut() {
-                    if let Some(h) = g
-                        .as_inline_table_mut()
-                        .and_then(|t| t.get_mut("hooks"))
-                        .and_then(T::as_array_mut)
-                    {
-                        h.retain(|v| {
-                            !v.as_inline_table()
-                                .and_then(|t| t.get("command"))
-                                .and_then(T::as_str)
-                                .is_some_and(|c| c.contains(MARKER))
-                        });
-                    }
-                }
-                groups.retain(|g| {
-                    g.as_inline_table()
-                        .and_then(|t| t.get("hooks"))
-                        .and_then(T::as_array)
-                        .is_none_or(|h| !h.is_empty())
-                });
-            } else {
-                return Err(Error::message(
-                    "Unsupported Codex hook format for {event}; left untouched",
-                ));
-            }
-        }
-        if !remove {
-            let mut handler = InlineTable::new();
-            handler.insert("type", T::from("command"));
-            handler.insert("command", T::from(command));
-            handler.insert("timeout", T::from(2));
-            let mut hs = Array::new();
-            hs.push(handler);
-            if let Some(arr) = hooks.get_mut(event).and_then(Item::as_array_mut) {
-                let mut group = InlineTable::new();
-                group.insert("hooks", T::Array(hs));
-                arr.push(group);
-            } else {
-                if hooks.get(event).is_none() {
-                    hooks.insert(event, Item::ArrayOfTables(ArrayOfTables::new()));
-                }
-                let mut group = Table::new();
-                group.insert("hooks", Item::Value(T::Array(hs)));
-                hooks
-                    .get_mut(event)
-                    .and_then(Item::as_array_of_tables_mut)
-                    .ok_or_else(|| {
-                        Error::message("Unsupported Codex hook format for {event}; left untouched")
-                    })?
-                    .push(group);
-            }
-        }
-    }
-    Ok(doc.to_string())
-}
-fn opencode_plugin(helper: &Path) -> String {
-    let helper = json!(helper.to_string_lossy()).to_string();
-    format!(
-        r"// {MARKER}
-import {{ spawn }} from 'node:child_process';
-import {{ randomUUID }} from 'node:crypto';
-const TYPES = ['session.created','session.status','session.idle','session.error','session.deleted','permission.asked','permission.replied','permission.v2.asked','permission.v2.replied','question.asked','question.replied','question.rejected','question.v2.asked','question.v2.replied','question.v2.rejected'];
-let started = false;
-function bind() {{
-  if (!process.env.TERMINATOR_SESSION_ID || started) return null;
-  started = true;
-  return {{ invocation: randomUUID(), seq: {{ n: 0 }} }};
-}}
-function emit(invocation, seq, event) {{
-  const type = event && event.type;
-  if (!TYPES.includes(type)) return;
-  const payload = {{...event, terminator_invocation: invocation, terminator_sequence: ++seq.n, terminator_event: randomUUID()}};
-  const child = spawn({helper}, ['event','opencode'], {{stdio:['pipe','ignore','ignore'], env:process.env}});
-  child.on('error', () => {{}}); child.stdin.on('error', () => {{}});
-  child.stdin.end(JSON.stringify(payload));
-  const timer = setTimeout(() => child.kill(), 1800); timer.unref(); child.on('exit', () => clearTimeout(timer));
-}}
-async function server() {{
-  const s = bind();
-  if (!s) return {{}};
-  return {{ event: async ({{ event }}) => emit(s.invocation, s.seq, event) }};
-}}
-export const Terminator = server;
-export default {{
-  id: 'terminator',
-  server,
-  async setup(ctx) {{
-    const s = bind();
-    if (!s) return;
-    const c = new AbortController();
-    void (async () => {{
-      for await (const event of ctx.event.subscribe({{ signal: c.signal }})) emit(s.invocation, s.seq, event);
-    }})();
-    return () => c.abort();
-  }},
-}};
-"
-    )
-}
-
+mod codex;
+mod error;
+mod json_hooks;
 mod normalize;
+mod opencode;
+use codex::codex_config;
+pub use error::Error;
+use json_hooks::{cursor_config, json_config, sync_muse_settings};
 pub use normalize::normalize;
+use opencode::opencode_plugin;
 
 #[cfg(test)]
 mod tests;

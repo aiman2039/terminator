@@ -1,4 +1,5 @@
-use crate::{AgentState, Context, Lifecycle, Paths, Request, Response, Result, State, fs};
+use super::{GenerationsError, Result};
+use crate::{AgentState, Lifecycle, Paths, Request, Response, State, fs};
 use rusqlite::{Connection, OpenFlags};
 
 use super::catalog::{Catalog, Generation, Health, Status, coordinate};
@@ -45,7 +46,10 @@ pub(crate) fn unavailable_snapshot(
                 generation: owner.id.clone(),
                 ..State::default()
             },
-            Some(format!("{error}; saved state unavailable: {saved_error:#}")),
+            Some(format!(
+                "{error}; saved state unavailable: {}",
+                crate::ErrorChain(&saved_error)
+            )),
         )),
         Err(error) => Err(error),
     }
@@ -173,7 +177,9 @@ pub fn prune_retired(root: &Paths, keep: usize) -> Result<usize> {
 
 pub fn snapshot(paths: &Paths) -> Result<State> {
     let catalog = Catalog::open(paths)?;
-    let active = catalog.active()?.context("No active generation")?;
+    let active = catalog
+        .active()?
+        .ok_or(GenerationsError::NoActiveGeneration)?;
     let mut aggregate = State::default();
     let mut inventories = Vec::new();
     for owner in catalog.generations()? {
@@ -190,9 +196,14 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         } else {
             match crate::rpc(&owner.paths(), Request::Snapshot) {
                 Ok(Response::State(s)) => (*s, None),
-                result => {
-                    unavailable_snapshot(&owner, &active, format!("Owner unavailable: {result:?}"))?
-                }
+                result => unavailable_snapshot(
+                    &owner,
+                    &active,
+                    format!(
+                        "Owner unavailable: {:?}",
+                        result.as_ref().map_err(|e| crate::ErrorReport(e))
+                    ),
+                )?,
             }
         };
         if owner.id == active {

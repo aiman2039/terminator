@@ -26,74 +26,9 @@ pub fn check(browser: bool, wayland: bool) -> Result<()> {
         cfg!(target_os = "linux") && Path::new("/.dockerenv").exists(),
         "linux-check is only for a disposable Linux container"
     );
-    let shell = xshell::Shell::new()?;
-    let _env = shell.push_env("DEBIAN_FRONTEND", "noninteractive");
-    xshell::cmd!(shell, "apt-get update -qq").run()?;
-    xshell::cmd!(shell,"apt-get install -y -qq --no-install-recommends pkg-config libfontconfig1-dev libasound2-dev libwebkit2gtk-4.1-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 git curl ca-certificates neovim xvfb xauth openbox dbus-x11 xdg-desktop-portal xdg-desktop-portal-gtk lsof weston").run()?;
-    if browser {
-        xshell::cmd!(
-            shell,
-            "apt-get install -y -qq --no-install-recommends chromium"
-        )
-        .run()?;
-    }
-    let tools = artifacts().join("tools");
-    fs::create_dir_all(&tools)?;
-    let arch = if std::env::consts::ARCH == "aarch64" {
-        "arm64"
-    } else {
-        "x86_64"
-    };
-    let bundle = format!("nvim-linux-{arch}");
-    let executable = tools.join(&bundle).join("bin/nvim");
-    if !executable.exists() {
-        let archive = tools.join(format!("{bundle}.tar.gz"));
-        let url =
-            format!("https://github.com/neovim/neovim/releases/download/v0.11.5/{bundle}.tar.gz");
-        let mut download = command(
-            "curl",
-            &[
-                "-fL",
-                "--retry",
-                "2",
-                "--connect-timeout",
-                "15",
-                "--max-time",
-                "180",
-                "-o",
-            ],
-        );
-        download.arg(&archive).arg(url);
-        status(download)?;
-        let bytes = fs::File::open(&archive)?;
-        tar::Archive::new(flate2::read::GzDecoder::new(bytes)).unpack(&tools)?;
-    }
-    ensure!(executable.exists(), "Pinned Neovim was not extracted");
-    let tool_path = format!(
-        "{}:{}",
-        executable.parent().unwrap().display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let mut build = command(
-        "cargo",
-        &[
-            "build",
-            "--workspace",
-            "--bins",
-            "--examples",
-            "--features",
-            "terminator/test-support",
-            "--locked",
-        ],
-    );
-    build.current_dir(root());
-    status(build)?;
-    let mut tests = command(
-        "cargo",
-        &["test", "--workspace", "--all-features", "--locked"],
-    );
-    tests.current_dir(root()).env("PATH", &tool_path);
-    status(tests)?;
+    install_packages(browser)?;
+    let tool_path = pinned_neovim()?;
+    build_and_test(&tool_path)?;
     let exe = bin().join("xtask");
     let mut integration = Command::new(&exe);
     integration.arg("integration").env("PATH", &tool_path);
@@ -135,6 +70,82 @@ pub fn check(browser: bool, wayland: bool) -> Result<()> {
     }
     Ok(())
 }
+fn install_packages(browser: bool) -> Result<()> {
+    let shell = xshell::Shell::new()?;
+    let _env = shell.push_env("DEBIAN_FRONTEND", "noninteractive");
+    xshell::cmd!(shell, "apt-get update -qq").run()?;
+    xshell::cmd!(shell,"apt-get install -y -qq --no-install-recommends pkg-config libfontconfig1-dev libasound2-dev libwebkit2gtk-4.1-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 git curl ca-certificates neovim xvfb xauth openbox dbus-x11 xdg-desktop-portal xdg-desktop-portal-gtk lsof weston").run()?;
+    if browser {
+        xshell::cmd!(
+            shell,
+            "apt-get install -y -qq --no-install-recommends chromium"
+        )
+        .run()?;
+    }
+    Ok(())
+}
+/// Download the pinned Neovim once; returns a PATH with it first.
+fn pinned_neovim() -> Result<String> {
+    let tools = artifacts().join("tools");
+    fs::create_dir_all(&tools)?;
+    let arch = if std::env::consts::ARCH == "aarch64" {
+        "arm64"
+    } else {
+        "x86_64"
+    };
+    let bundle = format!("nvim-linux-{arch}");
+    let executable = tools.join(&bundle).join("bin/nvim");
+    if !executable.exists() {
+        let archive = tools.join(format!("{bundle}.tar.gz"));
+        let url =
+            format!("https://github.com/neovim/neovim/releases/download/v0.11.5/{bundle}.tar.gz");
+        let mut download = command(
+            "curl",
+            &[
+                "-fL",
+                "--retry",
+                "2",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "180",
+                "-o",
+            ],
+        );
+        download.arg(&archive).arg(url);
+        status(download)?;
+        let bytes = fs::File::open(&archive)?;
+        tar::Archive::new(flate2::read::GzDecoder::new(bytes)).unpack(&tools)?;
+    }
+    ensure!(executable.exists(), "Pinned Neovim was not extracted");
+    Ok(format!(
+        "{}:{}",
+        executable.parent().unwrap().display(),
+        std::env::var("PATH").unwrap_or_default()
+    ))
+}
+fn build_and_test(tool_path: &str) -> Result<()> {
+    let mut build = command(
+        "cargo",
+        &[
+            "build",
+            "--workspace",
+            "--bins",
+            "--examples",
+            "--features",
+            "terminator/test-support",
+            "--locked",
+        ],
+    );
+    build.current_dir(root());
+    status(build)?;
+    let mut tests = command(
+        "cargo",
+        &["test", "--workspace", "--all-features", "--locked"],
+    );
+    tests.current_dir(root()).env("PATH", tool_path);
+    status(tests)
+}
 fn start(program: &Path, args: &[&str], log: &Path) -> Result<Process> {
     let file = fs::File::create(log)?;
     let mut c = Command::new(program);
@@ -153,58 +164,75 @@ pub fn desktop(backend: &str, browser: bool, case: Option<&str>) -> Result<()> {
     fs::create_dir_all(&output)?;
     let mut children = Vec::new();
     if backend == "x11" {
-        children.push(start(
-            Path::new("/usr/bin/openbox"),
-            &[],
-            &output.join("openbox.log"),
-        )?);
-        for name in ["xdg-desktop-portal-gtk", "xdg-desktop-portal"] {
-            let candidates = [
-                PathBuf::from("/usr/libexec").join(name),
-                PathBuf::from("/usr/lib/xdg-desktop-portal").join(name),
-            ];
-            let path = candidates
-                .iter()
-                .find(|p| p.exists())
-                .context("Portal executable missing")?;
-            children.push(start(path, &[], &output.join(format!("{name}.log")))?);
-        }
+        start_x11_services(&output, &mut children)?;
     } else {
-        let help = output_command("weston", &["--help"])?;
-        let render = if help.contains("--use-pixman") {
-            "--use-pixman"
-        } else {
-            "--renderer=pixman"
-        };
-        children.push(start(
-            Path::new("/usr/bin/weston"),
-            &[
-                "--backend=headless-backend.so",
-                render,
-                "--socket=terminator-wayland",
-                "--idle-time=0",
-                "--width=3200",
-                "--height=2000",
-            ],
-            &output.join("weston.log"),
-        )?);
+        children.push(start_weston(&output)?);
     }
     thread::sleep(Duration::from_secs(2));
     if let Some(case) = case {
-        if case == "browser" {
-            integration::browser_live()?;
-        } else {
-            native::run(
-                case,
-                native::Options {
-                    output: output.join("targeted"),
-                    ..Default::default()
-                },
-            )?;
-        }
+        run_targeted(case, &output)?;
         drop(children);
         return Ok(());
     }
+    run_suite(backend, &output)?;
+    if browser {
+        integration::browser_live()?;
+    }
+    drop(children);
+    Ok(())
+}
+fn start_x11_services(output: &Path, children: &mut Vec<Process>) -> Result<()> {
+    children.push(start(
+        Path::new("/usr/bin/openbox"),
+        &[],
+        &output.join("openbox.log"),
+    )?);
+    for name in ["xdg-desktop-portal-gtk", "xdg-desktop-portal"] {
+        let candidates = [
+            PathBuf::from("/usr/libexec").join(name),
+            PathBuf::from("/usr/lib/xdg-desktop-portal").join(name),
+        ];
+        let path = candidates
+            .iter()
+            .find(|p| p.exists())
+            .context("Portal executable missing")?;
+        children.push(start(path, &[], &output.join(format!("{name}.log")))?);
+    }
+    Ok(())
+}
+fn start_weston(output: &Path) -> Result<Process> {
+    let help = output_command("weston", &["--help"])?;
+    let render = if help.contains("--use-pixman") {
+        "--use-pixman"
+    } else {
+        "--renderer=pixman"
+    };
+    start(
+        Path::new("/usr/bin/weston"),
+        &[
+            "--backend=headless-backend.so",
+            render,
+            "--socket=terminator-wayland",
+            "--idle-time=0",
+            "--width=3200",
+            "--height=2000",
+        ],
+        &output.join("weston.log"),
+    )
+}
+fn run_targeted(case: &str, output: &Path) -> Result<()> {
+    if case == "browser" {
+        return integration::browser_live();
+    }
+    native::run(
+        case,
+        native::Options {
+            output: output.join("targeted"),
+            ..Default::default()
+        },
+    )
+}
+fn run_suite(backend: &str, output: &Path) -> Result<()> {
     for scale in [1.0, 2.0] {
         let opts = native::Options {
             scale,
@@ -241,10 +269,6 @@ pub fn desktop(backend: &str, browser: bool, case: Option<&str>) -> Result<()> {
     } else {
         native::run("control", opts)?;
     }
-    if browser {
-        integration::browser_live()?;
-    }
-    drop(children);
     Ok(())
 }
 fn output_command(program: &str, args: &[&str]) -> Result<String> {

@@ -35,9 +35,7 @@ pub fn relative_path(root: &Path, path: &Path) -> Result<PathBuf> {
     match std::fs::symlink_metadata(&absolute) {
         Ok(meta) => {
             if meta.file_type().is_symlink() {
-                return Err(Error::message(
-                    "Diff review supports regular files, not symlinks or submodules",
-                ));
+                return Err(Error::NotRegularFile { path: absolute });
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -59,7 +57,9 @@ pub fn relative_path(root: &Path, path: &Path) -> Result<PathBuf> {
         .components()
         .all(|c| matches!(c, Component::Normal(_))))
     {
-        return Err(Error::message("Review path must be inside the repository"));
+        return Err(Error::PathEscapes {
+            path: relative.to_path_buf(),
+        });
     }
     Ok(relative.to_path_buf())
 }
@@ -73,21 +73,25 @@ pub fn worktree_file(path: &Path) -> Result<Vec<u8>> {
         Err(error) => return Err(error.into()),
     };
     if !meta.is_file() {
-        return Err(Error::message(
-            "Diff review supports regular files, not symlinks or submodules",
-        ));
+        return Err(Error::NotRegularFile { path: path.into() });
     }
     if meta.len() > SNAPSHOT_LIMIT as u64 {
-        return Err(Error::message("Diff file exceeds 1 MiB"));
+        return Err(Error::TooLarge { bytes: meta.len() });
     }
     let mut bytes = vec![];
     std::fs::File::open(path)?
         .take((SNAPSHOT_LIMIT + 1) as u64)
         .read_to_end(&mut bytes)?;
     if bytes.len() > SNAPSHOT_LIMIT {
-        return Err(Error::message("Diff file exceeds 1 MiB"));
+        return Err(too_large(&bytes));
     }
     Ok(bytes)
+}
+
+fn too_large(bytes: &[u8]) -> Error {
+    Error::TooLarge {
+        bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+    }
 }
 
 /// Snapshot bytes must be NUL-free UTF-8 before rendering. Callers report
@@ -104,38 +108,37 @@ pub fn find_record(raw: &[u8], path: &Path) -> Result<Option<(String, String)>> 
     while let Some(header) = fields.next() {
         let header = std::str::from_utf8(header)?;
         let parts: Vec<_> = header.split_whitespace().collect();
+        let invalid = || Error::InvalidDiffRecord {
+            header: header.to_owned(),
+        };
         let Some(&[old_mode, new_mode, before, after, status]) = parts.get(..5) else {
-            return Err(Error::message("Invalid Git diff record"));
+            return Err(invalid());
         };
         if parts.len() != 5 {
-            return Err(Error::message("Invalid Git diff record"));
+            return Err(invalid());
         }
-        let first = fields
-            .next()
-            .ok_or_else(|| Error::message("Missing Git path"))?;
+        let first = fields.next().ok_or_else(|| Error::MissingPath {
+            header: header.to_owned(),
+        })?;
         let target = if status.starts_with(['R', 'C']) {
-            fields
-                .next()
-                .ok_or_else(|| Error::message("Missing rename target"))?
+            fields.next().ok_or_else(|| Error::MissingRenameTarget {
+                header: header.to_owned(),
+            })?
         } else {
             first
         };
         if target != terminator_core::os_bytes(path.as_os_str()).as_ref() {
             continue;
         }
-        if !(!status.starts_with('U')) {
-            return Err(Error::message(
-                "Resolve this file's merge conflict in your editor before opening a two-way diff",
-            ));
+        if status.starts_with('U') {
+            return Err(Error::Conflicted { path: path.into() });
         }
         if !(old_mode != ":160000"
             && new_mode != "160000"
             && old_mode != ":120000"
             && new_mode != "120000")
         {
-            return Err(Error::message(
-                "Diff review supports regular files, not symlinks or submodules",
-            ));
+            return Err(Error::NotRegularFile { path: path.into() });
         }
         return Ok(Some((before.to_owned(), after.to_owned())));
     }
@@ -165,7 +168,7 @@ pub fn blob(root: &Path, oid: &str, options: &CommandOptions) -> Result<Vec<u8>>
     }
     let bytes = git::run_blocking(root, &["cat-file", "blob", oid], fork_options(options))?;
     if bytes.len() > SNAPSHOT_LIMIT {
-        return Err(Error::message("Diff file exceeds 1 MiB"));
+        return Err(too_large(&bytes));
     }
     Ok(bytes)
 }
@@ -197,7 +200,7 @@ pub async fn blob_async(
     )
     .await?;
     if bytes.len() > SNAPSHOT_LIMIT {
-        return Err(Error::message("Diff file exceeds 1 MiB"));
+        return Err(too_large(&bytes));
     }
     Ok(bytes)
 }
@@ -212,7 +215,7 @@ pub fn snapshots(
     options: &CommandOptions,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
     if !(!path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_)))) {
-        return Err(Error::message("Review path must be inside the repository"));
+        return Err(Error::PathEscapes { path: path.into() });
     }
     let raw = git::run_blocking(root, &raw_args(staged), fork_options(options))?;
     match find_record(&raw, path)? {
@@ -225,9 +228,7 @@ pub fn snapshots(
             };
             Ok((left, right))
         }
-        None if staged => Err(Error::message(
-            "This file has no staged changes; refresh Git status",
-        )),
+        None if staged => Err(Error::NoStagedChanges { path: path.into() }),
         None => {
             let tracked = git::run_blocking(
                 root,
@@ -239,13 +240,11 @@ pub fn snapshots(
                 ],
                 fork_options(options),
             )?;
-            if !(tracked.is_empty()) {
-                return Err(Error::message(
-                    "This file has no working-tree changes; refresh Git status",
-                ));
+            if !tracked.is_empty() {
+                return Err(Error::NoWorkingChanges { path: path.into() });
             }
-            if !(root.join(path).exists()) {
-                return Err(Error::message("File no longer exists; refresh Git status"));
+            if !root.join(path).exists() {
+                return Err(Error::Deleted { path: path.into() });
             }
             Ok((vec![], worktree_file(&root.join(path))?))
         }

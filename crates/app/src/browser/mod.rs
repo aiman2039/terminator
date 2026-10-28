@@ -47,7 +47,7 @@ pub(crate) fn supported_file(path: &Path) -> bool {
 }
 
 pub(crate) fn parse_url(value: &str) -> Result<String> {
-    metadata::http_url(value)
+    Ok(metadata::http_url(value)?)
 }
 
 pub(crate) fn profile_dir(data: &Path) -> PathBuf {

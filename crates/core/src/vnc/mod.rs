@@ -1,7 +1,6 @@
 mod options;
 pub use options::*;
 
-use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "vnc-v1";
@@ -9,6 +8,25 @@ pub const CAPABILITY: &str = "vnc-v1";
 /// carries `regions: true` with only the changed rectangle.
 pub const REGIONS_CAPABILITY: &str = "vnc-regions-v1";
 pub const DEFAULT_PORT: u16 = 5900;
+
+/// Why a saved VNC profile is invalid.
+#[derive(Debug, thiserror::Error)]
+pub enum VncProfileError {
+    #[error("Invalid VNC profile ID")]
+    InvalidId { id: String },
+    #[error("Invalid VNC username")]
+    InvalidUsername { username: String },
+    #[error("VNC password exceeds 4096 bytes")]
+    PasswordTooLong { bytes: usize },
+    #[error("VNC host must be 1–255 characters")]
+    InvalidHost { host: String },
+    #[error("VNC port must be between 1 and 65535")]
+    InvalidPort,
+    #[error("VNC profile name must be at most 255 characters")]
+    NameTooLong { bytes: usize },
+    #[error(transparent)]
+    Options(#[from] VncOptionsError),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VncProfile {
@@ -37,33 +55,41 @@ fn default_true() -> bool {
 }
 
 impl VncProfile {
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            !self.id.is_empty()
-                && self.id.len() <= 128
-                && self
-                    .id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
-            "Invalid VNC profile ID"
-        );
-        ensure!(
-            self.username.len() <= 4096 && !self.username.chars().any(char::is_control),
-            "Invalid VNC username"
-        );
-        ensure!(
-            self.password.len() <= 4096,
-            "VNC password exceeds 4096 bytes"
-        );
-        ensure!(
-            !self.host.trim().is_empty() && self.host.len() <= 255,
-            "VNC host must be 1–255 characters"
-        );
-        ensure!(self.port > 0, "VNC port must be between 1 and 65535");
-        ensure!(
-            self.name.len() <= 255,
-            "VNC profile name must be at most 255 characters"
-        );
+    pub fn validate(&self) -> Result<(), VncProfileError> {
+        let valid_id = !self.id.is_empty()
+            && self.id.len() <= 128
+            && self
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        if !valid_id {
+            return Err(VncProfileError::InvalidId {
+                id: self.id.clone(),
+            });
+        }
+        if self.username.len() > 4096 || self.username.chars().any(char::is_control) {
+            return Err(VncProfileError::InvalidUsername {
+                username: self.username.clone(),
+            });
+        }
+        if self.password.len() > 4096 {
+            return Err(VncProfileError::PasswordTooLong {
+                bytes: self.password.len(),
+            });
+        }
+        if self.host.trim().is_empty() || self.host.len() > 255 {
+            return Err(VncProfileError::InvalidHost {
+                host: self.host.clone(),
+            });
+        }
+        if self.port == 0 {
+            return Err(VncProfileError::InvalidPort);
+        }
+        if self.name.len() > 255 {
+            return Err(VncProfileError::NameTooLong {
+                bytes: self.name.len(),
+            });
+        }
         self.options.validate()?;
         Ok(())
     }
