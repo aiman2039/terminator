@@ -1,6 +1,6 @@
 use super::super::*;
 use super::diff_paint::{DiffColors, PaintDiffDocumentInput, paint_diff_document};
-use super::diff_tests::tests::long_doc;
+use super::diff_tests::long_doc;
 use super::header::{
     HEADER_ACTIONS, ProjectHeaderChrome, filter_history_lines, header_row_width,
     header_visible_count, project_header_chrome,
