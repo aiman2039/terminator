@@ -1330,12 +1330,12 @@ mod tests {
         engine.set_modeless(true);
         let _ = engine.place_cursor(&mut doc, 1, 0);
         assert_eq!(
-            super::super::render::caret_reference("src/lib.rs", &engine),
+            super::super::render::RenderHelpers::caret_reference("src/lib.rs", &engine),
             "src/lib.rs:2"
         );
         engine.extend_selection_to(&mut doc, 2, 1);
         assert_eq!(
-            super::super::render::caret_reference("src/lib.rs", &engine),
+            super::super::render::RenderHelpers::caret_reference("src/lib.rs", &engine),
             "src/lib.rs:2-3"
         );
     }

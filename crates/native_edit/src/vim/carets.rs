@@ -44,6 +44,39 @@ struct Spot {
     preferred_col: usize,
 }
 
+impl Spot {
+    fn of<B: Buffer>(doc: &B, caret: &Caret) -> Self {
+        Self {
+            mode: caret.mode,
+            cursor: offset(doc, caret.cursor),
+            anchor: offset(doc, caret.anchor),
+            preferred_col: caret.preferred_col,
+        }
+    }
+
+    fn caret<B: Buffer>(&self, doc: &B) -> Caret {
+        Caret {
+            mode: self.mode,
+            cursor: cursor_at(doc, self.cursor),
+            anchor: cursor_at(doc, self.anchor),
+            preferred_col: self.preferred_col,
+        }
+    }
+
+    /// Follow a buffer length change from `before` to `after` chars.
+    fn shift(&mut self, before: usize, after: usize) {
+        let shift = |at: usize| {
+            if after >= before {
+                at.saturating_add(after.saturating_sub(before))
+            } else {
+                at.saturating_sub(before.saturating_sub(after))
+            }
+        };
+        self.cursor = shift(self.cursor);
+        self.anchor = shift(self.anchor);
+    }
+}
+
 fn offset<B: Buffer>(doc: &B, at: Cursor) -> usize {
     doc.char_at_line_col(at.line, at.col)
 }
@@ -278,15 +311,10 @@ impl VimEngine {
         if self.extra_carets.is_empty() {
             return apply(self, doc);
         }
-        let carets = self.carets();
-        let mut spots: Vec<Spot> = carets
+        let mut spots: Vec<Spot> = self
+            .carets()
             .iter()
-            .map(|caret| Spot {
-                mode: caret.mode,
-                cursor: offset(doc, caret.cursor),
-                anchor: offset(doc, caret.anchor),
-                preferred_col: caret.preferred_col,
-            })
+            .map(|caret| Spot::of(doc, caret))
             .collect();
         let mut order: Vec<usize> = (0..spots.len()).collect();
         order.sort_by_key(|index| {
@@ -303,12 +331,7 @@ impl VimEngine {
             let Some(spot) = spots.get(index).copied() else {
                 continue;
             };
-            self.load_caret(Caret {
-                mode: spot.mode,
-                cursor: cursor_at(doc, spot.cursor),
-                anchor: cursor_at(doc, spot.anchor),
-                preferred_col: spot.preferred_col,
-            });
+            self.load_caret(spot.caret(doc));
             let before = doc.len_chars();
             effects.extend(apply(self, doc));
             let after = doc.len_chars();
@@ -316,37 +339,26 @@ impl VimEngine {
             // length change (deletions shrink, insertions grow).
             for other in &done {
                 if let Some(moved) = spots.get_mut(*other) {
-                    let shift = |at: usize| {
-                        if after >= before {
-                            at.saturating_add(after.saturating_sub(before))
-                        } else {
-                            at.saturating_sub(before.saturating_sub(after))
-                        }
-                    };
-                    moved.cursor = shift(moved.cursor);
-                    moved.anchor = shift(moved.anchor);
+                    moved.shift(before, after);
                 }
             }
             let now = self.current_caret();
             if let Some(slot) = spots.get_mut(index) {
-                *slot = Spot {
-                    mode: now.mode,
-                    cursor: offset(doc, now.cursor),
-                    anchor: offset(doc, now.anchor),
-                    preferred_col: now.preferred_col,
-                };
+                *slot = Spot::of(doc, &now);
             }
             done.push(index);
         }
         doc.end_undo_group();
+        self.load_merged_carets(doc, &spots);
+        effects
+    }
+
+    /// Carets that ended up on the same spot merge; the first becomes the
+    /// engine's own.
+    fn load_merged_carets<B: Buffer>(&mut self, doc: &B, spots: &[Spot]) {
         let mut merged: Vec<Caret> = Vec::new();
-        for spot in &spots {
-            let caret = Caret {
-                mode: spot.mode,
-                cursor: cursor_at(doc, spot.cursor),
-                anchor: cursor_at(doc, spot.anchor),
-                preferred_col: spot.preferred_col,
-            };
+        for spot in spots {
+            let caret = spot.caret(doc);
             if !merged.iter().any(|kept| kept.cursor == caret.cursor) {
                 merged.push(caret);
             }
@@ -356,7 +368,6 @@ impl VimEngine {
             self.load_caret(primary);
         }
         self.extra_carets = merged.collect();
-        effects
     }
 }
 
