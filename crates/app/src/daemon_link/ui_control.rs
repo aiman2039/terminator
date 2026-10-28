@@ -93,56 +93,7 @@ async fn serve_until(
     paths: Paths,
     deadline: Instant,
 ) -> Result<()> {
-    let result: Result<serde_json::Value> = async {
-        let bytes = tokio::time::timeout(Duration::from_secs(3), async {
-            let size = stream.read_u32().await? as usize;
-            ensure!(size <= terminator_core::MAX_FRAME, "IPC frame too large");
-            let mut bytes = vec![0; size];
-            stream.read_exact(&mut bytes).await?;
-            Ok::<_, anyhow::Error>(bytes)
-        })
-        .await??;
-        let envelope: Envelope = service
-            .cpu()
-            .run(&CancellationToken::new(), move || {
-                anyhow::Ok(serde_json::from_slice(&bytes)?)
-            })
-            .await?;
-        let token = service
-            .client()
-            .catalog
-            .run(&CancellationToken::new(), move || {
-                Ok::<_, anyhow::Error>(paths.token()?)
-            })
-            .await?;
-        ensure!(
-            envelope.version == 1 && envelope.auth == token,
-            "GUI authentication failed"
-        );
-        envelope.request.validate()?;
-        if !matches!(
-            envelope.request,
-            terminator_core::ui_control::Request::Snapshot
-                | terminator_core::ui_control::Request::Ping
-        ) && let terminator_core::Response::State(state) = service
-            .client()
-            .rpc(terminator_core::Request::Snapshot)
-            .await?
-        {
-            service.emit(Update::State(state)).await?;
-        }
-        let (reply, response) = tokio::sync::oneshot::channel();
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(5))
-            .map_or(deadline, |limit| deadline.min(limit));
-        service
-            .emit(Update::AsyncUiRequest(envelope.request, reply, deadline))
-            .await?;
-        tokio::time::timeout_at(deadline.into(), response)
-            .await??
-            .map_err(anyhow::Error::msg)
-    }
-    .await;
+    let result = answer(&mut stream, &service, paths, deadline).await;
     let response = match result {
         Ok(value) => Response {
             result: Some(value),
@@ -153,6 +104,91 @@ async fn serve_until(
             error: Some(error.to_string()),
         },
     };
+    write_response(&mut stream, &service, response).await
+}
+
+/// Reads, authenticates and runs one request; the error becomes the reply.
+async fn answer(
+    stream: &mut transport::AsyncStream,
+    service: &Services,
+    paths: Paths,
+    deadline: Instant,
+) -> Result<serde_json::Value> {
+    let bytes = read_frame(stream).await?;
+    let request = authenticated_request(service, paths, bytes).await?;
+    sync_state(service, &request).await?;
+    let (reply, response) = tokio::sync::oneshot::channel();
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .map_or(deadline, |limit| deadline.min(limit));
+    service
+        .emit(Update::AsyncUiRequest(request, reply, deadline))
+        .await?;
+    tokio::time::timeout_at(deadline.into(), response)
+        .await??
+        .map_err(anyhow::Error::msg)
+}
+
+async fn read_frame(stream: &mut transport::AsyncStream) -> Result<Vec<u8>> {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let size = stream.read_u32().await? as usize;
+        ensure!(size <= terminator_core::MAX_FRAME, "IPC frame too large");
+        let mut bytes = vec![0; size];
+        stream.read_exact(&mut bytes).await?;
+        Ok::<_, anyhow::Error>(bytes)
+    })
+    .await?
+}
+
+async fn authenticated_request(
+    service: &Services,
+    paths: Paths,
+    bytes: Vec<u8>,
+) -> Result<terminator_core::ui_control::Request> {
+    let envelope: Envelope = service
+        .cpu()
+        .run(&CancellationToken::new(), move || {
+            anyhow::Ok(serde_json::from_slice(&bytes)?)
+        })
+        .await?;
+    let token = service
+        .client()
+        .catalog
+        .run(&CancellationToken::new(), move || {
+            Ok::<_, anyhow::Error>(paths.token()?)
+        })
+        .await?;
+    ensure!(
+        envelope.version == 1 && envelope.auth == token,
+        "GUI authentication failed"
+    );
+    envelope.request.validate()?;
+    Ok(envelope.request)
+}
+
+/// Requests that act on sessions see the daemon's latest state first.
+async fn sync_state(
+    service: &Services,
+    request: &terminator_core::ui_control::Request,
+) -> Result<()> {
+    if !matches!(
+        request,
+        terminator_core::ui_control::Request::Snapshot | terminator_core::ui_control::Request::Ping
+    ) && let terminator_core::Response::State(state) = service
+        .client()
+        .rpc(terminator_core::Request::Snapshot)
+        .await?
+    {
+        service.emit(Update::State(state)).await?;
+    }
+    Ok(())
+}
+
+async fn write_response(
+    stream: &mut transport::AsyncStream,
+    service: &Services,
+    response: Response,
+) -> Result<()> {
     let bytes = service
         .cpu()
         .run(&CancellationToken::new(), move || {
