@@ -31,8 +31,21 @@ pub(super) struct Geometry {
     pub mouse_drag_key: egui::Id,
 }
 
+pub struct MeasureInput<'a, B> {
+    pub ui: &'a egui::Ui,
+    pub doc: &'a B,
+    pub options: &'a SourceOptions,
+    pub id: &'a str,
+}
+
 impl Geometry {
-    pub fn measure<B: Buffer>(ui: &egui::Ui, doc: &B, options: &SourceOptions, id: &str) -> Self {
+    pub fn measure<B: Buffer>(input: MeasureInput<'_, B>) -> Self {
+        let MeasureInput {
+            ui,
+            doc,
+            options,
+            id,
+        } = input;
         let font = FontId::monospace(options.font_size);
         let italic_font = FontId::new(
             options.font_size,

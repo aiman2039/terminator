@@ -230,12 +230,12 @@ impl Shared {
                 });
             }));
             if outcome.is_err() {
-                mark_failed(
-                    &shared_ref,
-                    &runtime,
-                    &session_id,
-                    "VNC session stopped after an internal error".into(),
-                );
+                mark_failed(MarkFailedInput {
+                    shared: &shared_ref,
+                    runtime: &runtime,
+                    session_id: &session_id,
+                    message: "VNC session stopped after an internal error".into(),
+                });
             }
         });
     }

@@ -1,7 +1,7 @@
 use super::super::{
     Context, Harness, Options, Result, Value, capture, ensure, fs, id, json, sessions,
 };
-use super::{CaptureInput, gui, launch, view};
+use super::{CaptureInput, ViewInput, gui, launch, view};
 
 pub fn busy(o: &Options) -> Result<()> {
     let (h, shell, root) = launch("markdown-busy")?;
@@ -72,8 +72,12 @@ fn capture_waiting(h: &Harness, o: &Options) -> Result<()> {
                         .iter()
                         .find(|s| s["kind"] == "editor")
                         .is_some_and(|editor| {
-                            view(h, editor, "# Markdown while Neovim waits", false)
-                                && has_status(h, editor, "Saved file · live preview paused")
+                            view(ViewInput {
+                                h,
+                                editor,
+                                text: "# Markdown while Neovim waits",
+                                attached: false,
+                            }) && has_status(h, editor, "Saved file · live preview paused")
                         })
                 },
                 8,
@@ -96,8 +100,12 @@ fn capture_resumed(h: &Harness, o: &Options, editor: &Value) -> Result<()> {
         |_| {
             h.wait(
                 |_| {
-                    view(h, editor, "# Markdown while Neovim waits", false)
-                        && has_status(h, editor, "Live preview")
+                    view(ViewInput {
+                        h,
+                        editor,
+                        text: "# Markdown while Neovim waits",
+                        attached: false,
+                    }) && has_status(h, editor, "Live preview")
                 },
                 8,
             )?;

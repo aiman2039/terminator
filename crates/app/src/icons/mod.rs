@@ -1,6 +1,69 @@
 use eframe::egui;
 
+mod file_tables;
+mod lang_sources;
+mod lang_tables;
 mod langs;
+mod ui_sources;
+
+/// Icon name paired with every lowercased key (file name or extension) it covers.
+type IconTable = &'static [(&'static str, &'static [&'static str])];
+/// Bundled image per icon name.
+type SourceTable = &'static [(&'static str, egui::ImageSource<'static>)];
+
+/// Lookups over the static icon tables.
+struct IconTables;
+
+impl IconTables {
+    fn icon(table: IconTable, key: &str) -> Option<&'static str> {
+        table
+            .iter()
+            .find(|(_, keys)| keys.contains(&key))
+            .map(|(icon, _)| *icon)
+    }
+
+    fn source(table: SourceTable, name: &str) -> Option<egui::ImageSource<'static>> {
+        table
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, source)| source.clone())
+    }
+
+    /// Theme-tinted icon for file names matched by prefix or alias.
+    fn by_name_pattern(name: &str) -> Option<&'static str> {
+        if name == ".env" || name.starts_with(".env.") {
+            return Some("FileLock");
+        }
+        if name.starts_with("dockerfile.") {
+            return Some("FileCog");
+        }
+        if name.starts_with("makefile.") {
+            return Some("FileTerminal");
+        }
+        if name == "mobile emulator" || name == "simulator" {
+            return Some("Smartphone");
+        }
+        None
+    }
+
+    /// Lowercased extension, preferring multi-part tarball extensions.
+    fn extension(name: &str) -> &str {
+        ["tar.bz2", "tar.gz", "tar.xz"]
+            .into_iter()
+            .find(|ext| name.ends_with(&format!(".{ext}")))
+            .unwrap_or_else(|| {
+                name.rsplit_once('.')
+                    .filter(|(stem, _)| !stem.is_empty())
+                    .map(|(_, ext)| ext)
+                    .unwrap_or("")
+            })
+    }
+
+    fn by_extension(name: &str) -> Option<&'static str> {
+        let ext = Self::extension(name);
+        langs::by_extension(ext).or_else(|| Self::icon(file_tables::EXTENSION_ICONS, ext))
+    }
+}
 
 /// Colored, per-language glyph for files with a known type. These keep their
 /// own colors; the renderer skips theme tinting for them.
@@ -14,411 +77,37 @@ pub fn file_icon(path: &std::path::Path) -> &'static str {
         .unwrap_or_default()
         .to_string_lossy()
         .to_lowercase();
-    if let Some(icon) = langs::by_name(&name) {
-        return icon;
-    }
-    match name.as_str() {
-        ".babelrc" => return "FileSliders",
-        ".dockerignore" => return "FileSliders",
-        ".editorconfig" => return "FileSliders",
-        ".eslintrc" => return "FileSliders",
-        ".eslintrc.cjs" => return "FileSliders",
-        ".eslintrc.js" => return "FileSliders",
-        ".eslintrc.json" => return "FileJson",
-        ".eslintrc.yaml" => return "FileSliders",
-        ".eslintrc.yml" => return "FileSliders",
-        ".gitattributes" => return "FileSliders",
-        ".gitignore" => return "FileSliders",
-        ".npmrc" => return "FileSliders",
-        ".prettierrc" => return "FileSliders",
-        ".prettierrc.json" => return "FileJson",
-        ".prettierrc.yaml" => return "FileSliders",
-        ".prettierrc.yml" => return "FileSliders",
-        "agents.md" => return "FileText",
-        "authors" => return "FileText",
-        "bun.lock" => return "FileBox",
-        "bun.lockb" => return "FileBox",
-        "cargo.lock" => return "FileBox",
-        "cargo.toml" => return "FileBox",
-        "changelog" => return "FileText",
-        "changelog.md" => return "FileText",
-        "cmakelists.txt" => return "FileCog",
-        "codeowners" => return "FileKey",
-        "components.json" => return "FileSliders",
-        "composer.json" => return "FileBox",
-        "composer.lock" => return "FileBox",
-        "contributing" => return "FileText",
-        "contributing.md" => return "FileText",
-        "copying" => return "FileKey",
-        "dockerfile" => return "FileCog",
-        "gemfile" => return "FileBox",
-        "go.mod" => return "FileBox",
-        "go.sum" => return "FileBox",
-        "license" => return "FileKey",
-        "makefile" => return "FileTerminal",
-        "meson.build" => return "FileCog",
-        "notice" => return "FileKey",
-        "package-lock.json" => return "FileBox",
-        "package.json" => return "FileBox",
-        "pipfile" => return "FileBox",
-        "pnpm-lock.yaml" => return "FileBox",
-        "pnpm-workspace.yaml" => return "FileBox",
-        "poetry.lock" => return "FileBox",
-        "pom.xml" => return "FileBox",
-        "postcss.config.cjs" => return "FileSliders",
-        "postcss.config.js" => return "FileSliders",
-        "postcss.config.mjs" => return "FileSliders",
-        "postcss.config.ts" => return "FileSliders",
-        "pyproject.toml" => return "FileBox",
-        "readme" => return "FileText",
-        "readme.md" => return "FileText",
-        "requirements-dev.txt" => return "FileBox",
-        "requirements.txt" => return "FileBox",
-        "security" => return "FileLock",
-        "security.md" => return "FileLock",
-        "settings.gradle" => return "FileCog",
-        "settings.gradle.kts" => return "FileCog",
-        "tailwind.config.cjs" => return "FileSliders",
-        "tailwind.config.js" => return "FileSliders",
-        "tailwind.config.mjs" => return "FileSliders",
-        "tailwind.config.ts" => return "FileSliders",
-        "todo" => return "FileText",
-        "tsconfig.json" => return "FileSliders",
-        "vite.config.js" => return "FileSliders",
-        "vite.config.mjs" => return "FileSliders",
-        "vite.config.ts" => return "FileSliders",
-        "vitest.config.js" => return "FileSliders",
-        "vitest.config.mjs" => return "FileSliders",
-        "vitest.config.ts" => return "FileSliders",
-        "yarn.lock" => return "FileBox",
-        _ => {}
-    }
-    if name == ".env" || name.starts_with(".env.") {
-        return "FileLock";
-    }
-    if name.starts_with("dockerfile.") {
-        return "FileCog";
-    }
-    if name.starts_with("makefile.") {
-        return "FileTerminal";
-    }
-    if name == "mobile emulator" || name == "simulator" {
-        return "Smartphone";
-    }
-    let ext = ["tar.bz2", "tar.gz", "tar.xz"]
-        .into_iter()
-        .find(|ext| name.ends_with(&format!(".{ext}")))
-        .unwrap_or_else(|| {
-            name.rsplit_once('.')
-                .filter(|(stem, _)| !stem.is_empty())
-                .map(|(_, ext)| ext)
-                .unwrap_or("")
-        });
-    if let Some(icon) = langs::by_extension(ext) {
-        return icon;
-    }
-    match ext {
-        "7z" => "FileArchive",
-        "aac" => "FileMusic",
-        "adoc" => "FileText",
-        "ai" => "FileImage",
-        "asc" => "FileKey",
-        "astro" => "FileCode",
-        "avi" => "FileVideo",
-        "avif" => "FileImage",
-        "bash" => "FileTerminal",
-        "bat" => "FileTerminal",
-        "blend" => "FileAxis3D",
-        "bmp" => "FileImage",
-        "br" => "FileArchive",
-        "bz2" => "FileArchive",
-        "c" => "FileCode",
-        "cc" => "FileCode",
-        "cer" => "FileKey",
-        "cfg" => "FileSliders",
-        "cjs" => "FileCode",
-        "clj" => "FileCode",
-        "cmd" => "FileTerminal",
-        "conf" => "FileSliders",
-        "cpp" => "FileCode",
-        "crt" => "FileKey",
-        "cs" => "FileCode",
-        "css" => "FileType",
-        "csv" => "FileSpreadsheet",
-        "cts" => "FileCode",
-        "cxx" => "FileCode",
-        "dart" => "FileCode",
-        "db" => "Database",
-        "diff" => "FileDiff",
-        "dmg" => "FileArchive",
-        "doc" => "FileText",
-        "docx" => "FileText",
-        "duckdb" => "Database",
-        "eot" => "FileType",
-        "eps" => "FileImage",
-        "erl" => "FileCode",
-        "ex" => "FileCode",
-        "exs" => "FileCode",
-        "fbx" => "FileAxis3D",
-        "fish" => "FileTerminal",
-        "flac" => "FileMusic",
-        "fs" => "FileCode",
-        "fsx" => "FileCode",
-        "gif" => "FileImage",
-        "glb" => "FileAxis3D",
-        "gltf" => "FileAxis3D",
-        "go" => "FileCode",
-        "gpg" => "FileKey",
-        "gql" => "FileBraces",
-        "gradle" => "FileCog",
-        "graphql" => "FileBraces",
-        "gz" => "FileArchive",
-        "h" => "FileCode",
-        "hcl" => "FileSliders",
-        "heic" => "FileImage",
-        "hpp" => "FileCode",
-        "hrl" => "FileCode",
-        "hs" => "FileCode",
-        "htm" => "FileCode",
-        "html" => "FileCode",
-        "ico" => "FileImage",
-        "ini" => "FileSliders",
-        "ipynb" => "FileChartColumn",
-        "iso" => "FileArchive",
-        "java" => "FileCode",
-        "jpeg" => "FileImage",
-        "jpg" => "FileImage",
-        "js" => "FileCode",
-        "json" => "FileJson",
-        "json5" => "FileJson",
-        "jsonc" => "FileJson",
-        "jsx" => "FileCode",
-        "key" => "FileKey",
-        "kt" => "FileCode",
-        "kts" => "FileCode",
-        "less" => "FileType",
-        "lock" => "FileLock",
-        "log" => "FileText",
-        "lua" => "FileCode",
-        "m4a" => "FileMusic",
-        "m4v" => "FileVideo",
-        "md" => "FileText",
-        "mdx" => "FileText",
-        "mjs" => "FileCode",
-        "mkv" => "FileVideo",
-        "mmd" => "FileChartColumn",
-        "mov" => "FileVideo",
-        "mp3" => "FileMusic",
-        "mp4" => "FileVideo",
-        "mpeg" => "FileVideo",
-        "mpg" => "FileVideo",
-        "mts" => "FileCode",
-        "nim" => "FileCode",
-        "nu" => "FileTerminal",
-        "obj" => "FileAxis3D",
-        "ods" => "FileSpreadsheet",
-        "ogg" => "FileMusic",
-        "opus" => "FileMusic",
-        "otf" => "FileType",
-        "p12" => "FileLock",
-        "patch" => "FileDiff",
-        "pdf" => "FileText",
-        "pem" => "FileKey",
-        "pfx" => "FileLock",
-        "php" => "FileCode",
-        "pl" => "FileCode",
-        "pm" => "FileCode",
-        "png" => "FileImage",
-        "ppt" => "FileChartColumn",
-        "pptx" => "FileChartColumn",
-        "prisma" => "Database",
-        "properties" => "FileSliders",
-        "proto" => "FileBraces",
-        "ps1" => "FileTerminal",
-        "psd" => "FileImage",
-        "pub" => "FileKey",
-        "py" => "FileCode",
-        "r" => "FileCode",
-        "rar" => "FileArchive",
-        "rb" => "FileCode",
-        "rst" => "FileText",
-        "rs" => "FileCode",
-        "rtf" => "FileText",
-        "sass" => "FileType",
-        "scala" => "FileCode",
-        "scss" => "FileType",
-        "sh" => "FileTerminal",
-        "sol" => "FileCode",
-        "sqlite" => "Database",
-        "sqlite3" => "Database",
-        "sql" => "Database",
-        "stl" => "FileAxis3D",
-        "svelte" => "FileCode",
-        "svg" => "FileImage",
-        "swift" => "FileCode",
-        "tar" => "FileArchive",
-        "tar.bz2" => "FileArchive",
-        "tar.gz" => "FileArchive",
-        "tar.xz" => "FileArchive",
-        "tbz2" => "FileArchive",
-        "tex" => "FileText",
-        "tf" => "FileSliders",
-        "tfvars" => "FileSliders",
-        "tgz" => "FileArchive",
-        "tif" => "FileImage",
-        "tiff" => "FileImage",
-        "toml" => "FileSliders",
-        "ts" => "FileCode",
-        "tsx" => "FileCode",
-        "tsv" => "FileSpreadsheet",
-        "ttf" => "FileType",
-        "txt" => "FileText",
-        "txz" => "FileArchive",
-        "vb" => "FileCode",
-        "vue" => "FileCode",
-        "wav" => "FileMusic",
-        "webm" => "FileVideo",
-        "webp" => "FileImage",
-        "woff" => "FileType",
-        "woff2" => "FileType",
-        "xhtml" => "FileCode",
-        "xls" => "FileSpreadsheet",
-        "xlsx" => "FileSpreadsheet",
-        "xml" => "FileCode",
-        "xz" => "FileArchive",
-        "yaml" => "FileSliders",
-        "yml" => "FileSliders",
-        "zig" => "FileCode",
-        "zip" => "FileArchive",
-        "zsh" => "FileTerminal",
-        _ => "File",
-    }
+    langs::by_name(&name)
+        .or_else(|| IconTables::icon(file_tables::NAME_ICONS, &name))
+        .or_else(|| IconTables::by_name_pattern(&name))
+        .or_else(|| IconTables::by_extension(&name))
+        .unwrap_or("File")
 }
+
 pub fn source(name: &str) -> egui::ImageSource<'static> {
     if let Some(language) = name.strip_prefix("lang:") {
         return langs::source(language);
     }
-    match name {
-        "RefreshCw" => egui::include_image!("../../assets/icons/refresh-cw.svg"),
-        "PanelLeft" => egui::include_image!("../../assets/icons/panel-left.svg"),
-        "PanelRight" => egui::include_image!("../../assets/icons/panel-right.svg"),
-        "PanelRightClose" => egui::include_image!("../../assets/icons/panel-right-close.svg"),
-        "PanelBottomClose" => egui::include_image!("../../assets/icons/panel-bottom-close.svg"),
-        "PanelLeftClose" => egui::include_image!("../../assets/icons/panel-left-close.svg"),
-        "PanelTopClose" => egui::include_image!("../../assets/icons/panel-top-close.svg"),
-        "Pencil" => egui::include_image!("../../assets/icons/pencil.svg"),
-        "TextSelect" => egui::include_image!("../../assets/icons/text-select.svg"),
-        "Clipboard" => egui::include_image!("../../assets/icons/clipboard.svg"),
-        "Eraser" => egui::include_image!("../../assets/icons/eraser.svg"),
-        "Save" => egui::include_image!("../../assets/icons/save.svg"),
-        "Copy" => egui::include_image!("../../assets/icons/copy.svg"),
-        "ClipboardPaste" => egui::include_image!("../../assets/icons/clipboard-paste.svg"),
-        "SquareDashed" => egui::include_image!("../../assets/icons/square-dashed.svg"),
-        "ExternalLink" => egui::include_image!("../../assets/icons/external-link.svg"),
-        "Columns2" => egui::include_image!("../../assets/icons/columns-2.svg"),
-        "Columns3" => egui::include_image!("../../assets/icons/columns-3.svg"),
-        "Rows2" => egui::include_image!("../../assets/icons/rows-2.svg"),
-        "Split" => egui::include_image!("../../assets/icons/split.svg"),
-        "X" => egui::include_image!("../../assets/icons/x.svg"),
-        "Trash" => egui::include_image!("../../assets/icons/trash-2.svg"),
-        "Search" => egui::include_image!("../../assets/icons/search.svg"),
-        "Menu" => egui::include_image!("../../assets/icons/menu.svg"),
-        "Settings" => egui::include_image!("../../assets/icons/settings.svg"),
-        "Settings2" => egui::include_image!("../../assets/icons/settings-2.svg"),
-        "GitBranch" => egui::include_image!("../../assets/icons/git-branch.svg"),
-        "PanelsTopLeft" => egui::include_image!("../../assets/icons/panels-top-left.svg"),
-        "Files" => egui::include_image!("../../assets/icons/files.svg"),
-        "Plus" => egui::include_image!("../../assets/icons/plus.svg"),
-        "ArrowUp" => egui::include_image!("../../assets/icons/arrow-up.svg"),
-        "ArrowDown" => egui::include_image!("../../assets/icons/arrow-down.svg"),
-        "ArrowDownWideNarrow" => {
-            egui::include_image!("../../assets/icons/arrow-down-wide-narrow.svg")
-        }
-        "Archive" => egui::include_image!("../../assets/icons/archive.svg"),
-        "ListTree" => egui::include_image!("../../assets/icons/list-tree.svg"),
-        "ChevronsDownUp" => egui::include_image!("../../assets/icons/chevrons-down-up.svg"),
-        "CaseSensitive" => egui::include_image!("../../assets/icons/case-sensitive.svg"),
-        "WholeWord" => egui::include_image!("../../assets/icons/whole-word.svg"),
-        "Regex" => egui::include_image!("../../assets/icons/regex.svg"),
-        "GitCompareArrows" => egui::include_image!("../../assets/icons/git-compare-arrows.svg"),
-        "List" => egui::include_image!("../../assets/icons/list.svg"),
-        "LayoutDashboard" => egui::include_image!("../../assets/icons/layout-dashboard.svg"),
-        "ArrowLeft" => egui::include_image!("../../assets/icons/arrow-left.svg"),
-        "ArrowRight" => egui::include_image!("../../assets/icons/arrow-right.svg"),
-        "FileKey" => egui::include_image!("../../assets/icons/file-key.svg"),
-        "FileSliders" => egui::include_image!("../../assets/icons/file-sliders.svg"),
-        "Smartphone" => egui::include_image!("../../assets/icons/smartphone.svg"),
-        "Monitor" => egui::include_image!("../../assets/icons/monitor.svg"),
-        "Keyboard" => egui::include_image!("../../assets/icons/keyboard.svg"),
-        "Globe" => egui::include_image!("../../assets/icons/globe.svg"),
-        "ChevronDown" => egui::include_image!("../../assets/icons/chevron-down.svg"),
-        "Database" => egui::include_image!("../../assets/icons/database.svg"),
-        "File" => egui::include_image!("../../assets/icons/file.svg"),
-        "Terminal" => egui::include_image!("../../assets/icons/terminal-octicons.svg"),
-        "FileVideo" => egui::include_image!("../../assets/icons/file-video.svg"),
-        "FileText" => egui::include_image!("../../assets/icons/file-text.svg"),
-        "FolderOpen" => egui::include_image!("../../assets/icons/folder-open.svg"),
-        "FileCog" => egui::include_image!("../../assets/icons/file-cog.svg"),
-        "ChevronRight" => egui::include_image!("../../assets/icons/chevron-right.svg"),
-        "ChevronLeft" => egui::include_image!("../../assets/icons/chevron-left.svg"),
-        "FileSpreadsheet" => egui::include_image!("../../assets/icons/file-spreadsheet.svg"),
-        "FileChartColumn" => egui::include_image!("../../assets/icons/file-chart-column.svg"),
-        "FileImage" => egui::include_image!("../../assets/icons/file-image.svg"),
-        "FileArchive" => egui::include_image!("../../assets/icons/file-archive.svg"),
-        "FileMusic" => egui::include_image!("../../assets/icons/file-music.svg"),
-        "FileBox" => egui::include_image!("../../assets/icons/file-box.svg"),
-        "FileCode" => egui::include_image!("../../assets/icons/file-code.svg"),
-        "FileType" => egui::include_image!("../../assets/icons/file-type.svg"),
-        "FileDiff" => egui::include_image!("../../assets/icons/file-diff.svg"),
-        "FileTerminal" => egui::include_image!("../../assets/icons/file-terminal.svg"),
-        "Moon" => egui::include_image!("../../assets/icons/moon.svg"),
-        "Square" => egui::include_image!("../../assets/icons/square.svg"),
-        "AudioLines" => egui::include_image!("../../assets/icons/audio-lines.svg"),
-        "SkipBack" => egui::include_image!("../../assets/icons/skip-back.svg"),
-        "Play" => egui::include_image!("../../assets/icons/play.svg"),
-        "Pause" => egui::include_image!("../../assets/icons/pause.svg"),
-        "SkipForward" => egui::include_image!("../../assets/icons/skip-forward.svg"),
-        "ListMusic" => egui::include_image!("../../assets/icons/list-music.svg"),
-        "Shuffle" => egui::include_image!("../../assets/icons/shuffle.svg"),
-        "Repeat" => egui::include_image!("../../assets/icons/repeat.svg"),
-        "Radio" => egui::include_image!("../../assets/icons/radio.svg"),
-        "Bell" => egui::include_image!("../../assets/icons/bell.svg"),
-        "Eye" => egui::include_image!("../../assets/icons/eye.svg"),
-        "EyeOff" => egui::include_image!("../../assets/icons/eye-off.svg"),
-        "Circle" => egui::include_image!("../../assets/icons/circle.svg"),
-        "CircleCheck" => egui::include_image!("../../assets/icons/circle-check.svg"),
-        "CircleAlert" => egui::include_image!("../../assets/icons/circle-alert.svg"),
-        "Info" => egui::include_image!("../../assets/icons/info.svg"),
-        "CircleStop" => egui::include_image!("../../assets/icons/circle-stop.svg"),
-        "CircleQuestion" => egui::include_image!("../../assets/icons/circle-question.svg"),
-        "LoaderCircle" => egui::include_image!("../../assets/icons/loader-circle.svg"),
-        "MessageCircleQuestion" => {
-            egui::include_image!("../../assets/icons/message-circle-question.svg")
-        }
-        "ShieldQuestion" => egui::include_image!("../../assets/icons/shield-question.svg"),
-        "History" => egui::include_image!("../../assets/icons/history.svg"),
-        "LocateFixed" => egui::include_image!("../../assets/icons/locate-fixed.svg"),
-        "Folder" => egui::include_image!("../../assets/icons/folder.svg"),
-        "FileLock" => egui::include_image!("../../assets/icons/file-lock.svg"),
-        "FileAxis3D" => egui::include_image!("../../assets/icons/file-axis-3d.svg"),
-        "FileJson" => egui::include_image!("../../assets/icons/file-json.svg"),
-        "FileBraces" => egui::include_image!("../../assets/icons/file-json.svg"),
-        "AgentCodex" => egui::include_image!("../../assets/icons/agent-codex.svg"),
-        "AgentClaude" => egui::include_image!("../../assets/icons/agent-claude.svg"),
-        "AgentPi" => egui::include_image!("../../assets/icons/agent-pi.svg"),
-        "AgentOpencode" => egui::include_image!("../../assets/icons/agent-opencode.svg"),
-        "AgentGrok" => egui::include_image!("../../assets/icons/agent-grok.png"),
-        "AgentMuse" => egui::include_image!("../../assets/icons/agent-muse.svg"),
-        "AgentCursor" => egui::include_image!("../../assets/icons/agent-cursor.svg"),
-        "AgentGeneric" => egui::include_image!("../../assets/icons/agent-generic.svg"),
-        "AgentMultiple" => egui::include_image!("../../assets/icons/agent-multiple.svg"),
-        _ => egui::include_image!("../../assets/icons/file.svg"),
-    }
+    IconTables::source(ui_sources::UI_SOURCES, name)
+        .unwrap_or(egui::include_image!("../../assets/icons/file.svg"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_icon_falls_back_through_name_and_extension_tables() {
+        let icon = |name: &str| file_icon(std::path::Path::new(name));
+        assert_eq!(icon("Cargo.toml"), "lang:rust");
+        assert_eq!(icon("components.json"), "FileSliders");
+        assert_eq!(icon("Simulator"), "Smartphone");
+        assert_eq!(icon("backup.tar.gz"), "lang:zip");
+        assert_eq!(icon("scene.blend"), "lang:3d");
+        assert_eq!(icon("notes.zzz"), "File");
+        assert_eq!(icon(".hidden"), "File");
+        assert!(matches!(source("Play"), egui::ImageSource::Bytes { .. }));
+    }
 
     #[test]
     fn grok_icon_decodes_with_application_loaders() {

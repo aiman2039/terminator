@@ -148,7 +148,12 @@ impl Shared {
             zeroize::Zeroize::zeroize(&mut profile.password);
             profile.credential_saved = false;
         } else if !profile.password.is_empty() {
-            credentials::save_replacing(paths, previous, profile, &profile.password)?;
+            credentials::save_replacing(credentials::SaveReplacingInput {
+                paths,
+                previous,
+                profile,
+                password: &profile.password,
+            })?;
             zeroize::Zeroize::zeroize(&mut profile.password);
             profile.credential_saved = true;
         } else {

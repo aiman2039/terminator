@@ -39,7 +39,20 @@ fn pixels(encoded: &str) -> Vec<u8> {
     out
 }
 
-fn one_pixel(runtime: &mut VncRuntime, x: u16, y: u16, rgba: [u8; 4]) {
+struct OnePixelInput<'a> {
+    runtime: &'a mut VncRuntime,
+    x: u16,
+    y: u16,
+    rgba: [u8; 4],
+}
+
+fn one_pixel(input: OnePixelInput<'_>) {
+    let OnePixelInput {
+        runtime,
+        x,
+        y,
+        rgba,
+    } = input;
     runtime.blit_rgba(
         Rect {
             x,
@@ -60,7 +73,12 @@ fn a_client_at_the_encoded_revision_takes_the_changed_region_only() {
     assert_eq!(pixels(&full.zlib_rgba).len(), 4 * 4 * 4);
     assert_eq!((full.width, full.height), (4, 4));
 
-    one_pixel(&mut rt, 1, 2, [9, 8, 7, 255]);
+    one_pixel(OnePixelInput {
+        runtime: &mut rt,
+        x: 1,
+        y: 2,
+        rgba: [9, 8, 7, 255],
+    });
     let partial = rt
         .encode_frame("s", full.revision, true)
         .expect("partial frame");
@@ -93,7 +111,12 @@ fn a_client_behind_the_encoded_revision_gets_the_whole_frame() {
     let mut rt = runtime();
     rt.resize(2, 2);
     let full = rt.encode_frame("s", 0, true).expect("full frame");
-    one_pixel(&mut rt, 0, 0, [1, 2, 3, 255]);
+    one_pixel(OnePixelInput {
+        runtime: &mut rt,
+        x: 0,
+        y: 0,
+        rgba: [1, 2, 3, 255],
+    });
     // The client never took the last full frame, so a rectangle cut
     // from it would land on the wrong texture.
     let stale = rt
@@ -108,7 +131,12 @@ fn a_client_that_never_asked_for_regions_gets_the_whole_frame() {
     let mut rt = runtime();
     rt.resize(2, 2);
     let full = rt.encode_frame("s", 0, false).expect("full frame");
-    one_pixel(&mut rt, 1, 1, [4, 5, 6, 255]);
+    one_pixel(OnePixelInput {
+        runtime: &mut rt,
+        x: 1,
+        y: 1,
+        rgba: [4, 5, 6, 255],
+    });
     let frame = rt
         .encode_frame("s", full.revision, false)
         .expect("legacy frame");

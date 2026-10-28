@@ -10,7 +10,7 @@ pub mod windows;
 use anyhow::{Context, Result, ensure};
 use clap::Args;
 use command::{Runner, System, cmd, git};
-use publish::execute;
+use publish::{ExecuteInput, execute};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 #[cfg(test)]
@@ -21,7 +21,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-use validate::validate;
+use validate::{ValidateInput, validate};
 
 #[derive(Args, Debug, Default)]
 pub struct Options {
@@ -142,8 +142,18 @@ pub fn run(mut options: Options) -> Result<()> {
         }
         Ok(())
     })?;
-    execute(&root, &options, &System, |source, artifacts| {
-        validate(source, artifacts, &options, &System)
+    execute(ExecuteInput {
+        root: &root,
+        options: &options,
+        runner: &System,
+        validate: |source, artifacts| {
+            validate(ValidateInput {
+                source,
+                artifacts,
+                options: &options,
+                runner: &System,
+            })
+        },
     })
 }
 
@@ -308,7 +318,20 @@ fn linux_platform(architecture: &str) -> Result<&'static str> {
     }
 }
 
-fn linux_image_tag(dockerfile: &[u8], rust: &str, components: &str, platform: &str) -> String {
+struct LinuxImageTagInput<'a> {
+    dockerfile: &'a [u8],
+    rust: &'a str,
+    components: &'a str,
+    platform: &'a str,
+}
+
+fn linux_image_tag(input: LinuxImageTagInput<'_>) -> String {
+    let LinuxImageTagInput {
+        dockerfile,
+        rust,
+        components,
+        platform,
+    } = input;
     let mut hash = Sha256::new();
     for part in [
         dockerfile,

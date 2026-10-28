@@ -406,13 +406,21 @@ mod tests {
         assert_eq!(command_prompt(&engine), Some("/h".to_string()));
     }
 
+    struct DriveKeysInput<'a> {
+        ctx: &'a egui::Context,
+        doc: &'a mut crate::doc::Doc,
+        engine: &'a mut VimEngine,
+        keys: &'a [egui::Key],
+    }
+
     /// Drive the real widget headless: one synthetic keypress per frame.
-    fn drive_keys(
-        ctx: &egui::Context,
-        doc: &mut crate::doc::Doc,
-        engine: &mut VimEngine,
-        keys: &[egui::Key],
-    ) -> Vec<Effect> {
+    fn drive_keys(input: DriveKeysInput<'_>) -> Vec<Effect> {
+        let DriveKeysInput {
+            ctx,
+            doc,
+            engine,
+            keys,
+        } = input;
         drive_mods(DriveModsInput {
             ctx,
             doc,
@@ -501,12 +509,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
-        let effects = drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[egui::Key::Colon, egui::Key::Q, egui::Key::Enter],
-        );
+        let effects = drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[egui::Key::Colon, egui::Key::Q, egui::Key::Enter],
+        });
         assert!(effects.contains(&Effect::Quit));
         assert_eq!(engine.mode(), Mode::Normal);
     }
@@ -517,11 +525,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
-        let effects = drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[
+        let effects = drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[
                 egui::Key::Colon,
                 egui::Key::S,
                 egui::Key::P,
@@ -530,13 +538,13 @@ mod tests {
                 egui::Key::T,
                 egui::Key::Enter,
             ],
-        );
+        });
         assert_eq!(effects, vec![Effect::Split]);
-        let effects = drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[
+        let effects = drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[
                 egui::Key::Colon,
                 egui::Key::T,
                 egui::Key::A,
@@ -546,7 +554,7 @@ mod tests {
                 egui::Key::W,
                 egui::Key::Enter,
             ],
-        );
+        });
         assert_eq!(effects, vec![Effect::TabNew]);
     }
 
@@ -557,11 +565,11 @@ mod tests {
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
         assert_eq!(engine.wrap(), None);
-        drive_keys(
-            &ctx,
-            &mut doc,
-            &mut engine,
-            &[
+        drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[
                 egui::Key::Colon,
                 egui::Key::S,
                 egui::Key::E,
@@ -573,7 +581,7 @@ mod tests {
                 egui::Key::P,
                 egui::Key::Enter,
             ],
-        );
+        });
         assert_eq!(engine.wrap(), Some(true));
     }
 
@@ -583,7 +591,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = Doc::new("hi");
         let mut engine = VimEngine::new();
-        drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::I]);
+        drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[egui::Key::I],
+        });
         assert_eq!(engine.mode(), Mode::Insert);
         assert_eq!(doc.text(), "hi");
     }
@@ -670,7 +683,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut doc = crate::doc::Doc::new("text");
         let mut engine = VimEngine::new();
-        drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::I, egui::Key::Tab]);
+        drive_keys(DriveKeysInput {
+            ctx: &ctx,
+            doc: &mut doc,
+            engine: &mut engine,
+            keys: &[egui::Key::I, egui::Key::Tab],
+        });
         assert_eq!(doc.text(), "\ttext");
         assert_eq!(engine.mode(), Mode::Insert);
     }
@@ -756,7 +774,12 @@ mod tests {
                     });
                     assert_eq!(doc.text(), expected, "{control:?} {toggle:?} {action:?}");
                     assert_eq!(engine.mode(), Mode::Normal);
-                    drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::U]);
+                    drive_keys(DriveKeysInput {
+                        ctx: &ctx,
+                        doc: &mut doc,
+                        engine: &mut engine,
+                        keys: &[egui::Key::U],
+                    });
                     assert_eq!(doc.text(), "abcd\nefgh\n");
                 }
             }

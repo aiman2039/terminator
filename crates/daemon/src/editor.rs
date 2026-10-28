@@ -46,7 +46,12 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<CommandBuilder> {
         command.arg("--");
         command.arg(file);
     } else {
-        command.args(terminal_args(&editor, file, line, column));
+        command.args(terminal_args(TerminalArgsInput {
+            editor: &editor,
+            file,
+            line,
+            column,
+        }));
     }
     Ok(command)
 }
@@ -59,12 +64,20 @@ fn vim_position(line: Option<u32>, column: Option<u32>) -> Vec<OsString> {
     .map(OsString::from)
     .collect()
 }
-fn terminal_args(
-    editor: &Path,
-    file: &Path,
+struct TerminalArgsInput<'a> {
+    editor: &'a Path,
+    file: &'a Path,
     line: Option<u32>,
     column: Option<u32>,
-) -> Vec<OsString> {
+}
+
+fn terminal_args(input: TerminalArgsInput<'_>) -> Vec<OsString> {
+    let TerminalArgsInput {
+        editor,
+        file,
+        line,
+        column,
+    } = input;
     let name = editor
         .file_name()
         .and_then(|s| s.to_str())
@@ -105,11 +118,21 @@ mod tests {
             let mut expected: Vec<OsString> = prefix.into_iter().map(OsString::from).collect();
             expected.push(file.into());
             assert_eq!(
-                terminal_args(Path::new(program), file, Some(12), Some(3)),
+                terminal_args(TerminalArgsInput {
+                    editor: Path::new(program),
+                    file,
+                    line: Some(12),
+                    column: Some(3)
+                }),
                 expected
             );
             assert_eq!(
-                terminal_args(Path::new(program), file, None, None),
+                terminal_args(TerminalArgsInput {
+                    editor: Path::new(program),
+                    file,
+                    line: None,
+                    column: None
+                }),
                 vec![file.as_os_str()]
             );
         }

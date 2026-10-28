@@ -128,7 +128,12 @@ fn versioned_launcher_binaries_match_but_helpers_do_not() {
         proc(100, None, "zsh"),
         proc(200, Some(100), "muse-bin-1.4.1-R4503.1"),
     ];
-    let found = detect_agents(&procs, 100, 1100, None);
+    let found = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(found.outcome, PresenceOutcome::Verified);
     assert_eq!(found.agents.len(), 1);
     assert_eq!(found.agents[0].kind, "muse");
@@ -143,7 +148,12 @@ fn versioned_launcher_binaries_match_but_helpers_do_not() {
             live: true,
         },
     ];
-    let found = detect_agents(&resolved, 100, 1100, None);
+    let found = detect_agents(DetectAgentsInput {
+        procs: &resolved,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(found.outcome, PresenceOutcome::Verified);
     assert_eq!(found.agents.len(), 1);
     assert_eq!(found.agents[0].kind, "claude");
@@ -175,7 +185,12 @@ fn shell_script_launcher_matches_before_the_real_binary_execs() {
             live: true,
         },
     ];
-    let found = detect_agents(&procs, 100, 1100, None);
+    let found = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(found.outcome, PresenceOutcome::Verified);
     assert_eq!(found.agents.len(), 1);
     assert_eq!(found.agents[0].kind, "muse");
@@ -211,7 +226,12 @@ fn child_tools_keep_the_root_identity_and_nested_agents_are_ignored() {
         proc(202, Some(200), "claude"),
         proc(203, Some(202), "node"),
     ];
-    let found = detect_agents(&procs, 100, 1100, None);
+    let found = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(found.outcome, PresenceOutcome::Verified);
     assert_eq!(found.agents.len(), 1);
     assert_eq!(found.agents[0].kind, "codex");
@@ -225,7 +245,12 @@ fn independently_launched_sibling_agents_each_produce_an_entry() {
         proc(200, Some(100), "codex"),
         proc(300, Some(100), "claude"),
     ];
-    let found = detect_agents(&procs, 100, 1100, None);
+    let found = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(found.outcome, PresenceOutcome::Verified);
     assert_eq!(found.agents.len(), 2);
     // No foreground process: no single preferred agent.
@@ -239,9 +264,19 @@ fn foreground_association_prefers_one_agent_for_the_icon() {
         proc(200, Some(100), "codex"),
         proc(300, Some(100), "claude"),
     ];
-    let found = detect_agents(&procs, 100, 1100, Some(300));
+    let found = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: Some(300),
+    });
     assert_eq!(preferred_agent(&found.agents).unwrap().kind, "claude");
-    let single = detect_agents(&procs[..2], 100, 1100, None);
+    let single = detect_agents(DetectAgentsInput {
+        procs: &procs[..2],
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(preferred_agent(&single.agents).unwrap().kind, "codex");
 }
 
@@ -249,20 +284,45 @@ fn foreground_association_prefers_one_agent_for_the_icon() {
 fn pid_reuse_and_missing_shells_cannot_claim_verified_presence() {
     let procs = vec![proc(100, None, "zsh"), proc(200, Some(100), "codex")];
     // Same PID, recycled start time: shell identity changed.
-    let stale = detect_agents(&procs, 100, 9999, None);
+    let stale = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 100,
+        shell_start_time: 9999,
+        foreground_pgid: None,
+    });
     assert_eq!(stale.outcome, PresenceOutcome::Unavailable);
     assert!(stale.agents.is_empty());
     // Shell gone entirely.
-    let gone = detect_agents(&procs, 999, 1999, None);
+    let gone = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 999,
+        shell_start_time: 1999,
+        foreground_pgid: None,
+    });
     assert_eq!(gone.outcome, PresenceOutcome::Unavailable);
 }
 
 #[test]
 fn exit_removes_live_identity_on_the_next_successful_inspection() {
     let before = vec![proc(100, None, "zsh"), proc(200, Some(100), "pi")];
-    assert_eq!(detect_agents(&before, 100, 1100, None).agents.len(), 1);
+    assert_eq!(
+        detect_agents(DetectAgentsInput {
+            procs: &before,
+            shell_pid: 100,
+            shell_start_time: 1100,
+            foreground_pgid: None
+        })
+        .agents
+        .len(),
+        1
+    );
     let after = vec![proc(100, None, "zsh")];
-    let found = detect_agents(&after, 100, 1100, None);
+    let found = detect_agents(DetectAgentsInput {
+        procs: &after,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(found.outcome, PresenceOutcome::Verified);
     assert!(found.agents.is_empty());
 }
@@ -272,12 +332,22 @@ fn terminated_but_unreaped_processes_have_already_exited() {
     let mut zombie = proc(200, Some(100), "codex");
     zombie.live = false;
     let procs = vec![proc(100, None, "zsh"), zombie];
-    let found = detect_agents(&procs, 100, 1100, None);
+    let found = detect_agents(DetectAgentsInput {
+        procs: &procs,
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(found.outcome, PresenceOutcome::Verified);
     assert!(found.agents.is_empty());
     let mut dead_shell = proc(100, None, "zsh");
     dead_shell.live = false;
-    let gone = detect_agents(&[dead_shell], 100, 1100, None);
+    let gone = detect_agents(DetectAgentsInput {
+        procs: &[dead_shell],
+        shell_pid: 100,
+        shell_start_time: 1100,
+        foreground_pgid: None,
+    });
     assert_eq!(gone.outcome, PresenceOutcome::Unavailable);
 }
 

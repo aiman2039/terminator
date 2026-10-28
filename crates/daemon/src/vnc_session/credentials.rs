@@ -62,14 +62,22 @@ pub(crate) fn save(paths: &Paths, profile: &VncProfile, password: &str) -> Resul
     );
     Ok(())
 }
+pub(crate) struct SaveReplacingInput<'a> {
+    pub(crate) paths: &'a Paths,
+    pub(crate) previous: Option<&'a VncProfile>,
+    pub(crate) profile: &'a VncProfile,
+    pub(crate) password: &'a str,
+}
+
 /// Publish a verified credential under the new identity, then remove the old
 /// identity. If removal fails, retain the old profile and undo the new entry.
-pub(crate) fn save_replacing(
-    paths: &Paths,
-    previous: Option<&VncProfile>,
-    profile: &VncProfile,
-    password: &str,
-) -> Result<()> {
+pub(crate) fn save_replacing(input: SaveReplacingInput<'_>) -> Result<()> {
+    let SaveReplacingInput {
+        paths,
+        previous,
+        profile,
+        password,
+    } = input;
     replace_with(ReplaceWithInput {
         previous,
         profile,

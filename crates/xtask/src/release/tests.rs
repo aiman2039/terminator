@@ -109,7 +109,12 @@ impl Fixture {
         )
     }
     fn execute(&self, validate: impl FnOnce(&Path, &Path) -> Result<()>) -> Result<()> {
-        execute(&self.root, &self.options, &self.runner, validate)
+        execute(ExecuteInput {
+            root: &self.root,
+            options: &self.options,
+            runner: &self.runner,
+            validate,
+        })
     }
     fn remote_head(&self) -> String {
         git(&self.remote, &["rev-parse", "refs/heads/master"]).unwrap()
@@ -532,15 +537,15 @@ fn failed_host_retains_logs_and_does_not_start_other_platforms() {
         fail: Some("bash"),
         ..FakeRunner::default()
     };
-    let error = validate(
-        &fixture.root,
-        &artifacts,
-        &Options {
+    let error = validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &Options {
             skip_linux: true,
             ..Options::default()
         },
-        &runner,
-    )
+        runner: &runner,
+    })
     .unwrap_err();
     assert!(error.to_string().contains("host failed"));
     assert_eq!(runner.commands.lock().unwrap().len(), 1);
@@ -562,12 +567,12 @@ fn unit_failure_stops_before_runtime_and_packaging() {
         ..FakeRunner::default()
     };
     assert!(
-        checks::run_with(
-            &fixture.root,
-            &fixture.root.join(".artifacts/check"),
-            checks::Platform::Mac,
-            &runner
-        )
+        checks::run_with(checks::RunWithInput {
+            root: &fixture.root,
+            output: &fixture.root.join(".artifacts/check"),
+            platform: checks::Platform::Mac,
+            runner: &runner
+        })
         .is_err()
     );
     let commands = runner.commands.lock().unwrap();
@@ -586,12 +591,12 @@ fn unit_failure_stops_before_runtime_and_packaging() {
 fn mac_checks_include_cross_check_runtime_gui_and_package() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
-    checks::run_with(
-        &fixture.root,
-        &fixture.root.join(".artifacts/check"),
-        checks::Platform::Mac,
-        &runner,
-    )
+    checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Mac,
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     for expected in [
@@ -615,12 +620,12 @@ fn mac_checks_include_cross_check_runtime_gui_and_package() {
 fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
-    checks::run_with(
-        &fixture.root,
-        &fixture.root.join(".artifacts/check"),
-        checks::Platform::Linux,
-        &runner,
-    )
+    checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Linux,
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     assert!(
@@ -638,12 +643,12 @@ fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
 fn windows_checks_do_not_claim_unix_runtime_coverage() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
-    checks::run_with(
-        &fixture.root,
-        &fixture.root.join(".artifacts/check"),
-        checks::Platform::Windows,
-        &runner,
-    )
+    checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Windows,
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     assert!(
@@ -853,7 +858,13 @@ fn docker_plan_keeps_source_read_only_and_records_windows_skip() {
         skip_windows: true,
         ..Options::default()
     };
-    validate(&fixture.root, &artifacts, &options, &runner).unwrap();
+    validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &options,
+        runner: &runner,
+    })
+    .unwrap();
     let commands = runner.commands.lock().unwrap();
     let build = commands
         .iter()
@@ -929,32 +940,47 @@ fn image_components_reject_invalid_values() {
 #[test]
 fn linux_image_key_tracks_setup_but_not_application_source() {
     let dockerfile = b"FROM ubuntu:24.04\n";
-    let image = linux_image_tag(dockerfile, "1.97.1", "clippy rustfmt", "linux/amd64");
+    let image = linux_image_tag(LinuxImageTagInput {
+        dockerfile,
+        rust: "1.97.1",
+        components: "clippy rustfmt",
+        platform: "linux/amd64",
+    });
     assert_eq!(
         image,
-        linux_image_tag(dockerfile, "1.97.1", "clippy rustfmt", "linux/amd64")
-    );
-    assert_ne!(
-        image,
-        linux_image_tag(
-            b"FROM ubuntu:26.04\n",
-            "1.97.1",
-            "clippy rustfmt",
-            "linux/amd64"
-        )
-    );
-    assert_ne!(
-        image,
-        linux_image_tag(dockerfile, "1.98.0", "clippy rustfmt", "linux/amd64")
-    );
-    assert_ne!(
-        image,
-        linux_image_tag(
+        linux_image_tag(LinuxImageTagInput {
             dockerfile,
-            "1.97.1",
-            "clippy rustfmt rust-src",
-            "linux/amd64"
-        )
+            rust: "1.97.1",
+            components: "clippy rustfmt",
+            platform: "linux/amd64"
+        })
+    );
+    assert_ne!(
+        image,
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile: b"FROM ubuntu:26.04\n",
+            rust: "1.97.1",
+            components: "clippy rustfmt",
+            platform: "linux/amd64"
+        })
+    );
+    assert_ne!(
+        image,
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile,
+            rust: "1.98.0",
+            components: "clippy rustfmt",
+            platform: "linux/amd64"
+        })
+    );
+    assert_ne!(
+        image,
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile,
+            rust: "1.97.1",
+            components: "clippy rustfmt rust-src",
+            platform: "linux/amd64"
+        })
     );
 }
 
@@ -981,7 +1007,13 @@ fn linux_reuses_matching_image_and_explicit_refresh_rebuilds_it() {
             rebuild_linux_image: refresh,
             ..Options::default()
         };
-        validate(&fixture.root, &artifacts, &options, &runner).unwrap();
+        validate(ValidateInput {
+            source: &fixture.root,
+            artifacts: &artifacts,
+            options: &options,
+            runner: &runner,
+        })
+        .unwrap();
         let commands = runner.commands.lock().unwrap();
         assert_eq!(
             commands
@@ -1037,7 +1069,13 @@ fn failed_linux_image_build_stops_before_linux_tests() {
         rebuild_linux_image: true,
         ..Options::default()
     };
-    let error = validate(&fixture.root, &artifacts, &options, &runner).unwrap_err();
+    let error = validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &options,
+        runner: &runner,
+    })
+    .unwrap_err();
     assert!(error.to_string().contains("linux-image failed"));
     assert!(
         !runner
@@ -1073,7 +1111,12 @@ fn explicit_linux_image_uses_local_selection_and_missing_selection_stops() {
             linux_image: Some("existing:local".into()),
             ..Options::default()
         };
-        let result = validate(&fixture.root, &artifacts, &options, &runner);
+        let result = validate(ValidateInput {
+            source: &fixture.root,
+            artifacts: &artifacts,
+            options: &options,
+            runner: &runner,
+        });
         let commands = runner.commands.lock().unwrap();
         assert!(
             !commands
@@ -1115,8 +1158,18 @@ fn native_linux_architecture_is_required_and_normalized() {
         assert!(linux_platform(arch).is_err());
     }
     assert_ne!(
-        linux_image_tag(b"recipe", "1.97.1", "clippy", "linux/amd64"),
-        linux_image_tag(b"recipe", "1.97.1", "clippy", "linux/arm64")
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile: b"recipe",
+            rust: "1.97.1",
+            components: "clippy",
+            platform: "linux/amd64"
+        }),
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile: b"recipe",
+            rust: "1.97.1",
+            components: "clippy",
+            platform: "linux/arm64"
+        })
     );
 }
 
@@ -1141,15 +1194,15 @@ fn arm_docker_uses_native_runtime_and_separate_build_cache() {
         fail: Some("inspect"),
         ..FakeRunner::default()
     };
-    validate(
-        &fixture.root,
-        &artifacts,
-        &Options {
+    validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &Options {
             skip_windows: true,
             ..Options::default()
         },
-        &runner,
-    )
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     for verb in ["build", "run"] {
@@ -1186,16 +1239,16 @@ fn emulated_image_is_rejected_before_host_checks() {
         image_architecture: Some("amd64"),
         ..FakeRunner::default()
     };
-    let error = validate(
-        &fixture.root,
-        &artifacts,
-        &Options {
+    let error = validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &Options {
             skip_windows: true,
             linux_image: Some("old:x64".into()),
             ..Options::default()
         },
-        &runner,
-    )
+        runner: &runner,
+    })
     .unwrap_err();
     assert!(error.to_string().contains("requires native linux/arm64"));
     assert_eq!(runner.commands.lock().unwrap().len(), 2);

@@ -174,7 +174,20 @@ fn parse(bytes: &[u8]) -> Result<Vec<GitWorktree>> {
     }
     Ok(result)
 }
-pub fn add(common: &Path, path: &Path, branch: Option<&str>, start: &str) -> Result<GitWorktree> {
+pub struct AddInput<'a> {
+    pub common: &'a Path,
+    pub path: &'a Path,
+    pub branch: Option<&'a str>,
+    pub start: &'a str,
+}
+
+pub fn add(input: AddInput<'_>) -> Result<GitWorktree> {
+    let AddInput {
+        common,
+        path,
+        branch,
+        start,
+    } = input;
     let path = dunce::simplified(path);
     if !path.is_absolute() {
         return Err(WorktreeError::RelativePath { path: path.into() });
@@ -355,7 +368,13 @@ mod tests {
             .unwrap()
             .join("space checkout");
         let requested = dir.path().canonicalize().unwrap().join("space checkout");
-        let record = add(&common, &requested, Some("task-fixture"), "HEAD").unwrap();
+        let record = add(AddInput {
+            common: &common,
+            path: &requested,
+            branch: Some("task-fixture"),
+            start: "HEAD",
+        })
+        .unwrap();
         assert_eq!(record.path, path);
         assert_eq!(record.branch.as_deref(), Some("task-fixture"));
         assert_eq!(list(&common).unwrap().len(), 2);
@@ -366,8 +385,24 @@ mod tests {
         remove(&common, &requested).unwrap();
         assert!(!path.exists());
         git(&repo, &["show-ref", "--verify", "refs/heads/task-fixture"]);
-        assert!(add(&common, &repo, Some("other"), "HEAD").is_err());
-        assert!(add(&common, &path, Some("--bad"), "HEAD").is_err());
+        assert!(
+            add(AddInput {
+                common: &common,
+                path: &repo,
+                branch: Some("other"),
+                start: "HEAD"
+            })
+            .is_err()
+        );
+        assert!(
+            add(AddInput {
+                common: &common,
+                path: &path,
+                branch: Some("--bad"),
+                start: "HEAD"
+            })
+            .is_err()
+        );
     }
     #[test]
     fn locked_clean_checkout_is_preserved_until_unlocked() {
@@ -386,7 +421,13 @@ mod tests {
         let path = dunce::canonicalize(dir.path())
             .unwrap()
             .join("locked checkout");
-        add(&common, &path, Some("locked-fixture"), "HEAD").unwrap();
+        add(AddInput {
+            common: &common,
+            path: &path,
+            branch: Some("locked-fixture"),
+            start: "HEAD",
+        })
+        .unwrap();
         let head = resolve_start(&repo, "refs/heads/locked-fixture").unwrap();
         git(
             &repo,

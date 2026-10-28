@@ -1131,38 +1131,18 @@ async fn live_rust_analyzer_call_hierarchy() {
         revision: 1,
         text: main,
     });
-    let on_add = L::Position {
-        line: 0,
-        character: 4,
+    let mut live = LiveHierarchy {
+        manager: &mut manager,
+        file: &file,
+        start: Instant::now(),
     };
-    let start = Instant::now();
     // Prepare until the server is ready and names the function.
-    let (generation, root_item) = loop {
-        assert!(start.elapsed() < Duration::from_secs(90), "no hierarchy");
-        manager.poll();
-        let Ok(generation) = manager.request_hierarchy(&file, on_add, L::HierarchyKind::Call)
-        else {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        };
-        let mut found = None;
-        for _ in 0..50 {
-            manager.poll();
-            if let Some(HierarchyAnswer::Roots {
-                generation: g,
-                items,
-            }) = manager.hierarchy_answers.pop()
-                && g == generation
-            {
-                found = items.into_iter().next();
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        if let Some(item) = found {
-            break (generation, item);
-        }
-    };
+    let (generation, root_item) = live
+        .first_root(L::Position {
+            line: 0,
+            character: 4,
+        })
+        .await;
     assert_eq!(root_item.name, "add");
     for (direction, expected) in [
         (L::HierarchyDirection::Up, "main"),
@@ -1172,61 +1152,13 @@ async fn live_rust_analyzer_call_hierarchy() {
         let item = if direction == L::HierarchyDirection::Up {
             root_item.clone()
         } else {
-            let on_main = L::Position {
+            live.root(L::Position {
                 line: 1,
                 character: 4,
-            };
-            // Prepare answers empty too while indexing: ask again.
-            'prepare: loop {
-                let generation = manager
-                    .request_hierarchy(&file, on_main, L::HierarchyKind::Call)
-                    .expect("ready");
-                loop {
-                    assert!(start.elapsed() < Duration::from_secs(90), "no main root");
-                    manager.poll();
-                    if let Some(HierarchyAnswer::Roots {
-                        generation: g,
-                        items,
-                    }) = manager.hierarchy_answers.pop()
-                        && g == generation
-                    {
-                        if let Some(item) = items.into_iter().next() {
-                            break 'prepare item;
-                        }
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                        continue 'prepare;
-                    }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            }
+            })
+            .await
         };
-        // An indexing server answers empty at first: ask until it knows.
-        let items = 'ask: loop {
-            assert!(
-                manager.request_hierarchy_children(RequestHierarchyChildrenInput {
-                    path: &file,
-                    item: &item.raw,
-                    kind: L::HierarchyKind::Call,
-                    direction,
-                    generation,
-                    node: 0
-                })
-            );
-            loop {
-                assert!(start.elapsed() < Duration::from_secs(90), "no children");
-                manager.poll();
-                if let Some(HierarchyAnswer::Children { items, .. }) =
-                    manager.hierarchy_answers.pop()
-                {
-                    if items.is_empty() {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                        continue 'ask;
-                    }
-                    break 'ask items;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        };
+        let items = live.children(&item, direction, generation).await;
         assert_eq!(
             items
                 .iter()
@@ -1237,4 +1169,128 @@ async fn live_rust_analyzer_call_hierarchy() {
         );
     }
     manager.prune(&std::collections::HashSet::new());
+}
+
+/// Polling helpers for the live call hierarchy scenario.
+struct LiveHierarchy<'a> {
+    manager: &'a mut LspManager,
+    file: &'a Path,
+    start: Instant,
+}
+
+impl LiveHierarchy<'_> {
+    /// Prepare at `position` until the server is ready and answers a root.
+    async fn first_root(&mut self, position: L::Position) -> (u64, L::HierarchyItem) {
+        loop {
+            assert!(
+                self.start.elapsed() < Duration::from_secs(90),
+                "no hierarchy"
+            );
+            self.manager.poll();
+            let Ok(generation) =
+                self.manager
+                    .request_hierarchy(self.file, position, L::HierarchyKind::Call)
+            else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            if let Some(item) = self.poll_roots(generation).await {
+                return (generation, item);
+            }
+        }
+    }
+
+    /// Up to 50 polls for the roots answer to `generation`.
+    async fn poll_roots(&mut self, generation: u64) -> Option<L::HierarchyItem> {
+        for _ in 0..50 {
+            self.manager.poll();
+            if let Some(HierarchyAnswer::Roots {
+                generation: g,
+                items,
+            }) = self.manager.hierarchy_answers.pop()
+                && g == generation
+            {
+                return items.into_iter().next();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        None
+    }
+
+    /// Prepare answers empty too while indexing: ask again until a root.
+    async fn root(&mut self, position: L::Position) -> L::HierarchyItem {
+        loop {
+            let generation = self
+                .manager
+                .request_hierarchy(self.file, position, L::HierarchyKind::Call)
+                .expect("ready");
+            if let Some(item) = self.wait_roots(generation).await {
+                return item;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Poll until the roots answer to `generation`; its first item.
+    async fn wait_roots(&mut self, generation: u64) -> Option<L::HierarchyItem> {
+        loop {
+            assert!(
+                self.start.elapsed() < Duration::from_secs(90),
+                "no main root"
+            );
+            self.manager.poll();
+            if let Some(HierarchyAnswer::Roots {
+                generation: g,
+                items,
+            }) = self.manager.hierarchy_answers.pop()
+                && g == generation
+            {
+                return items.into_iter().next();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// An indexing server answers empty at first: ask until it knows.
+    async fn children(
+        &mut self,
+        item: &L::HierarchyItem,
+        direction: L::HierarchyDirection,
+        generation: u64,
+    ) -> Vec<L::HierarchyItem> {
+        loop {
+            assert!(
+                self.manager
+                    .request_hierarchy_children(RequestHierarchyChildrenInput {
+                        path: self.file,
+                        item: &item.raw,
+                        kind: L::HierarchyKind::Call,
+                        direction,
+                        generation,
+                        node: 0
+                    })
+            );
+            let items = self.wait_children().await;
+            if !items.is_empty() {
+                return items;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    async fn wait_children(&mut self) -> Vec<L::HierarchyItem> {
+        loop {
+            assert!(
+                self.start.elapsed() < Duration::from_secs(90),
+                "no children"
+            );
+            self.manager.poll();
+            if let Some(HierarchyAnswer::Children { items, .. }) =
+                self.manager.hierarchy_answers.pop()
+            {
+                return items;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }

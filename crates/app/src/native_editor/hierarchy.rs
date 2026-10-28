@@ -186,159 +186,215 @@ impl App {
 
     /// Drain answers, then paint the window.
     pub(crate) fn show_hierarchy_window(&mut self, ctx: &egui::Context) {
-        let answers = std::mem::take(&mut self.lsp.hierarchy_answers);
-        for answer in answers {
-            if let Some(next) = self.hierarchy.as_mut().and_then(|view| view.apply(answer)) {
-                self.expand_hierarchy_node(next);
-            }
-        }
+        self.drain_hierarchy_answers();
         let Some(view) = self.hierarchy.as_ref() else {
             return;
         };
         let root = self.selected_project().map(|project| project.path.clone());
         let mut open = true;
-        let mut toggle: Option<usize> = None;
-        let mut jump: Option<NavLocation> = None;
-        let mut direction: Option<HierarchyDirection> = None;
-        let (up, down) = view.direction_labels();
+        let mut picks = HierarchyPicks::default();
         self.popups
             .window(ctx, view.title())
             .open(&mut open)
             .collapsible(false)
             .default_width(520.0)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    for (label, value) in [
-                        (up, HierarchyDirection::Up),
-                        (down, HierarchyDirection::Down),
-                    ] {
-                        if ui
-                            .selectable_label(view.direction == value, label)
-                            .clicked()
-                            && view.direction != value
-                        {
-                            direction = Some(value);
-                        }
-                    }
-                    if !view.nodes.is_empty()
-                        && ui
-                            .button("Refresh")
-                            .on_hover_text("Ask the language server again")
-                            .clicked()
-                    {
-                        direction = Some(view.direction);
-                    }
-                });
-                ui.separator();
-                if let Some(status) = &view.status {
-                    ui.weak(status);
-                    return;
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(420.0)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        for index in view.visible() {
-                            let Some(node) = view.nodes.get(index) else {
-                                continue;
-                            };
-                            ui.horizontal(|ui| {
-                                ui.add_space(node.depth as f32 * 16.0);
-                                let leaf = node.children.as_ref().is_some_and(Vec::is_empty);
-                                let arrow = if leaf {
-                                    " "
-                                } else if node.open {
-                                    "▾"
-                                } else {
-                                    "▸"
-                                };
-                                let arrow = ui.add(egui::Button::new(arrow).frame(false));
-                                let arrow = if leaf {
-                                    arrow.on_hover_text("Nothing found; click to ask again")
-                                } else {
-                                    arrow
-                                };
-                                if arrow.clicked() {
-                                    toggle = Some(index);
-                                }
-                                if node.loading {
-                                    ui.spinner();
-                                }
-                                let file = native_lsp::uri_to_path(&node.item.uri);
-                                let place = file.as_ref().map(|file| {
-                                    let shown = root
-                                        .as_deref()
-                                        .and_then(|root| file.strip_prefix(root).ok())
-                                        .unwrap_or(file);
-                                    format!(
-                                        "{}:{}",
-                                        shown.display(),
-                                        node.item.selection.start.line.saturating_add(1)
-                                    )
-                                });
-                                let mut text = egui::text::LayoutJob::default();
-                                text.append(
-                                    &node.item.name,
-                                    0.0,
-                                    egui::TextFormat::simple(
-                                        egui::FontId::proportional(13.0),
-                                        ui.visuals().strong_text_color(),
-                                    ),
-                                );
-                                let weak = egui::TextFormat::simple(
-                                    egui::FontId::proportional(12.0),
-                                    ui.visuals().weak_text_color(),
-                                );
-                                if let Some(detail) = &node.item.detail {
-                                    text.append(detail, 8.0, weak.clone());
-                                }
-                                if let Some(place) = &place {
-                                    text.append(place, 8.0, weak);
-                                }
-                                let hit = ui
-                                    .add(egui::Button::selectable(false, text).truncate())
-                                    .on_hover_text(&node.item.kind);
-                                if hit.clicked()
-                                    && let Some(path) = file
-                                {
-                                    jump = Some(NavLocation {
-                                        path,
-                                        line: node.item.selection.start.line,
-                                        character: node.item.selection.start.character,
-                                    });
-                                }
-                            });
-                        }
-                    });
+                picks = view.window_body(ui, root.as_deref());
             });
+        self.apply_hierarchy_picks(picks);
+        if !open {
+            self.hierarchy = None;
+        }
+    }
+
+    fn drain_hierarchy_answers(&mut self) {
+        let answers = std::mem::take(&mut self.lsp.hierarchy_answers);
+        for answer in answers {
+            if let Some(next) = self.hierarchy.as_mut().and_then(|view| view.apply(answer)) {
+                self.expand_hierarchy_node(next);
+            }
+        }
+    }
+
+    fn apply_hierarchy_picks(&mut self, picks: HierarchyPicks) {
+        let HierarchyPicks {
+            toggle,
+            jump,
+            direction,
+        } = picks;
         if let Some(direction) = direction {
             self.set_hierarchy_direction(direction);
         }
         if let Some(index) = toggle {
-            let opened = self
-                .hierarchy
-                .as_ref()
-                .and_then(|view| view.nodes.get(index))
-                .is_some_and(|node| node.open);
-            if opened {
-                if let Some(node) = self
-                    .hierarchy
-                    .as_mut()
-                    .and_then(|view| view.nodes.get_mut(index))
-                {
-                    node.open = false;
-                }
-            } else {
-                self.expand_hierarchy_node(index);
-            }
+            self.toggle_hierarchy_node(index);
         }
         if let Some(target) = jump {
             self.record_jump_origin();
             self.open_location(&target);
         }
-        if !open {
-            self.hierarchy = None;
+    }
+
+    /// Collapse an open node, else expand (and load) it.
+    fn toggle_hierarchy_node(&mut self, index: usize) {
+        let node = self
+            .hierarchy
+            .as_mut()
+            .and_then(|view| view.nodes.get_mut(index));
+        match node {
+            Some(node) if node.open => node.open = false,
+            _ => self.expand_hierarchy_node(index),
         }
+    }
+}
+
+/// What the user picked in the hierarchy window this frame.
+#[derive(Default)]
+struct HierarchyPicks {
+    toggle: Option<usize>,
+    jump: Option<NavLocation>,
+    direction: Option<HierarchyDirection>,
+}
+
+impl HierarchyView {
+    fn window_body(&self, ui: &mut egui::Ui, root: Option<&Path>) -> HierarchyPicks {
+        let mut picks = HierarchyPicks {
+            direction: self.direction_bar(ui),
+            ..HierarchyPicks::default()
+        };
+        ui.separator();
+        if let Some(status) = &self.status {
+            ui.weak(status);
+            return picks;
+        }
+        egui::ScrollArea::vertical()
+            .max_height(420.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for index in self.visible() {
+                    let Some(node) = self.nodes.get(index) else {
+                        continue;
+                    };
+                    ui.horizontal(|ui| {
+                        let (toggled, jump) = Self::node_row(ui, node, root);
+                        if toggled {
+                            picks.toggle = Some(index);
+                        }
+                        if jump.is_some() {
+                            picks.jump = jump;
+                        }
+                    });
+                }
+            });
+        picks
+    }
+
+    /// Up/Down direction toggle and Refresh; returns a requested direction.
+    fn direction_bar(&self, ui: &mut egui::Ui) -> Option<HierarchyDirection> {
+        let (up, down) = self.direction_labels();
+        let mut direction = None;
+        ui.horizontal(|ui| {
+            for (label, value) in [
+                (up, HierarchyDirection::Up),
+                (down, HierarchyDirection::Down),
+            ] {
+                if ui
+                    .selectable_label(self.direction == value, label)
+                    .clicked()
+                    && self.direction != value
+                {
+                    direction = Some(value);
+                }
+            }
+            if !self.nodes.is_empty()
+                && ui
+                    .button("Refresh")
+                    .on_hover_text("Ask the language server again")
+                    .clicked()
+            {
+                direction = Some(self.direction);
+            }
+        });
+        direction
+    }
+
+    /// One tree row. Returns whether the arrow was clicked and the jump
+    /// target when the item was.
+    fn node_row(
+        ui: &mut egui::Ui,
+        node: &Node,
+        root: Option<&Path>,
+    ) -> (bool, Option<NavLocation>) {
+        ui.add_space(node.depth as f32 * 16.0);
+        let leaf = node.children.as_ref().is_some_and(Vec::is_empty);
+        let arrow = if leaf {
+            " "
+        } else if node.open {
+            "▾"
+        } else {
+            "▸"
+        };
+        let arrow = ui.add(egui::Button::new(arrow).frame(false));
+        let arrow = if leaf {
+            arrow.on_hover_text("Nothing found; click to ask again")
+        } else {
+            arrow
+        };
+        let toggled = arrow.clicked();
+        if node.loading {
+            ui.spinner();
+        }
+        let file = native_lsp::uri_to_path(&node.item.uri);
+        let text = Self::node_label(ui, node, Self::node_place(node, file.as_deref(), root));
+        let hit = ui
+            .add(egui::Button::selectable(false, text).truncate())
+            .on_hover_text(&node.item.kind);
+        let jump = hit
+            .clicked()
+            .then_some(file)
+            .flatten()
+            .map(|path| NavLocation {
+                path,
+                line: node.item.selection.start.line,
+                character: node.item.selection.start.character,
+            });
+        (toggled, jump)
+    }
+
+    /// `file:line`, relative to the project root when inside it.
+    fn node_place(node: &Node, file: Option<&Path>, root: Option<&Path>) -> Option<String> {
+        file.map(|file| {
+            let shown = root
+                .and_then(|root| file.strip_prefix(root).ok())
+                .unwrap_or(file);
+            format!(
+                "{}:{}",
+                shown.display(),
+                node.item.selection.start.line.saturating_add(1)
+            )
+        })
+    }
+
+    fn node_label(ui: &egui::Ui, node: &Node, place: Option<String>) -> egui::text::LayoutJob {
+        let mut text = egui::text::LayoutJob::default();
+        text.append(
+            &node.item.name,
+            0.0,
+            egui::TextFormat::simple(
+                egui::FontId::proportional(13.0),
+                ui.visuals().strong_text_color(),
+            ),
+        );
+        let weak = egui::TextFormat::simple(
+            egui::FontId::proportional(12.0),
+            ui.visuals().weak_text_color(),
+        );
+        if let Some(detail) = &node.item.detail {
+            text.append(detail, 8.0, weak.clone());
+        }
+        if let Some(place) = &place {
+            text.append(place, 8.0, weak);
+        }
+        text
     }
 }
 

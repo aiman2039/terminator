@@ -83,7 +83,20 @@ fn muse_hook_events() -> &'static [&'static str] {
         "SessionEnd",
     ]
 }
-pub fn install(home: &Path, kind: &str, helper: &Path, remove: bool) -> Result<PathBuf> {
+pub struct InstallInput<'a> {
+    pub home: &'a Path,
+    pub kind: &'a str,
+    pub helper: &'a Path,
+    pub remove: bool,
+}
+
+pub fn install(input: InstallInput<'_>) -> Result<PathBuf> {
+    let InstallInput {
+        home,
+        kind,
+        helper,
+        remove,
+    } = input;
     install_at(InstallAtInput {
         home,
         kind,
@@ -229,7 +242,7 @@ mod opencode;
 use codex::codex_config;
 pub use error::Error;
 use json_hooks::{cursor_config, json_config, sync_muse_settings};
-pub use normalize::normalize;
+pub use normalize::{NormalizeInput, normalize};
 use opencode::opencode_plugin;
 
 #[cfg(test)]

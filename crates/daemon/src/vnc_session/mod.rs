@@ -352,12 +352,12 @@ fn run_vnc_thread(input: RunVncThreadInput) {
         .enable_all()
         .build()
     else {
-        mark_failed(
+        mark_failed(MarkFailedInput {
             shared,
             runtime,
             session_id,
-            "Could not initialize async runtime".into(),
-        );
+            message: "Could not initialize async runtime".into(),
+        });
         return;
     };
     rt.block_on(reconnect::run(reconnect::RunInput {
@@ -370,7 +370,7 @@ fn run_vnc_thread(input: RunVncThreadInput) {
 }
 
 mod events;
-use events::apply_vnc_event;
+use events::{ApplyVncEventInput, apply_vnc_event};
 fn mark_connected(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, session_id: &str) {
     {
         let mut rt = relock(runtime);
@@ -388,12 +388,20 @@ fn mark_connected(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, sessio
     }
 }
 
-fn mark_failed(
-    shared: &Arc<Shared>,
-    runtime: &Arc<Mutex<VncRuntime>>,
-    session_id: &str,
+struct MarkFailedInput<'a> {
+    shared: &'a Arc<Shared>,
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    session_id: &'a str,
     message: String,
-) {
+}
+
+fn mark_failed(input: MarkFailedInput<'_>) {
+    let MarkFailedInput {
+        shared,
+        runtime,
+        session_id,
+        message,
+    } = input;
     {
         let mut rt = relock(runtime);
         rt.status = VncSessionStatus::Failed;
@@ -409,12 +417,20 @@ fn mark_failed(
     }
 }
 
-fn mark_disconnected(
-    shared: &Arc<Shared>,
-    runtime: &Arc<Mutex<VncRuntime>>,
-    session_id: &str,
+struct MarkDisconnectedInput<'a> {
+    shared: &'a Arc<Shared>,
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    session_id: &'a str,
     reason: Option<String>,
-) {
+}
+
+fn mark_disconnected(input: MarkDisconnectedInput<'_>) {
+    let MarkDisconnectedInput {
+        shared,
+        runtime,
+        session_id,
+        reason,
+    } = input;
     {
         let mut rt = relock(runtime);
         if rt.status == VncSessionStatus::Failed {

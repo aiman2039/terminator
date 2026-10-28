@@ -36,7 +36,12 @@ pub fn assemble(input: AssembleInput<'_>) -> Result<()> {
     copy_tree(app, &staged)?;
     verify_app_executables(&staged)?;
     embed_sparkle(&staged, sparkle)?;
-    write_update_plist(&staged, app_info, build_number, public_key)?;
+    write_update_plist(WriteUpdatePlistInput {
+        app: &staged,
+        info: app_info,
+        build_number,
+        public_key,
+    })?;
     verify_arm64_macho(&staged)?;
     // Also check at publication time in case another task created the output.
     new_assembly_output(destination)?;
@@ -119,12 +124,20 @@ fn embed_sparkle(app: &Path, sparkle: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_update_plist(
-    app: &Path,
-    mut info: plist::Dictionary,
+struct WriteUpdatePlistInput<'a> {
+    app: &'a Path,
+    info: plist::Dictionary,
     build_number: u64,
     public_key: String,
-) -> Result<()> {
+}
+
+fn write_update_plist(input: WriteUpdatePlistInput<'_>) -> Result<()> {
+    let WriteUpdatePlistInput {
+        app,
+        mut info,
+        build_number,
+        public_key,
+    } = input;
     info.insert("CFBundleVersion".into(), build_number.to_string().into());
     info.insert(
         "SUFeedURL".into(),

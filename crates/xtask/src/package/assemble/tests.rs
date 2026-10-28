@@ -109,7 +109,13 @@ fn assembled_plist_enables_signed_automatic_updates() {
     fs::create_dir_all(app.join("Contents")).unwrap();
     let mut info = plist::Dictionary::new();
     info.insert("CFBundleIdentifier".into(), "dev.terminator.app".into());
-    write_update_plist(&app, info, 25, "public-key".into()).unwrap();
+    write_update_plist(WriteUpdatePlistInput {
+        app: &app,
+        info,
+        build_number: 25,
+        public_key: "public-key".into(),
+    })
+    .unwrap();
     let written = plist::Value::from_file(app.join("Contents/Info.plist")).unwrap();
     let dict = written.as_dictionary().unwrap();
     assert_eq!(

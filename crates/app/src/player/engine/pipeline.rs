@@ -64,37 +64,28 @@ pub(super) async fn pipeline(input: PipelineInput<'_>) -> Result<()> {
     let _cancel_on_drop = cancel.clone().drop_guard();
     let (sender, receiver) = mpsc::channel(COMPRESSED_SLOTS);
     let source = desired.source.clone().context("audio source missing")?;
-    let network_controls = Arc::clone(&controls);
-    let network = async {
-        if let Playable::Stream { url, .. } = source {
-            let _network = PipelineGuard::new(network_controls, true);
-            download(DownloadInput {
-                client,
-                url,
-                sender,
-                headers: Duration::from_secs(8),
-                read_timeout: Duration::from_secs(10),
-            })
-            .await
-        } else {
-            drop(sender);
-            Ok(())
-        }
-    };
+    let network = feed_network(FeedInput {
+        client,
+        source,
+        controls: Arc::clone(&controls),
+        sender,
+    });
     let ready = Arc::new(AtomicBool::new(false));
-    let started = Instant::now();
-    let monitor_ready = Arc::clone(&ready);
     let counters = Arc::new(PlaybackCounters::default());
-    let monitored = Arc::clone(&counters);
-    let monitor_status = status.clone();
-    let monitor_controls = Arc::clone(&controls);
-    let monitor_title = desired
-        .source
-        .as_ref()
-        .context("audio source missing")?
-        .title()
-        .to_owned();
-    let monitor_generation = desired.generation;
+    let startup = StartupMonitor {
+        started: Instant::now(),
+        ready: Arc::clone(&ready),
+        counters: Arc::clone(&counters),
+        status: status.clone(),
+        controls: Arc::clone(&controls),
+        title: desired
+            .source
+            .as_ref()
+            .context("audio source missing")?
+            .title()
+            .to_owned(),
+        generation: desired.generation,
+    };
     let decode_cancel = cancel.clone();
     let decode = pool.run(&cancel, move || {
         decode_audio(DecodeAudioInput {
@@ -109,34 +100,81 @@ pub(super) async fn pipeline(input: PipelineInput<'_>) -> Result<()> {
             healthy,
         })
     });
-    let startup = async move {
+    tokio::select! {
+        result = async { tokio::try_join!(network, decode)?; Ok(()) } => result,
+        result = startup.watch() => result,
+    }
+}
+
+struct FeedInput<'a> {
+    client: &'a reqwest::Client,
+    source: Playable,
+    controls: Arc<Controls>,
+    sender: mpsc::Sender<Vec<u8>>,
+}
+
+/// Download a stream source into the decoder's channel; file sources close
+/// the channel at once.
+async fn feed_network(input: FeedInput<'_>) -> Result<()> {
+    let FeedInput {
+        client,
+        source,
+        controls,
+        sender,
+    } = input;
+    let Playable::Stream { url, .. } = source else {
+        drop(sender);
+        return Ok(());
+    };
+    let _network = PipelineGuard::new(controls, true);
+    download(DownloadInput {
+        client,
+        url,
+        sender,
+        headers: Duration::from_secs(8),
+        read_timeout: Duration::from_secs(10),
+    })
+    .await
+}
+
+/// Fails playback that never starts, and reports buffering once it has.
+struct StartupMonitor {
+    started: Instant,
+    ready: Arc<AtomicBool>,
+    counters: Arc<PlaybackCounters>,
+    status: watch::Sender<Event>,
+    controls: Arc<Controls>,
+    title: String,
+    generation: u64,
+}
+
+impl StartupMonitor {
+    async fn watch(self) -> Result<()> {
         loop {
-            if monitor_ready.load(Ordering::Acquire) {
-                if monitored.buffering.load(Ordering::Relaxed)
-                    && !monitor_controls.paused.load(Ordering::Acquire)
-                {
-                    monitor_status.send_replace(Event {
-                        generation: monitor_generation,
-                        status: Status::Buffering {
-                            title: monitor_title.clone(),
-                        },
-                        finished: false,
-                    });
-                }
+            if self.ready.load(Ordering::Acquire) {
+                self.report_buffering();
             } else {
                 ensure!(
-                    started.elapsed() < Duration::from_secs(10),
+                    self.started.elapsed() < Duration::from_secs(10),
                     "Radio/audio startup deadline exceeded"
                 );
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        #[expect(unreachable_code, reason = "Keeps the block's Result type")]
-        Ok::<(), anyhow::Error>(())
-    };
-    tokio::select! {
-        result = async { tokio::try_join!(network, decode)?; Ok(()) } => result,
-        result = startup => result,
+    }
+
+    fn report_buffering(&self) {
+        if self.counters.buffering.load(Ordering::Relaxed)
+            && !self.controls.paused.load(Ordering::Acquire)
+        {
+            self.status.send_replace(Event {
+                generation: self.generation,
+                status: Status::Buffering {
+                    title: self.title.clone(),
+                },
+                finished: false,
+            });
+        }
     }
 }
 

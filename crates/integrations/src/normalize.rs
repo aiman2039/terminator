@@ -53,7 +53,20 @@ fn cursor_session_end_state(payload: &Value) -> AgentState {
     }
 }
 
-fn hook_state(kind: &str, name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
+struct HookStateInput<'a> {
+    kind: &'a str,
+    name: &'a str,
+    payload: &'a Value,
+    tool: &'a str,
+}
+
+fn hook_state(input: HookStateInput<'_>) -> Option<AgentState> {
+    let HookStateInput {
+        kind,
+        name,
+        payload,
+        tool,
+    } = input;
     match name {
         "SessionStart" | "session.created" | "sessionStart" => Some(AgentState::Unknown),
         "UserPromptSubmit"
@@ -104,32 +117,65 @@ fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
     })
 }
 
-pub fn normalize(
-    kind: &str,
-    session: &str,
-    parent: &str,
-    payload: &Value,
-) -> Result<Option<HookEvent>> {
-    let provider = first_str(
+/// Payload keys naming the provider's own session, in lookup order.
+const PROVIDER_SESSION_KEYS: &[&str] = &[
+    "session_id",
+    "sessionId",
+    "conversation_id",
+    "conversationId",
+    "thread-id",
+    "sessionID",
+    "/properties/sessionID",
+    "/properties/info/id",
+    "/data/sessionID",
+    "/data/info/id",
+];
+
+/// Payload keys carrying a human-readable summary, in lookup order.
+const SUMMARY_KEYS: &[&str] = &[
+    "message",
+    "last_assistant_message",
+    "last-assistant-message",
+    "lastAssistantMessage",
+];
+
+/// Payload keys identifying the pending request, in lookup order.
+const REQUEST_KEYS: &[&str] = &[
+    "tool_use_id",
+    "toolUseId",
+    "request_id",
+    "requestId",
+    "/properties/id",
+    "/properties/requestID",
+    "/data/id",
+    "/data/requestID",
+];
+
+pub struct NormalizeInput<'a> {
+    pub kind: &'a str,
+    pub session: &'a str,
+    pub parent: &'a str,
+    pub payload: &'a Value,
+}
+
+pub fn normalize(input: NormalizeInput<'_>) -> Result<Option<HookEvent>> {
+    let NormalizeInput {
+        kind,
+        session,
+        parent,
         payload,
-        &[
-            "session_id",
-            "sessionId",
-            "conversation_id",
-            "conversationId",
-            "thread-id",
-            "sessionID",
-            "/properties/sessionID",
-            "/properties/info/id",
-            "/data/sessionID",
-            "/data/info/id",
-        ],
-    );
+    } = input;
+    let provider = first_str(payload, PROVIDER_SESSION_KEYS);
     let name = first_str(payload, &["hook_event_name", "type", "hookEventName"]).unwrap_or("");
     let tool = first_str(payload, &["tool_name", "toolName"])
         .unwrap_or("")
         .to_lowercase();
-    let Some(state) = hook_state(kind, name, payload, &tool) else {
+    let Some(state) = hook_state(HookStateInput {
+        kind,
+        name,
+        payload,
+        tool: &tool,
+    }) else {
         return Ok(None);
     };
     let Some(provider) = provider else {
@@ -137,35 +183,14 @@ pub fn normalize(
     };
     let process = first_str(payload, &["terminator_invocation"]).unwrap_or(parent);
     let invocation = format!("{kind}:{process}:{provider}");
-    let summary = first_str(
-        payload,
-        &[
-            "message",
-            "last_assistant_message",
-            "last-assistant-message",
-            "lastAssistantMessage",
-        ],
-    )
-    .unwrap_or(state.label())
-    .chars()
-    .take(1000)
-    .collect();
+    let summary = first_str(payload, SUMMARY_KEYS)
+        .unwrap_or(state.label())
+        .chars()
+        .take(1000)
+        .collect();
     // Deliberately omit tool input, prompts, transcripts and credentials from details.
     let details = format!("Agent: {kind}\nEvent: {name}\nSession: {provider}");
-    let request = first_str(
-        payload,
-        &[
-            "tool_use_id",
-            "toolUseId",
-            "request_id",
-            "requestId",
-            "/properties/id",
-            "/properties/requestID",
-            "/data/id",
-            "/data/requestID",
-        ],
-    )
-    .map(str::to_owned);
+    let request = first_str(payload, REQUEST_KEYS).map(str::to_owned);
     Ok(Some(HookEvent {
         protocol_version: PROTOCOL_VERSION,
         event_id: first_str(payload, &["terminator_event"]).map_or_else(id, str::to_owned),

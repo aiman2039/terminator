@@ -29,12 +29,20 @@ fn within(root: &str, actual: &str) -> bool {
     let root = root.trim_end_matches('/');
     actual == root || actual.starts_with(&format!("{root}/"))
 }
-pub(super) async fn read(
-    sftp: &Sftp,
-    fs: &mut Fs,
-    project: &RemoteProject,
-    path: &str,
-) -> Result<Vec<u8>> {
+pub(super) struct ReadInput<'a> {
+    pub(super) sftp: &'a Sftp,
+    pub(super) fs: &'a mut Fs,
+    pub(super) project: &'a RemoteProject,
+    pub(super) path: &'a str,
+}
+
+pub(super) async fn read(input: ReadInput<'_>) -> Result<Vec<u8>> {
+    let ReadInput {
+        sftp,
+        fs,
+        project,
+        path,
+    } = input;
     let actual = contained(fs, project, path).await?;
     let mut file = sftp.open(actual).await?;
     let metadata = file.metadata().await?;
@@ -98,7 +106,13 @@ pub(super) fn operation(
                 }
             };
             let mut fs = sftp.fs();
-            let result = dispatch_operation(&sftp, &mut fs, project, operation).await;
+            let result = dispatch_operation(DispatchOperationInput {
+                sftp: &sftp,
+                fs: &mut fs,
+                project,
+                operation,
+            })
+            .await;
             drop(fs);
             let close = sftp.close().await;
             let _ = child.start_kill();
@@ -154,16 +168,30 @@ async fn list_directory(fs: &mut Fs, project: &RemoteProject, path: String) -> R
     entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.name.cmp(&b.name)));
     Ok(Reply::Directory { path, entries })
 }
-async fn dispatch_operation(
-    sftp: &Sftp,
-    fs: &mut Fs,
-    project: &RemoteProject,
+struct DispatchOperationInput<'a> {
+    sftp: &'a Sftp,
+    fs: &'a mut Fs,
+    project: &'a RemoteProject,
     operation: Operation,
-) -> Result<Reply> {
+}
+
+async fn dispatch_operation(input: DispatchOperationInput<'_>) -> Result<Reply> {
+    let DispatchOperationInput {
+        sftp,
+        fs,
+        project,
+        operation,
+    } = input;
     match operation {
         Operation::List { path } => list_directory(fs, project, path).await,
         Operation::Read { path } => {
-            let bytes = read(sftp, fs, project, &path).await?;
+            let bytes = read(ReadInput {
+                sftp,
+                fs,
+                project,
+                path: &path,
+            })
+            .await?;
             Ok(Reply::File {
                 path,
                 base64: B64.encode(bytes),

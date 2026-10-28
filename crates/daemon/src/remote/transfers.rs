@@ -131,7 +131,13 @@ async fn run(input: RunInput<'_>) -> Result<()> {
                 let actual = super::files::contained(&mut fs, project, path).await?;
                 drop(fs);
                 let actual = actual.to_str().context("Remote path must be UTF-8")?;
-                super::transfer::download(sftp, actual, local, progress).await?;
+                super::transfer::download(super::transfer::DownloadInput {
+                    sftp,
+                    remote: actual,
+                    local,
+                    progress,
+                })
+                .await?;
             }
             _ => anyhow::bail!("Not a transfer operation"),
         }

@@ -146,12 +146,20 @@ fn spawn_relaunch(paths: &Paths, exe: &Path) -> Result<()> {
     Ok(())
 }
 
-fn stop_session(
-    paths: &Paths,
-    generation: &str,
-    targets: &HashSet<String>,
-    sid: &str,
-) -> Result<()> {
+struct StopSessionInput<'a> {
+    paths: &'a Paths,
+    generation: &'a str,
+    targets: &'a HashSet<String>,
+    sid: &'a str,
+}
+
+fn stop_session(input: StopSessionInput<'_>) -> Result<()> {
+    let StopSessionInput {
+        paths,
+        generation,
+        targets,
+        sid,
+    } = input;
     let before = current(paths, generation)?;
     check_scope(&before, targets)?;
     if before
@@ -179,12 +187,20 @@ fn stop_session(
     Ok(())
 }
 
-fn wait_until_idle(
-    paths: &Paths,
-    generation: &str,
-    targets: &HashSet<String>,
+struct WaitUntilIdleInput<'a> {
+    paths: &'a Paths,
+    generation: &'a str,
+    targets: &'a HashSet<String>,
     timeout: Duration,
-) -> Result<()> {
+}
+
+fn wait_until_idle(input: WaitUntilIdleInput<'_>) -> Result<()> {
+    let WaitUntilIdleInput {
+        paths,
+        generation,
+        targets,
+        timeout,
+    } = input;
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(Instant::now);
@@ -226,7 +242,46 @@ fn wait_daemon_exit(paths: &Paths, timeout: Duration) -> Result<()> {
     }
 }
 
-fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Result<usize> {
+/// Owners that are not yet retired and must be shut down after the sessions stop.
+fn retiring_owners(paths: &Paths) -> Result<Vec<generations::Generation>> {
+    Ok(if generations::exists(paths) {
+        generations::Catalog::open(paths)?
+            .generations()?
+            .into_iter()
+            .filter(|g| g.status != generations::Status::Retired)
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    })
+}
+
+/// The shutdown request the owner understands: idle-only when advertised.
+fn shutdown_request(state: &State) -> Request {
+    if state
+        .capabilities
+        .iter()
+        .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
+    {
+        Request::ShutdownIfIdle
+    } else {
+        Request::Shutdown
+    }
+}
+
+struct FinishCleanupInput<'a> {
+    paths: &'a Paths,
+    state: State,
+    stop_all: bool,
+    timeout: Duration,
+}
+
+fn finish_cleanup(input: FinishCleanupInput<'_>) -> Result<usize> {
+    let FinishCleanupInput {
+        paths,
+        state,
+        stop_all,
+        timeout,
+    } = input;
     let targets: HashSet<_> = state
         .sessions
         .iter()
@@ -245,30 +300,23 @@ fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration
             targets.len()
         ));
     }
-    let retiring = if generations::exists(paths) {
-        generations::Catalog::open(paths)?
-            .generations()?
-            .into_iter()
-            .filter(|g| g.status != generations::Status::Retired)
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
+    let retiring = retiring_owners(paths)?;
     for sid in &targets {
-        stop_session(paths, &state.generation, &targets, sid)?;
+        stop_session(StopSessionInput {
+            paths,
+            generation: &state.generation,
+            targets: &targets,
+            sid,
+        })?;
     }
-    wait_until_idle(paths, &state.generation, &targets, timeout)?;
-    let request = if state
-        .capabilities
-        .iter()
-        .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
-    {
-        Request::ShutdownIfIdle
-    } else {
-        Request::Shutdown
-    };
+    wait_until_idle(WaitUntilIdleInput {
+        paths,
+        generation: &state.generation,
+        targets: &targets,
+        timeout,
+    })?;
     ensure!(
-        matches!(rpc(paths, request)?, Response::Ok),
+        matches!(rpc(paths, shutdown_request(&state))?, Response::Ok),
         "Daemon shutdown was not acknowledged"
     );
     if generations::exists(paths) {
@@ -330,7 +378,12 @@ pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
     let thaw = freeze(paths, &state, confirmed.as_ref())?;
     let lock = close_gui(paths, timeout)?;
     let generation = state.generation.clone();
-    let result = finish_cleanup(paths, state, stop_all, timeout);
+    let result = finish_cleanup(FinishCleanupInput {
+        paths,
+        state,
+        stop_all,
+        timeout,
+    });
     // Persist before reopening: the old GUI and its error receiver are already gone.
     let report_result = if relaunch.is_some() {
         write_restart_result(paths, &generation, &result)

@@ -346,9 +346,9 @@ fn match_shell_script(argv: &[&str]) -> Option<&'static str> {
 /// matches an earlier observation.
 mod detect;
 pub use detect::{
-    DetectedAgent, PresenceOutcome, ProcView, ProcessIdentity, ShellDetection, ShellTarget,
-    TerminalPresence, detect_agents, inspect_shells, observation_fresh, preferred_agent,
-    presence_verified, snapshot_processes,
+    DetectAgentsInput, DetectedAgent, PresenceOutcome, ProcView, ProcessIdentity, ShellDetection,
+    ShellTarget, TerminalPresence, detect_agents, inspect_shells, observation_fresh,
+    preferred_agent, presence_verified, snapshot_processes,
 };
 
 #[cfg(test)]

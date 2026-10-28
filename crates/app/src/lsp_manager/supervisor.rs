@@ -294,7 +294,7 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
         key,
         binary,
         root,
-        mut incoming,
+        incoming,
         pump,
         cancel,
     } = input;
@@ -318,49 +318,11 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
     };
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
-    let writer = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt as _;
-        let mut stdin = stdin;
-        while let Some(bytes) = incoming.recv().await {
-            let ok = match stdin.as_mut() {
-                Some(pipe) => pipe.write_all(&bytes).await.is_ok() && pipe.flush().await.is_ok(),
-                None => false,
-            };
-            if !ok {
-                break;
-            }
-        }
-    });
+    let writer = tokio::spawn(ServerPipes::write_stdin(stdin, incoming));
     let reader_pump = pump.clone();
     let reader_key = key.clone();
     let reader = tokio::spawn(async move {
-        use tokio::io::AsyncReadExt as _;
-        let mut stdout = stdout;
-        let mut decoder = L::FrameDecoder::default();
-        let mut chunk = [0u8; 8192];
-        while let Some(pipe) = stdout.as_mut() {
-            match pipe.read(&mut chunk).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let mut stop = false;
-                    for body in decoder.feed(chunk.get(..n).unwrap_or(&[])) {
-                        if reader_pump
-                            .send(PumpEvent::Body {
-                                key: reader_key.clone(),
-                                body,
-                            })
-                            .is_err()
-                        {
-                            stop = true;
-                            break;
-                        }
-                    }
-                    if stop {
-                        break;
-                    }
-                }
-            }
-        }
+        ServerPipes::read_stdout(stdout, &reader_pump, &reader_key).await;
     });
     // The child outlives the pumps on crash: wait for the process
     // itself, then tear the pumps down.
@@ -383,6 +345,64 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The two stdio pumps between a server process and the manager.
+struct ServerPipes;
+
+impl ServerPipes {
+    /// Write each queued frame to the server's stdin until it closes.
+    async fn write_stdin(
+        mut stdin: Option<tokio::process::ChildStdin>,
+        mut incoming: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    ) {
+        use tokio::io::AsyncWriteExt as _;
+        while let Some(bytes) = incoming.recv().await {
+            let ok = match stdin.as_mut() {
+                Some(pipe) => pipe.write_all(&bytes).await.is_ok() && pipe.flush().await.is_ok(),
+                None => false,
+            };
+            if !ok {
+                break;
+            }
+        }
+    }
+
+    /// Decode framed bodies from the server's stdout and forward them
+    /// until it closes or the manager stops listening.
+    async fn read_stdout(
+        mut stdout: Option<tokio::process::ChildStdout>,
+        pump: &tokio::sync::mpsc::UnboundedSender<PumpEvent>,
+        key: &ServerKey,
+    ) {
+        use tokio::io::AsyncReadExt as _;
+        let mut decoder = L::FrameDecoder::default();
+        let mut chunk = [0u8; 8192];
+        while let Some(pipe) = stdout.as_mut() {
+            let n = match pipe.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            if !Self::forward(decoder.feed(chunk.get(..n).unwrap_or(&[])), pump, key) {
+                break;
+            }
+        }
+    }
+
+    /// False once the manager's receiver is gone.
+    fn forward(
+        bodies: impl IntoIterator<Item = Vec<u8>>,
+        pump: &tokio::sync::mpsc::UnboundedSender<PumpEvent>,
+        key: &ServerKey,
+    ) -> bool {
+        bodies.into_iter().all(|body| {
+            pump.send(PumpEvent::Body {
+                key: key.clone(),
+                body,
+            })
+            .is_ok()
+        })
+    }
+}
+
 /// Spawn one server with piped stdio in `root`, handshake it, and pump
 /// both directions on background tasks. Needs a running tokio runtime;
 /// only the no-services test path uses this (tests use `#[tokio::test]`).
@@ -402,50 +422,12 @@ fn spawn_server_direct(
         .map_err(|error| format!("Could not start {}: {error:#}", key.language))?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
-    let (inbox, mut incoming) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt as _;
-        let mut stdin = stdin;
-        while let Some(bytes) = incoming.recv().await {
-            let ok = match stdin.as_mut() {
-                Some(pipe) => pipe.write_all(&bytes).await.is_ok() && pipe.flush().await.is_ok(),
-                None => false,
-            };
-            if !ok {
-                break;
-            }
-        }
-    });
+    let (inbox, incoming) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    tokio::spawn(ServerPipes::write_stdin(stdin, incoming));
     let reader_pump = pump.clone();
     let reader_key = key.clone();
     tokio::spawn(async move {
-        use tokio::io::AsyncReadExt as _;
-        let mut stdout = stdout;
-        let mut decoder = L::FrameDecoder::default();
-        let mut chunk = [0u8; 8192];
-        while let Some(pipe) = stdout.as_mut() {
-            match pipe.read(&mut chunk).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let mut stop = false;
-                    for body in decoder.feed(chunk.get(..n).unwrap_or(&[])) {
-                        if reader_pump
-                            .send(PumpEvent::Body {
-                                key: reader_key.clone(),
-                                body,
-                            })
-                            .is_err()
-                        {
-                            stop = true;
-                            break;
-                        }
-                    }
-                    if stop {
-                        break;
-                    }
-                }
-            }
-        }
+        ServerPipes::read_stdout(stdout, &reader_pump, &reader_key).await;
         let _ = pump.send(PumpEvent::Down { key: reader_key });
     });
     let mut server = Server {

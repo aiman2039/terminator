@@ -68,7 +68,7 @@ impl Shared {
                 rt.block_on(async {
                     tokio::time::timeout(
                         Duration::from_mins(5),
-                        run(&runtime, &options.ssh, control.as_deref(), &transfer),
+                        run(RunInput { runtime: &runtime, ssh: &options.ssh, control: control.as_deref(), transfer: &transfer }),
                     )
                     .await
                     .context("SFTP transfer timed out; publication state is unknown; check the destination before retrying")?
@@ -113,12 +113,19 @@ impl Progress for Session<'_> {
         }
     }
 }
-async fn run(
-    runtime: &Arc<Mutex<VncRuntime>>,
-    ssh: &terminator_core::vnc::SshOptions,
-    control: Option<&std::path::Path>,
-    transfer: &VncTransfer,
-) -> Result<()> {
+struct RunInput<'a> {
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    ssh: &'a terminator_core::vnc::SshOptions,
+    control: Option<&'a std::path::Path>,
+    transfer: &'a VncTransfer,
+}
+async fn run(input: RunInput<'_>) -> Result<()> {
+    let RunInput {
+        runtime,
+        ssh,
+        control,
+        transfer,
+    } = input;
     let progress = Session {
         runtime,
         id: &transfer.id,
@@ -136,7 +143,13 @@ async fn run(
                 .await?;
             }
             TransferDirection::Download => {
-                transfer::download(sftp, &transfer.remote, &transfer.local, &progress).await?;
+                transfer::download(transfer::DownloadInput {
+                    sftp,
+                    remote: &transfer.remote,
+                    local: &transfer.local,
+                    progress: &progress,
+                })
+                .await?;
             }
         }
         Ok(())

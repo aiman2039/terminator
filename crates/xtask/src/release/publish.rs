@@ -9,12 +9,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) fn execute(
-    root: &Path,
-    options: &Options,
-    runner: &impl Runner,
-    validate: impl FnOnce(&Path, &Path) -> Result<()>,
-) -> Result<()> {
+pub(super) struct ExecuteInput<'a, R, V>
+where
+    R: Runner,
+    V: FnOnce(&Path, &Path) -> Result<()>,
+{
+    pub(super) root: &'a Path,
+    pub(super) options: &'a Options,
+    pub(super) runner: &'a R,
+    pub(super) validate: V,
+}
+
+pub(super) fn execute<R, V>(input: ExecuteInput<'_, R, V>) -> Result<()>
+where
+    R: Runner,
+    V: FnOnce(&Path, &Path) -> Result<()>,
+{
+    let ExecuteInput {
+        root,
+        options,
+        runner,
+        validate,
+    } = input;
     let (head, branch) = check_branch(root, options, runner)?;
     let parent = root.join(".artifacts/releases");
     fs::create_dir_all(&parent)?;

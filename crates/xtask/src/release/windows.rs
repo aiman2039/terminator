@@ -34,7 +34,20 @@ pub(super) fn powershell(root: &Path, host: &str, script: &str) -> Command {
     )
 }
 
-pub fn run(source: &Path, artifacts: &Path, host: &str, bash: &str) -> Result<()> {
+pub struct RunInput<'a> {
+    pub source: &'a Path,
+    pub artifacts: &'a Path,
+    pub host: &'a str,
+    pub bash: &'a str,
+}
+
+pub fn run(input: RunInput<'_>) -> Result<()> {
+    let RunInput {
+        source,
+        artifacts,
+        host,
+        bash,
+    } = input;
     run_with(
         RunWithInput {
             source,
