@@ -308,7 +308,20 @@ fn linux_platform(architecture: &str) -> Result<&'static str> {
     }
 }
 
-fn linux_image_tag(dockerfile: &[u8], rust: &str, components: &str, platform: &str) -> String {
+struct LinuxImageTagInput<'a> {
+    dockerfile: &'a [u8],
+    rust: &'a str,
+    components: &'a str,
+    platform: &'a str,
+}
+
+fn linux_image_tag(input: LinuxImageTagInput<'_>) -> String {
+    let LinuxImageTagInput {
+        dockerfile,
+        rust,
+        components,
+        platform,
+    } = input;
     let mut hash = Sha256::new();
     for part in [
         dockerfile,

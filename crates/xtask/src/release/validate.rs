@@ -1,5 +1,7 @@
 use super::command::{Runner, cmd};
-use super::{Options, linux_image_tag, linux_platform, rust_components, version};
+use super::{
+    LinuxImageTagInput, Options, linux_image_tag, linux_platform, rust_components, version,
+};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -154,12 +156,12 @@ impl<R: Runner> Stages<'_, R> {
         let image = if let Some(image) = &options.linux_image {
             image.clone()
         } else {
-            linux_image_tag(
-                &fs::read(source.join("scripts/release-linux.Dockerfile"))?,
-                &rust,
-                &components,
+            linux_image_tag(LinuxImageTagInput {
+                dockerfile: &fs::read(source.join("scripts/release-linux.Dockerfile"))?,
+                rust: &rust,
+                components: &components,
                 platform,
-            )
+            })
         };
         let context = artifacts.join("linux-build-context");
         fs::create_dir(&context)?;

@@ -1,5 +1,5 @@
 use super::super::{Result, Value, capture, ensure, fs, id, json, plain, sessions};
-use super::{CaptureInput, Md, TEXT, expression, gui, stored_mode_is_default, view};
+use super::{CaptureInput, Md, TEXT, ViewInput, expression, gui, stored_mode_is_default, view};
 
 impl Md<'_> {
     pub(super) fn split_unsaved(&self) -> Result<()> {

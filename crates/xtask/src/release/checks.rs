@@ -18,7 +18,12 @@ pub fn run(output: &Path) -> Result<()> {
     } else {
         Platform::Windows
     };
-    run_with(&crate::harness::root(), &output, platform, &System)
+    run_with(RunWithInput {
+        root: &crate::harness::root(),
+        output: &output,
+        platform,
+        runner: &System,
+    })
 }
 /// Runs release-check commands with the isolated release environment.
 struct Checks<'a, R> {
@@ -27,12 +32,20 @@ struct Checks<'a, R> {
     runner: &'a R,
 }
 
-pub(super) fn run_with(
-    root: &Path,
-    output: &Path,
-    platform: Platform,
-    runner: &impl Runner,
-) -> Result<()> {
+pub(super) struct RunWithInput<'a, R> {
+    pub(super) root: &'a Path,
+    pub(super) output: &'a Path,
+    pub(super) platform: Platform,
+    pub(super) runner: &'a R,
+}
+
+pub(super) fn run_with(input: RunWithInput<'_, impl Runner>) -> Result<()> {
+    let RunWithInput {
+        root,
+        output,
+        platform,
+        runner,
+    } = input;
     fs::create_dir_all(output.join("state"))?;
     fs::create_dir_all(output.join("config"))?;
     let checks = Checks {

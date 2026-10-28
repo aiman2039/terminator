@@ -562,12 +562,12 @@ fn unit_failure_stops_before_runtime_and_packaging() {
         ..FakeRunner::default()
     };
     assert!(
-        checks::run_with(
-            &fixture.root,
-            &fixture.root.join(".artifacts/check"),
-            checks::Platform::Mac,
-            &runner
-        )
+        checks::run_with(checks::RunWithInput {
+            root: &fixture.root,
+            output: &fixture.root.join(".artifacts/check"),
+            platform: checks::Platform::Mac,
+            runner: &runner
+        })
         .is_err()
     );
     let commands = runner.commands.lock().unwrap();
@@ -586,12 +586,12 @@ fn unit_failure_stops_before_runtime_and_packaging() {
 fn mac_checks_include_cross_check_runtime_gui_and_package() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
-    checks::run_with(
-        &fixture.root,
-        &fixture.root.join(".artifacts/check"),
-        checks::Platform::Mac,
-        &runner,
-    )
+    checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Mac,
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     for expected in [
@@ -615,12 +615,12 @@ fn mac_checks_include_cross_check_runtime_gui_and_package() {
 fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
-    checks::run_with(
-        &fixture.root,
-        &fixture.root.join(".artifacts/check"),
-        checks::Platform::Linux,
-        &runner,
-    )
+    checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Linux,
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     assert!(
@@ -638,12 +638,12 @@ fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
 fn windows_checks_do_not_claim_unix_runtime_coverage() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
-    checks::run_with(
-        &fixture.root,
-        &fixture.root.join(".artifacts/check"),
-        checks::Platform::Windows,
-        &runner,
-    )
+    checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Windows,
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     assert!(
@@ -929,32 +929,47 @@ fn image_components_reject_invalid_values() {
 #[test]
 fn linux_image_key_tracks_setup_but_not_application_source() {
     let dockerfile = b"FROM ubuntu:24.04\n";
-    let image = linux_image_tag(dockerfile, "1.97.1", "clippy rustfmt", "linux/amd64");
+    let image = linux_image_tag(LinuxImageTagInput {
+        dockerfile,
+        rust: "1.97.1",
+        components: "clippy rustfmt",
+        platform: "linux/amd64",
+    });
     assert_eq!(
         image,
-        linux_image_tag(dockerfile, "1.97.1", "clippy rustfmt", "linux/amd64")
-    );
-    assert_ne!(
-        image,
-        linux_image_tag(
-            b"FROM ubuntu:26.04\n",
-            "1.97.1",
-            "clippy rustfmt",
-            "linux/amd64"
-        )
-    );
-    assert_ne!(
-        image,
-        linux_image_tag(dockerfile, "1.98.0", "clippy rustfmt", "linux/amd64")
-    );
-    assert_ne!(
-        image,
-        linux_image_tag(
+        linux_image_tag(LinuxImageTagInput {
             dockerfile,
-            "1.97.1",
-            "clippy rustfmt rust-src",
-            "linux/amd64"
-        )
+            rust: "1.97.1",
+            components: "clippy rustfmt",
+            platform: "linux/amd64"
+        })
+    );
+    assert_ne!(
+        image,
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile: b"FROM ubuntu:26.04\n",
+            rust: "1.97.1",
+            components: "clippy rustfmt",
+            platform: "linux/amd64"
+        })
+    );
+    assert_ne!(
+        image,
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile,
+            rust: "1.98.0",
+            components: "clippy rustfmt",
+            platform: "linux/amd64"
+        })
+    );
+    assert_ne!(
+        image,
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile,
+            rust: "1.97.1",
+            components: "clippy rustfmt rust-src",
+            platform: "linux/amd64"
+        })
     );
 }
 
@@ -1115,8 +1130,18 @@ fn native_linux_architecture_is_required_and_normalized() {
         assert!(linux_platform(arch).is_err());
     }
     assert_ne!(
-        linux_image_tag(b"recipe", "1.97.1", "clippy", "linux/amd64"),
-        linux_image_tag(b"recipe", "1.97.1", "clippy", "linux/arm64")
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile: b"recipe",
+            rust: "1.97.1",
+            components: "clippy",
+            platform: "linux/amd64"
+        }),
+        linux_image_tag(LinuxImageTagInput {
+            dockerfile: b"recipe",
+            rust: "1.97.1",
+            components: "clippy",
+            platform: "linux/arm64"
+        })
     );
 }
 

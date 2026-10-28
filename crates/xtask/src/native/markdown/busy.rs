@@ -1,7 +1,7 @@
 use super::super::{
     Context, Harness, Options, Result, Value, capture, ensure, fs, id, json, sessions,
 };
-use super::{CaptureInput, gui, launch, view};
+use super::{CaptureInput, ViewInput, gui, launch, view};
 
 pub fn busy(o: &Options) -> Result<()> {
     let (h, shell, root) = launch("markdown-busy")?;
