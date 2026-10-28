@@ -235,15 +235,25 @@ fn name_at(root: &Path, relative: &str, revision: &str) -> String {
     relative.to_owned()
 }
 
+pub struct RevisionDocumentInput<'a> {
+    pub cwd: &'a Path,
+    pub path: &'a Path,
+    pub left: &'a str,
+    pub right: &'a str,
+}
+
 /// Read-only diff of `path` between `left` and `right` (empty `right` is
 /// the working tree). A side where the file did not exist is empty; a
 /// side from before a rename reads the file under its name back then.
 pub fn revision_document(
-    cwd: &Path,
-    path: &Path,
-    left: &str,
-    right: &str,
+    input: RevisionDocumentInput<'_>,
 ) -> Result<crate::diff::DiffDocument, String> {
+    let RevisionDocumentInput {
+        cwd,
+        path,
+        left,
+        right,
+    } = input;
     let root = git_root(cwd)?;
     let relative = terminator_git::relative_path(&root, path).map_err(|error| error.to_string())?;
     let name = relative.to_string_lossy().into_owned();
@@ -310,7 +320,15 @@ impl crate::GitView {
                 path,
                 left,
                 right,
-            } => Self::Revision(revision_document(cwd, path, left, right).map(std::sync::Arc::new)),
+            } => Self::Revision(
+                revision_document(RevisionDocumentInput {
+                    cwd,
+                    path,
+                    left,
+                    right,
+                })
+                .map(std::sync::Arc::new),
+            ),
             _ => Self::failed(tab, "Not a Git view".into()),
         }
     }

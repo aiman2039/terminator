@@ -170,17 +170,34 @@ fn history_files_and_revision_diffs_follow_commits() {
     );
 
     // The commit's own change: one added line.
-    let commit = revision_document(root, &file, &format!("{newest}^"), newest).unwrap();
+    let commit = revision_document(RevisionDocumentInput {
+        cwd: root,
+        path: &file,
+        left: &format!("{newest}^"),
+        right: newest,
+    })
+    .unwrap();
     assert_eq!(commit.hunks.len(), 1);
     assert_eq!(commit.right_text, "one\ntwo\n");
     assert!(commit.read_only);
     // Against the working tree.
-    let local = revision_document(root, &file, newest, "").unwrap();
+    let local = revision_document(RevisionDocumentInput {
+        cwd: root,
+        path: &file,
+        left: newest,
+        right: "",
+    })
+    .unwrap();
     assert_eq!(local.right_label, "Working tree");
     assert_eq!(local.right_text, "one\ntwo\nlocal\n");
     // A file added by the commit has an empty left side.
-    let added =
-        revision_document(root, &root.join("b.txt"), &format!("{newest}^"), newest).unwrap();
+    let added = revision_document(RevisionDocumentInput {
+        cwd: root,
+        path: &root.join("b.txt"),
+        left: &format!("{newest}^"),
+        right: newest,
+    })
+    .unwrap();
     assert_eq!(added.left_text, "");
     assert_eq!(added.right_text, "b\n");
 }
@@ -201,7 +218,13 @@ fn revision_diffs_before_a_rename_read_the_old_name() {
     assert_eq!(history.len(), 3);
     // The pre-rename commit's own change, read under the old name.
     let grow = &history[1].hash;
-    let before = revision_document(root, &file, &format!("{grow}^"), grow).unwrap();
+    let before = revision_document(RevisionDocumentInput {
+        cwd: root,
+        path: &file,
+        left: &format!("{grow}^"),
+        right: grow,
+    })
+    .unwrap();
     assert_eq!(before.left_text, "one\n");
     assert_eq!(before.right_text, "one\ntwo\n");
     assert!(
@@ -211,7 +234,13 @@ fn revision_diffs_before_a_rename_read_the_old_name() {
     );
     // The rename commit itself: old name on the left, new on the right.
     let rename = &history[0].hash;
-    let moved = revision_document(root, &file, &format!("{rename}^"), rename).unwrap();
+    let moved = revision_document(RevisionDocumentInput {
+        cwd: root,
+        path: &file,
+        left: &format!("{rename}^"),
+        right: rename,
+    })
+    .unwrap();
     assert_eq!(moved.left_text, moved.right_text);
     assert!(moved.left_label.ends_with("old.txt"));
     assert!(!moved.right_label.contains("old.txt"));

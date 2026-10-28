@@ -66,12 +66,20 @@ fn occupies_close(mode: Mode, lifecycle: &Lifecycle) -> bool {
     }
 }
 
-pub async fn close_async(
-    client: &async_client::Client,
-    ids: &[String],
-    mode: Mode,
-    timeout: Duration,
-) -> Result<()> {
+pub struct CloseAsyncInput<'a> {
+    pub client: &'a async_client::Client,
+    pub ids: &'a [String],
+    pub mode: Mode,
+    pub timeout: Duration,
+}
+
+pub async fn close_async(input: CloseAsyncInput<'_>) -> Result<()> {
+    let CloseAsyncInput {
+        client,
+        ids,
+        mode,
+        timeout,
+    } = input;
     let Response::State(state) = client.rpc(Request::Snapshot).await? else {
         anyhow::bail!("Could not inspect editor state")
     };
@@ -83,7 +91,14 @@ pub async fn close_async(
         quit_editor(client, id, mode).await?;
     }
     for attempt in 0..2 {
-        if wait_closed(client, ids, mode, timeout).await? {
+        if wait_closed(WaitClosedInput {
+            client,
+            ids,
+            mode,
+            timeout,
+        })
+        .await?
+        {
             return Ok(());
         }
         if mode != Mode::Discard || attempt != 0 {
@@ -158,13 +173,21 @@ async fn quit_editor(client: &async_client::Client, id: &str, mode: Mode) -> Res
     Ok(())
 }
 
-/// Polls until no listed session still occupies the close, up to `timeout`.
-async fn wait_closed(
-    client: &async_client::Client,
-    ids: &[String],
+struct WaitClosedInput<'a> {
+    client: &'a async_client::Client,
+    ids: &'a [String],
     mode: Mode,
     timeout: Duration,
-) -> Result<bool> {
+}
+
+/// Polls until no listed session still occupies the close, up to `timeout`.
+async fn wait_closed(input: WaitClosedInput<'_>) -> Result<bool> {
+    let WaitClosedInput {
+        client,
+        ids,
+        mode,
+        timeout,
+    } = input;
     let started = Instant::now();
     loop {
         let Response::State(state) = client.rpc(Request::Snapshot).await? else {
@@ -202,7 +225,22 @@ async fn stop_live(client: &async_client::Client, ids: &[String]) -> Result<()> 
 
 #[cfg(test)]
 #[cfg(unix)]
-pub fn close(paths: &Paths, ids: &[String], mode: Mode, timeout: Duration) -> Result<()> {
+pub struct CloseInput<'a> {
+    pub paths: &'a Paths,
+    pub ids: &'a [String],
+    pub mode: Mode,
+    pub timeout: Duration,
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+pub fn close(input: CloseInput<'_>) -> Result<()> {
+    let CloseInput {
+        paths,
+        ids,
+        mode,
+        timeout,
+    } = input;
     let client = async_client::Client::new(
         paths.clone(),
         async_service::NativePool::new("close-catalog-test", 1)?,
@@ -211,7 +249,12 @@ pub fn close(paths: &Paths, ids: &[String], mode: Mode, timeout: Duration) -> Re
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(close_async(&client, ids, mode, timeout))
+        .block_on(close_async(CloseAsyncInput {
+            client: &client,
+            ids,
+            mode,
+            timeout,
+        }))
 }
 #[cfg(test)]
 mod tests {

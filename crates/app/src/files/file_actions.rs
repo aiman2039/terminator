@@ -97,11 +97,29 @@ pub fn items(
 }
 
 pub fn menu(ui: &mut egui::Ui, spec: FileMenu) -> Option<FileAction> {
-    menu_with(ui, spec, "", "")
+    menu_with(MenuWithInput {
+        ui,
+        spec,
+        open: "",
+        split: "",
+    })
+}
+
+pub struct MenuWithInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub spec: FileMenu,
+    pub open: &'a str,
+    pub split: &'a str,
 }
 
 /// `open` and `split` are the displayed shortcuts for those rows.
-pub fn menu_with(ui: &mut egui::Ui, spec: FileMenu, open: &str, split: &str) -> Option<FileAction> {
+pub fn menu_with(input: MenuWithInput<'_>) -> Option<FileAction> {
+    let MenuWithInput {
+        ui,
+        spec,
+        open,
+        split,
+    } = input;
     let mut previous_group = None;
     for (label, action) in items(spec) {
         let group = match action {

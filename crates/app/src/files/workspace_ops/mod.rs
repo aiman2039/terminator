@@ -101,8 +101,18 @@ pub struct CommittedFile {
 pub fn perform(root: &Path, op: Op) -> Result<Report> {
     match op {
         Op::Perforce(_) => bail!("Perforce actions require the async process service"),
-        Op::Stage(path) => git_path(root, &["add", "--"], &path, "Staged"),
-        Op::Unstage(path) => git_path(root, &["restore", "--staged", "--"], &path, "Unstaged"),
+        Op::Stage(path) => git_path(GitPathInput {
+            root,
+            prefix: &["add", "--"],
+            path: &path,
+            verb: "Staged",
+        }),
+        Op::Unstage(path) => git_path(GitPathInput {
+            root,
+            prefix: &["restore", "--staged", "--"],
+            path: &path,
+            verb: "Unstaged",
+        }),
         Op::Discard { path, untracked } => discard(root, &path, untracked),
         Op::Delete(path) => delete(root, &path),
         Op::Commit {

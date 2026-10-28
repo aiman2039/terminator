@@ -369,12 +369,12 @@ fn assert_old_owner_routing(paths: &Paths, a: &GenerationA) {
         fs::read_to_string(&a.file).unwrap(),
         "UNSAVED-GENERATION-A\n"
     );
-    crate::editor_close::close(
+    crate::editor_close::close(crate::editor_close::CloseInput {
         paths,
-        std::slice::from_ref(&a.editor.id),
-        crate::editor_close::Mode::Save,
-        Duration::from_secs(2),
-    )
+        ids: std::slice::from_ref(&a.editor.id),
+        mode: crate::editor_close::Mode::Save,
+        timeout: Duration::from_secs(2),
+    })
     .unwrap();
     signals::signal_process(u32::try_from(a.job).unwrap(), signals::ProcSignal::Hangup).unwrap();
     input(paths, &a.shell, b"printf 'STILL-INTERACTIVE-A\\n'\r");

@@ -272,7 +272,12 @@ pub(super) fn discard(root: &Path, path: &Path, untracked: bool) -> Result<Repor
         // Restore the worktree from the index (the default source),
         // never from HEAD: partially staged files keep their staged
         // content, and newly staged files have no HEAD version.
-        git_path(root, &["restore", "--worktree", "--"], path, "Discarded")
+        git_path(GitPathInput {
+            root,
+            prefix: &["restore", "--worktree", "--"],
+            path,
+            verb: "Discarded",
+        })
     }
 }
 

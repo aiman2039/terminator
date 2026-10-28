@@ -297,17 +297,17 @@ struct FileRowMenu<'a> {
 
 impl FileRowMenu<'_> {
     fn show(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
-        if let Some(action) = file_actions::menu_with(
+        if let Some(action) = file_actions::menu_with(file_actions::MenuWithInput {
             ui,
-            file_actions::FileMenu {
+            spec: file_actions::FileMenu {
                 file: true,
                 browser: file_actions::browser_document(self.path),
                 git: None,
                 neovim: false,
             },
-            self.open_shortcut,
-            self.split_shortcut,
-        ) {
+            open: self.open_shortcut,
+            split: self.split_shortcut,
+        }) {
             outcome.menu = Some(action);
         }
         if self.perforce {

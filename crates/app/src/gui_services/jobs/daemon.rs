@@ -271,9 +271,14 @@ impl Services {
             updates,
         } = input;
         let client = self.client();
-        let result = editor_close::close_async(client, &ids, mode, timeout)
-            .await
-            .map_err(|e| format!("{e:#}"));
+        let result = editor_close::close_async(editor_close::CloseAsyncInput {
+            client,
+            ids: &ids,
+            mode,
+            timeout,
+        })
+        .await
+        .map_err(|e| format!("{e:#}"));
         updates.push(Update::EditorsClosed(target, ids, result));
         Ok(())
     }

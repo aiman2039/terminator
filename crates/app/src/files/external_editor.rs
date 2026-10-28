@@ -80,12 +80,21 @@ fn command(program: &str, args: &[String], path: &Path) -> Result<Command> {
     Ok(command)
 }
 #[cfg(test)]
-pub fn launch(
-    program: &str,
-    args: &[String],
-    path: &Path,
-    done: impl FnOnce(Result<()>) + Send + 'static,
-) -> Result<()> {
+pub struct LaunchInput<'a, F: FnOnce(Result<()>) + Send + 'static> {
+    pub program: &'a str,
+    pub args: &'a [String],
+    pub path: &'a Path,
+    pub done: F,
+}
+
+#[cfg(test)]
+pub fn launch(input: LaunchInput<'_, impl FnOnce(Result<()>) + Send + 'static>) -> Result<()> {
+    let LaunchInput {
+        program,
+        args,
+        path,
+        done,
+    } = input;
     let mut child = command(program, args, path)?
         .spawn()
         .with_context(|| format!("Start external editor {program}"))?;
@@ -134,12 +143,20 @@ pub fn launch(
     Ok(())
 }
 
-pub async fn launch_supervised(
-    service: crate::gui_services::Services,
-    program: String,
-    args: Vec<String>,
-    path: std::path::PathBuf,
-) -> Result<()> {
+pub struct LaunchSupervisedInput {
+    pub service: crate::gui_services::Services,
+    pub program: String,
+    pub args: Vec<String>,
+    pub path: std::path::PathBuf,
+}
+
+pub async fn launch_supervised(input: LaunchSupervisedInput) -> Result<()> {
+    let LaunchSupervisedInput {
+        service,
+        program,
+        args,
+        path,
+    } = input;
     use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
     let cancel = CancellationToken::new();
     let token = cancel.clone();
@@ -300,12 +317,12 @@ mod tests {
     #[test]
     fn missing_executable_and_spawn_failure_are_reported() {
         assert!(
-            launch(
-                "terminator-nonexistent-fixture-editor",
-                &[],
-                Path::new("file"),
-                |_| {}
-            )
+            launch(LaunchInput {
+                program: "terminator-nonexistent-fixture-editor",
+                args: &[],
+                path: Path::new("file"),
+                done: |_| {}
+            })
             .unwrap_err()
             .to_string()
             .contains("not found")
@@ -318,14 +335,14 @@ mod tests {
         #[cfg(unix)]
         std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700)).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
-        let started = launch(
-            invalid.to_str().unwrap(),
-            &[],
-            Path::new("file"),
-            move |result| {
+        let started = launch(LaunchInput {
+            program: invalid.to_str().unwrap(),
+            args: &[],
+            path: Path::new("file"),
+            done: move |result| {
                 tx.send(result).unwrap();
             },
-        );
+        });
         // Binary translators may acknowledge spawning before reporting an
         // invalid interpreter through the child's exit status.
         if started.is_ok() {
@@ -341,17 +358,17 @@ mod tests {
     fn failing_exit_is_reported_and_long_running_editor_does_not_block() {
         let (tx, rx) = mpsc::channel();
         let start = Instant::now();
-        launch(
-            "/bin/sh",
-            &[
+        launch(LaunchInput {
+            program: "/bin/sh",
+            args: &[
                 "-c".into(),
                 "sleep 1; echo fixture-failure >&2; exit 7".into(),
             ],
-            Path::new("file"),
-            move |result| {
+            path: Path::new("file"),
+            done: move |result| {
                 tx.send(result.map_err(|e| e.to_string())).unwrap();
             },
-        )
+        })
         .unwrap();
         assert!(start.elapsed() < Duration::from_millis(500));
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
@@ -366,18 +383,18 @@ mod tests {
     #[cfg(unix)]
     fn noisy_failure_is_drained_but_diagnostic_is_bounded() {
         let (tx, rx) = mpsc::channel();
-        launch(
-            "/bin/sh",
-            &[
+        launch(LaunchInput {
+            program: "/bin/sh",
+            args: &[
                 "-c".into(),
                 "i=0; while [ $i -lt 3000 ]; do echo diagnostic-line >&2; i=$((i+1)); done; exit 2"
                     .into(),
             ],
-            Path::new("file"),
-            move |r| {
+            path: Path::new("file"),
+            done: move |r| {
                 tx.send(r.map_err(|e| e.to_string())).unwrap();
             },
-        )
+        })
         .unwrap();
         let error = rx
             .recv_timeout(Duration::from_secs(5))

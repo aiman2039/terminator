@@ -102,7 +102,13 @@ impl Services {
             test,
             _cancel,
         } = input;
-        external_editor::launch_supervised(self.clone(), program, args, path).await?;
+        external_editor::launch_supervised(external_editor::LaunchSupervisedInput {
+            service: self.clone(),
+            program,
+            args,
+            path,
+        })
+        .await?;
         if test {
             self.emit(Update::Info("External editor launched with draft settings. Check the selected file in the editor.".into())).await?;
         }

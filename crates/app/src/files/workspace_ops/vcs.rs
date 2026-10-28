@@ -13,7 +13,20 @@ pub(super) fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
-pub(super) fn git_path(root: &Path, prefix: &[&str], path: &Path, verb: &str) -> Result<Report> {
+pub(super) struct GitPathInput<'a> {
+    pub(super) root: &'a Path,
+    pub(super) prefix: &'a [&'a str],
+    pub(super) path: &'a Path,
+    pub(super) verb: &'a str,
+}
+
+pub(super) fn git_path(input: GitPathInput<'_>) -> Result<Report> {
+    let GitPathInput {
+        root,
+        prefix,
+        path,
+        verb,
+    } = input;
     let relative = relative_arg(root, path)?;
     let mut args: Vec<&str> = prefix.to_vec();
     args.push(&relative);

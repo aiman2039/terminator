@@ -215,15 +215,29 @@ pub async fn load(
     path: std::path::PathBuf,
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> Result<ColorImage> {
-    load_pools(service.fs(), service.cpu(), path, cancel).await
+    load_pools(LoadPoolsInput {
+        fs: service.fs(),
+        cpu: service.cpu(),
+        path,
+        cancel,
+    })
+    .await
 }
 
-pub async fn load_pools(
-    fs: &terminator_core::async_service::NativePool,
-    cpu: &terminator_core::async_service::NativePool,
-    path: std::path::PathBuf,
-    cancel: &terminator_core::async_service::CancellationToken,
-) -> Result<ColorImage> {
+pub struct LoadPoolsInput<'a> {
+    pub fs: &'a terminator_core::async_service::NativePool,
+    pub cpu: &'a terminator_core::async_service::NativePool,
+    pub path: std::path::PathBuf,
+    pub cancel: &'a terminator_core::async_service::CancellationToken,
+}
+
+pub async fn load_pools(input: LoadPoolsInput<'_>) -> Result<ColorImage> {
+    let LoadPoolsInput {
+        fs,
+        cpu,
+        path,
+        cancel,
+    } = input;
     let svg = path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));

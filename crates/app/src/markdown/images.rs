@@ -121,12 +121,12 @@ impl ImageJob {
             .and_then(|s| url::Url::parse(s).ok())
             .and_then(|u| u.to_file_path().ok());
         match path {
-            Some(path) => crate::image_preview::load_pools(
-                self.submit.fs(),
-                self.submit.cpu(),
+            Some(path) => crate::image_preview::load_pools(crate::image_preview::LoadPoolsInput {
+                fs: self.submit.fs(),
+                cpu: self.submit.cpu(),
                 path,
-                &self.cancelled,
-            )
+                cancel: &self.cancelled,
+            })
             .await
             .map(Arc::new)
             .map_err(|e| format!("{e:#}")),
