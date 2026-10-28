@@ -2,8 +2,10 @@ use super::*;
 /// The fixtures fail with `Failure` itself.
 type Supervisor<T> = super::Supervisor<T, Failure>;
 async fn completion<T: Send + 'static>(supervisor: &mut Supervisor<T>) -> Completion<T> {
+    // Generous: a panic unwind under a fully loaded parallel test run can take
+    // seconds. The deadline only bounds how long a real hang takes to fail.
     let deadline = Instant::now()
-        .checked_add(Duration::from_secs(3))
+        .checked_add(Duration::from_secs(10))
         .unwrap_or_else(Instant::now);
     loop {
         if let Some(result) = supervisor.try_recv() {
