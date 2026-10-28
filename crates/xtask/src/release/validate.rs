@@ -65,12 +65,20 @@ impl<R: Runner> Stages<'_, R> {
     }
 }
 
-pub(super) fn validate(
-    source: &Path,
-    artifacts: &Path,
-    options: &Options,
-    runner: &impl Runner,
-) -> Result<()> {
+pub(super) struct ValidateInput<'a, R> {
+    pub(super) source: &'a Path,
+    pub(super) artifacts: &'a Path,
+    pub(super) options: &'a Options,
+    pub(super) runner: &'a R,
+}
+
+pub(super) fn validate(input: ValidateInput<'_, impl Runner>) -> Result<()> {
+    let ValidateInput {
+        source,
+        artifacts,
+        options,
+        runner,
+    } = input;
     let stages = Stages {
         source,
         artifacts,

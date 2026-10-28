@@ -109,7 +109,12 @@ impl Fixture {
         )
     }
     fn execute(&self, validate: impl FnOnce(&Path, &Path) -> Result<()>) -> Result<()> {
-        execute(&self.root, &self.options, &self.runner, validate)
+        execute(ExecuteInput {
+            root: &self.root,
+            options: &self.options,
+            runner: &self.runner,
+            validate,
+        })
     }
     fn remote_head(&self) -> String {
         git(&self.remote, &["rev-parse", "refs/heads/master"]).unwrap()
@@ -532,15 +537,15 @@ fn failed_host_retains_logs_and_does_not_start_other_platforms() {
         fail: Some("bash"),
         ..FakeRunner::default()
     };
-    let error = validate(
-        &fixture.root,
-        &artifacts,
-        &Options {
+    let error = validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &Options {
             skip_linux: true,
             ..Options::default()
         },
-        &runner,
-    )
+        runner: &runner,
+    })
     .unwrap_err();
     assert!(error.to_string().contains("host failed"));
     assert_eq!(runner.commands.lock().unwrap().len(), 1);
@@ -853,7 +858,13 @@ fn docker_plan_keeps_source_read_only_and_records_windows_skip() {
         skip_windows: true,
         ..Options::default()
     };
-    validate(&fixture.root, &artifacts, &options, &runner).unwrap();
+    validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &options,
+        runner: &runner,
+    })
+    .unwrap();
     let commands = runner.commands.lock().unwrap();
     let build = commands
         .iter()
@@ -996,7 +1007,13 @@ fn linux_reuses_matching_image_and_explicit_refresh_rebuilds_it() {
             rebuild_linux_image: refresh,
             ..Options::default()
         };
-        validate(&fixture.root, &artifacts, &options, &runner).unwrap();
+        validate(ValidateInput {
+            source: &fixture.root,
+            artifacts: &artifacts,
+            options: &options,
+            runner: &runner,
+        })
+        .unwrap();
         let commands = runner.commands.lock().unwrap();
         assert_eq!(
             commands
@@ -1052,7 +1069,13 @@ fn failed_linux_image_build_stops_before_linux_tests() {
         rebuild_linux_image: true,
         ..Options::default()
     };
-    let error = validate(&fixture.root, &artifacts, &options, &runner).unwrap_err();
+    let error = validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &options,
+        runner: &runner,
+    })
+    .unwrap_err();
     assert!(error.to_string().contains("linux-image failed"));
     assert!(
         !runner
@@ -1088,7 +1111,12 @@ fn explicit_linux_image_uses_local_selection_and_missing_selection_stops() {
             linux_image: Some("existing:local".into()),
             ..Options::default()
         };
-        let result = validate(&fixture.root, &artifacts, &options, &runner);
+        let result = validate(ValidateInput {
+            source: &fixture.root,
+            artifacts: &artifacts,
+            options: &options,
+            runner: &runner,
+        });
         let commands = runner.commands.lock().unwrap();
         assert!(
             !commands
@@ -1166,15 +1194,15 @@ fn arm_docker_uses_native_runtime_and_separate_build_cache() {
         fail: Some("inspect"),
         ..FakeRunner::default()
     };
-    validate(
-        &fixture.root,
-        &artifacts,
-        &Options {
+    validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &Options {
             skip_windows: true,
             ..Options::default()
         },
-        &runner,
-    )
+        runner: &runner,
+    })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
     for verb in ["build", "run"] {
@@ -1211,16 +1239,16 @@ fn emulated_image_is_rejected_before_host_checks() {
         image_architecture: Some("amd64"),
         ..FakeRunner::default()
     };
-    let error = validate(
-        &fixture.root,
-        &artifacts,
-        &Options {
+    let error = validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &Options {
             skip_windows: true,
             linux_image: Some("old:x64".into()),
             ..Options::default()
         },
-        &runner,
-    )
+        runner: &runner,
+    })
     .unwrap_err();
     assert!(error.to_string().contains("requires native linux/arm64"));
     assert_eq!(runner.commands.lock().unwrap().len(), 2);

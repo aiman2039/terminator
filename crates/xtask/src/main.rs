@@ -217,7 +217,12 @@ fn dispatch(task: Task) -> Result<()> {
             artifacts,
             host,
             bash,
-        } => release::windows::run(&source, &artifacts, &host, &bash),
+        } => release::windows::run(release::windows::RunInput {
+            source: &source,
+            artifacts: &artifacts,
+            host: &host,
+            bash: &bash,
+        }),
         Task::BumpVersion => release::version::bump(&harness::root()).map(|_| ()),
         Task::AsyncBoundary => async_boundary::run(),
         Task::LaunchAssets => launch::run(),
