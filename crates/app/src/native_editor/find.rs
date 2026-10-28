@@ -181,67 +181,118 @@ pub(crate) fn find_bar(input: FindBarInput<'_>) -> (FindOutcome, Arc<Vec<FindMat
         read_only,
     } = input;
     let mut outcome = FindOutcome::default();
-    let mut go: Option<bool> = None;
-    let mut replace_one = false;
-    let mut replace_all = false;
-    let query_id = egui::Id::unique(("native-find-query", &bar.path));
-    ui.horizontal(|ui| {
+    let mut go = ui
+        .horizontal(|ui| bar.query_row(ui, buffer, &mut outcome))
+        .inner;
+    let request = if bar.replacing && !read_only {
+        ui.horizontal(|ui| bar.replace_row(ui)).inner
+    } else {
+        ReplaceRequest::default()
+    };
+    if bar.apply_replace(buffer, engine, request) {
+        go = Some(true);
+    }
+    let matches = bar.step_to_match(engine, buffer, go);
+    (outcome, matches)
+}
+
+/// Replace buttons pressed this frame.
+#[derive(Default, Clone, Copy)]
+struct ReplaceRequest {
+    one: bool,
+    all: bool,
+}
+
+impl FindBar {
+    /// Query field, toggles, count, and navigation. Returns a requested
+    /// step: `Some(true)` forward, `Some(false)` back.
+    fn query_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        buffer: &Doc,
+        outcome: &mut FindOutcome,
+    ) -> Option<bool> {
         ui.spacing_mut().item_spacing.x = 4.0;
+        let mut go = self.query_field(ui, outcome);
+        self.option_toggles(ui);
+        self.match_count(ui, buffer);
+        if let Some(forward) = self.nav_buttons(ui, outcome) {
+            go = Some(forward);
+        }
+        go
+    }
+
+    fn query_field(&mut self, ui: &mut egui::Ui, outcome: &mut FindOutcome) -> Option<bool> {
+        let query_id = egui::Id::unique(("native-find-query", &self.path));
         let field = ui.add(
-            appearance::singleline(&mut bar.query)
+            appearance::singleline(&mut self.query)
                 .id(query_id)
                 .hint_text("Find")
                 .desired_width((ui.available_width() - 260.0).max(120.0)),
         );
-        if bar.focus {
+        if self.focus {
             field.request_focus();
-            bar.focus = false;
+            self.focus = false;
         }
         if field.changed() {
-            bar.current = None;
+            self.current = None;
         }
-        if field.has_focus() || field.lost_focus() {
-            ui.input(|input| {
-                if input.key_pressed(egui::Key::Enter) {
-                    go = Some(!input.modifiers.shift);
-                }
-                if input.key_pressed(egui::Key::Escape) {
-                    outcome.close = true;
-                }
-            });
-            if go.is_some() {
-                field.request_focus();
+        if !(field.has_focus() || field.lost_focus()) {
+            return None;
+        }
+        let mut go = None;
+        ui.input(|input| {
+            if input.key_pressed(egui::Key::Enter) {
+                go = Some(!input.modifiers.shift);
             }
+            if input.key_pressed(egui::Key::Escape) {
+                outcome.close = true;
+            }
+        });
+        if go.is_some() {
+            field.request_focus();
         }
+        go
+    }
+
+    fn option_toggles(&mut self, ui: &mut egui::Ui) {
         for (flag, icon, tip) in [
-            (&mut bar.case, "CaseSensitive", "Match case"),
-            (&mut bar.word, "WholeWord", "Words"),
-            (&mut bar.regex, "Regex", "Regex"),
+            (&mut self.case, "CaseSensitive", "Match case"),
+            (&mut self.word, "WholeWord", "Words"),
+            (&mut self.regex, "Regex", "Regex"),
         ] {
             if appearance::selectable_icon(ui, icon, tip, *flag).clicked() {
                 *flag = !*flag;
-                bar.current = None;
+                self.current = None;
             }
         }
-        let matches = bar.matches(buffer);
+    }
+
+    fn match_count(&mut self, ui: &mut egui::Ui, buffer: &Doc) {
+        let matches = self.matches(buffer);
         let count = if matches.len() >= MAX_MATCHES {
             format!("{}+", matches.len())
         } else {
             matches.len().to_string()
         };
-        match (&bar.error, bar.current) {
+        match (&self.error, self.current) {
             (Some(_), _) => {
                 ui.colored_label(ui.visuals().error_fg_color, "Bad regex")
-                    .on_hover_text(bar.error.clone().unwrap_or_default());
+                    .on_hover_text(self.error.clone().unwrap_or_default());
             }
             (None, Some(index)) => {
                 ui.weak(format!("{}/{count}", index.saturating_add(1)));
             }
-            (None, None) if !bar.query.is_empty() => {
+            (None, None) if !self.query.is_empty() => {
                 ui.weak(format!("{count} results"));
             }
             _ => {}
         }
+    }
+
+    /// Previous/next, the Replace toggle, and Close.
+    fn nav_buttons(&mut self, ui: &mut egui::Ui, outcome: &mut FindOutcome) -> Option<bool> {
+        let mut go = None;
         if appearance::sidebar_action(ui, "ArrowUp", "Previous occurrence (Shift+Enter)").clicked()
         {
             go = Some(false);
@@ -249,75 +300,98 @@ pub(crate) fn find_bar(input: FindBarInput<'_>) -> (FindOutcome, Arc<Vec<FindMat
         if appearance::sidebar_action(ui, "ArrowDown", "Next occurrence (Enter)").clicked() {
             go = Some(true);
         }
-        if appearance::selectable_icon(ui, "Pencil", "Replace", bar.replacing).clicked() {
-            bar.replacing = !bar.replacing;
+        if appearance::selectable_icon(ui, "Pencil", "Replace", self.replacing).clicked() {
+            self.replacing = !self.replacing;
         }
         if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {
             outcome.close = true;
         }
-    });
-    if bar.replacing && !read_only {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.add(
-                appearance::singleline(&mut bar.replacement)
-                    .hint_text(if bar.regex {
-                        "Replace ($1 for groups)"
-                    } else {
-                        "Replace"
-                    })
-                    .desired_width((ui.available_width() - 200.0).max(120.0)),
-            );
-            replace_one = ui.button("Replace").clicked();
-            replace_all = ui.button("Replace All").clicked();
-        });
+        go
     }
-    let matches = bar.matches(buffer);
-    if replace_all && !matches.is_empty() {
-        if let Ok(pattern) = bar.pattern() {
-            replace_matches(ReplaceMatchesInput {
-                buffer,
-                engine,
-                pattern: &pattern,
-                replacement: &bar.replacement,
-                matches: &matches,
-                regex: bar.regex,
-            });
+
+    fn replace_row(&mut self, ui: &mut egui::Ui) -> ReplaceRequest {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add(
+            appearance::singleline(&mut self.replacement)
+                .hint_text(if self.regex {
+                    "Replace ($1 for groups)"
+                } else {
+                    "Replace"
+                })
+                .desired_width((ui.available_width() - 200.0).max(120.0)),
+        );
+        let one = ui.button("Replace").clicked();
+        let all = ui.button("Replace All").clicked();
+        ReplaceRequest { one, all }
+    }
+
+    /// Run a Replace / Replace All. Returns true when the bar should then
+    /// step to the next match (after Replace).
+    fn apply_replace(
+        &mut self,
+        buffer: &mut Doc,
+        engine: &mut VimEngine,
+        request: ReplaceRequest,
+    ) -> bool {
+        let matches = self.matches(buffer);
+        if request.all && !matches.is_empty() {
+            if let Ok(pattern) = self.pattern() {
+                replace_matches(ReplaceMatchesInput {
+                    buffer,
+                    engine,
+                    pattern: &pattern,
+                    replacement: &self.replacement,
+                    matches: &matches,
+                    regex: self.regex,
+                });
+            }
+            self.current = None;
+            return false;
         }
-        bar.current = None;
-    } else if replace_one {
+        if !request.one {
+            return false;
+        }
         // Replace the selected match, then move on to the next one.
-        if let (Some(index), Ok(pattern)) = (bar.current, bar.pattern())
+        if let (Some(index), Ok(pattern)) = (self.current, self.pattern())
             && let Some(found) = matches.get(index).copied()
         {
             replace_matches(ReplaceMatchesInput {
                 buffer,
                 engine,
                 pattern: &pattern,
-                replacement: &bar.replacement,
+                replacement: &self.replacement,
                 matches: &[found],
-                regex: bar.regex,
+                regex: self.regex,
             });
-            go = Some(true);
-        } else {
-            go = Some(true);
         }
+        true
     }
-    let matches = bar.matches(buffer);
-    if let Some(forward) = go {
+
+    /// The current matches; with `go`, step from the selected match (or
+    /// the caret) and select the result.
+    fn step_to_match(
+        &mut self,
+        engine: &mut VimEngine,
+        buffer: &mut Doc,
+        go: Option<bool>,
+    ) -> Arc<Vec<FindMatch>> {
+        let matches = self.matches(buffer);
+        let Some(forward) = go else {
+            return matches;
+        };
         let cursor = engine.cursor();
-        let caret = match (bar.current.and_then(|i| matches.get(i)), forward) {
+        let caret = match (self.current.and_then(|i| matches.get(i)), forward) {
             // From the selected match, step past it.
             (Some(current), true) => (current.line, current.end),
             (Some(current), false) => (current.line, current.start.saturating_add(1)),
             (None, _) => (cursor.line, cursor.col),
         };
-        bar.current = step(&matches, caret, forward);
-        if let Some(found) = bar.current.and_then(|i| matches.get(i)).copied() {
+        self.current = step(&matches, caret, forward);
+        if let Some(found) = self.current.and_then(|i| matches.get(i)).copied() {
             select(engine, buffer, found);
         }
+        matches
     }
-    (outcome, matches)
 }
 
 /// Replace `matches` (sorted) with `replacement`, last first so earlier
