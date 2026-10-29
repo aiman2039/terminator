@@ -150,6 +150,7 @@ pub(crate) struct VncSidebarState {
     pub(crate) ssh_probe: super::ssh_probe::SshProbe,
     /// Address-book card selected for keyboard actions.
     pub(crate) selected_host: Option<String>,
+    pub(crate) thumbnails: super::thumbnails::ThumbnailCache,
 }
 
 /// Pages of the host Properties editor.
@@ -188,6 +189,7 @@ impl Default for VncSidebarState {
             ssh_notice: None,
             ssh_probe: super::ssh_probe::SshProbe::default(),
             selected_host: None,
+            thumbnails: super::thumbnails::ThumbnailCache::default(),
         }
     }
 }

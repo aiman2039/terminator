@@ -183,10 +183,15 @@ impl App {
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(CARD_WIDTH, CARD_HEIGHT), egui::Sense::click());
         let session = self.vnc_profile_session(&profile.id);
+        // The live screen while connected, else the last saved one.
         let texture = session
             .as_ref()
             .and_then(|s| self.vnc_views.get(&s.id))
-            .and_then(|view| view.texture.clone());
+            .and_then(|view| view.texture.clone())
+            .or_else(|| {
+                let path = self.paths.vnc_thumbnail(&profile.id);
+                self.vnc_sidebar.thumbnails.get(ui.ctx(), &profile.id, path)
+            });
         let status = session.as_ref().map(|s| self.vnc_status_color(s.status));
         paint_card(PaintCardInput {
             ui,

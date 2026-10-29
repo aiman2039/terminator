@@ -166,7 +166,7 @@ impl Shared {
         let VncConnectSpec {
             options,
             project: _,
-            profile_id: _,
+            profile_id,
             host,
             port,
             username,
@@ -179,6 +179,10 @@ impl Shared {
         let runtime = Arc::new(Mutex::new(VncRuntime::new(view_only, input_tx)));
         relock(&runtime).options = options.clone();
         relock(&self.vnc_sessions).insert(sid.clone(), Arc::clone(&runtime));
+        let root = self.catalog_paths.as_ref().unwrap_or(&self.paths);
+        if let Some(path) = profile_id.and_then(|pid| root.vnc_thumbnail(&pid)) {
+            thumbnail::spawn(Arc::downgrade(&runtime), path);
+        }
         self.spawn_vnc_thread(SpawnVncThreadInput {
             runtime,
             session_id: sid,

@@ -53,6 +53,9 @@ impl Shared {
         if let Some(profile) = self.vnc_profile(|p| p.id == id && p.credential_saved) {
             credentials::forget(self.credential_paths(), &profile)?;
         }
+        if let Some(path) = self.credential_paths().vnc_thumbnail(id) {
+            let _ = std::fs::remove_file(path);
+        }
         let mut state = relock(&self.state);
         state.vnc_profiles.retain(|p| p.id != id);
         state.revision = state.revision.saturating_add(1);

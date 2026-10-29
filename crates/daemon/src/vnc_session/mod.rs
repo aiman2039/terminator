@@ -6,6 +6,7 @@ mod quality;
 mod reconnect;
 pub(crate) mod shm;
 mod stats;
+mod thumbnail;
 mod transfer;
 mod transport;
 
@@ -14,6 +15,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use flate2::{Compression, write::ZlibEncoder};
 use std::{
     collections::HashMap,
+    fs,
     io::Write,
     sync::{Arc, Mutex},
     thread,

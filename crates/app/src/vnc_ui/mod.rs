@@ -18,6 +18,7 @@ mod speed;
 mod ssh_probe;
 mod state;
 mod tabs;
+mod thumbnails;
 mod toolbar;
 mod transfer;
 mod view;
