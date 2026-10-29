@@ -1,15 +1,16 @@
-//! Shared look for the VNC connect pane and the sidebar host editor:
-//! small section captions, labels above fields, and one accent button.
+//! Shared look for main-pane forms (VNC connect and Properties, SSH host
+//! Properties and import): small section captions, labels above fields,
+//! and one accent button.
 use super::*;
 
 /// Fixed width of the port and display fields beside the host.
-pub(super) const NUMBER_WIDTH: f32 = 68.0;
+pub(crate) const NUMBER_WIDTH: f32 = 68.0;
 const LABEL_SIZE: f32 = 11.0;
 /// Below this host width, port and display move under the host.
 const MIN_INLINE_HOST: f32 = 180.0;
 
 /// Small uppercase caption that starts a group of fields.
-pub(super) fn section(ui: &mut egui::Ui, title: &str) {
+pub(crate) fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(10.0);
     ui.label(
         RichText::new(title.to_uppercase())
@@ -21,7 +22,7 @@ pub(super) fn section(ui: &mut egui::Ui, title: &str) {
 }
 
 /// Field label, drawn above its control.
-pub(super) fn label(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn label(ui: &mut egui::Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .size(LABEL_SIZE)
@@ -30,7 +31,7 @@ pub(super) fn label(ui: &mut egui::Ui, text: &str) {
 }
 
 /// Full-width single-line field with its label above.
-pub(super) fn text(
+pub(crate) fn text(
     ui: &mut egui::Ui,
     label_text: &str,
     value: &mut String,
@@ -45,7 +46,7 @@ pub(super) fn text(
 }
 
 /// One-line hint under a group; `detail` shows on hover.
-pub(super) fn hint(ui: &mut egui::Ui, text: &str, detail: &str) {
+pub(crate) fn hint(ui: &mut egui::Ui, text: &str, detail: &str) {
     let response = ui.label(
         RichText::new(text)
             .size(LABEL_SIZE)
@@ -57,7 +58,7 @@ pub(super) fn hint(ui: &mut egui::Ui, text: &str, detail: &str) {
 }
 
 /// Mutually exclusive choices drawn as one row of selectable chips.
-pub(super) fn segmented<T: PartialEq + Copy>(
+pub(crate) fn segmented<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     value: &mut T,
     choices: &[(T, &str)],
@@ -71,7 +72,7 @@ pub(super) fn segmented<T: PartialEq + Copy>(
 }
 
 /// The form's main action, filled with the theme accent.
-pub(super) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+pub(crate) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let fill = ui.visuals().selection.bg_fill;
     let color = ui.visuals().selection.stroke.color;
     ui.add(egui::Button::new(RichText::new(text).strong().color(color)).fill(fill))
@@ -148,7 +149,7 @@ pub(super) fn endpoint(
 const CARD_WIDTH: f32 = 560.0;
 
 /// A centered, framed card for a form in the main pane.
-pub(super) fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.vertical_centered(|ui| {
         ui.set_max_width(CARD_WIDTH.min(ui.available_width()));
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {

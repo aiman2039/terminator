@@ -36,6 +36,13 @@ pub struct App {
     /// Type-to-search text in the focused tree and when it was last typed.
     pub(crate) explorer_speed: String,
     pub(crate) explorer_speed_at: std::time::Instant,
+    /// Focus the Explorer search field on the next paint.
+    pub(crate) explorer_focus_find: bool,
+    /// Explorer renames and moves, newest last, as `(from, to)` pairs per
+    /// action, for Cmd/Ctrl+Z.
+    pub(crate) explorer_undo: Vec<Vec<(std::path::PathBuf, std::path::PathBuf)>>,
+    /// Renames queued by an undo, so their success is not recorded again.
+    pub(crate) explorer_undoing: Vec<(std::path::PathBuf, std::path::PathBuf)>,
     /// Row the tree should scroll into view on its next paint.
     pub(crate) explorer_scroll_to: Option<PathBuf>,
     /// Last file auto-reveal followed, so it reveals once per focus change.
@@ -108,6 +115,8 @@ pub struct App {
     pub(crate) browser_host: browser_host::BrowserHost,
     pub(crate) visible_browsers: Vec<browser_host::VisibleBrowser>,
     pub(crate) browser_urls: HashMap<String, String>,
+    /// Browser tab icons by icon URL; never evicted (one entry per site).
+    pub(crate) favicons: HashMap<String, crate::browser::favicon::Favicon>,
     pub(crate) browser_submit: Option<(String, BrowserTarget)>,
     pub(crate) remote_ui: crate::remote_ui::RemoteUi,
     pub(crate) vnc_fullscreen: Option<Tab>,

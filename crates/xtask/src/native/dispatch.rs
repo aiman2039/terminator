@@ -286,6 +286,7 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
         "renderer-perf" => super::renderer_perf::run(&opts)?,
         "hover-menu" => super::hover_menu::run(&opts)?,
         "ssh-hostkey" => super::ssh_hostkey::run(&opts)?,
+        "vnc" => super::vnc::run(&opts)?,
         _ => anyhow::bail!("Unknown native fixture: {case}"),
     }
     println!(

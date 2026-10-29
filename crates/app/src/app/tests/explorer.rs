@@ -140,7 +140,7 @@ fn explorer_prepared_rows_reuse_listings_and_refresh_expansion_and_content() {
     app.preferences.show_ignored = true;
     assert_eq!(app.explorer_rows(&root).len(), 3);
     app.explorer_query = "missing".into();
-    assert_eq!(app.explorer_rows(&root).len(), 1); // folders remain navigable
+    assert!(app.explorer_rows(&root).is_empty()); // no folder without a match
     app.explorer_query.clear();
     app.dirs.get_mut(&folder).unwrap()[0].path = folder.join("changed.rs");
     app.sidebar_cache.get_mut().clear_files();
@@ -799,6 +799,51 @@ fn explorer_type_to_search_selects_the_next_match() {
 }
 
 #[test]
+fn home_end_and_search_arrows_jump_between_rows() {
+    let (mut app, ctx, dir) = keyboard_tree();
+    let root = dir.path().to_path_buf();
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
+    // Rows: src, src/main.rs, a.rs, b.rs.
+    click_row(ClickRowInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        y: 12.0,
+    });
+    let none = egui::Modifiers::NONE;
+    let press = |app: &mut App, event| {
+        draw_tree(DrawTreeInput {
+            app,
+            ctx: &ctx,
+            root: &root,
+            events: vec![event],
+        })
+    };
+    press(&mut app, key(egui::Key::End, none));
+    assert_eq!(app.explorer_selection, [root.join("b.rs")]);
+    press(&mut app, key(egui::Key::Home, none));
+    assert_eq!(app.explorer_selection, [root.join("src")]);
+    press(&mut app, key(egui::Key::PageDown, none));
+    assert_eq!(app.explorer_selection, [root.join("b.rs")]);
+    press(&mut app, key(egui::Key::Home, none));
+    // While type-to-search is live, arrows step between matches and wrap.
+    press(&mut app, egui::Event::Text(".rs".into()));
+    assert_eq!(app.explorer_selection, [root.join("src/main.rs")]);
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    assert_eq!(app.explorer_selection, [root.join("a.rs")]);
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    assert_eq!(app.explorer_selection, [root.join("src/main.rs")]);
+    press(&mut app, key(egui::Key::ArrowUp, none));
+    assert_eq!(app.explorer_selection, [root.join("b.rs")]);
+}
+
+#[test]
 fn command_click_toggles_and_shift_click_extends_without_opening() {
     let (mut app, _ctx, dir) = keyboard_tree();
     let root = dir.path();
@@ -980,4 +1025,251 @@ fn single_child_folder_chains_show_as_one_compact_row() {
     // "Compact folders" off: one row per folder again.
     app.preferences.explorer_flat_folders = true;
     assert_eq!(labels(&mut app)[0], ("java".to_owned(), 0));
+}
+
+#[test]
+fn name_filter_keeps_only_folders_on_the_path_to_a_match() {
+    let (mut app, _ctx, dir) = fixture();
+    let root = dir.path().to_path_buf();
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    app.dirs.insert(
+        root.clone(),
+        vec![
+            entry("src", true),
+            entry("docs", true),
+            entry("main.rs", false),
+        ],
+    );
+    app.dirs
+        .insert(root.join("src"), vec![entry("src/deep", true)]);
+    app.dirs.insert(
+        root.join("src/deep"),
+        vec![entry("src/deep/needle.rs", false)],
+    );
+    app.dirs
+        .insert(root.join("docs"), vec![entry("docs/guide.md", false)]);
+    app.explorer_query = "needle".into();
+    // Collapsed folders are searched too; "docs" and "main.rs" have no match.
+    let rows = app.explorer_rows(&root);
+    let labels: Vec<_> = rows
+        .iter()
+        .map(|row| (row.label.as_str(), row.depth))
+        .collect();
+    assert_eq!(labels, [("src", 0), ("deep", 1), ("needle.rs", 2)]);
+    assert!(app.explorer_row_expanded(&rows[0]));
+    assert!(app.expanded_dirs.is_empty());
+    // A folder whose name matches shows its own contents unfiltered.
+    app.explorer_query = "doc".into();
+    let rows = app.explorer_rows(&root);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "docs");
+    assert!(!app.explorer_row_expanded(&rows[0]));
+    // Unloaded folders are listed in the background without "Loading…" rows.
+    app.dirs.remove(&root.join("src/deep"));
+    app.explorer_query = "needle".into();
+    assert!(app.explorer_rows(&root).is_empty());
+    assert!(app.visible_dirs.contains(&root.join("src/deep")));
+}
+
+#[test]
+fn find_in_folder_scopes_the_search_to_that_folder() {
+    use crate::search::folder_include_pattern;
+    let root = Path::new("/repo");
+    assert_eq!(folder_include_pattern(root, root), "");
+    assert_eq!(folder_include_pattern(root, Path::new("/other")), "");
+    assert_eq!(
+        folder_include_pattern(root, Path::new("/repo/src/ui")),
+        "src/ui/**"
+    );
+    assert_eq!(
+        folder_include_pattern(root, Path::new("/repo/my dir,[x]")),
+        "my?dir?[[]x[]]/**"
+    );
+}
+
+#[test]
+fn view_options_sort_folders_among_files_and_by_type() {
+    let (mut app, _ctx, dir) = fixture();
+    let root = dir.path().to_path_buf();
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    // Listings arrive folders first, natural name order.
+    app.dirs.insert(
+        root.clone(),
+        vec![
+            entry("lib", true),
+            entry("b.md", false),
+            entry("c.rs", false),
+            entry("file10.md", false),
+        ],
+    );
+    let labels = |app: &mut App| {
+        app.explorer_rows(&root)
+            .iter()
+            .map(|row| row.label.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(labels(&mut app), ["lib", "b.md", "c.rs", "file10.md"]);
+    app.preferences.explorer_view.folders_mixed = true;
+    assert_eq!(labels(&mut app), ["b.md", "c.rs", "file10.md", "lib"]);
+    app.preferences.explorer_view.folders_mixed = false;
+    app.preferences.explorer_view.sort_by_type = true;
+    assert_eq!(labels(&mut app), ["lib", "b.md", "file10.md", "c.rs"]);
+}
+
+#[test]
+fn undo_renames_a_moved_selection_back_once() {
+    let (mut app, ctx, dir) = keyboard_tree();
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    let root = dir.path().to_path_buf();
+    let (a, b) = (root.join("a.rs"), root.join("b.rs"));
+    let (a2, b2) = (root.join("src/a.rs"), root.join("src/b.rs"));
+    app.explorer_record_move(vec![(a.clone(), a2.clone()), (b.clone(), b2.clone())]);
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
+    click_row(ClickRowInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        y: 12.0,
+    });
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![key(egui::Key::Z, egui::Modifiers::COMMAND)],
+    });
+    let renames: Vec<_> = received
+        .try_iter()
+        .filter_map(|job| match job {
+            crate::Job::Workspace(_, workspace_ops::Op::Rename { from, to }) => Some((from, to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(renames, [(b2.clone(), b.clone()), (a2.clone(), a.clone())]);
+    // The undo's own renames finish without becoming a new undo step.
+    app.explorer_record_move(vec![(b2, b)]);
+    app.explorer_record_move(vec![(a2, a)]);
+    assert!(app.explorer_undo.is_empty());
+    assert!(app.explorer_undoing.is_empty());
+}
+
+fn scoped_tree() -> (App, tempfile::TempDir, PathBuf) {
+    let (mut app, _ctx, dir) = fixture();
+    let root = dir.path().to_path_buf();
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    app.dirs.insert(
+        root.clone(),
+        vec![
+            entry("docs", true),
+            entry("src", true),
+            entry("Cargo.lock", false),
+            entry("Cargo.toml", false),
+        ],
+    );
+    app.dirs.insert(
+        root.join("src"),
+        vec![entry("src/lib.rs", false), entry("src/main.rs", false)],
+    );
+    app.dirs
+        .insert(root.join("docs"), vec![entry("docs/guide.md", false)]);
+    (app, dir, root)
+}
+
+fn row_labels(app: &mut App, root: &Path) -> Vec<(String, usize)> {
+    app.explorer_rows(root)
+        .iter()
+        .map(|row| (row.label.clone(), row.depth))
+        .collect()
+}
+
+#[test]
+fn lock_files_nest_under_their_manifest_until_opened() {
+    let (mut app, _dir, root) = scoped_tree();
+    let labels = row_labels(&mut app, &root);
+    assert_eq!(labels[2], ("Cargo.toml +1".to_owned(), 0));
+    assert_eq!(labels.len(), 3);
+    let rows = app.explorer_rows(&root);
+    assert!(rows[2].nests);
+    app.set_explorer_row_expanded(&rows[2], true);
+    let labels = row_labels(&mut app, &root);
+    assert_eq!(
+        labels[2..],
+        [("Cargo.toml".to_owned(), 0), ("Cargo.lock".to_owned(), 1)]
+    );
+    app.preferences.explorer_view.nesting_off = true;
+    assert_eq!(row_labels(&mut app, &root).len(), 4);
+}
+
+#[test]
+fn changed_scope_shows_only_changed_files_and_their_folders() {
+    let (mut app, _dir, root) = scoped_tree();
+    let main = root.join("src/main.rs");
+    app.context = Some(services::ContextData {
+        cwd: root.clone(),
+        root: Some(root.clone()),
+        perforce: None,
+        git_dirs: vec![],
+        branch: "main".into(),
+        changes: vec![terminator_git::Change {
+            path: main.clone(),
+            status: " M".into(),
+        }],
+        decorations: terminator_git::decorations(
+            &root,
+            &[terminator_git::Change {
+                path: main,
+                status: " M".into(),
+            }],
+        ),
+        stats: HashMap::default(),
+        error: None,
+    });
+    app.preferences.explorer_view.changed_only = true;
+    assert_eq!(
+        row_labels(&mut app, &root),
+        [("src".to_owned(), 0), ("main.rs".to_owned(), 1)]
+    );
+}
+
+#[test]
+fn hidden_paths_leave_the_tree_until_ignored_files_are_shown() {
+    let (mut app, _dir, root) = scoped_tree();
+    let docs = root.join("docs");
+    app.explorer_toggle_excluded(&docs);
+    assert!(
+        !row_labels(&mut app, &root)
+            .iter()
+            .any(|(label, _)| label == "docs")
+    );
+    // Shown again with ignored files, painted as ignored.
+    app.preferences.show_ignored = true;
+    let rows = app.explorer_rows(&root);
+    let row = rows.iter().find(|row| row.path == docs).unwrap();
+    assert!(row.entry.as_ref().unwrap().ignored);
+    app.explorer_toggle_excluded(&docs);
+    assert!(app.preferences.explorer_view.excluded.is_empty());
+    app.explorer_toggle_bookmark(&docs);
+    assert_eq!(
+        app.preferences.explorer_bookmarks,
+        std::slice::from_ref(&docs)
+    );
+    app.explorer_toggle_bookmark(&docs);
+    assert!(app.preferences.explorer_bookmarks.is_empty());
 }

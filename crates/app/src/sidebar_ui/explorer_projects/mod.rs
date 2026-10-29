@@ -212,6 +212,32 @@ impl App {
                 }
                 self.explorer_confirm_delete();
             }
+            ExplorerLocal::ToggleNested => {
+                if !self.expanded_dirs.remove(path) {
+                    self.expanded_dirs.insert(path.to_owned());
+                }
+            }
+            ExplorerLocal::ToggleExcluded => self.explorer_toggle_excluded(path),
+            ExplorerLocal::ToggleBookmark => self.explorer_toggle_bookmark(path),
+        }
+    }
+
+    /// Hide `path` from the Explorer like an ignored file, or show it again.
+    pub(crate) fn explorer_toggle_excluded(&mut self, path: &std::path::Path) {
+        let excluded = &mut self.preferences.explorer_view.excluded;
+        if let Some(at) = excluded.iter().position(|known| known == path) {
+            excluded.remove(at);
+        } else {
+            excluded.push(path.to_owned());
+        }
+    }
+
+    pub(crate) fn explorer_toggle_bookmark(&mut self, path: &std::path::Path) {
+        let bookmarks = &mut self.preferences.explorer_bookmarks;
+        if let Some(at) = bookmarks.iter().position(|known| known == path) {
+            bookmarks.remove(at);
+        } else {
+            bookmarks.push(path.to_owned());
         }
     }
 }

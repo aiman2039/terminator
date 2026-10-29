@@ -30,6 +30,38 @@ fn unsupported_language_never_syncs() {
 }
 
 #[test]
+fn errors_mark_the_file_and_its_folders_but_not_warnings() {
+    let mut manager = LspManager::new();
+    let diagnostic = |severity| L::Diagnostic {
+        range: L::Range {
+            start: L::Position {
+                line: 0,
+                character: 0,
+            },
+            end: L::Position {
+                line: 0,
+                character: 1,
+            },
+        },
+        severity: Some(severity),
+        message: String::new(),
+    };
+    let broken = crate::test_path("/repo/src/ui/main.rs");
+    let warned = crate::test_path("/repo/docs/lib.rs");
+    manager
+        .diagnostics
+        .insert(broken.clone(), vec![diagnostic(L::Severity::Error)]);
+    manager
+        .diagnostics
+        .insert(warned.clone(), vec![diagnostic(L::Severity::Warning)]);
+    assert!(manager.has_errors_under(&broken));
+    assert!(manager.has_errors_under(&crate::test_path("/repo/src")));
+    assert!(manager.has_errors_under(&crate::test_path("/repo")));
+    assert!(!manager.has_errors_under(&warned));
+    assert!(!manager.has_errors_under(&crate::test_path("/repo/docs")));
+}
+
+#[test]
 fn marks_keep_worst_severity_per_row_sorted() {
     let mut manager = LspManager::new();
     let path = crate::test_path("/tmp/main.rs");

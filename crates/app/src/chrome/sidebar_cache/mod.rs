@@ -2,6 +2,7 @@
 //! indexes; scrolling, selection and expansion reuse the same immutable data.
 mod explorer;
 mod index;
+mod nesting;
 
 use crate::{
     App,
@@ -76,6 +77,7 @@ pub(crate) struct ExplorerCache {
     pub expanded: HashSet<PathBuf>,
     pub ignored: bool,
     pub flat: bool,
+    pub view: crate::preferences::ExplorerView,
     pub query: String,
     pub reveal_file: Option<PathBuf>,
     pub rows: Arc<Vec<ExplorerRow>>,
@@ -89,6 +91,11 @@ pub(crate) struct ExplorerRow {
     /// Compact folder row (`a/b/c`): every folder in the chain, top
     /// first; `path` and `entry` are the deepest. Empty for plain rows.
     pub chain: Vec<PathBuf>,
+    /// A folder the name filter keeps open because something inside
+    /// it matches.
+    pub filtered_open: bool,
+    /// A file with nested files under it (File nesting).
+    pub nests: bool,
 }
 impl Cache {
     pub fn clear_files(&mut self) {

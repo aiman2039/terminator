@@ -52,6 +52,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
     ("Save", egui::include_image!("../../assets/icons/save.svg")),
     ("Copy", egui::include_image!("../../assets/icons/copy.svg")),
     (
+        "Scissors",
+        egui::include_image!("../../assets/icons/scissors.svg"),
+    ),
+    (
         "ClipboardPaste",
         egui::include_image!("../../assets/icons/clipboard-paste.svg"),
     ),
@@ -80,6 +84,11 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/split.svg"),
     ),
     ("X", egui::include_image!("../../assets/icons/x.svg")),
+    ("Lock", egui::include_image!("../../assets/icons/lock.svg")),
+    (
+        "EllipsisVertical",
+        egui::include_image!("../../assets/icons/ellipsis-vertical.svg"),
+    ),
     (
         "Trash",
         egui::include_image!("../../assets/icons/trash-2.svg"),
@@ -151,6 +160,15 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/git-compare-arrows.svg"),
     ),
     ("List", egui::include_image!("../../assets/icons/list.svg")),
+    ("Bold", egui::include_image!("../../assets/icons/bold.svg")),
+    (
+        "Italic",
+        egui::include_image!("../../assets/icons/italic.svg"),
+    ),
+    (
+        "Heading",
+        egui::include_image!("../../assets/icons/heading.svg"),
+    ),
     (
         "LayoutDashboard",
         egui::include_image!("../../assets/icons/layout-dashboard.svg"),
@@ -211,6 +229,26 @@ pub(super) static UI_SOURCES: SourceTable = &[
     (
         "FolderOpen",
         egui::include_image!("../../assets/icons/folder-open.svg"),
+    ),
+    (
+        "FolderGit",
+        egui::include_image!("../../assets/icons/folder-git-2.svg"),
+    ),
+    (
+        "FolderCode",
+        egui::include_image!("../../assets/icons/folder-code.svg"),
+    ),
+    (
+        "FolderCheck",
+        egui::include_image!("../../assets/icons/folder-check.svg"),
+    ),
+    (
+        "FolderX",
+        egui::include_image!("../../assets/icons/folder-x.svg"),
+    ),
+    (
+        "Bookmark",
+        egui::include_image!("../../assets/icons/bookmark.svg"),
     ),
     (
         "FileCog",

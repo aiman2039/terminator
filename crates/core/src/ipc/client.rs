@@ -134,6 +134,7 @@ pub(crate) fn redirect_allowed(request: &Request) -> bool {
             | Request::AddRemoteProject { .. }
             | Request::RemoveRemoteProject { .. }
             | Request::SetRemoteProjectGroup { .. }
+            | Request::UpdateRemoteProject { .. }
             | Request::SetRemoteProjectForwards { .. }
             | Request::SaveLayout { .. }
             | Request::SelectProject { .. }

@@ -23,8 +23,10 @@ impl App {
             self.preferences.visible = true;
         }
     }
-    #[cfg(any(test, target_os = "macos"))]
+    /// Shows the inbox in the right sidebar. Projects there take precedence
+    /// over the tool, so clear them or the inbox stays hidden.
     pub(crate) fn open_agents_inbox(&mut self) {
+        self.preferences.right_projects = false;
         self.preferences.tool = SidebarTool::Agents;
         self.preferences.visible = true;
         self.preferences.agents_tab = AgentsTab::NeedsAttention;

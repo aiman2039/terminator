@@ -304,6 +304,7 @@ pub(crate) fn remote_project(name: &str, ssh: SshOptions) -> RemoteProject {
         layout: serde_json::Value::Null,
         group: None,
         forwards: Vec::new(),
+        last_connected: 0,
     }
 }
 fn probe(h: &Harness, project: &RemoteProject) -> Result<Response> {

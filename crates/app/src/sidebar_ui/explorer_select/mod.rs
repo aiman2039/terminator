@@ -21,6 +21,8 @@ pub(crate) struct ExplorerKeysInput<'a> {
 
 /// Type-to-search resets after this much idle time, like `IntelliJ`.
 const SPEED_SEARCH_IDLE: Duration = Duration::from_millis(1500);
+/// Most Explorer renames and moves Cmd/Ctrl+Z can undo.
+const EXPLORER_UNDO_LIMIT: usize = 50;
 
 /// Drag payload: the Explorer paths being dragged.
 #[derive(Clone)]
@@ -38,6 +40,11 @@ fn entry_rows(rows: &[ExplorerRow]) -> Vec<&ExplorerRow> {
 
 fn is_dir(row: &ExplorerRow) -> bool {
     row.entry.as_ref().is_some_and(|entry| entry.directory)
+}
+
+/// A folder, or a file with nested files: Left/Right close and open it.
+fn expandable(row: &ExplorerRow) -> bool {
+    is_dir(row) || row.nests
 }
 
 /// `path` moved from `from` to `to` (itself or anything under it).
@@ -160,7 +167,8 @@ impl App {
 
     /// A folder row is open when any folder of its compact chain is.
     pub(crate) fn explorer_row_expanded(&self, row: &ExplorerRow) -> bool {
-        self.expanded_dirs.contains(&row.path)
+        row.filtered_open
+            || self.expanded_dirs.contains(&row.path)
             || row
                 .chain
                 .iter()
@@ -229,6 +237,36 @@ impl App {
             .collect();
         if !from.is_empty() {
             self.queue_workspace(workspace_ops::Op::Move { from, to_dir });
+        }
+    }
+
+    /// Remember a finished rename or move for undo, unless it is an undo.
+    pub(crate) fn explorer_record_move(&mut self, mut moved: Vec<(PathBuf, PathBuf)>) {
+        moved.retain(|pair| {
+            let Some(at) = self.explorer_undoing.iter().position(|undo| undo == pair) else {
+                return true;
+            };
+            self.explorer_undoing.swap_remove(at);
+            false
+        });
+        if moved.is_empty() {
+            return;
+        }
+        if self.explorer_undo.len() >= EXPLORER_UNDO_LIMIT {
+            self.explorer_undo.remove(0);
+        }
+        self.explorer_undo.push(moved);
+    }
+
+    /// Undo the last Explorer rename or move by renaming each path back.
+    pub(super) fn explorer_undo_last(&mut self) {
+        let Some(moved) = self.explorer_undo.pop() else {
+            self.info = Some("Nothing to undo in Explorer".into());
+            return;
+        };
+        for (from, to) in moved.into_iter().rev() {
+            self.explorer_undoing.push((to.clone(), from.clone()));
+            self.queue_workspace(workspace_ops::Op::Rename { from: to, to: from });
         }
     }
 

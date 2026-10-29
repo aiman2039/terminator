@@ -1,6 +1,6 @@
 //! Connection settings are saved per host and enforced by the daemon.
 use super::*;
-use terminator_core::vnc::{ClipboardMode, Quality, Transport, VncOptions};
+use terminator_core::vnc::{ClipboardMode, CommandKey, Quality, Transport, VncOptions};
 
 /// Transport and authentication, the Properties "Security" page.
 /// `supported`: the running daemon advertises the VNC features capability.
@@ -145,6 +145,9 @@ fn display(ui: &mut egui::Ui, value: &mut VncOptions) {
         &mut value.remote_resize,
         "Resize remote desktop to fit the pane",
     );
+    form::section(ui, "Keyboard");
+    form::label(ui, "Mac Command key sends");
+    command_key(ui, &mut value.command_key);
     form::section(ui, "Clipboard");
     form::segmented(
         ui,
@@ -190,4 +193,14 @@ fn optional_path(
     if form::text(ui, label, &mut text, hint).changed() {
         *path = (!text.trim().is_empty()).then(|| text.trim().into());
     }
+}
+
+/// Ctrl (default) makes Cmd+A, Cmd+Z, Cmd+S act as Ctrl chords on the
+/// remote; Cmd+C/V/X always go through the Clipboard menu's chord.
+pub(super) fn command_key(ui: &mut egui::Ui, value: &mut CommandKey) {
+    form::segmented(
+        ui,
+        value,
+        &[(CommandKey::Control, "Ctrl"), (CommandKey::Super, "Super")],
+    );
 }

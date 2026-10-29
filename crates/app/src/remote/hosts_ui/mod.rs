@@ -1,5 +1,8 @@
-//! Hosts sidebar: saved SSH projects grouped by folder and host, live
-//! connection dots, and quick connect for `~/.ssh/config` aliases.
+//! Hosts sidebar: saved SSH projects in collapsible groups, live
+//! connection dots, quick connect for `~/.ssh/config` aliases and typed
+//! `user@host:port` targets, and a page that imports many config hosts.
+pub(crate) mod import;
+mod rows;
 mod sidebar;
 #[cfg(test)]
 mod tests;
@@ -7,13 +10,14 @@ mod tests;
 use crate::{App, Job};
 use eframe::egui;
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     time::{Duration, Instant},
 };
 use terminator_core::{
     remote::{HOME_ROOT, RemoteProject},
-    ssh::{ConfigHost, SshOptions},
+    ssh::{ConfigHost, SshFailure, SshOptions},
 };
 
 /// How often visible host dots re-run `ssh -O check`.
@@ -32,6 +36,11 @@ pub(crate) struct HostsState {
     pub status_pending: bool,
     pub status_polled: Option<Instant>,
     pub confirm_remove: Option<String>,
+    /// The quick connect behind `error`, with its SSH failure, for the fix
+    /// button.
+    pub failure: Option<(SshFailure, RemoteProject)>,
+    /// Keyboard selection while the filter field has focus.
+    pub cursor: Option<HostCursor>,
     /// Project id and the group name being typed.
     pub editing_group: Option<(String, String)>,
     /// Quick connect in flight: probing the login directory, then adding.
@@ -50,11 +59,25 @@ pub(crate) struct HostsState {
     pub forward_draft: Option<crate::forwards_ui::ForwardDraft>,
 }
 
+/// One row the keyboard can select in the Hosts sidebar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum HostCursor {
+    Project(String),
+    Alias(String),
+}
+
 pub(crate) struct HostGroup<'a> {
     /// `None` collects projects without a group.
     pub name: Option<&'a str>,
-    /// Host authority (`user@host:port`) and its projects, sorted by name.
-    pub hosts: Vec<(String, Vec<&'a RemoteProject>)>,
+    /// Sorted by name, or most recently connected first.
+    pub projects: Vec<&'a RemoteProject>,
+}
+
+impl HostGroup<'_> {
+    /// Key for [`Preferences::hosts_collapsed`](crate::preferences::Preferences).
+    pub(crate) fn key(&self) -> &str {
+        self.name.unwrap_or_default()
+    }
 }
 
 fn matches(project: &RemoteProject, filter: &str) -> bool {
@@ -70,35 +93,56 @@ fn matches(project: &RemoteProject, filter: &str) -> bool {
         .any(|field| field.to_lowercase().contains(filter))
 }
 
-/// Named groups alphabetically, then ungrouped projects; hosts and projects
-/// sorted within each. `filter` matches name, host, user, root or group.
-pub(crate) fn group_hosts<'a>(projects: &'a [RemoteProject], filter: &str) -> Vec<HostGroup<'a>> {
+/// Named groups alphabetically, then ungrouped projects. Within a group,
+/// projects sort by name or, with `recent_first`, by last connection.
+/// `filter` matches name, host, user, root or group.
+pub(crate) fn group_hosts<'a>(
+    projects: &'a [RemoteProject],
+    filter: &str,
+    recent_first: bool,
+) -> Vec<HostGroup<'a>> {
     let filter = filter.trim().to_lowercase();
-    type Hosts<'a> = BTreeMap<(String, String), Vec<&'a RemoteProject>>;
-    let mut groups: BTreeMap<(bool, String, &'a str), Hosts<'a>> = BTreeMap::new();
+    let mut groups: BTreeMap<(bool, String, &'a str), Vec<&'a RemoteProject>> = BTreeMap::new();
     for project in projects.iter().filter(|p| matches(p, &filter)) {
         let name = project.group.as_deref().unwrap_or_default();
-        let authority = project.ssh.authority();
         groups
             .entry((project.group.is_none(), name.to_lowercase(), name))
-            .or_default()
-            .entry((authority.to_lowercase(), authority))
             .or_default()
             .push(project);
     }
     groups
         .into_iter()
-        .map(|((ungrouped, _, name), hosts)| HostGroup {
-            name: (!ungrouped).then_some(name),
-            hosts: hosts
-                .into_iter()
-                .map(|((_, authority), mut projects)| {
-                    projects.sort_by_cached_key(|p| (p.name.to_lowercase(), p.id.clone()));
-                    (authority, projects)
-                })
-                .collect(),
+        .map(|((ungrouped, _, name), mut projects)| {
+            projects.sort_by_cached_key(|p| {
+                let recent = if recent_first { p.last_connected } else { 0 };
+                (Reverse(recent), p.name.to_lowercase(), p.id.clone())
+            });
+            HostGroup {
+                name: (!ungrouped).then_some(name),
+                projects,
+            }
         })
         .collect()
+}
+
+/// `host`, `user@host`, `host:port` or `user@host:port` typed into the
+/// filter, as SSH options. `None` unless the options validate.
+pub(crate) fn parse_target(text: &str) -> Option<SshOptions> {
+    let text = text.trim();
+    let (user, rest) = text.split_once('@').unwrap_or(("", text));
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => {
+            (host, Some(port.parse::<u16>().ok().filter(|p| *p > 0)?))
+        }
+        _ => (rest, None),
+    };
+    let options = SshOptions {
+        host: host.to_owned(),
+        username: user.to_owned(),
+        port,
+        ..SshOptions::default()
+    };
+    options.validate().ok().map(|()| options)
 }
 
 /// Config aliases no saved project connects to by name, filtered like
@@ -216,23 +260,26 @@ impl App {
     /// Probes the alias's login directory, then adds a project rooted there
     /// and opens a terminal in it.
     pub(crate) fn quick_connect(&mut self, alias: &str) {
+        self.quick_connect_to(SshOptions {
+            host: alias.to_owned(),
+            ..SshOptions::default()
+        });
+    }
+
+    /// Quick connect to typed or config options, named after them.
+    pub(crate) fn quick_connect_to(&mut self, ssh: SshOptions) {
         let project = RemoteProject {
-            id: String::new(),
-            name: alias.to_owned(),
-            ssh: SshOptions {
-                host: alias.to_owned(),
-                ..SshOptions::default()
-            },
+            name: ssh.authority(),
+            ssh,
             root: HOME_ROOT.to_owned(),
-            layout: serde_json::Value::Null,
-            group: None,
-            forwards: Vec::new(),
+            ..crate::remote_ui::blank_project()
         };
         self.start_quick_connect(project);
     }
 
     pub(crate) fn start_quick_connect(&mut self, project: RemoteProject) {
         self.remote_ui.hosts.error = None;
+        self.remote_ui.hosts.failure = None;
         self.remote_ui.hosts.quick = Some(project.clone());
         let _ = self.jobs.send(Job::RemoteAdd {
             project,
@@ -288,6 +335,9 @@ impl App {
                     );
                 }
                 self.remote_ui.hosts.error = Some(failure.text);
+                if let Some(ssh) = failure.ssh {
+                    self.remote_ui.hosts.failure = Some((ssh, project.clone()));
+                }
             }
         }
     }

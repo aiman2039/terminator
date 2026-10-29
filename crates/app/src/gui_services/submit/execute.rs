@@ -80,6 +80,7 @@ impl Services {
             | Job::LinePreviews(..)
             | Job::PasteClipboard(..)
             | Job::Browser(..)
+            | Job::Favicon(..)
             | Job::External(..)
             | Job::TestExternal(..)) => self.files_job(job, cancel, updates).await,
             job @ (Job::DiffAction(..)

@@ -66,6 +66,14 @@ impl Shared {
         Ok(Outcome::Changed)
     }
 
+    pub(super) fn on_update_remote_project(
+        &self,
+        project: remote::RemoteProject,
+    ) -> Result<Outcome> {
+        self.update_remote_project(project)?;
+        Ok(Outcome::Changed)
+    }
+
     pub(super) fn on_set_remote_project_group(
         &self,
         project: &str,

@@ -1,5 +1,8 @@
 //! Native OS webview overlay. Lives on top of egui; must hide when covered.
-use crate::browser::{self, BrowserTarget};
+use crate::browser::{
+    self, BrowserTarget,
+    nav::{self, NavState, NavStates},
+};
 use anyhow::Result;
 use eframe::egui;
 use std::{
@@ -30,6 +33,8 @@ use wry::{
 };
 
 const MAX_VIEWS: usize = 4;
+/// How often a shown view re-reads back/forward availability.
+const HISTORY_POLL: std::time::Duration = std::time::Duration::from_millis(400);
 
 pub(crate) struct VisibleBrowser {
     pub key: String,
@@ -41,6 +46,7 @@ struct Hosted {
     view: WebView,
     target: BrowserTarget,
     used: Instant,
+    history_at: Instant,
     allow_local: bool,
 }
 
@@ -50,9 +56,11 @@ pub(crate) struct BrowserHost {
     errors: HashMap<String, String>,
     opens: Arc<Mutex<Vec<(String, String)>>>,
     navigations: Arc<Mutex<Vec<(String, BrowserTarget)>>>,
+    nav: NavStates,
 }
 
 pub(crate) struct SyncInput<'a> {
+    pub ctx: &'a egui::Context,
     pub frame: &'a eframe::Frame,
     pub visible: &'a [VisibleBrowser],
     pub occluded: bool,
@@ -70,6 +78,7 @@ impl BrowserHost {
             errors: HashMap::new(),
             opens: Arc::new(Mutex::new(Vec::new())),
             navigations: Arc::new(Mutex::new(Vec::new())),
+            nav: NavStates::default(),
         }
     }
 
@@ -80,11 +89,25 @@ impl BrowserHost {
     pub fn drop_view(&mut self, key: &str) {
         self.views.remove(key);
         self.errors.remove(key);
+        self.nav.retain(|other| other != key);
     }
 
     pub fn retain(&mut self, keys: &HashSet<String>) {
         self.views.retain(|key, _| keys.contains(key));
         self.errors.retain(|key, _| keys.contains(key));
+        self.nav.retain(|key| keys.contains(key));
+    }
+
+    /// Loading, title, and history flags for the toolbar and tab title.
+    pub fn nav(&self, key: &str) -> NavState {
+        self.nav.get(key)
+    }
+
+    pub fn stop(&self, key: &str) {
+        if let Some(hosted) = self.views.get(key) {
+            nav::stop(&hosted.view);
+            self.nav.update(key, |state| state.loading = false);
+        }
     }
 
     pub fn navigate(&mut self, key: &str, target: &BrowserTarget) -> bool {
@@ -165,16 +188,19 @@ impl BrowserHost {
         self.views.clear();
         self.context = None;
         self.errors.clear();
+        self.nav.retain(|_| false);
     }
 
     pub fn sync(&mut self, input: SyncInput<'_>) {
         let SyncInput {
+            ctx,
             frame,
             visible,
             occluded,
             covers,
             data_dir,
         } = input;
+        self.nav.set_context(ctx);
         if occluded {
             self.hide_all();
             return;
@@ -243,6 +269,14 @@ impl BrowserHost {
             hosted.view.set_bounds(bounds).map_err(wry_error)?;
             hosted.view.set_visible(true).map_err(wry_error)?;
             hosted.used = Instant::now();
+            let loaded = self.nav.take_stale(&pane.key);
+            if loaded {
+                nav::refresh_favicon(&hosted.view, &self.nav, &pane.key);
+            }
+            if loaded || hosted.history_at.elapsed() >= HISTORY_POLL {
+                hosted.history_at = Instant::now();
+                nav::refresh_history(&hosted.view, &self.nav, &pane.key);
+            }
             return Ok(());
         }
         let view = self.create_view(CreateViewInput {
@@ -257,6 +291,7 @@ impl BrowserHost {
                 view,
                 target: pane.target.clone(),
                 used: Instant::now(),
+                history_at: Instant::now(),
                 allow_local: pane.target.file().is_some(),
             },
         );
@@ -287,14 +322,30 @@ impl BrowserHost {
             })
             .with_on_page_load_handler({
                 let events = std::sync::Arc::clone(&self.navigations);
+                let states = self.nav.clone();
                 let key = pane.key.clone();
                 move |event, url| {
+                    let loading = matches!(event, PageLoadEvent::Started);
+                    states.update(&key, |state| {
+                        state.loading = loading;
+                        state.stale = true;
+                    });
                     if matches!(event, PageLoadEvent::Finished)
                         && let Some(target) = browser::navigation_target(&url, allow_local)
                         && let Ok(mut pending) = events.lock()
                     {
                         pending.push((key.clone(), target));
                     }
+                }
+            })
+            .with_document_title_changed_handler({
+                let states = self.nav.clone();
+                let key = pane.key.clone();
+                move |title| {
+                    let title = title.trim().to_owned();
+                    states.update(&key, |state| {
+                        state.title = (!title.is_empty()).then_some(title);
+                    });
                 }
             })
             .with_bounds(bounds)
@@ -312,7 +363,7 @@ impl BrowserHost {
                     NewWindowResponse::Deny
                 }
             });
-        let builder = apply_store(builder, data_dir)?;
+        let builder = browser::apply_store(builder, data_dir)?;
         builder.build_as_child(frame).map_err(wry_error)
     }
 
@@ -407,33 +458,6 @@ fn bounds(rect: egui::Rect) -> Rect {
 
 fn wry_error(error: wry::Error) -> String {
     format!("{error}. Use Open in browser.")
-}
-
-fn apply_store<'a>(
-    builder: WebViewBuilder<'a>,
-    data_dir: &Path,
-) -> Result<WebViewBuilder<'a>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use wry::WebViewBuilderExtDarwin;
-        if objc2_foundation::NSProcessInfo::processInfo()
-            .operatingSystemVersion()
-            .majorVersion
-            >= 14
-        {
-            let identifier = browser::profile_identifier(data_dir).map_err(|e| e.to_string())?;
-            Ok(builder.with_data_store_identifier(identifier))
-        } else {
-            // Named persistent stores are unavailable before macOS 14. Never fall
-            // back to the shared default store; older systems use private browsing.
-            Ok(builder.with_incognito(true))
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = data_dir;
-        Ok(builder)
-    }
 }
 
 #[cfg(test)]

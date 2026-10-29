@@ -134,6 +134,13 @@ pub enum Request {
     RemoveRemoteProject {
         project: String,
     },
+    /// Replaces the saved project with the same id: name, connection, root
+    /// and group. Its layout, forwards and `last_connected` stay. Changing
+    /// the connection or root is refused while the project has live
+    /// sessions, transfers or active forwards. Requires `ssh-edit-v1`.
+    UpdateRemoteProject {
+        project: crate::remote::RemoteProject,
+    },
     /// `None` or blank moves the project out of any group. Requires
     /// `ssh-hosts-v1`.
     SetRemoteProjectGroup {
@@ -304,6 +311,7 @@ impl Request {
             Self::ProbeRemoteProject { .. } => "ProbeRemoteProject",
             Self::RemoveRemoteProject { .. } => "RemoveRemoteProject",
             Self::SetRemoteProjectGroup { .. } => "SetRemoteProjectGroup",
+            Self::UpdateRemoteProject { .. } => "UpdateRemoteProject",
             Self::SetRemoteProjectForwards { .. } => "SetRemoteProjectForwards",
             Self::StartForward { .. } => "StartForward",
             Self::StopForward { .. } => "StopForward",

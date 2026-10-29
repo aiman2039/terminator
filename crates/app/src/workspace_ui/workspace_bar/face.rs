@@ -8,6 +8,7 @@ impl TabFace {
         Self {
             label,
             icon,
+            image: None,
             sid: None,
             brand: None,
             status: None,
@@ -41,7 +42,10 @@ impl App {
             Some(Tab::Terminal(sid)) => self.terminal_tab_face(sid),
             Some(Tab::Diff { path, .. }) => TabFace::plain(TabFace::file_name(path), "FileDiff"),
             Some(Tab::Image { path }) => TabFace::plain(TabFace::file_name(path), "FileImage"),
-            Some(Tab::Browser { target, .. }) => TabFace::plain(target.title(), "FileCode"),
+            Some(Tab::Browser { id, target }) => TabFace {
+                image: self.browser_favicon(id),
+                ..TabFace::plain(self.browser_title(id, target), "Globe")
+            },
             Some(Tab::NativeEditor { path }) => {
                 TabFace::plain(TabFace::file_name(path), "FileCode")
             }
@@ -72,6 +76,7 @@ impl App {
             }) => TabFace {
                 label: Self::vnc_tab_label(label, host, *port),
                 icon: "Monitor",
+                image: None,
                 sid: None,
                 brand: None,
                 status: self.vnc_tab_status(session),
@@ -97,6 +102,7 @@ impl App {
                             "Terminal"
                         },
                     ),
+                    image: None,
                     sid: Some(sid.clone()),
                     brand: presented.brand_icon,
                     status: presented.lifecycle.map(|lifecycle| {

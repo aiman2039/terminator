@@ -84,7 +84,9 @@ impl ViewPass<'_> {
     /// Markdown mode toggles and heading menu, else the Vim mode badge.
     fn header_mode(&mut self, ui: &mut egui::Ui) -> Option<usize> {
         if self.frame.is_markdown {
-            // Right to left: the heading menu sits right of the modes.
+            // Right to left: modes, then the heading menu, then the
+            // format buttons at the right.
+            self.markdown_format(ui);
             let heading_jump = self.heading_menu(ui);
             self.markdown_modes(ui);
             return heading_jump;

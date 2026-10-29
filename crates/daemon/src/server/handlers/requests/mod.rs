@@ -169,6 +169,7 @@ impl Shared {
             Request::SetRemoteProjectGroup { project, group } => {
                 self.on_set_remote_project_group(&project, group.as_deref())
             }
+            Request::UpdateRemoteProject { project } => self.on_update_remote_project(project),
             Request::SetRemoteProjectForwards { project, forwards } => {
                 self.on_set_remote_project_forwards(&project, forwards)
             }

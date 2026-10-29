@@ -98,7 +98,7 @@ impl ViewPass<'_> {
         }
     }
 
-    fn read_only(&self) -> bool {
+    pub(super) fn read_only(&self) -> bool {
         self.frame.rename_applying || self.frame.remote_snapshot
     }
 
@@ -341,7 +341,12 @@ impl ViewPass<'_> {
             }),
             soft_wrap,
             font_size: style.prefs.editor_font_size + bump,
-            line_height: style.prefs.editor_line_spacing,
+            // Markdown prose reads better with at least 1.3 spacing.
+            line_height: if frame.is_markdown {
+                style.prefs.editor_line_spacing.max(1.3)
+            } else {
+                style.prefs.editor_line_spacing
+            },
             caret_blink: style.prefs.editor_caret_blink,
             palette: Some(style.palette),
             status_items: [if crlf { "CRLF" } else { "LF" }, "UTF-8", "4 spaces"]
@@ -399,15 +404,20 @@ impl ViewPass<'_> {
             markdown::Mode::Edit => Some(source(ui)),
             markdown::Mode::Split => {
                 let width = ui.available_width();
-                Some(
-                    egui::Panel::left(egui::Id::unique(("native-markdown-editor", path)))
-                        .resizable(true)
-                        .default_size(width * 0.5)
-                        .size_range(80.0..=(width - 80.0).max(80.0))
-                        .frame(egui::Frame::NONE)
-                        .show(ui, source)
-                        .inner,
-                )
+                let shown = egui::Panel::left(egui::Id::unique(("native-markdown-editor", path)))
+                    .resizable(true)
+                    .default_size(width * 0.5)
+                    .size_range(80.0..=(width - 80.0).max(80.0))
+                    .frame(egui::Frame::NONE)
+                    .show(ui, source);
+                // A clear divider between source and preview (MarkEdit-like).
+                let color = ui.visuals().weak_text_color().gamma_multiply(0.5);
+                ui.painter().vline(
+                    shown.response.rect.right(),
+                    shown.response.rect.y_range(),
+                    egui::Stroke::new(1.0, color),
+                );
+                Some(shown.inner)
             }
         }
     }

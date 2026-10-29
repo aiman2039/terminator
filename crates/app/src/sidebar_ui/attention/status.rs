@@ -119,9 +119,7 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "status-attention-bell", response.rect);
         if response.clicked() {
-            self.preferences.tool = SidebarTool::Agents;
-            self.preferences.visible = true;
-            self.preferences.agents_tab = AgentsTab::NeedsAttention;
+            self.open_agents_inbox();
         }
     }
 }
