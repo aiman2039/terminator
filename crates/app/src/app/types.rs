@@ -246,6 +246,8 @@ pub(crate) enum Job {
     ),
     ResolveTarget(String, String, PathBuf),
     Browser(String),
+    /// Download a browser tab icon; answers with `Update::Favicon`.
+    Favicon(String),
     PasteClipboard(String),
 
     Diff(Tab),
@@ -461,6 +463,7 @@ pub(crate) enum Update {
     DiffActionFailed(String, String),
     Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
     Search(u64, Result<Vec<search::Hit>, String>),
+    Favicon(String, Option<Vec<u8>>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),
     GitBase(PathBuf, u64, Option<String>),
     EditorBlame(PathBuf, u64, Result<Vec<git_log::BlameEntry>, String>),

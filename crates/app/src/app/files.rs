@@ -316,6 +316,7 @@ impl App {
                 .collect()
         });
         self.browser_host.sync(browser_host::SyncInput {
+            ctx,
             frame,
             visible: &self.visible_browsers,
             occluded: self.browser_covered(),
