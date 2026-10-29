@@ -311,6 +311,7 @@ impl App {
             pending_quit_all: None,
             open_path: false,
             pick_audio: false,
+            pick_vnc_files: false,
             pick_audio_dir: false,
             path_text: String::new(),
             last_save: Instant::now(),

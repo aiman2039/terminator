@@ -448,6 +448,7 @@ pub(crate) enum Update {
         cwd: PathBuf,
     },
     PickedAudio(Vec<PathBuf>),
+    PickedVncFiles(Vec<PathBuf>),
     PickedPath {
         path: Option<PathBuf>,
         target: BrowseTarget,

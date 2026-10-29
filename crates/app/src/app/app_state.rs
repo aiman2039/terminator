@@ -361,6 +361,8 @@ pub struct App {
     pub(crate) pending_quit_all: Option<bool>,
     pub(crate) open_path: bool,
     pub(crate) pick_audio: bool,
+    /// Open the picker for RealVNC `.vnc` files to import.
+    pub(crate) pick_vnc_files: bool,
     pub(crate) pick_audio_dir: bool,
     pub(crate) path_text: String,
     pub(crate) last_save: Instant,

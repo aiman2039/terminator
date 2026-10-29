@@ -17,6 +17,13 @@ pub(super) enum CardAction {
 impl App {
     /// The page body: Properties while editing, else the address book.
     pub(super) fn vnc_address_book(&mut self, ui: &mut egui::Ui, state_key: &str) {
+        if self.vnc_sidebar.import.is_some() {
+            egui::ScrollArea::vertical()
+                .id_salt("vnc-import")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.vnc_import_panel(ui));
+            return;
+        }
         if self.vnc_sidebar.form_open {
             egui::ScrollArea::vertical()
                 .id_salt("vnc-properties")
@@ -188,6 +195,9 @@ impl App {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Import…").clicked() {
+                    editor.import = Some(import::ImportState::default());
+                }
                 form::segmented(
                     ui,
                     &mut editor.list_view,

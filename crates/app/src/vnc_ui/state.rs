@@ -161,6 +161,8 @@ pub(crate) struct VncSidebarState {
     pub(crate) label_filter: Option<String>,
     /// Address book shows rows instead of cards.
     pub(crate) list_view: bool,
+    /// Open "Import hosts" panel.
+    pub(crate) import: Option<super::import::ImportState>,
 }
 
 /// Pages of the host Properties editor.
@@ -203,6 +205,7 @@ impl Default for VncSidebarState {
             labels: String::new(),
             label_filter: None,
             list_view: false,
+            import: None,
         }
     }
 }
