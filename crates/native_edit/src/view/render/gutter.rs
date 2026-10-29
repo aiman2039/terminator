@@ -195,7 +195,10 @@ impl<B: Buffer> SourceView<'_, B> {
         );
         let geometry = self.geometry;
         canvas.painter.text(
-            Pos2::new(canvas.origin.x + geometry.gutter - geometry.advance, row.y),
+            Pos2::new(
+                canvas.origin.x + geometry.gutter - geometry.advance,
+                row.y + geometry.text_top,
+            ),
             egui::Align2::RIGHT_TOP,
             format!("{}", row.line().saturating_add(1)),
             geometry.font.clone(),

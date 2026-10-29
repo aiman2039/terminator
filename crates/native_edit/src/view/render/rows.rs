@@ -29,6 +29,10 @@ pub(super) struct RowMarks {
     occurrence_fill: Color32,
     bracket_stroke: egui::Stroke,
     guide_color: Color32,
+    /// The caret's line gets a quiet full-width band while nothing is
+    /// selected.
+    current_line: Option<usize>,
+    current_line_fill: Color32,
     /// A bar caret sits before a hint; a block covers the char after it.
     bar: bool,
 }
@@ -67,6 +71,9 @@ impl<B: Buffer> SourceView<'_, B> {
                 .bg_stroke
                 .color
                 .gamma_multiply(0.6),
+            current_line: (cursor_visible && selection.is_none() && engine.block_span().is_none())
+                .then(|| engine.cursor().line),
+            current_line_fill: visuals.text_color().gamma_multiply(0.05),
             bar: engine.mode() == Mode::Insert || !self.options.vim,
         }
     }
@@ -81,6 +88,7 @@ impl<B: Buffer> SourceView<'_, B> {
             if y + row_height < canvas.clip.top() || y > canvas.clip.bottom() {
                 continue;
             }
+            Self::paint_current_line(canvas, &row, marks);
             self.paint_gutter(canvas, &row);
             guide_cells = canvas.paint_indent_guides(&row, guide_cells, marks.guide_color);
             self.paint_selections(canvas, &row, marks);
@@ -91,6 +99,19 @@ impl<B: Buffer> SourceView<'_, B> {
             self.paint_extra_carets(canvas, &row, marks);
             self.paint_caret(canvas, &row, marks);
         }
+    }
+
+    fn paint_current_line(canvas: &Canvas<'_>, row: &PaintRow<'_>, marks: &RowMarks) {
+        if marks.current_line != Some(row.line()) {
+            return;
+        }
+        let rect = Rect::from_x_y_ranges(
+            canvas.clip.x_range(),
+            row.y..=row.y + canvas.geometry.row_height,
+        );
+        canvas
+            .painter
+            .rect_filled(rect, 0.0, marks.current_line_fill);
     }
 
     /// Selection background for this row: the primary selection (or
@@ -203,7 +224,7 @@ impl<B: Buffer> SourceView<'_, B> {
             hints: row.cells.hints,
             spans: &spans,
             x: canvas.origin.x + self.geometry.gutter,
-            y: row.y,
+            y: row.y + self.geometry.text_top,
             geometry: self.geometry,
             plain: canvas.ui.visuals().text_color(),
         }
@@ -350,7 +371,7 @@ impl<B: Buffer> SourceView<'_, B> {
         // Keep the covered cell legible on the block cursor.
         if let Some(cell) = cell {
             canvas.painter.text(
-                at,
+                Pos2::new(at.x, at.y + geometry.text_top),
                 egui::Align2::LEFT_TOP,
                 cell.to_string(),
                 geometry.font.clone(),

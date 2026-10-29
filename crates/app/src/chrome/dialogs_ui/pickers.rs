@@ -100,6 +100,39 @@ impl App {
         });
     }
 
+    /// RealVNC Viewer `.vnc` files for the VNC "Import hosts" panel.
+    pub(super) fn vnc_files_picker(&mut self, frame: &eframe::Frame) {
+        if !self.pick_vnc_files || self.picker_active {
+            return;
+        }
+        self.pick_vnc_files = false;
+        self.picker_active = true;
+        let cwd = self.dialog_directory();
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_parent(frame)
+            .set_title("Import RealVNC connections")
+            .add_filter("VNC connection", &["vnc"]);
+        let service = self.services.clone();
+        self.services.dialog(async move {
+            let cwd = service
+                .fs()
+                .run(&async_service::CancellationToken::new(), move || {
+                    anyhow::Ok(services::existing_directory(cwd))
+                })
+                .await?;
+            let paths = dialog
+                .set_directory(cwd)
+                .pick_files()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|file| file.path().to_path_buf())
+                .collect();
+            service.emit(Update::PickedVncFiles(paths)).await?;
+            Ok(())
+        });
+    }
+
     pub(super) fn audio_directory_picker(&mut self, frame: &eframe::Frame) {
         if !self.pick_audio_dir || self.picker_active {
             return;

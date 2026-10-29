@@ -30,9 +30,9 @@ pub(super) fn port_display_fields(
     let field = |ui: &mut egui::Ui, label: &str, value: &mut String, hover: &str| {
         if stacked {
             ui.vertical(|ui| {
-                ui.set_width(68.0);
-                ui.label(label);
-                ui.add(appearance::singleline(value).desired_width(68.0))
+                ui.set_width(super::form::NUMBER_WIDTH);
+                super::form::label(ui, label);
+                ui.add(appearance::singleline(value).desired_width(super::form::NUMBER_WIDTH))
                     .on_hover_text(hover)
             })
             .inner

@@ -40,7 +40,7 @@ impl App {
             self.search_history_center(ui);
             return;
         }
-        self.workspace_center(ui);
+        self.ssh_page_or_vnc_center(ui);
     }
 
     pub(crate) fn search_history_center(&mut self, ui: &mut egui::Ui) {

@@ -94,13 +94,12 @@ impl App {
                 label,
             },
         });
-        self.vnc_status_lines(ui, &state_key, daemon_session.as_ref());
-        ui.separator();
-
-        let is_live = daemon_session.as_ref().is_some_and(|s| s.status.live());
-        let form_connect = (!is_live)
-            .then(|| self.vnc_connect_form(ui, &state_key, features))
-            .flatten();
+        let page = VncConnectPage {
+            state_key: &state_key,
+            features,
+            profile_id: profile_id.as_deref(),
+        };
+        let (form_connect, is_live) = self.vnc_view_body(ui, page, daemon_session.as_ref());
         if let Some(request) = form_connect.or(connect)
             && let Some(project) = self.selected.clone()
         {
@@ -118,17 +117,47 @@ impl App {
             });
             return;
         }
-        if !is_live {
-            return;
+        if is_live {
+            let view_only = daemon_session.is_some_and(|s| s.view_only);
+            self.vnc_live_screen(
+                ui,
+                VncLiveInput {
+                    session_id,
+                    view_only,
+                    features,
+                },
+            );
         }
-        self.vnc_live_screen(
-            ui,
-            VncLiveInput {
-                session_id,
-                view_only: daemon_session.as_ref().is_some_and(|s| s.view_only),
-                features,
-            },
-        );
+    }
+
+    /// Status lines, then the connect page while the session is not live.
+    /// Returns the page's connection request and whether the session is live.
+    fn vnc_view_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        page: VncConnectPage<'_>,
+        session: Option<&VncSession>,
+    ) -> (Option<PendingVncConnect>, bool) {
+        let fix = self.vnc_status_lines(ui, page.state_key, session);
+        ui.separator();
+        let mut retry = None;
+        if let Some(session) = session {
+            self.vnc_auto_password_prompt(page.state_key, session);
+            if let Some(fix) = fix {
+                retry = self.apply_vnc_error_fix(error_fix::ApplyFixInput {
+                    fix,
+                    state_key: page.state_key,
+                    session,
+                });
+            }
+        }
+        let is_live = session.is_some_and(|s| s.status.live());
+        let request = if is_live {
+            None
+        } else {
+            self.vnc_connect_page(ui, page)
+        };
+        (retry.or(request), is_live)
     }
 
     fn vnc_daemon_session(&self, session_id: &str) -> Option<VncSession> {
@@ -286,6 +315,7 @@ impl App {
                 .get(state_key)
                 .map_or_else(Default::default, |v| v.draft_options.clone()),
             credential_saved: false,
+            labels: Vec::new(),
             id: new_id.clone(),
             name: label.to_owned(),
             host: host.to_owned(),
@@ -303,12 +333,14 @@ impl App {
         });
     }
 
+    /// Transport, retry and error lines. Returns the fix the user clicked,
+    /// offered when the daemon classified the failure.
     fn vnc_status_lines(
         &self,
         ui: &mut egui::Ui,
         state_key: &str,
         daemon_session: Option<&VncSession>,
-    ) {
+    ) -> Option<error_fix::ErrorFix> {
         if let Some(record) = daemon_session {
             let security = match record.options.transport {
                 terminator_core::vnc::Transport::Direct => "Direct VNC · unencrypted transport",
@@ -323,17 +355,23 @@ impl App {
                 ));
             }
         }
-        if let Some(error) = self
+        let error = self
             .vnc_views
             .get(state_key)
-            .and_then(|v| v.error.as_deref())
-        {
+            .and_then(|v| v.error.as_deref())?;
+        let fix = daemon_session
+            .filter(|s| !s.status.live())
+            .and_then(|s| s.error_kind)
+            .map(error_fix::ErrorFix::for_kind);
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(error).color(appearance::color(&self.theme.status_failed)),
                 )
                 .wrap(),
             );
-        }
+            fix.filter(|fix| ui.button(fix.label()).clicked())
+        })
+        .inner
     }
 }

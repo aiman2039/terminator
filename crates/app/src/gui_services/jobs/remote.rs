@@ -45,8 +45,12 @@ impl Services {
             Request::ProbeRemoteProject {
                 project: project.clone(),
             }
-        } else {
+        } else if project.id.is_empty() {
             Request::AddRemoteProject {
+                project: project.clone(),
+            }
+        } else {
+            Request::UpdateRemoteProject {
                 project: project.clone(),
             }
         };

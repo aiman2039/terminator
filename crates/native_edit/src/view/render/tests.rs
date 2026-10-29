@@ -38,3 +38,32 @@ fn markdown_source_uses_wrapped_viewport_height() {
     output.textures_delta.clear();
     assert!(visual_count > doc.line_count());
 }
+
+#[test]
+fn line_spacing_adds_row_height_and_centers_the_text() {
+    use super::geometry::{Geometry, MeasureInput};
+    let ctx = egui::Context::default();
+    let doc = Doc::new("one\ntwo\n");
+    let mut rows = Vec::new();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        for line_spacing in [1.0, 1.5] {
+            let geometry = Geometry::measure(MeasureInput {
+                ui,
+                doc: &doc,
+                options: &SourceOptions {
+                    line_spacing,
+                    ..Default::default()
+                },
+                id: "spacing.md",
+            });
+            rows.push((geometry.row_height, geometry.text_top));
+        }
+    });
+    output.textures_delta.clear();
+    let [(plain, plain_top), (spaced, spaced_top)] = rows[..] else {
+        panic!("two measurements");
+    };
+    assert!(plain_top.abs() < f32::EPSILON);
+    assert!(spaced > plain * 1.4);
+    assert!((spaced_top - ((spaced - plain) * 0.5).floor()).abs() < 1.0);
+}

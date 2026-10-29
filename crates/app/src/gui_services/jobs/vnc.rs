@@ -9,6 +9,8 @@ pub(crate) struct VncPickTransferInput<'a> {
     pub(in crate::gui_services) session: String,
     pub(in crate::gui_services) direction: terminator_core::vnc::TransferDirection,
     pub(in crate::gui_services) remote: String,
+    /// Already chosen (dropped) file; `None` asks with a file picker.
+    pub(in crate::gui_services) local: Option<std::path::PathBuf>,
     pub(in crate::gui_services) cancel: CancellationToken,
     pub(in crate::gui_services) updates: &'a mut Vec<Update>,
 }
@@ -17,6 +19,7 @@ pub(crate) struct VncFrameInput<'a> {
     pub(in crate::gui_services) session: String,
     pub(in crate::gui_services) since: u64,
     pub(in crate::gui_services) regions: bool,
+    pub(in crate::gui_services) shm: Option<terminator_core::vnc::VncShmRequest>,
     pub(in crate::gui_services) cancel: CancellationToken,
     pub(in crate::gui_services) updates: &'a mut Vec<Update>,
 }
@@ -30,6 +33,7 @@ impl Services {
             session,
             direction,
             remote,
+            local,
             cancel,
             updates,
         } = input;
@@ -38,6 +42,9 @@ impl Services {
         let picked = self
             .fs()
             .run(&cancel, move || {
+                if local.is_some() {
+                    return anyhow::Ok(local);
+                }
                 let dialog = rfd::FileDialog::new().set_title(if upload {
                     "Upload via SFTP"
                 } else {
@@ -128,21 +135,26 @@ impl Services {
             session,
             since,
             regions,
+            shm,
             cancel,
             updates,
         } = input;
         let client = self.client();
+        let runtime = client.paths.runtime.clone();
         let result = match client
             .rpc(Request::VncFrame {
                 session: session.clone(),
                 since,
                 regions,
+                shm,
             })
             .await
         {
             Ok(Response::VncFrame(frame)) => self
                 .cpu()
-                .run(&cancel, move || crate::vnc_ui::decode_frame(*frame))
+                .run(&cancel, move || {
+                    crate::vnc_ui::decode_frame(*frame, &runtime)
+                })
                 .await
                 .map(Some)
                 .map_err(|e| format!("{e:#}")),

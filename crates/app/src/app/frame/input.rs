@@ -32,8 +32,7 @@ impl App {
             Self::drop_key_events(ctx, egui::Key::F8);
         }
         if self.vnc_fullscreen.is_some() && ctx.input(|i| i.key_pressed(egui::Key::F11)) {
-            self.vnc_fullscreen = None;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            self.exit_vnc_fullscreen(ctx);
             Self::drop_key_events(ctx, egui::Key::F11);
         }
     }

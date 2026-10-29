@@ -588,6 +588,22 @@ mod tests {
         assert!(doc.text.contains("Image: remote"));
     }
 
+    #[test]
+    fn bare_web_urls_become_links_outside_code_and_existing_links() {
+        let doc = prepare(snapshot(
+            "See https://example.com/a_b__c+d now.\n\n[x](https://example.com/y) `https://example.com/code`\n\n```\nhttps://example.com/block\n```\n\nftp://example.com/file",
+        ));
+        assert!(doc.text.contains("See <https://example.com/a_b__c+d> now."));
+        assert_eq!(
+            doc.links["https://example.com/a_b__c+d"],
+            Some(Link::Web("https://example.com/a_b__c+d".into()))
+        );
+        assert!(doc.text.contains("[x](https://example.com/y)"));
+        assert!(doc.text.contains("`https://example.com/code`"));
+        assert!(doc.text.contains("\nhttps://example.com/block\n"));
+        assert!(!doc.text.contains("<ftp:"));
+    }
+
     #[cfg(unix)]
     #[test]
     #[cfg(unix)]

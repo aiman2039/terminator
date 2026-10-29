@@ -157,6 +157,7 @@ impl App {
             }
             Update::PickedPath { path, target } => self.handle_picked_path(path, target),
             Update::PickedAudio(paths) => self.handle_picked_audio(paths),
+            Update::PickedVncFiles(paths) => self.vnc_import_files(paths),
             Update::PickedFile { path, project, cwd } => {
                 self.handle_picked_file(path, project, cwd);
             }
@@ -226,6 +227,7 @@ impl App {
                 self.apply_line_previews(generation, lines);
             }
             Update::Search(id, result) => self.handle_search(id, result),
+            Update::Favicon(url, bytes) => self.apply_favicon(url, bytes),
         }
     }
 

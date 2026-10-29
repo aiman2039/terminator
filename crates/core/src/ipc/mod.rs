@@ -62,6 +62,10 @@ pub enum Request {
         /// the reply's `region` decides whether the pixels are partial.
         #[serde(default)]
         regions: bool,
+        /// Shared-memory frame and long poll; only sent to daemons that
+        /// advertise `vnc-shm-v1`. Older daemons ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shm: Option<vnc::VncShmRequest>,
     },
     PruneHistory {
         budget: u64,
@@ -129,6 +133,13 @@ pub enum Request {
     /// Requires `ssh-hosts-v1`.
     RemoveRemoteProject {
         project: String,
+    },
+    /// Replaces the saved project with the same id: name, connection, root
+    /// and group. Its layout, forwards and `last_connected` stay. Changing
+    /// the connection or root is refused while the project has live
+    /// sessions, transfers or active forwards. Requires `ssh-edit-v1`.
+    UpdateRemoteProject {
+        project: crate::remote::RemoteProject,
     },
     /// `None` or blank moves the project out of any group. Requires
     /// `ssh-hosts-v1`.
@@ -262,6 +273,8 @@ impl Request {
             | Self::WorktreeAdd { .. }
             | Self::WorktreeRemove { .. } => 40,
             Self::VncFrame { .. } | Self::CloseIdleSessions { .. } => 30,
+            // Writing the OS keychain can wait on a macOS permission prompt.
+            Self::VncProfileSave { .. } | Self::VncForgetCredential { .. } => 120,
             _ => 3,
         })
     }
@@ -298,6 +311,7 @@ impl Request {
             Self::ProbeRemoteProject { .. } => "ProbeRemoteProject",
             Self::RemoveRemoteProject { .. } => "RemoveRemoteProject",
             Self::SetRemoteProjectGroup { .. } => "SetRemoteProjectGroup",
+            Self::UpdateRemoteProject { .. } => "UpdateRemoteProject",
             Self::SetRemoteProjectForwards { .. } => "SetRemoteProjectForwards",
             Self::StartForward { .. } => "StartForward",
             Self::StopForward { .. } => "StopForward",

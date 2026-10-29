@@ -18,6 +18,7 @@ fn vnc_accepts_ssh_project_ids_and_rejects_unknown_projects() {
             layout: serde_json::Value::Null,
             group: None,
             forwards: Vec::new(),
+            last_connected: 0,
         });
     assert!(state.projects.is_empty());
     assert!(validate_project(&state, "ssh-project").is_ok());

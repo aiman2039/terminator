@@ -53,6 +53,9 @@ impl Shared {
         if let Some(profile) = self.vnc_profile(|p| p.id == id && p.credential_saved) {
             credentials::forget(self.credential_paths(), &profile)?;
         }
+        if let Some(path) = self.credential_paths().vnc_thumbnail(id) {
+            let _ = std::fs::remove_file(path);
+        }
         let mut state = relock(&self.state);
         state.vnc_profiles.retain(|p| p.id != id);
         state.revision = state.revision.saturating_add(1);
@@ -82,13 +85,14 @@ impl Shared {
         Ok(Outcome::Reply(Response::Ok))
     }
 
-    pub(super) fn on_vnc_frame(&self, session: &str, since: u64, regions: bool) -> Result<Outcome> {
-        Ok(Outcome::Reply(
-            match self.vnc_frame(session, since, regions)? {
-                Some(frame) => Response::VncFrame(Box::new(frame)),
-                None => Response::Unchanged,
-            },
-        ))
+    pub(super) fn on_vnc_frame(
+        &self,
+        request: crate::vnc_session::VncFrameRequest<'_>,
+    ) -> Result<Outcome> {
+        Ok(Outcome::Reply(match self.vnc_frame(request)? {
+            Some(frame) => Response::VncFrame(Box::new(frame)),
+            None => Response::Unchanged,
+        }))
     }
 
     fn credential_paths(&self) -> &Paths {

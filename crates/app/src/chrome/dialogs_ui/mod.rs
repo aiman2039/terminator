@@ -56,6 +56,7 @@ impl App {
         self.notice_detail_modal(ctx);
         self.test_editor_picker(frame);
         self.audio_files_picker(frame);
+        self.vnc_files_picker(frame);
         self.audio_directory_picker(frame);
         self.open_file_picker(frame);
         self.worktree_remove_dialog(ctx);

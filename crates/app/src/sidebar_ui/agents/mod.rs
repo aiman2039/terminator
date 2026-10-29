@@ -53,11 +53,28 @@ impl App {
         let _ = (ui, badge);
     }
 
+    /// The left sidebar is visible and paints the Agents inbox. A left tool
+    /// takes precedence over `left_agents`, so the flag alone is not enough.
+    pub(crate) fn left_agents_shown(&self) -> bool {
+        self.preferences.left_visible
+            && match self.preferences.left_tool {
+                Some(tool) => tool == SidebarTool::Agents,
+                None => self.preferences.left_agents,
+            }
+    }
+
     pub(crate) fn toggle_left_agents(&mut self) {
+        if self.left_agents_shown() {
+            self.preferences.left_tool = None;
+            self.preferences.left_agents = false;
+            return;
+        }
         if !self.preferences.left_agents {
             self.preferences.agents_tab = AgentsTab::NeedsAttention;
         }
-        self.preferences.left_agents = !self.preferences.left_agents;
+        self.preferences.left_tool = None;
+        self.preferences.left_agents = true;
+        self.preferences.left_visible = true;
     }
 
     /// Header bell. Same square as the hide-sidebar control, with a corner count.
@@ -73,7 +90,7 @@ impl App {
             ui,
             icon: "Bell",
             tip: &tip,
-            selected: self.preferences.left_agents,
+            selected: self.left_agents_shown(),
             tint: appearance::icon_color(),
         });
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Agents"));
@@ -104,11 +121,7 @@ impl App {
         } else {
             format!("Agents · {badge}")
         };
-        let mark = if self.preferences.left_agents {
-            "✓"
-        } else {
-            ""
-        };
+        let mark = if self.left_agents_shown() { "✓" } else { "" };
         let clicked = appearance::menu_item(appearance::MenuItemInput {
             ui,
             label: &label,

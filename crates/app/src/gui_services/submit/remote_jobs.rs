@@ -85,11 +85,13 @@ impl Services {
                 session,
                 direction,
                 remote,
+                local,
             } => {
                 self.vnc_pick_transfer(VncPickTransferInput {
                     session,
                     direction,
                     remote,
+                    local,
                     cancel,
                     updates,
                 })
@@ -105,11 +107,13 @@ impl Services {
                 session,
                 since,
                 regions,
+                shm,
             } => {
                 self.vnc_frame(VncFrameInput {
                     session,
                     since,
                     regions,
+                    shm,
                     cancel,
                     updates,
                 })

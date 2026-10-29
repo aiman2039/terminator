@@ -90,7 +90,13 @@ impl Shared {
                 session,
                 since,
                 regions,
-            } => self.on_vnc_frame(&session, since, regions),
+                shm,
+            } => self.on_vnc_frame(crate::vnc_session::VncFrameRequest {
+                session: &session,
+                since,
+                regions,
+                shm,
+            }),
             Request::PruneHistory { budget } => self.on_prune_history(budget),
             Request::Archived {
                 generation,
@@ -163,6 +169,7 @@ impl Shared {
             Request::SetRemoteProjectGroup { project, group } => {
                 self.on_set_remote_project_group(&project, group.as_deref())
             }
+            Request::UpdateRemoteProject { project } => self.on_update_remote_project(project),
             Request::SetRemoteProjectForwards { project, forwards } => {
                 self.on_set_remote_project_forwards(&project, forwards)
             }

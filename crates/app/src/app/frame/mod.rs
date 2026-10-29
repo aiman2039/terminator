@@ -131,7 +131,7 @@ impl eframe::App for App {
         }
         self.save_changed_preferences();
         self.central_panel(ui);
-        self.remote_project_dialog(&ctx);
+        self.vnc_quit_dialog(&ctx);
         self.note_rename_frame(&ctx);
         self.preview_appearance(&ctx);
         self.prune_unpainted(&ctx);

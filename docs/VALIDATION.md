@@ -5625,3 +5625,20 @@ was inspected. Logs and captures are in
 `/private/tmp/terminator-linux-ui-iJz4Fk/`. The archived release artifacts were
 not edited. Coverage, packaging, publication, and the complete release pipeline
 were not rerun. The installed GUI and live user sessions were not changed.
+
+## SSH hosts: Properties, import, settings (2026-10-29)
+
+Added `UpdateRemoteProject` and `last_connected` (`ssh-edit-v1`), Settings → SSH
+(`ssh-settings-v1`), main-pane SSH host Properties and import pages, collapsible
+Hosts groups, recent-first sort, a filter that connects to typed
+`user@host:port`, and one fix button per classified SSH error.
+
+Unit tests cover the edit rules (rename keeps layout and last connection; a
+new host needs an idle project and returns the old SSH options; duplicates and
+unknown ids are refused), tuning options and validation, recent-first sorting
+and typed-target parsing. Workspace Clippy (all targets and features, warnings
+denied), the sarah limits and all workspace tests passed, except
+`release::tests::windows_failure_still_collects_artifacts` in xtask, which
+fails at a `git push` to its temporary fixture remote in this worktree and uses
+no changed code. The GUI was not launched and no native fixture or live SSH
+host was exercised.

@@ -69,6 +69,7 @@ pub(crate) fn open_state(
     catalog_paths: &Option<Paths>,
 ) -> Result<(storage::Store, State)> {
     let (mut store, mut state) = storage::Store::open(paths)?;
+    terminator_core::ssh::set_tuning(state.settings.ssh_tuning());
     recover_loaded(&mut state);
     drop_non_resumable(paths, &mut state);
     if let Some(root) = &catalog_paths {
@@ -152,7 +153,14 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::remote::HOSTS_CAPABILITY.into(),
         terminator_core::remote::FORWARDING_CAPABILITY.into(),
         terminator_core::remote::TRANSFER_CAPABILITY.into(),
+        terminator_core::remote::EDIT_CAPABILITY.into(),
+        terminator_core::ssh::TUNING_CAPABILITY.into(),
         vnc::FEATURES_CAPABILITY.into(),
+        vnc::LABELS_CAPABILITY.into(),
+        vnc::ERRORS_CAPABILITY.into(),
+        vnc::START_COMMAND_CAPABILITY.into(),
+        vnc::SHM_CAPABILITY.into(),
+        vnc::DETACH_TIMEOUT_CAPABILITY.into(),
     ];
     if catalog {
         state.daemon_build = Some(generations::build_identity(
@@ -166,9 +174,11 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
     Ok(())
 }
 
-/// Removes helpers left by crashed daemons and stages this one's.
+/// Removes helpers and shared VNC framebuffers left by crashed daemons and
+/// stages this one's helper.
 pub(crate) fn stage_helper(paths: &Paths) -> Result<helper::Helper> {
     helper::cleanup_abandoned(&paths.data)?;
+    crate::vnc_session::shm::remove_stale_files(&paths.runtime);
     helper::Helper::stage(
         &std::env::current_exe()?.with_file_name(exe_name("terminator-hook")),
         &paths.data,

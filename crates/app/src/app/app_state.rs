@@ -115,15 +115,14 @@ pub struct App {
     pub(crate) browser_host: browser_host::BrowserHost,
     pub(crate) visible_browsers: Vec<browser_host::VisibleBrowser>,
     pub(crate) browser_urls: HashMap<String, String>,
+    /// Browser tab icons by icon URL; never evicted (one entry per site).
+    pub(crate) favicons: HashMap<String, crate::browser::favicon::Favicon>,
     pub(crate) browser_submit: Option<(String, BrowserTarget)>,
     pub(crate) remote_ui: crate::remote_ui::RemoteUi,
     pub(crate) vnc_fullscreen: Option<Tab>,
     pub(crate) vnc_views: HashMap<String, crate::vnc_ui::VncViewState>,
     pub(crate) vnc_sidebar: crate::vnc_ui::VncSidebarState,
     pub(crate) visible_vnc: HashSet<String>,
-    /// Session whose last VNC tab closed: the disconnect is sent after the
-    /// dock is checked back in, and only when no tab still shows it.
-    pub(crate) pending_vnc_disconnect: Option<String>,
     pub(crate) player: player::Controller,
     pub(crate) markdown: markdown::Previews,
     pub(crate) visible_images: HashSet<PathBuf>,
@@ -242,6 +241,8 @@ pub struct App {
     pub(crate) settings_session: bool,
     pub(crate) settings_pending: Option<settings_ui::SettingsPending>,
     pub(crate) player_open: bool,
+    /// The VNC address book fills the main pane (same pattern as Player).
+    pub(crate) vnc_page_open: bool,
     pub(crate) editor_preset: usize,
     pub(crate) test_editor: bool,
     pub(crate) settings_draft: Settings,
@@ -312,6 +313,10 @@ pub struct App {
     pub(crate) native_close_after_save: Option<PathBuf>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pub(crate) pending_app_quit: bool,
+    /// Quit is waiting on "VNC sessions stay connected"; and whether that
+    /// was answered for this quit.
+    pub(crate) vnc_quit_prompt: bool,
+    pub(crate) vnc_quit_confirmed: bool,
     /// Deferred native closes: path, force flag, and the issuing view.
     /// `:q!` takes every view; a plain close removes only its issuing
     /// view, preserving other copies of the same file.
@@ -369,6 +374,8 @@ pub struct App {
     pub(crate) pending_quit_all: Option<bool>,
     pub(crate) open_path: bool,
     pub(crate) pick_audio: bool,
+    /// Open the picker for RealVNC `.vnc` files to import.
+    pub(crate) pick_vnc_files: bool,
     pub(crate) pick_audio_dir: bool,
     pub(crate) path_text: String,
     pub(crate) last_save: Instant,

@@ -11,25 +11,23 @@ fn project(id: &str, host: &str, group: Option<&str>) -> RemoteProject {
         layout: serde_json::Value::Null,
         group: group.map(Into::into),
         forwards: Vec::new(),
+        last_connected: 0,
     }
 }
-fn names(groups: &[HostGroup<'_>]) -> Vec<(Option<String>, String, Vec<String>)> {
+fn names(groups: &[HostGroup<'_>]) -> Vec<(Option<String>, Vec<String>)> {
     groups
         .iter()
-        .flat_map(|g| {
-            g.hosts.iter().map(|(host, projects)| {
-                (
-                    g.name.map(Into::into),
-                    host.clone(),
-                    projects.iter().map(|p| p.name.clone()).collect(),
-                )
-            })
+        .map(|g| {
+            (
+                g.name.map(Into::into),
+                g.projects.iter().map(|p| p.name.clone()).collect(),
+            )
         })
         .collect()
 }
 
 #[test]
-fn hosts_group_by_folder_then_host_with_ungrouped_last() {
+fn hosts_group_by_folder_with_ungrouped_last() {
     let projects = vec![
         project("web", "beta", None),
         project("db", "alpha", Some("prod")),
@@ -37,17 +35,42 @@ fn hosts_group_by_folder_then_host_with_ungrouped_last() {
         project("ci", "gamma", Some("Lab")),
     ];
     assert_eq!(
-        names(&group_hosts(&projects, "")),
+        names(&group_hosts(&projects, "", false)),
         vec![
-            (Some("Lab".into()), "gamma".into(), vec!["ci".into()]),
-            (
-                Some("prod".into()),
-                "alpha".into(),
-                vec!["api".into(), "db".into()]
-            ),
-            (None, "beta".into(), vec!["web".into()]),
+            (Some("Lab".into()), vec!["ci".into()]),
+            (Some("prod".into()), vec!["api".into(), "db".into()]),
+            (None, vec!["web".into()]),
         ]
     );
+}
+
+#[test]
+fn recent_first_sorts_by_last_connection_then_name() {
+    let mut projects = vec![
+        project("a", "alpha", None),
+        project("b", "beta", None),
+        project("c", "gamma", None),
+    ];
+    projects[1].last_connected = 200;
+    projects[2].last_connected = 100;
+    assert_eq!(
+        names(&group_hosts(&projects, "", true)),
+        vec![(None, vec!["b".into(), "c".into(), "a".into()])]
+    );
+}
+
+#[test]
+fn typed_targets_parse_user_host_and_port() {
+    let target = parse_target(" me@build.example.com:2222 ").unwrap();
+    assert_eq!(target.username, "me");
+    assert_eq!(target.host, "build.example.com");
+    assert_eq!(target.port, Some(2222));
+    let plain = parse_target("alias").unwrap();
+    assert_eq!((plain.username.as_str(), plain.port), ("", None));
+    assert_eq!(parse_target("fe80::1").unwrap().host, "fe80::1");
+    for bad in ["", "me@", "host:0", "host:port", "-oProxyCommand=x", "a b"] {
+        assert!(parse_target(bad).is_none(), "{bad}");
+    }
 }
 
 #[test]
@@ -57,9 +80,9 @@ fn host_filter_matches_name_host_root_and_group() {
         project("db", "alpha", Some("Prod")),
     ];
     let only = |filter| {
-        names(&group_hosts(&projects, filter))
+        names(&group_hosts(&projects, filter, false))
             .into_iter()
-            .flat_map(|(_, _, p)| p)
+            .flat_map(|(_, p)| p)
             .collect::<Vec<_>>()
     };
     assert_eq!(only("PROD"), ["db"]);

@@ -48,6 +48,10 @@ impl Default for Settings {
             native_vim: true,
             inlay_hints: true,
             keybindings: Settings::default_keybindings(),
+            vnc_detached_timeout_minutes: 30,
+            ssh_keepalive_seconds: crate::ssh::Tuning::DEFAULT.keepalive_seconds,
+            ssh_reuse_minutes: crate::ssh::Tuning::DEFAULT.reuse_minutes,
+            ssh_connect_timeout_seconds: crate::ssh::Tuning::DEFAULT.connect_timeout_seconds,
         }
     }
 }
@@ -89,6 +93,14 @@ impl Settings {
         .into()
     }
 
+    pub fn ssh_tuning(&self) -> crate::ssh::Tuning {
+        crate::ssh::Tuning {
+            keepalive_seconds: self.ssh_keepalive_seconds,
+            reuse_minutes: self.ssh_reuse_minutes,
+            connect_timeout_seconds: self.ssh_connect_timeout_seconds,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), SettingsError> {
         // Disabled ntfy accepts any channel/machine contents (including
         // leftovers) so turning the toggle off always saves. Enabling
@@ -123,6 +135,16 @@ impl Settings {
         if !(1..=30).contains(&self.editor_close_timeout_secs) {
             return Err(SettingsError::EditorCloseTimeout {
                 seconds: self.editor_close_timeout_secs,
+            });
+        }
+        if self.vnc_detached_timeout_minutes > 1440 {
+            return Err(SettingsError::VncDetachedTimeout {
+                minutes: self.vnc_detached_timeout_minutes,
+            });
+        }
+        if !self.ssh_tuning().valid() {
+            return Err(SettingsError::SshTuning {
+                tuning: self.ssh_tuning(),
             });
         }
         Ok(())

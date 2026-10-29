@@ -52,9 +52,25 @@ fn vnc_session(id: &str, status: VncSessionStatus) -> VncSession {
         view_only: false,
         status,
         error: None,
+        error_kind: None,
         created: 0,
         generation: "fixture".into(),
     }
+}
+
+#[test]
+fn a_password_required_failure_opens_the_password_prompt_once() {
+    let (mut app, _ctx, _dir) = fixture();
+    let mut session = vnc_session("s1", VncSessionStatus::Failed);
+    session.error_kind = Some(terminator_core::vnc::VncErrorKind::PasswordRequired);
+    app.vnc_auto_password_prompt("s1", &session);
+    let view = app.vnc_views.get_mut("s1").expect("the prompt view exists");
+    assert!(!view.save_profile, "the pane asks for the password");
+    assert_eq!(view.draft_port, "5900");
+    // The user went back to all hosts: the same failure must not force it again.
+    view.save_profile = true;
+    app.vnc_auto_password_prompt("s1", &session);
+    assert!(app.vnc_views.get("s1").is_some_and(|v| v.save_profile));
 }
 
 #[test]
@@ -121,43 +137,19 @@ fn pruning_keeps_view_state_for_open_tabs_and_drafts_only() {
 }
 
 #[test]
-fn a_closed_vnc_tab_disconnects_only_when_no_copy_remains() {
+fn a_detached_vnc_session_is_reported_without_a_tab() {
     let (mut app, _ctx, _dir) = fixture();
-    let (jobs, requests) = mpsc::channel();
-    app.jobs = jobs.into();
-    // Two tabs still show the session: the close must keep it connected.
     app.layouts.insert(
         "a".into(),
-        Workspace::from_layout(DockState::new(vec![
-            vnc_tab("t1", "s1", "dev"),
-            vnc_tab("t2", "s1", "dev"),
-        ])),
+        Workspace::from_layout(DockState::new(vec![vnc_tab("t1", "s1", "dev")])),
     );
-    app.pending_vnc_disconnect = Some("s1".into());
-    app.drain_pending_vnc_disconnect();
     assert!(
-        requests.try_recv().is_err(),
-        "a remaining tab keeps the remote session"
+        app.vnc_session_has_tab("s1"),
+        "an open tab shows the session"
     );
-    assert_eq!(app.pending_vnc_disconnect, None, "the request is consumed");
-
-    // The last copy is gone: the disconnect lands exactly once.
-    app.layouts.insert(
-        "a".into(),
-        Workspace::from_layout(DockState::new(vec![vnc_tab("t1", "other", "dev")])),
-    );
-    app.pending_vnc_disconnect = Some("s1".into());
-    app.drain_pending_vnc_disconnect();
-    match requests.try_recv() {
-        Ok(Job::Control(request, _)) => assert!(
-            matches!(*request, Request::VncDisconnect { session } if session == "s1"),
-            "the deferred close disconnects the session"
-        ),
-        _ => panic!("expected one VNC disconnect request"),
-    }
     assert!(
-        requests.try_recv().is_err(),
-        "a drained close never queues a second disconnect"
+        !app.vnc_session_has_tab("s2"),
+        "a session whose tab closed is detached, not disconnected"
     );
 }
 
@@ -293,7 +285,11 @@ fn repeated_vnc_frames_do_not_overwrite_a_new_local_clipboard() {
                     error: None,
                     image: None,
                     region: None,
+                    patches: Vec::new(),
+                    cursor_serial: 0,
+                    shm_failed: false,
                     clipboard: Some(text.into()),
+                    stats: None,
                 },
             );
         });
@@ -344,4 +340,92 @@ fn hidden_vnc_views_do_not_capture_application_shortcuts() {
         .unwrap()
         .visible_last_frame = false;
     assert!(!app.vnc_captures_shortcuts(&ctx));
+}
+
+#[test]
+fn connecting_a_host_with_a_live_session_reattaches_it() {
+    let (mut app, _ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.selected = Some("a".into());
+    let mut session = vnc_session("s1", VncSessionStatus::Connected);
+    session.profile_id = Some("p1".into());
+    app.state.vnc_sessions = vec![session];
+    let profile = terminator_core::vnc::VncProfile {
+        id: "p1".into(),
+        name: "dev".into(),
+        host: "127.0.0.1".into(),
+        port: 5900,
+        username: String::new(),
+        password: String::new(),
+        shared: true,
+        view_only: false,
+        last_connected: 0,
+        options: Default::default(),
+        credential_saved: true,
+        labels: Vec::new(),
+    };
+    app.connect_vnc_profile(&profile, None);
+    while let Ok(job) = requests.try_recv() {
+        if let Job::Control(request, _) = job {
+            assert!(
+                !matches!(*request, Request::VncConnect { .. }),
+                "a live session must not get a second connection"
+            );
+        }
+    }
+}
+
+#[test]
+fn quitting_with_live_vnc_sessions_asks_and_can_disconnect_them() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.vnc_sessions = vec![
+        vnc_session("live", VncSessionStatus::Connected),
+        vnc_session("gone", VncSessionStatus::Disconnected),
+    ];
+    assert!(!app.vnc_quit_allowed(), "live sessions ask first");
+    assert!(app.vnc_quit_prompt);
+
+    app.answer_vnc_quit(&ctx, crate::vnc_ui::QuitChoice::Cancel);
+    assert!(!app.vnc_quit_prompt && !app.vnc_quit_confirmed);
+    assert!(requests.try_recv().is_err(), "cancel sends nothing");
+
+    assert!(!app.vnc_quit_allowed());
+    app.answer_vnc_quit(&ctx, crate::vnc_ui::QuitChoice::Disconnect);
+    match requests.try_recv() {
+        Ok(Job::Control(request, _)) => assert!(
+            matches!(*request, Request::VncDisconnect { session } if session == "live"),
+            "only the live session is disconnected"
+        ),
+        _ => panic!("expected one VNC disconnect"),
+    }
+    assert!(app.vnc_quit_allowed(), "answered once per quit");
+}
+
+#[test]
+fn an_app_restart_does_not_ask_about_live_vnc_sessions() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.state.vnc_sessions = vec![vnc_session("live", VncSessionStatus::Connected)];
+    app.restart_pending = true;
+    assert!(app.vnc_quit_allowed(), "the restarted GUI reattaches them");
+    assert!(!app.vnc_quit_prompt);
+}
+
+#[test]
+fn leaving_vnc_fullscreen_restores_shortcut_capture() {
+    let (mut app, ctx, _dir) = fixture();
+    let view = app.vnc_views.entry("s1".into()).or_default();
+    view.capture_before_fullscreen = Some(false);
+    view.capture_shortcuts = true;
+    app.vnc_fullscreen = Some(vnc_tab("t1", "s1", "dev"));
+    app.exit_vnc_fullscreen(&ctx);
+    let view = &app.vnc_views["s1"];
+    assert!(app.vnc_fullscreen.is_none());
+    assert!(
+        !view.capture_shortcuts,
+        "capture goes back to its old value"
+    );
+    assert!(view.capture_before_fullscreen.is_none());
 }

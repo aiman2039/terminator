@@ -24,8 +24,15 @@ OpenSSH config aliases (with their `User`, `Port`, `ProxyJump` and
 `IdentityFile`), explicit users/ports, identity files, and an SSH agent are
 supported. A blank port uses the SSH config. Every OpenSSH call for a host
 shares one multiplexing master through a control socket in the runtime
-directory (`ControlMaster=auto`, `ControlPersist=10m`), so Explorer, Git,
+directory (`ControlMaster=auto`, `ControlPersist`), so Explorer, Git,
 editor control and transfers ride an existing connection.
+
+Settings → SSH sets the keep-alive interval (`ServerAliveInterval`, default
+15 s, three missed replies end the connection), how long the shared connection
+stays open after its last terminal (`ControlPersist`, default 10 min) and the
+connect timeout (default 10 s). They apply to OpenSSH processes the daemon
+starts after the change. The section needs `ssh-settings-v1`; older daemons
+keep the defaults.
 
 SSH terminals are interactive: OpenSSH prompts in the terminal for passwords,
 key passphrases and 2FA codes, and asks about an unknown host key there. The
@@ -98,7 +105,45 @@ removed while a transfer runs. VNC SFTP transfers share the same code.
 
 ## Hosts sidebar
 
-The Hosts tool lists SSH projects grouped by their optional group, then by host, with a search filter. The dot is green while `ssh -O check` finds a live OpenSSH master on the project's control socket; the check runs off the GUI thread every 10 seconds, only while the sidebar is visible. "Open terminal" selects the project and opens a terminal tab. Quick connect takes a `~/.ssh/config` alias with no saved project, probes its login directory with `pwd -P`, adds a project rooted there and opens a terminal. Grouping, removal and quick connect need a daemon advertising `ssh-hosts-v1`. Removal is refused while the project has live terminals, VNC sessions or running transfers, and it stops the project's OpenSSH master unless another project or live session uses the same socket.
+The Hosts tool lists SSH projects in collapsible groups (state kept in
+`ui-preferences.json`), each row showing `user@host:port · root · last
+connection`. The History toggle sorts each group by last connection instead of
+by name. The dot is green while `ssh -O check` finds a live OpenSSH master on
+the project's control socket; the check runs off the GUI thread every 10
+seconds, only while the sidebar is visible. The terminal icon (or a
+double-click on the name) opens a terminal; the row menu holds Properties,
+Duplicate, Set group, Port forwards and Remove.
+
+The filter field also connects: Up/Down move a selection over the visible
+hosts and config aliases, and Enter opens the selected or first match. With no
+match, Enter quick-connects a typed `host`, `user@host`, `host:port` or
+`user@host:port`. Quick connect probes the login directory with `pwd -P`, adds
+a project rooted there and opens a terminal. A failed quick connect shows one
+fix: "Set up…" (sign-in needed: opens Properties, where the user sets the path
+and signs in through a terminal), "Review host key", or "Retry".
+
+New, Properties and Duplicate open SSH host Properties in the main pane (like
+VNC Properties): config alias picker, host, port and user, name, remote path
+("Login directory" probes it), group, and folded key files (`~/` expands to the
+home directory). For a host that is not a config alias, `ssh -G` runs off the
+GUI thread and the page shows what `~/.ssh/config` sets for it. "Test
+connection" probes without saving. Errors carry the same one fix button; for a
+sign-in error it saves and opens a terminal. Saving an existing project sends
+`UpdateRemoteProject` (`ssh-edit-v1`): name and group always change; a new
+host, user, port, keys or root is refused while the project has live
+terminals, VNC sessions, transfers or active forwards, and afterwards stops the
+old OpenSSH master unless something else shares it. Layout, forwards and the
+last-connection time are kept. Duplicate copies a project without id, layout or
+forwards; saving a copy with the same host and root is refused. The daemon
+records `last_connected` when an SSH shell starts (`ssh-edit-v1`).
+
+The key icon in the Hosts header opens a main-pane import page that lists
+`~/.ssh/config` aliases with no saved project. Chosen hosts are added one at a
+time, either at their login directory (one batch connection each, so hosts
+needing a password or 2FA fail and are listed) or at one path for all (no
+connection), with an optional group.
+
+Grouping, removal and quick connect need a daemon advertising `ssh-hosts-v1`. Removal is refused while the project has live terminals, VNC sessions or running transfers, and it stops the project's OpenSSH master unless another project or live session uses the same socket.
 
 ## Port forwarding
 
@@ -114,7 +159,7 @@ starts a batch master (`ssh -fN -oControlMaster=yes`), which needs key or agent
 authentication; otherwise sign in through an SSH terminal first and retry. Such a
 dedicated master has no idle timeout and is exited when its last forward stops,
 unless a live terminal or VNC session joined it. A master started by a terminal
-keeps its 10-minute `ControlPersist`; idle forward listeners do not keep it
+keeps its `ControlPersist` (Settings → SSH); idle forward listeners do not keep it
 alive. Forwards end with their master, and status (rechecked with `ssh -O check`
 every 10 seconds while forwards are shown) reflects that. A local port already
 in use is reported before the forward is requested.

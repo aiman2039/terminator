@@ -5,11 +5,15 @@ pub(super) const MODIFIER_KEYSYMS: [(u8, u32); 4] = [
     (1, 0xFFE1), // Shift_L
     (2, 0xFFE3), // Control_L
     (4, 0xFFE9), // Alt_L
-    (8, 0xFFEB), // Meta_L (Command on macOS)
+    (8, 0xFFEB), // Super_L (Command on macOS when it sends Super)
 ];
 
-/// Local modifier state reduced to the remote's four keys.
-pub(super) fn modifier_bits(modifiers: egui::Modifiers) -> u8 {
+/// Local modifier state reduced to the remote's four keys. `command` picks
+/// what the Mac Command key presses.
+pub(super) fn modifier_bits(
+    modifiers: egui::Modifiers,
+    command: terminator_core::vnc::CommandKey,
+) -> u8 {
     let mut bits = 0u8;
     if modifiers.shift {
         bits |= 1;
@@ -22,7 +26,10 @@ pub(super) fn modifier_bits(modifiers: egui::Modifiers) -> u8 {
     }
     // `command` mirrors Ctrl away from macOS; on macOS it is Command.
     if modifiers.command && !modifiers.ctrl {
-        bits |= 8;
+        bits |= match command {
+            terminator_core::vnc::CommandKey::Control => 2,
+            terminator_core::vnc::CommandKey::Super => 8,
+        };
     }
     bits
 }

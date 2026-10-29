@@ -22,6 +22,14 @@ fn worktree_requests_outlast_their_git_timeout() {
 }
 
 #[test]
+fn keychain_requests_wait_for_a_permission_prompt() {
+    // A macOS keychain prompt needs the user; 3 s reported a save that
+    // then succeeded as an uncertain mutation.
+    let forget = Request::VncForgetCredential { id: "p".into() };
+    assert!(forget.response_deadline() >= Duration::from_mins(1));
+}
+
+#[test]
 fn ssh_errors_survive_the_wire_as_typed_errors() {
     let error = crate::ssh::SshError {
         failure: crate::ssh::SshFailure::UnknownHostKey,

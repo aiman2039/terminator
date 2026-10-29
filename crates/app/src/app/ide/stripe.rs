@@ -223,11 +223,7 @@ impl App {
                     StripeTool::Projects => {
                         self.preferences.left_tool.is_none() && !self.preferences.left_agents
                     }
-                    StripeTool::Tool(SidebarTool::Agents) => {
-                        self.preferences.left_tool == Some(SidebarTool::Agents)
-                            || (self.preferences.left_tool.is_none()
-                                && self.preferences.left_agents)
-                    }
+                    StripeTool::Tool(SidebarTool::Agents) => self.left_agents_shown(),
                     StripeTool::Tool(tool) => self.preferences.left_tool == Some(tool),
                 }
         }
@@ -242,6 +238,9 @@ impl App {
                 self.preferences.left_visible = false;
             }
             return;
+        }
+        if matches!(tool, StripeTool::Tool(SidebarTool::Vnc)) {
+            self.show_vnc_page();
         }
         if right {
             match tool {

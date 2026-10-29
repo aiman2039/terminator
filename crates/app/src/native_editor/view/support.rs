@@ -172,22 +172,7 @@ impl App {
                 .and_then(|doc| doc.doc.as_ref())
                 .map(Doc::text);
             if let Some(text) = text {
-                let state = if self.native_dirty(path) {
-                    "Unsaved changes"
-                } else {
-                    "Saved"
-                };
-                let cursor = self.native_docs.get(path).map(|doc| doc.engine.cursor());
-                let status = cursor.map_or_else(
-                    || state.to_owned(),
-                    |cursor| {
-                        format!(
-                            "Ln {}, Col {}  ·  {state}",
-                            cursor.line.saturating_add(1),
-                            cursor.col.saturating_add(1)
-                        )
-                    },
-                );
+                let status = self.native_preview_status(path, mode);
                 let remote_base = std::path::PathBuf::from("/__terminator_remote__")
                     .join(path.file_name().unwrap_or_default());
                 let preview = self.markdown.snapshot(
@@ -233,6 +218,30 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Save state for the preview pill. Preview-only mode adds Ln/Col; a
+    /// split already shows it under its source view.
+    fn native_preview_status(&self, path: &Path, mode: Option<markdown::Mode>) -> String {
+        let state = if self.native_dirty(path) {
+            "Unsaved changes"
+        } else {
+            "Saved"
+        };
+        self.native_docs
+            .get(path)
+            .filter(|_| mode == Some(markdown::Mode::Preview))
+            .map(|doc| doc.engine.cursor())
+            .map_or_else(
+                || state.to_owned(),
+                |cursor| {
+                    format!(
+                        "Ln {}, Col {}  ·  {state}",
+                        cursor.line.saturating_add(1),
+                        cursor.col.saturating_add(1)
+                    )
+                },
+            )
     }
 
     pub(super) fn native_lsp_sync(&mut self, path: &Path, language: Language) {

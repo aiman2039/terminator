@@ -52,9 +52,8 @@ impl App {
                 self.worktree_open = true;
             }
         }
-        if appearance::sidebar_action(ui, "Monitor", "New SSH project").clicked() {
-            let generation = self.remote_ui.open_new();
-            let _ = self.jobs.send(Job::SshConfigHosts(generation));
+        if appearance::sidebar_action(ui, "Monitor", "New SSH host").clicked() {
+            self.new_ssh_host();
         }
         let add = appearance::sidebar_action(ui, "Plus", "New project");
         #[cfg(feature = "test-support")]

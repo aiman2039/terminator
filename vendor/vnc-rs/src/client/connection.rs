@@ -231,6 +231,7 @@ impl VncInner {
                     }
                     ClientMsg::ClientCutText(text)
                 }
+                X11Event::SetEncodings(encodings) => ClientMsg::SetEncodings(encodings),
             };
             Ok(msg)
         }
@@ -595,6 +596,7 @@ where
                     desktop.observe(&update);
                     output_func(VncEvent::DesktopUpdate(update)).await?;
                 }
+                output_func(VncEvent::UpdateEnd).await?;
             }
             // SetColorMapEntries,
             ServerMsg::Bell => {

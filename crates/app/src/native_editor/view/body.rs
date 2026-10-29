@@ -97,7 +97,7 @@ impl ViewPass<'_> {
         }
     }
 
-    fn read_only(&self) -> bool {
+    pub(super) fn read_only(&self) -> bool {
         self.frame.rename_applying || self.frame.remote_snapshot
     }
 
@@ -334,6 +334,7 @@ impl ViewPass<'_> {
             }),
             soft_wrap,
             font_size: if frame.is_markdown { 14.0 } else { 13.0 },
+            line_spacing: if frame.is_markdown { 1.3 } else { 1.0 },
             scroll_fraction: if mode == markdown::Mode::Split {
                 frame.preview.scroll
             } else {
@@ -386,15 +387,20 @@ impl ViewPass<'_> {
             markdown::Mode::Edit => Some(source(ui)),
             markdown::Mode::Split => {
                 let width = ui.available_width();
-                Some(
-                    egui::Panel::left(egui::Id::unique(("native-markdown-editor", path)))
-                        .resizable(true)
-                        .default_size(width * 0.5)
-                        .size_range(80.0..=(width - 80.0).max(80.0))
-                        .frame(egui::Frame::NONE)
-                        .show(ui, source)
-                        .inner,
-                )
+                let shown = egui::Panel::left(egui::Id::unique(("native-markdown-editor", path)))
+                    .resizable(true)
+                    .default_size(width * 0.5)
+                    .size_range(80.0..=(width - 80.0).max(80.0))
+                    .frame(egui::Frame::NONE)
+                    .show(ui, source);
+                // A clear divider between source and preview (MarkEdit-like).
+                let color = ui.visuals().weak_text_color().gamma_multiply(0.5);
+                ui.painter().vline(
+                    shown.response.rect.right(),
+                    shown.response.rect.y_range(),
+                    egui::Stroke::new(1.0, color),
+                );
+                Some(shown.inner)
             }
         }
     }

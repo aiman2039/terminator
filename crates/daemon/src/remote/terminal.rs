@@ -166,6 +166,7 @@ mod tests {
             layout: serde_json::Value::Null,
             group: None,
             forwards: Vec::new(),
+            last_connected: 0,
         };
         let (cmd, meta, _) = prepare(PrepareInput {
             project: &p,

@@ -3,6 +3,7 @@ mod files;
 mod forwards;
 mod git;
 mod host_keys;
+mod projects;
 pub(crate) mod terminal;
 pub(crate) mod transfer;
 mod transfers;
@@ -380,6 +381,7 @@ mod tests {
             layout: serde_json::Value::Null,
             group: None,
             forwards: Vec::new(),
+            last_connected: 0,
         }
     }
     #[test]

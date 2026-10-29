@@ -219,6 +219,10 @@ fn merge_inventory(aggregate: &mut State, (owner, state, error): Inventory) {
         error: &error,
         active: &aggregate.generation,
     });
+    // A VNC connection lives only in a running daemon. A retired or
+    // unreachable owner's saved records are dead and cannot be
+    // disconnected, so they are not shown.
+    let running = error.is_none() && !generations::historical(&owner, Some(&aggregate.generation));
     aggregate.generations.push(generations::Health {
         live_sessions: state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
         owner,
@@ -228,9 +232,11 @@ fn merge_inventory(aggregate: &mut State, (owner, state, error): Inventory) {
         helper: state.attachment_helper_executable.clone(),
     });
     aggregate.sessions.extend(state.sessions.iter().cloned());
-    aggregate
-        .vnc_sessions
-        .extend(state.vnc_sessions.iter().cloned());
+    if running {
+        aggregate
+            .vnc_sessions
+            .extend(state.vnc_sessions.iter().cloned());
+    }
     aggregate.agents.extend(state.agents.iter().cloned());
     aggregate
         .notifications
@@ -240,5 +246,59 @@ fn merge_inventory(aggregate: &mut State, (owner, state, error): Inventory) {
         .extend(state.terminal_notices.iter().cloned());
     if present {
         aggregate.presence.extend(state.presence.iter().cloned());
+    }
+}
+
+#[cfg(test)]
+mod vnc_merge_tests {
+    use super::*;
+
+    fn owner(id: &str, status: generations::Status) -> generations::Generation {
+        generations::Generation {
+            id: id.into(),
+            data: "/tmp/d".into(),
+            runtime: "/tmp/r".into(),
+            version: "1".into(),
+            build: "b".into(),
+            protocol: 1,
+            catalog: 1,
+            status,
+            pid: None,
+        }
+    }
+
+    fn with_vnc(id: &str) -> Arc<State> {
+        let session = serde_json::from_value(serde_json::json!({
+            "id": id, "project_id": "", "label": "", "host": "h", "port": 5900,
+            "width": 0, "height": 0, "view_only": false, "status": "connected",
+            "created": 0, "generation": "g"
+        }))
+        .expect("minimal VNC session");
+        let mut state = State::default();
+        state.vnc_sessions.push(session);
+        Arc::new(state)
+    }
+
+    #[test]
+    fn retired_and_unreachable_owners_show_no_vnc_sessions() {
+        let mut aggregate = State {
+            generation: "active".into(),
+            ..State::default()
+        };
+        let draining = owner("old", generations::Status::Draining);
+        merge_inventory(&mut aggregate, (draining, with_vnc("live"), None));
+        let retired = owner("gone", generations::Status::Retired);
+        merge_inventory(&mut aggregate, (retired, with_vnc("dead"), None));
+        let broken = owner("down", generations::Status::Draining);
+        merge_inventory(
+            &mut aggregate,
+            (broken, with_vnc("lost"), Some("unreachable".into())),
+        );
+        let ids: Vec<&str> = aggregate
+            .vnc_sessions
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["live"]);
     }
 }

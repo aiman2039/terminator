@@ -42,7 +42,7 @@ impl ViewPass<'_> {
 
     fn header_title(&self, ui: &mut egui::Ui) {
         let files = &self.frame.files;
-        let reserved = if self.frame.is_markdown { 260.0 } else { 200.0 };
+        let reserved = if self.frame.is_markdown { 370.0 } else { 200.0 };
         let title_width = (ui.available_width() - reserved).clamp(48.0, 260.0);
         ui.add_sized(
             [title_width, appearance::TOOLBAR_BUTTON],
@@ -66,7 +66,9 @@ impl ViewPass<'_> {
     fn header_mode(&mut self, ui: &mut egui::Ui) -> Option<usize> {
         if self.frame.is_markdown {
             self.markdown_modes(ui);
-            return self.heading_menu(ui);
+            let jump = self.heading_menu(ui);
+            self.markdown_format(ui);
+            return jump;
         }
         if self.frame.vim {
             // Modeless editing has no mode to report: the badge

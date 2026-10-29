@@ -263,6 +263,12 @@ pub struct UiPreferences {
     /// Hosts sidebar search text.
     #[serde(default)]
     pub hosts_filter: String,
+    /// Hosts sidebar groups shown collapsed; "" is Ungrouped.
+    #[serde(default)]
+    pub hosts_collapsed: HashSet<String>,
+    /// Hosts sidebar lists the most recently connected projects first.
+    #[serde(default)]
+    pub hosts_recent_first: bool,
     /// Most recently opened native editor files, newest first.
     #[serde(default)]
     pub recent_native_files: Vec<PathBuf>,
@@ -339,6 +345,8 @@ impl Default for UiPreferences {
             history_sort: HistorySort::LatestActivity,
             history_filter: String::new(),
             hosts_filter: String::new(),
+            hosts_collapsed: HashSet::new(),
+            hosts_recent_first: false,
             recent_native_files: Vec::new(),
             pinned_native_files: HashSet::new(),
             playlists: Vec::new(),

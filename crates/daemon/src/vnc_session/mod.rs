@@ -1,8 +1,13 @@
 mod connection;
 pub(crate) mod credentials;
+mod dirty;
 mod input;
 mod quality;
 mod reconnect;
+pub(crate) mod shm;
+mod ssh_steps;
+mod stats;
+mod thumbnail;
 mod transfer;
 mod transport;
 
@@ -11,6 +16,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use flate2::{Compression, write::ZlibEncoder};
 use std::{
     collections::HashMap,
+    fs,
     io::Write,
     sync::{Arc, Mutex},
     thread,
@@ -54,6 +60,20 @@ pub(crate) struct VncRuntime {
     /// this revision can take an incremental rectangle.
     encoded_revision: u64,
     last_poll: Option<Instant>,
+    /// Shared-memory framebuffer for `vnc-shm-v1` viewers; created on the
+    /// first such request and replaced on resize. Dropping it removes the file.
+    shm: Option<terminator_sys::SharedFrameWriter>,
+    /// Rectangles changed since the last shared-memory publish.
+    shm_dirty: dirty::DirtyRects,
+    /// Revision the shared-memory file holds; 0 before the first publish.
+    shm_revision: u64,
+    /// Files created so far; each resize gets a new file name.
+    shm_files: u32,
+    /// Bumped whenever the cursor image changes.
+    pub(crate) cursor_serial: u64,
+    pub(crate) stats: stats::UpdateStats,
+    /// An incremental update request is out and its update has not ended.
+    update_pending: bool,
 }
 
 impl VncRuntime {
@@ -77,6 +97,13 @@ impl VncRuntime {
             dirty: None,
             encoded_revision: 0,
             last_poll: None,
+            shm: None,
+            shm_dirty: dirty::DirtyRects::Full,
+            shm_revision: 0,
+            shm_files: 0,
+            cursor_serial: 0,
+            stats: stats::UpdateStats::default(),
+            update_pending: false,
         }
     }
 
@@ -108,6 +135,7 @@ impl VncRuntime {
         }
         // Every pixel changed: only a full frame can describe this now.
         self.dirty = None;
+        self.shm_dirty = dirty::DirtyRects::Full;
         self.revision = self.revision.saturating_add(1);
     }
 
@@ -115,6 +143,7 @@ impl VncRuntime {
         if region.is_empty() {
             return;
         }
+        self.shm_dirty.add(region);
         self.dirty = Some(match self.dirty {
             Some(previous) => previous.union(region),
             None => region,
@@ -230,6 +259,8 @@ impl VncRuntime {
             cursor: self.cursor.clone(),
             monitors: self.monitors.clone(),
             resize_supported: self.resize_supported,
+            shm: None,
+            cursor_serial: self.cursor_serial,
             session: session.to_owned(),
             width: self.width,
             height: self.height,
@@ -330,6 +361,7 @@ fn validate_project(state: &terminator_core::State, project: &str) -> Result<()>
 }
 
 mod connect;
+pub(crate) use connect::VncFrameRequest;
 struct RunVncThreadInput {
     shared: Arc<Shared>,
     runtime: Arc<Mutex<VncRuntime>>,
@@ -357,6 +389,7 @@ fn run_vnc_thread(input: RunVncThreadInput) {
             runtime,
             session_id,
             message: "Could not initialize async runtime".into(),
+            kind: terminator_core::vnc::VncErrorKind::Other,
         });
         return;
     };
@@ -371,85 +404,13 @@ fn run_vnc_thread(input: RunVncThreadInput) {
 
 mod events;
 use events::{ApplyVncEventInput, apply_vnc_event};
-fn mark_connected(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, session_id: &str) {
-    {
-        let mut rt = relock(runtime);
-        rt.status = VncSessionStatus::Connected;
-        rt.error = None;
-        rt.revision = rt.revision.saturating_add(1);
-    }
-    let mut state = relock(&shared.state);
-    if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
-        rec.status = VncSessionStatus::Connected;
-        rec.retry_attempt = 0;
-        rec.retry_in_seconds = 0;
-        rec.error = None;
-        state.revision = state.revision.saturating_add(1);
-    }
-}
-
-struct MarkFailedInput<'a> {
-    shared: &'a Arc<Shared>,
-    runtime: &'a Arc<Mutex<VncRuntime>>,
-    session_id: &'a str,
-    message: String,
-}
-
-fn mark_failed(input: MarkFailedInput<'_>) {
-    let MarkFailedInput {
-        shared,
-        runtime,
-        session_id,
-        message,
-    } = input;
-    {
-        let mut rt = relock(runtime);
-        rt.status = VncSessionStatus::Failed;
-        rt.error = Some(message.clone());
-        rt.input_tx = None;
-        rt.revision = rt.revision.saturating_add(1);
-    }
-    let mut state = relock(&shared.state);
-    if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
-        rec.status = VncSessionStatus::Failed;
-        rec.error = Some(message);
-        state.revision = state.revision.saturating_add(1);
-    }
-}
-
-struct MarkDisconnectedInput<'a> {
-    shared: &'a Arc<Shared>,
-    runtime: &'a Arc<Mutex<VncRuntime>>,
-    session_id: &'a str,
-    reason: Option<String>,
-}
-
-fn mark_disconnected(input: MarkDisconnectedInput<'_>) {
-    let MarkDisconnectedInput {
-        shared,
-        runtime,
-        session_id,
-        reason,
-    } = input;
-    {
-        let mut rt = relock(runtime);
-        if rt.status == VncSessionStatus::Failed {
-            return;
-        }
-        rt.status = VncSessionStatus::Disconnected;
-        rt.error.clone_from(&reason);
-        rt.input_tx = None;
-        rt.revision = rt.revision.saturating_add(1);
-    }
-    let mut state = relock(&shared.state);
-    if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id)
-        && rec.status != VncSessionStatus::Failed
-    {
-        rec.status = VncSessionStatus::Disconnected;
-        rec.error = reason;
-        state.revision = state.revision.saturating_add(1);
-    }
-}
+mod status;
+use status::{
+    MarkDisconnectedInput, MarkFailedInput, mark_connected, mark_disconnected, mark_failed,
+};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod shm_tests;
