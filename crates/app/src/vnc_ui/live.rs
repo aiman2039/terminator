@@ -1,6 +1,11 @@
 use super::*;
 use view::VncLiveInput;
 
+/// How long the daemon holds a shared-memory frame request open.
+const SHM_WAIT_MS: u32 = 400;
+/// Repaint fallback while the long poll is in use.
+const SHM_REPAINT_FALLBACK: Duration = Duration::from_millis(250);
+
 impl App {
     pub(super) fn vnc_live_screen(&mut self, ui: &mut egui::Ui, input: VncLiveInput<'_>) {
         let VncLiveInput {
@@ -8,8 +13,14 @@ impl App {
             view_only,
             features,
         } = input;
-        self.poll_vnc_frame(sid);
-        ui.ctx().request_repaint_after(Duration::from_millis(33));
+        // A shared-memory long poll wakes the GUI when its frame arrives; the
+        // timer is only the fallback that keeps the poll going.
+        let shm = self.poll_vnc_frame(sid);
+        ui.ctx().request_repaint_after(if shm {
+            SHM_REPAINT_FALLBACK
+        } else {
+            Duration::from_millis(33)
+        });
         let Some(texture) = self
             .vnc_views
             .entry(sid.to_owned())
@@ -52,26 +63,37 @@ impl App {
         }
     }
 
-    /// Poll for new framebuffer data when visible.
-    fn poll_vnc_frame(&mut self, sid: &str) {
+    /// Poll for new framebuffer data when visible. Returns whether the
+    /// shared-memory long poll is in use.
+    fn poll_vnc_frame(&mut self, sid: &str) -> bool {
+        let shm = !self.vnc_views.get(sid).is_some_and(|view| view.shm_failed)
+            && self.session_capability(sid, terminator_core::vnc::SHM_CAPABILITY);
+        // The long poll waits in the daemon, so it needs no client pacing.
+        let interval = if shm {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(33)
+        };
         let should_poll = {
             let view = self.vnc_views.entry(sid.to_owned()).or_default();
-            !view.fetching
-                && view
-                    .last_poll
-                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(33))
+            !view.fetching && view.last_poll.is_none_or(|t| t.elapsed() >= interval)
         };
         if !should_poll {
-            return;
+            return shm;
         }
         // A view whose texture cannot take the incremental update (no
         // texture yet, wrong size, dropped decode) asks for the whole
         // screen once; the daemon answers anything else with the
         // changed rectangle only.
-        let (since, regions) = self
-            .vnc_views
-            .get(sid)
-            .map_or((0, false), |view| (view.revision, !view.force_full));
+        let (mut since, regions, cursor_serial) =
+            self.vnc_views.get(sid).map_or((0, false, 0), |view| {
+                (view.revision, !view.force_full, view.cursor_serial)
+            });
+        if shm && !regions {
+            // The daemon sends the whole frame to a viewer that is not at
+            // its last published revision.
+            since = 0;
+        }
         if let Some(view) = self.vnc_views.get_mut(sid) {
             view.fetching = true;
             view.last_poll = Some(Instant::now());
@@ -81,6 +103,11 @@ impl App {
             session: sid.to_owned(),
             since,
             regions,
+            shm: shm.then_some(terminator_core::vnc::VncShmRequest {
+                wait_ms: SHM_WAIT_MS,
+                cursor_serial,
+            }),
         });
+        shm
     }
 }

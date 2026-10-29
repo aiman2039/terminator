@@ -124,7 +124,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     } = input;
     let client = connect_client(shared, spec, input_rx).await?;
     mark_connected(shared, runtime, sid);
-    let mut tick = tokio::time::interval(Duration::from_millis(33));
+    let mut tick = tokio::time::interval(REFRESH_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut resize: Option<tokio::task::JoinHandle<()>> = None;
     let mut last_request = Instant::now()
@@ -138,6 +138,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                     while let Ok(Some(event))=client.poll_event().await {
                         if !apply_vnc_event(ApplyVncEventInput { shared, runtime, session_id: sid, event }){break;}
                     }
+                    if let Err(e)=request_refresh(&client,runtime,spec.options.quality,&mut last_request).await{break Err(e);}
                 }
                 Err(e)=>break Err(Failure::Network(e.to_string())),
             },
@@ -163,11 +164,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                 }
             },
             _=tick.tick()=>{
-                let (watched,delay)={let rt=relock(runtime);(rt.polled_recently(),quality::refresh_ms(spec.options.quality,rt.last_encoded_bytes))};
-                if watched&&last_request.elapsed()>=Duration::from_millis(delay){
-                    if let Err(e)=client.input(X11Event::Refresh).await{break Err(Failure::Network(e.to_string()));}
-                    last_request=Instant::now();
-                }
+                if let Err(e)=request_refresh(&client,runtime,spec.options.quality,&mut last_request).await{break Err(e);}
             }
         }
     };
@@ -177,6 +174,48 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     }
     let _ = client.close().await;
     result
+}
+
+/// How often the loop checks whether a new update request is due.
+const REFRESH_TICK: Duration = Duration::from_millis(8);
+/// Ask again when an update request got no complete answer this long.
+const REFRESH_RESEND: Duration = Duration::from_secs(1);
+
+/// Pipelined incremental updates, as other viewers do: ask for the next
+/// update as soon as the previous one ended (no sooner than the quality's
+/// minimum interval), resend after [`REFRESH_RESEND`] without an answer,
+/// and stop while no viewer is watching.
+async fn request_refresh(
+    client: &vnc::VncClient,
+    runtime: &Arc<Mutex<VncRuntime>>,
+    quality: terminator_core::vnc::Quality,
+    last_request: &mut Instant,
+) -> Result<(), Failure> {
+    let (watched, pending, interval) = {
+        let rt = relock(runtime);
+        (
+            rt.polled_recently(),
+            rt.update_pending,
+            quality::refresh_ms(quality, rt.last_encoded_bytes),
+        )
+    };
+    let elapsed = last_request.elapsed();
+    let due = watched
+        && if pending {
+            elapsed >= REFRESH_RESEND
+        } else {
+            elapsed >= Duration::from_millis(interval)
+        };
+    if !due {
+        return Ok(());
+    }
+    client
+        .input(X11Event::Refresh)
+        .await
+        .map_err(|e| Failure::Network(e.to_string()))?;
+    relock(runtime).update_pending = true;
+    *last_request = Instant::now();
+    Ok(())
 }
 
 fn handshake_failure(error: vnc::VncError, transport: Transport) -> Failure {

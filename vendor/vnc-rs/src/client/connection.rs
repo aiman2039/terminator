@@ -595,6 +595,7 @@ where
                     desktop.observe(&update);
                     output_func(VncEvent::DesktopUpdate(update)).await?;
                 }
+                output_func(VncEvent::UpdateEnd).await?;
             }
             // SetColorMapEntries,
             ServerMsg::Bell => {

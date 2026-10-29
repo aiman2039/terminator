@@ -1,8 +1,10 @@
 mod connection;
 pub(crate) mod credentials;
+mod dirty;
 mod input;
 mod quality;
 mod reconnect;
+pub(crate) mod shm;
 mod transfer;
 mod transport;
 
@@ -54,6 +56,19 @@ pub(crate) struct VncRuntime {
     /// this revision can take an incremental rectangle.
     encoded_revision: u64,
     last_poll: Option<Instant>,
+    /// Shared-memory framebuffer for `vnc-shm-v1` viewers; created on the
+    /// first such request and replaced on resize. Dropping it removes the file.
+    shm: Option<terminator_sys::SharedFrameWriter>,
+    /// Rectangles changed since the last shared-memory publish.
+    shm_dirty: dirty::DirtyRects,
+    /// Revision the shared-memory file holds; 0 before the first publish.
+    shm_revision: u64,
+    /// Files created so far; each resize gets a new file name.
+    shm_files: u32,
+    /// Bumped whenever the cursor image changes.
+    pub(crate) cursor_serial: u64,
+    /// An incremental update request is out and its update has not ended.
+    update_pending: bool,
 }
 
 impl VncRuntime {
@@ -77,6 +92,12 @@ impl VncRuntime {
             dirty: None,
             encoded_revision: 0,
             last_poll: None,
+            shm: None,
+            shm_dirty: dirty::DirtyRects::Full,
+            shm_revision: 0,
+            shm_files: 0,
+            cursor_serial: 0,
+            update_pending: false,
         }
     }
 
@@ -108,6 +129,7 @@ impl VncRuntime {
         }
         // Every pixel changed: only a full frame can describe this now.
         self.dirty = None;
+        self.shm_dirty = dirty::DirtyRects::Full;
         self.revision = self.revision.saturating_add(1);
     }
 
@@ -115,6 +137,7 @@ impl VncRuntime {
         if region.is_empty() {
             return;
         }
+        self.shm_dirty.add(region);
         self.dirty = Some(match self.dirty {
             Some(previous) => previous.union(region),
             None => region,
@@ -230,6 +253,8 @@ impl VncRuntime {
             cursor: self.cursor.clone(),
             monitors: self.monitors.clone(),
             resize_supported: self.resize_supported,
+            shm: None,
+            cursor_serial: self.cursor_serial,
             session: session.to_owned(),
             width: self.width,
             height: self.height,
@@ -330,6 +355,7 @@ fn validate_project(state: &terminator_core::State, project: &str) -> Result<()>
 }
 
 mod connect;
+pub(crate) use connect::VncFrameRequest;
 struct RunVncThreadInput {
     shared: Arc<Shared>,
     runtime: Arc<Mutex<VncRuntime>>,
@@ -453,3 +479,6 @@ fn mark_disconnected(input: MarkDisconnectedInput<'_>) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod shm_tests;

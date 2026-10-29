@@ -17,6 +17,7 @@ pub(crate) struct VncFrameInput<'a> {
     pub(in crate::gui_services) session: String,
     pub(in crate::gui_services) since: u64,
     pub(in crate::gui_services) regions: bool,
+    pub(in crate::gui_services) shm: Option<terminator_core::vnc::VncShmRequest>,
     pub(in crate::gui_services) cancel: CancellationToken,
     pub(in crate::gui_services) updates: &'a mut Vec<Update>,
 }
@@ -128,21 +129,26 @@ impl Services {
             session,
             since,
             regions,
+            shm,
             cancel,
             updates,
         } = input;
         let client = self.client();
+        let runtime = client.paths.runtime.clone();
         let result = match client
             .rpc(Request::VncFrame {
                 session: session.clone(),
                 since,
                 regions,
+                shm,
             })
             .await
         {
             Ok(Response::VncFrame(frame)) => self
                 .cpu()
-                .run(&cancel, move || crate::vnc_ui::decode_frame(*frame))
+                .run(&cancel, move || {
+                    crate::vnc_ui::decode_frame(*frame, &runtime)
+                })
                 .await
                 .map(Some)
                 .map_err(|e| format!("{e:#}")),

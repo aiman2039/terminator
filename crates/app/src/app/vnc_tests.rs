@@ -269,6 +269,9 @@ fn repeated_vnc_frames_do_not_overwrite_a_new_local_clipboard() {
                     error: None,
                     image: None,
                     region: None,
+                    patches: Vec::new(),
+                    cursor_serial: 0,
+                    shm_failed: false,
                     clipboard: Some(text.into()),
                 },
             );

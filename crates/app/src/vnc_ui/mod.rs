@@ -11,6 +11,7 @@ mod live;
 mod page;
 mod profiles;
 mod settings;
+mod shm;
 mod sidebar;
 mod ssh_probe;
 mod state;
@@ -91,17 +92,19 @@ impl App {
             .any(|cap| cap == terminator_core::vnc::FEATURES_CAPABILITY)
     }
     fn session_features(&self, sid: &str) -> bool {
+        self.session_capability(sid, terminator_core::vnc::FEATURES_CAPABILITY)
+    }
+    /// Whether the daemon generation that owns `sid` advertises `capability`.
+    fn session_capability(&self, sid: &str, capability: &str) -> bool {
+        let current = || self.state.capabilities.iter().any(|c| c == capability);
         let Some(session) = self.state.vnc_sessions.iter().find(|s| s.id == sid) else {
-            return self.vnc_features_supported();
+            return current();
         };
         if session.generation == self.state.generation {
-            return self.vnc_features_supported();
+            return current();
         }
         self.state.generations.iter().any(|g| {
-            g.owner.id == session.generation
-                && g.capabilities
-                    .iter()
-                    .any(|c| c == terminator_core::vnc::FEATURES_CAPABILITY)
+            g.owner.id == session.generation && g.capabilities.iter().any(|c| c == capability)
         })
     }
     pub(crate) fn vnc_captures_shortcuts(&self, ctx: &egui::Context) -> bool {

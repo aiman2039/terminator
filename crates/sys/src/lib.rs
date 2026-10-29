@@ -1,5 +1,6 @@
 //! OS calls that still need `unsafe`: `pre_exec`, macOS `proc_pidinfo`, macOS memory
-//! pressure (`host_statistics64`, `sysctlbyname`), and Accessibility.
+//! pressure (`host_statistics64`, `sysctlbyname`), Accessibility, and the
+//! memory-mapped VNC framebuffer shared by the daemon and the GUI.
 //! Sparkle stays in `terminator-updater`. Every other Terminator crate forbids `unsafe`.
 
 #[cfg(windows)]
@@ -8,6 +9,7 @@ mod console;
 mod handle;
 mod pressure;
 mod session;
+mod shm;
 
 #[cfg(target_os = "macos")]
 mod threads;
@@ -18,6 +20,7 @@ pub use console::{RawMode, dimensions};
 pub use handle::socket_into_handle;
 pub use pressure::{MemoryPressure, PressureLevel, memory_pressure};
 pub use session::{detach_session, double_fork_setsid};
+pub use shm::{FrameRect, SharedFrameReader, SharedFrameWriter};
 
 #[cfg(target_os = "macos")]
 pub use threads::all_threads_waiting;

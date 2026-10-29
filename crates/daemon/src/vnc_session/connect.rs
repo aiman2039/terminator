@@ -289,16 +289,31 @@ impl Shared {
         Ok(())
     }
 
-    pub(crate) fn vnc_frame(
-        &self,
-        session: &str,
-        since: u64,
-        regions: bool,
-    ) -> Result<Option<VncFrame>> {
+    pub(crate) fn vnc_frame(&self, request: VncFrameRequest<'_>) -> Result<Option<VncFrame>> {
+        let VncFrameRequest {
+            session,
+            since,
+            regions,
+            shm,
+        } = request;
         let runtime = relock(&self.vnc_sessions)
             .get(session)
             .cloned()
             .context("VNC session is not live")?;
+        if let Some(shm) = shm {
+            let mut rt = shm::wait_for_revision(&runtime, since, shm.wait_ms);
+            if rt.revision <= since {
+                return Ok(None);
+            }
+            return rt
+                .publish_shm(shm::PublishInput {
+                    session,
+                    since,
+                    request: shm,
+                    runtime_dir: &self.paths.runtime,
+                })
+                .map(Some);
+        }
         let mut rt = relock(&runtime);
         // Any request counts as the viewer still watching: hidden or closed
         // views stop asking, and the refresh below stops with them.
@@ -308,4 +323,12 @@ impl Shared {
         }
         rt.encode_frame(session, since, regions).map(Some)
     }
+}
+
+/// One `VncFrame` request. `shm` selects the shared-memory long poll.
+pub(crate) struct VncFrameRequest<'a> {
+    pub(crate) session: &'a str,
+    pub(crate) since: u64,
+    pub(crate) regions: bool,
+    pub(crate) shm: Option<terminator_core::vnc::VncShmRequest>,
 }

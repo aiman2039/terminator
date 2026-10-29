@@ -105,11 +105,13 @@ impl Services {
                 session,
                 since,
                 regions,
+                shm,
             } => {
                 self.vnc_frame(VncFrameInput {
                     session,
                     since,
                     regions,
+                    shm,
                     cancel,
                     updates,
                 })
