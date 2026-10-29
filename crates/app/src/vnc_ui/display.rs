@@ -314,7 +314,8 @@ impl ScreenKeys<'_> {
             response,
             paste_shortcut,
         } = input;
-        let modifiers = ui.input(|input| modifier_bits(input.modifiers));
+        let command_key = view.draft_options.command_key;
+        let modifiers = ui.input(|input| modifier_bits(input.modifiers, command_key));
         let window_focused = ui.ctx().input(|input| input.focused);
         let focused = response.has_focus() && window_focused;
         let mut keys = ScreenKeys {

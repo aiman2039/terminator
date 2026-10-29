@@ -225,6 +225,8 @@ impl App {
                 tint,
                 spin: state == AgentState::Running,
             });
+        } else if let Some(image) = &face.image {
+            egui::Image::new(image.clone()).paint_at(ui, icon_rect.shrink(1.0));
         } else {
             egui::Image::new(icons::source(face.icon))
                 .tint(terminal_tint.unwrap_or(appearance::icon_color()))

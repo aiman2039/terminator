@@ -1,5 +1,5 @@
 use super::source::{Revision, Snapshot};
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeWithOffset};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -281,14 +281,33 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
     let mut links = HashMap::new();
     let mut images = HashSet::new();
     let mut replacements = Vec::new();
-    let mut events = Parser::new_ext(&snapshot.text, Options::all()).into_offset_iter();
+    // Bare URLs stay plain text outside links and code blocks.
+    let (mut in_link, mut in_code) = (0usize, false);
+    // Merged text keeps a URL with `_` or `*` in one event.
+    let mut events = TextMergeWithOffset::new(
+        Parser::new_ext(&snapshot.text, Options::all()).into_offset_iter(),
+    );
     while let Some((event, range)) = events.next() {
         match event {
-            Event::Start(Tag::Link { dest_url, .. }) if !dest_url.starts_with('#') => {
-                links.insert(
-                    dest_url.to_string(),
-                    resolve_link(&snapshot.path, &dest_url),
-                );
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                in_link = in_link.saturating_add(1);
+                if !dest_url.starts_with('#') {
+                    links.insert(
+                        dest_url.to_string(),
+                        resolve_link(&snapshot.path, &dest_url),
+                    );
+                }
+            }
+            Event::End(TagEnd::Link) => in_link = in_link.saturating_sub(1),
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Text(_) if in_link == 0 && !in_code => {
+                let Some(source) = snapshot.text.get(range.clone()) else {
+                    continue;
+                };
+                if let Some(linked) = autolink(source, &mut links) {
+                    replacements.push((range, linked));
+                }
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
                 let alt = image_alt(&mut events);
@@ -322,6 +341,35 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
         links,
         images,
     }
+}
+
+/// `source` with every bare http(s) URL wrapped as a CommonMark autolink,
+/// or `None` when it has none.
+fn autolink(source: &str, links: &mut HashMap<String, Option<Link>>) -> Option<String> {
+    let mut finder = linkify::LinkFinder::new();
+    finder.kinds(&[linkify::LinkKind::Url]);
+    let mut out = String::new();
+    let mut position = 0;
+    for link in finder.links(source) {
+        let url = link.as_str();
+        let Ok(parsed) = Url::parse(url) else {
+            continue;
+        };
+        if !matches!(parsed.scheme(), "http" | "https") {
+            continue;
+        }
+        out.push_str(source.get(position..link.start())?);
+        out.push('<');
+        out.push_str(url);
+        out.push('>');
+        position = link.end();
+        links.insert(url.to_owned(), Some(Link::Web(parsed.into())));
+    }
+    if position == 0 {
+        return None;
+    }
+    out.push_str(source.get(position..)?);
+    Some(out)
 }
 
 /// The text of an image's alt, consuming events through its end tag.

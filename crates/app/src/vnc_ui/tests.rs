@@ -152,29 +152,31 @@ fn modifier_transitions_report_each_changed_key_once() {
 }
 
 #[test]
-fn modifier_bits_map_command_to_meta_without_double_counting_ctrl() {
+fn modifier_bits_map_command_to_the_chosen_key_without_double_counting_ctrl() {
+    use terminator_core::vnc::CommandKey::{Control, Super};
     let none = egui::Modifiers::default();
-    assert_eq!(modifier_bits(none), 0);
+    assert_eq!(modifier_bits(none, Control), 0);
     let shift_alt = egui::Modifiers {
         shift: true,
         alt: true,
         ..none
     };
-    assert_eq!(modifier_bits(shift_alt), 1 | 4);
+    assert_eq!(modifier_bits(shift_alt, Control), 1 | 4);
     // macOS Command is `command` without `ctrl`.
     let command = egui::Modifiers {
         command: true,
         mac_cmd: true,
         ..none
     };
-    assert_eq!(modifier_bits(command), 8);
+    assert_eq!(modifier_bits(command, Super), 8);
+    assert_eq!(modifier_bits(command, Control), 2, "Cmd+A acts as Ctrl+A");
     // Elsewhere `command` mirrors Ctrl: one Control key, not two.
     let ctrl = egui::Modifiers {
         ctrl: true,
         command: true,
         ..none
     };
-    assert_eq!(modifier_bits(ctrl), 2);
+    assert_eq!(modifier_bits(ctrl, Super), 2);
 }
 
 #[test]
@@ -271,10 +273,11 @@ fn focused_vnc_clipboard_commands_send_remote_shortcuts() {
             down: true
         }
     )));
+    // The held Command key (sent as Control by default) is released last.
     assert!(matches!(
         paste.last(),
         Some(VncInputEvent::Key {
-            keycode: 0xFFEB,
+            keycode: 0xFFE3,
             down: false
         })
     ));
@@ -474,4 +477,104 @@ fn dropped_files_upload_into_an_absolute_folder_only() {
     assert_eq!(remote_for_drop("/", file), Ok("/report.pdf".to_owned()));
     assert!(remote_for_drop("", file).is_err());
     assert!(remote_for_drop("~/Desktop", file).is_err());
+}
+
+#[test]
+fn ctrl_and_cmd_chords_reach_the_remote_as_ctrl_chords() {
+    let ctx = egui::Context::default();
+    let mut view = VncViewState {
+        width: 800,
+        height: 600,
+        ..Default::default()
+    };
+    let texture = ctx.load_texture(
+        "keys-test",
+        ColorImage::filled([800, 600], Color32::BLACK),
+        egui::TextureOptions::NEAREST,
+    );
+    let mut paint = |mut events: Vec<egui::Event>, modifiers: egui::Modifiers| {
+        events.insert(0, egui::Event::ModifiersChanged(modifiers));
+        let mut result = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                result = Some(vnc_screen(VncScreenInput {
+                    ui,
+                    view: &mut view,
+                    texture: &texture,
+                    view_only: false,
+                    paste_shortcut: VncPasteShortcut::ShiftInsert,
+                }));
+            },
+        );
+        output.textures_delta.clear();
+        result.map(|outcome| outcome.events).unwrap_or_default()
+    };
+    let none = egui::Modifiers::NONE;
+    let pos = egui::pos2(120.0, 170.0);
+    paint(vec![], none);
+    // Click to focus the remote screen, as a user does.
+    for pressed in [true, false] {
+        paint(
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: none,
+                },
+            ],
+            none,
+        );
+    }
+    let key = |key, pressed, modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers,
+    };
+    let keys = |events: Vec<VncInputEvent>| -> Vec<(u32, bool)> {
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                VncInputEvent::Key { keycode, down } => Some((keycode, down)),
+                _ => None,
+            })
+            .collect()
+    };
+    const CONTROL: u32 = 0xFFE3;
+    let c = u32::from('c');
+    let a = u32::from('a');
+    // Physical Ctrl+C: Control down, c down/up, Control up.
+    let ctrl = egui::Modifiers { ctrl: true, ..none };
+    let mut sent = keys(paint(vec![key(egui::Key::C, true, ctrl)], ctrl));
+    sent.extend(keys(paint(vec![key(egui::Key::C, false, ctrl)], ctrl)));
+    sent.extend(keys(paint(vec![], none)));
+    assert_eq!(
+        sent,
+        vec![(CONTROL, true), (c, true), (c, false), (CONTROL, false)]
+    );
+    // Mac Cmd+A with the default Command key: also a Ctrl chord.
+    let cmd = egui::Modifiers {
+        command: true,
+        mac_cmd: true,
+        ..none
+    };
+    let mut sent = keys(paint(vec![key(egui::Key::A, true, cmd)], cmd));
+    sent.extend(keys(paint(vec![key(egui::Key::A, false, cmd)], cmd)));
+    sent.extend(keys(paint(vec![], none)));
+    assert_eq!(
+        sent,
+        vec![(CONTROL, true), (a, true), (a, false), (CONTROL, false)]
+    );
 }

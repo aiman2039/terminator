@@ -63,6 +63,8 @@ pub(super) fn tab_tooltip(label: &str, cwd: Option<&std::path::Path>) -> String 
 pub(crate) struct TabFace {
     pub(crate) label: String,
     pub(crate) icon: &'static str,
+    /// Untinted image painted in place of `icon`, such as a site favicon.
+    pub(crate) image: Option<egui::ImageSource<'static>>,
     pub(crate) sid: Option<String>,
     pub(crate) brand: Option<&'static str>,
     pub(crate) status: Option<(AgentState, &'static str, Color32)>,
