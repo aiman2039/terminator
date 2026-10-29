@@ -72,6 +72,32 @@ fn failed_migration_does_not_set_marker() {
 }
 
 #[test]
+fn bell_opens_agents_over_an_open_left_tool() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.preferences.left_visible = true;
+    app.preferences.left_tool = Some(SidebarTool::Git);
+    // A stale flag hidden behind the tool must not make the bell close.
+    app.preferences.left_agents = true;
+    assert!(!app.left_agents_shown());
+    app.toggle_left_agents();
+    assert!(app.left_agents_shown());
+    assert_eq!(app.preferences.left_tool, None);
+    app.toggle_left_agents();
+    assert!(!app.left_agents_shown());
+    assert!(!app.preferences.left_agents);
+}
+
+#[test]
+fn bell_shows_a_hidden_left_sidebar() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.preferences.left_visible = false;
+    app.preferences.left_agents = false;
+    app.toggle_left_agents();
+    assert!(app.preferences.left_visible);
+    assert!(app.left_agents_shown());
+}
+
+#[test]
 fn hidden_agent_terminal_keeps_owner_and_directory_context() {
     let (mut app, _, _dir) = fixture();
     app.state.sessions.push(Session {
