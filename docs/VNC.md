@@ -2,7 +2,12 @@
 
 The daemon owns VNC connections. The GUI owns display state, fullscreen,
 monitor selection, local shortcut handling, and file pickers. Closing a VNC
-tab disconnects that view's session; closing the GUI does not stop terminals.
+tab detaches its session, like a terminal: the daemon keeps it connected and
+the VNC sidebar marks it Detached; clicking it reattaches. Disconnect is an
+explicit action. A session no viewer has watched for 30 minutes is
+disconnected. Connecting a host that already has a live session reattaches
+it instead of opening a second connection. VNC records of retired or
+unreachable daemons are not shown; they cannot be live.
 
 ## Modules
 
@@ -14,9 +19,45 @@ tab disconnects that view's session; closing the GUI does not stop terminals.
 - `crates/daemon/src/vnc_session/input.rs`: input, clipboard and resize validation.
 - `crates/daemon/src/vnc_session/quality.rs`: encoding and refresh presets.
 - `crates/daemon/src/vnc_session/transfer.rs`: explicit, bounded SFTP transfers.
+- `crates/daemon/src/vnc_session/shm.rs`, `crates/sys/src/shm.rs`: shared-memory frames.
+- `crates/daemon/src/vnc_session/stats.rs`, `thumbnail.rs`: speed numbers and saved
+  host thumbnails.
+- `crates/daemon/src/vnc_session/ssh_steps.rs`, `status.rs`: start command and
+  typed session status.
 - `crates/app/src/vnc_ui/`: frame decoding, view state, connection profiles/settings,
   keyboard, clipboard, display, and transfer controls in separate modules.
+  `page.rs`, `address_book.rs`, `card.rs`, `book_keys.rs` and `import.rs` are the
+  address book; `profiles.rs` is host Properties; `ssh_probe.rs` reads SSH config.
 - `vendor/vnc-rs`: RFB framing and decoding. See its `UPSTREAM.md` for changes.
+
+## Address book and Properties
+
+The VNC tool opens the VNC page in the main pane (like Settings and Player).
+It is the one place to add and edit hosts; the VNC sidebar only lists
+sessions and hosts. The address bar filters cards and connects to
+`host:display` or `host::port` (TigerVNC style); an unknown address opens a
+new host's Properties. Cards show the live screen, or the last screen the
+daemon saved (`data/vnc-thumbnails/<profile>.png`, every 30 s while
+connected). Double-click or Enter connects; arrows move the selection;
+Delete removes; Command/Ctrl+I opens Properties. Labels filter cards; a
+Grid/List switch changes the layout. Import… adds hosts from concrete
+`~/.ssh/config` names (as SSH tunnels) or RealVNC `.vnc` files.
+
+Properties has General, Security and Options pages. A saved password shows
+as a mask; Forget password removes it. For a new host, `ssh -G` runs in the
+background: when `~/.ssh/config` configures the address, the SSH tunnel is
+selected and a notice names what was found. A blank SSH host tunnels to the
+address. Reconnect turns on for SSH hosts. Start command on host (optional,
+`vnc-start-command-v1`) runs a user-entered command over SSH before each
+connection, for example a script that starts the VNC server; it is not
+part of Terminator and is never generated.
+
+Errors carry a kind (`vnc-errors-v1`): wrong or missing password, SSH key or
+host key, unreachable, TLS, start command, protocol. The status line offers
+one fix: Enter password, Open Hosts, Properties or Retry. The daemon never
+sends an empty password; a server that needs one opens the password prompt.
+A saved password is read from the OS keychain on the session thread, so a
+keychain permission prompt cannot time out the connect request.
 
 ## Connections and passwords
 
@@ -85,8 +126,19 @@ allocation is bounded to 8192 pixels per axis and 32 Mi pixels total. Remote
 cursor images are limited to 256 pixels per axis.
 
 Sharp text uses lossless encodings. Low bandwidth prefers Tight compression
-with a lower JPEG quality and fewer refresh requests. Automatic mode adapts
-the request interval to recent frame size. Hidden views stop requesting frames.
+with a lower JPEG quality and fewer refresh requests. Automatic mode switches
+to the JPEG set after updates stay slower than 80 ms for 3 s, and back below
+30 ms. Hidden views stop requesting frames.
+
+With `vnc-shm-v1`, the daemon keeps each framebuffer in a private
+memory-mapped file in the runtime directory and the GUI copies only the
+changed rectangles (up to 32); a sequence counter discards torn reads.
+Frame requests long-poll for a new revision, and the next update request is
+sent as soon as an update ends. Older daemons and GUIs keep the compressed
+path. The cursor shape is always requested and drawn at the local pointer,
+so it never lags. 100% shows exact pixels; Fit is smoothed. The toolbar
+speed chip shows viewer frames per second and how long an update takes to
+arrive. Queued pointer moves collapse to the newest; presses keep their place.
 
 Reconnect is optional and bounded to at most ten attempts, with delays up to
 30 seconds. Authentication, certificate, SSH and protocol failures stop retries.
