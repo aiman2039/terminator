@@ -107,6 +107,9 @@ impl App {
                 name: String::new(),
             });
         }
+        if menu_click(ui, "Open in terminal", "Terminal") {
+            self.create_workspace_tab_in(None, Some(folder_path.to_owned()));
+        }
         ui.separator();
         self.explorer_folder_menu_clipboard(ui, folder_path);
         ui.separator();

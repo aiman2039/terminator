@@ -799,6 +799,51 @@ fn explorer_type_to_search_selects_the_next_match() {
 }
 
 #[test]
+fn home_end_and_search_arrows_jump_between_rows() {
+    let (mut app, ctx, dir) = keyboard_tree();
+    let root = dir.path().to_path_buf();
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
+    // Rows: src, src/main.rs, a.rs, b.rs.
+    click_row(ClickRowInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        y: 12.0,
+    });
+    let none = egui::Modifiers::NONE;
+    let press = |app: &mut App, event| {
+        draw_tree(DrawTreeInput {
+            app,
+            ctx: &ctx,
+            root: &root,
+            events: vec![event],
+        })
+    };
+    press(&mut app, key(egui::Key::End, none));
+    assert_eq!(app.explorer_selection, [root.join("b.rs")]);
+    press(&mut app, key(egui::Key::Home, none));
+    assert_eq!(app.explorer_selection, [root.join("src")]);
+    press(&mut app, key(egui::Key::PageDown, none));
+    assert_eq!(app.explorer_selection, [root.join("b.rs")]);
+    press(&mut app, key(egui::Key::Home, none));
+    // While type-to-search is live, arrows step between matches and wrap.
+    press(&mut app, egui::Event::Text(".rs".into()));
+    assert_eq!(app.explorer_selection, [root.join("src/main.rs")]);
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    assert_eq!(app.explorer_selection, [root.join("a.rs")]);
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    assert_eq!(app.explorer_selection, [root.join("src/main.rs")]);
+    press(&mut app, key(egui::Key::ArrowUp, none));
+    assert_eq!(app.explorer_selection, [root.join("b.rs")]);
+}
+
+#[test]
 fn command_click_toggles_and_shift_click_extends_without_opening() {
     let (mut app, _ctx, dir) = keyboard_tree();
     let root = dir.path();

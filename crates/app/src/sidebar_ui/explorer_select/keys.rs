@@ -18,11 +18,12 @@ impl TreeNav<'_> {
 }
 
 impl App {
-    /// Keyboard for a focused tree. Arrows move the selection (Shift
-    /// extends), Left/Right collapse, expand, and walk the hierarchy,
-    /// Enter opens, F2 renames, Delete trashes, Cmd/Ctrl+C/X/V copy, cut,
-    /// and paste files, Escape clears, and typed text searches the
-    /// visible rows.
+    /// Keyboard for a focused tree. Arrows, Home/End, and PageUp/PageDown
+    /// move the selection (Shift extends), Left/Right collapse, expand, and
+    /// walk the hierarchy, Enter or Cmd/Ctrl+Down opens, F2 renames, Delete
+    /// trashes, Cmd/Ctrl+C/X/V copy, cut, and paste files, Escape clears,
+    /// and typed text searches the visible rows (Up/Down then step between
+    /// matches).
     pub(in crate::sidebar_ui) fn explorer_keys(&mut self, input: ExplorerKeysInput<'_>) {
         let ExplorerKeysInput {
             ui,
@@ -106,8 +107,22 @@ impl App {
         (key, modifiers): (egui::Key, egui::Modifiers),
     ) -> bool {
         match key {
+            egui::Key::ArrowDown | egui::Key::ArrowUp
+                if !modifiers.command
+                    && !modifiers.shift
+                    && self.explorer_speed_text().is_some() =>
+            {
+                self.explorer_speed_step(nav, key == egui::Key::ArrowDown);
+            }
             egui::Key::ArrowDown | egui::Key::ArrowUp if !modifiers.command => {
                 self.explorer_key_vertical(nav, key, modifiers.shift);
+            }
+            egui::Key::ArrowDown if modifiers.command => self.explorer_key_enter(ui, nav),
+            egui::Key::Home | egui::Key::End | egui::Key::PageUp | egui::Key::PageDown => {
+                let page = (ui.clip_rect().height() / crate::sidebar_ui::explorer::ROW_HEIGHT)
+                    .floor()
+                    .max(1.0);
+                self.explorer_key_jump(nav, (key, page), modifiers.shift);
             }
             egui::Key::ArrowLeft => self.explorer_key_left(nav),
             egui::Key::ArrowRight => self.explorer_key_right(nav),
@@ -147,6 +162,56 @@ impl App {
             }
             (Some(i), _) => Some(i.saturating_sub(1)),
         };
+        self.explorer_move_cursor(nav, next, shift);
+    }
+
+    /// Home/End go to the first/last row, PageUp/PageDown move by `page`
+    /// rows. Shift extends from the anchor.
+    fn explorer_key_jump(&mut self, nav: &TreeNav<'_>, (key, page): (egui::Key, f32), shift: bool) {
+        let last = nav.visible.len().saturating_sub(1);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Page size is a small positive row count."
+        )]
+        let page = page as usize;
+        let at = nav.at.unwrap_or(0);
+        let next = match key {
+            egui::Key::Home => 0,
+            egui::Key::End => last,
+            egui::Key::PageUp => at.saturating_sub(page),
+            _ => at.saturating_add(page).min(last),
+        };
+        self.explorer_move_cursor(nav, Some(next), shift);
+    }
+
+    /// While type-to-search is live, Up/Down go to the previous/next match.
+    fn explorer_speed_step(&mut self, nav: &TreeNav<'_>, forward: bool) {
+        let needle = self.explorer_speed.to_lowercase();
+        let at = nav.at.unwrap_or(0);
+        let (before, after) = nav.visible.split_at(at.min(nav.visible.len()));
+        // Rows after the cursor, then wrap; the cursor row itself is last.
+        let after = after.get(1..).unwrap_or_default();
+        let current = nav.visible.get(at).into_iter();
+        let matches = |row: &&&ExplorerRow| row.label.to_lowercase().contains(&needle);
+        let hit = if forward {
+            after.iter().chain(before).chain(current).find(matches)
+        } else {
+            before
+                .iter()
+                .rev()
+                .chain(after.iter().rev())
+                .chain(current)
+                .find(matches)
+        };
+        if let Some(row) = hit {
+            self.explorer_select_one(row.path.clone());
+        }
+        // Stepping keeps the search alive.
+        self.explorer_speed_at = Instant::now();
+    }
+
+    fn explorer_move_cursor(&mut self, nav: &TreeNav<'_>, next: Option<usize>, shift: bool) {
         let Some(row) = next.and_then(|next| nav.visible.get(next)) else {
             return;
         };
