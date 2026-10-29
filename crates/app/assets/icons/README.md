@@ -85,3 +85,6 @@ their owners: OpenAI, Anthropic, SST, xAI, Meta, Anysphere, Mario Zechner/pi.dev
   custom hook agents and multi-agent terminals.
 
 Tooltips and the Agents sidebar always pair a glyph with the agent name.
+
+`lock.svg` and `ellipsis-vertical.svg` are Lucide 0.468.0 icons with the same
+license and white-stroke adaptation, for the browser address bar and menu.
