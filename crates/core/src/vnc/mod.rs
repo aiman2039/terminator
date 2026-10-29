@@ -1,4 +1,6 @@
+mod errors;
 mod options;
+pub use errors::*;
 pub use options::*;
 
 use serde::{Deserialize, Serialize};
@@ -172,6 +174,9 @@ pub struct VncSession {
     pub retry_attempt: u8,
     #[serde(default)]
     pub retry_in_seconds: u64,
+    /// Why the session failed (`vnc-errors-v1` daemons); omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<VncErrorKind>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

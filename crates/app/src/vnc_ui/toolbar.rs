@@ -68,6 +68,13 @@ impl VncToolbar<'_> {
                     .clicked();
             self.actions.disconnect =
                 appearance::sidebar_action(ui, "CircleStop", "Disconnect").clicked();
+        } else if self
+            .session
+            .is_some_and(|s| s.status == VncSessionStatus::Connecting)
+        {
+            // Connecting or waiting to retry: stopping must stay possible.
+            self.actions.disconnect =
+                appearance::sidebar_action(ui, "CircleStop", "Disconnect").clicked();
         } else if !self.fields.host.is_empty()
             && appearance::sidebar_action(ui, "Play", "Reconnect").clicked()
         {

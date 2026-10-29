@@ -41,6 +41,7 @@ impl App {
                 view_only,
             });
         }
+        let screen_area = ui.available_rect_before_wrap();
         let outcome = {
             let view = self.vnc_views.entry(sid.to_owned()).or_default();
             vnc_screen(VncScreenInput {
@@ -51,6 +52,7 @@ impl App {
                 paste_shortcut: self.preferences.vnc_paste_shortcut,
             })
         };
+        self.paint_reconnecting(ui, sid, screen_area);
         if outcome.activated {
             self.active_session = None;
             self.non_terminal_selected = true;
@@ -61,6 +63,29 @@ impl App {
                 events: outcome.events,
             });
         }
+    }
+
+    /// While the daemon waits to reconnect, dim the frozen last frame and
+    /// say when the next attempt starts.
+    fn paint_reconnecting(&self, ui: &egui::Ui, sid: &str, area: egui::Rect) {
+        let Some(session) = self.state.vnc_sessions.iter().find(|s| s.id == sid) else {
+            return;
+        };
+        if session.status != VncSessionStatus::Connecting || session.retry_attempt == 0 {
+            return;
+        }
+        let painter = ui.painter_at(area);
+        painter.rect_filled(area, 0.0, egui::Color32::from_black_alpha(140));
+        painter.text(
+            area.center(),
+            egui::Align2::CENTER_CENTER,
+            format!(
+                "Reconnecting… attempt {} in {}s",
+                session.retry_attempt, session.retry_in_seconds
+            ),
+            egui::FontId::proportional(16.0),
+            egui::Color32::WHITE,
+        );
     }
 
     /// Poll for new framebuffer data when visible. Returns whether the

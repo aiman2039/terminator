@@ -52,9 +52,25 @@ fn vnc_session(id: &str, status: VncSessionStatus) -> VncSession {
         view_only: false,
         status,
         error: None,
+        error_kind: None,
         created: 0,
         generation: "fixture".into(),
     }
+}
+
+#[test]
+fn a_password_required_failure_opens_the_password_prompt_once() {
+    let (mut app, _ctx, _dir) = fixture();
+    let mut session = vnc_session("s1", VncSessionStatus::Failed);
+    session.error_kind = Some(terminator_core::vnc::VncErrorKind::PasswordRequired);
+    app.vnc_auto_password_prompt("s1", &session);
+    let view = app.vnc_views.get_mut("s1").expect("the prompt view exists");
+    assert!(!view.save_profile, "the pane asks for the password");
+    assert_eq!(view.draft_port, "5900");
+    // The user went back to all hosts: the same failure must not force it again.
+    view.save_profile = true;
+    app.vnc_auto_password_prompt("s1", &session);
+    assert!(app.vnc_views.get("s1").is_some_and(|v| v.save_profile));
 }
 
 #[test]

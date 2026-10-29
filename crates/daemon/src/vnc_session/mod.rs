@@ -5,6 +5,7 @@ mod input;
 mod quality;
 mod reconnect;
 pub(crate) mod shm;
+mod ssh_steps;
 mod stats;
 mod transfer;
 mod transport;
@@ -386,6 +387,7 @@ fn run_vnc_thread(input: RunVncThreadInput) {
             runtime,
             session_id,
             message: "Could not initialize async runtime".into(),
+            kind: terminator_core::vnc::VncErrorKind::Other,
         });
         return;
     };
@@ -400,85 +402,10 @@ fn run_vnc_thread(input: RunVncThreadInput) {
 
 mod events;
 use events::{ApplyVncEventInput, apply_vnc_event};
-fn mark_connected(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, session_id: &str) {
-    {
-        let mut rt = relock(runtime);
-        rt.status = VncSessionStatus::Connected;
-        rt.error = None;
-        rt.revision = rt.revision.saturating_add(1);
-    }
-    let mut state = relock(&shared.state);
-    if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
-        rec.status = VncSessionStatus::Connected;
-        rec.retry_attempt = 0;
-        rec.retry_in_seconds = 0;
-        rec.error = None;
-        state.revision = state.revision.saturating_add(1);
-    }
-}
-
-struct MarkFailedInput<'a> {
-    shared: &'a Arc<Shared>,
-    runtime: &'a Arc<Mutex<VncRuntime>>,
-    session_id: &'a str,
-    message: String,
-}
-
-fn mark_failed(input: MarkFailedInput<'_>) {
-    let MarkFailedInput {
-        shared,
-        runtime,
-        session_id,
-        message,
-    } = input;
-    {
-        let mut rt = relock(runtime);
-        rt.status = VncSessionStatus::Failed;
-        rt.error = Some(message.clone());
-        rt.input_tx = None;
-        rt.revision = rt.revision.saturating_add(1);
-    }
-    let mut state = relock(&shared.state);
-    if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
-        rec.status = VncSessionStatus::Failed;
-        rec.error = Some(message);
-        state.revision = state.revision.saturating_add(1);
-    }
-}
-
-struct MarkDisconnectedInput<'a> {
-    shared: &'a Arc<Shared>,
-    runtime: &'a Arc<Mutex<VncRuntime>>,
-    session_id: &'a str,
-    reason: Option<String>,
-}
-
-fn mark_disconnected(input: MarkDisconnectedInput<'_>) {
-    let MarkDisconnectedInput {
-        shared,
-        runtime,
-        session_id,
-        reason,
-    } = input;
-    {
-        let mut rt = relock(runtime);
-        if rt.status == VncSessionStatus::Failed {
-            return;
-        }
-        rt.status = VncSessionStatus::Disconnected;
-        rt.error.clone_from(&reason);
-        rt.input_tx = None;
-        rt.revision = rt.revision.saturating_add(1);
-    }
-    let mut state = relock(&shared.state);
-    if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id)
-        && rec.status != VncSessionStatus::Failed
-    {
-        rec.status = VncSessionStatus::Disconnected;
-        rec.error = reason;
-        state.revision = state.revision.saturating_add(1);
-    }
-}
+mod status;
+use status::{
+    MarkDisconnectedInput, MarkFailedInput, mark_connected, mark_disconnected, mark_failed,
+};
 
 #[cfg(test)]
 mod tests;

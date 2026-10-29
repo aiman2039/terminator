@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub const FEATURES_CAPABILITY: &str = "vnc-features-v1";
+/// Daemons that run [`VncOptions::ssh_start_command`] before connecting.
+pub const START_COMMAND_CAPABILITY: &str = "vnc-start-command-v1";
+pub const MAX_START_COMMAND: usize = 1024;
 pub const MAX_CLIPBOARD: usize = 256 * 1024;
 pub const MAX_TRANSFER_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -29,6 +32,10 @@ pub enum VncOptionsError {
     RelativeTlsCaFile { path: PathBuf },
     #[error(transparent)]
     Ssh(#[from] crate::ssh::SshOptionsError),
+    #[error("The start command must be one line of at most 1024 characters")]
+    InvalidStartCommand,
+    #[error("A start command requires the SSH tunnel transport")]
+    StartCommandWithoutSsh,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +97,11 @@ pub struct VncOptions {
     pub quality: Quality,
     pub remote_resize: bool,
     pub show_remote_cursor: bool,
+    /// Shell command run on the SSH host before each connection, for
+    /// example to start the VNC server. Empty runs nothing. Omitted when
+    /// empty so older daemons see unchanged options.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ssh_start_command: String,
 }
 impl VncOptions {
     pub fn validate(&self) -> Result<(), VncOptionsError> {
@@ -113,6 +125,16 @@ impl VncOptions {
         }
         if self.transport == Transport::Ssh {
             self.ssh.validate()?;
+        }
+        if !self.ssh_start_command.is_empty() {
+            if self.ssh_start_command.len() > MAX_START_COMMAND
+                || self.ssh_start_command.chars().any(char::is_control)
+            {
+                return Err(VncOptionsError::InvalidStartCommand);
+            }
+            if self.transport != Transport::Ssh {
+                return Err(VncOptionsError::StartCommandWithoutSsh);
+            }
         }
         Ok(())
     }
@@ -154,5 +176,25 @@ mod tests {
         assert!(!ClipboardMode::ReceiveOnly.send());
         assert!(ClipboardMode::ReceiveOnly.receive());
         assert!(!ClipboardMode::Disabled.send() && !ClipboardMode::Disabled.receive());
+    }
+    #[test]
+    fn start_command_needs_ssh_and_one_short_line() {
+        let mut options = VncOptions {
+            ssh_start_command: "~/bin/vnc2039".into(),
+            ..VncOptions::default()
+        };
+        assert!(options.validate().is_err(), "direct transport");
+        options.transport = Transport::Ssh;
+        options.ssh.host = "build.example.com".into();
+        assert!(options.validate().is_ok());
+        options.ssh_start_command = "a\nb".into();
+        assert!(options.validate().is_err(), "multi-line");
+        options.ssh_start_command = "x".repeat(MAX_START_COMMAND + 1);
+        assert!(options.validate().is_err(), "too long");
+        let json = serde_json::to_string(&VncOptions::default()).unwrap();
+        assert!(
+            !json.contains("ssh_start_command"),
+            "older daemons see no new key"
+        );
     }
 }

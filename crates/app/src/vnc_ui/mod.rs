@@ -4,6 +4,7 @@ mod connect;
 mod display;
 pub(crate) use display::VncScreenInput;
 mod endpoint;
+mod error_fix;
 mod form;
 mod frame;
 mod keyboard;
@@ -91,6 +92,24 @@ impl App {
             .capabilities
             .iter()
             .any(|cap| cap == terminator_core::vnc::FEATURES_CAPABILITY)
+    }
+    /// Why the running daemon cannot honor `options`, if it cannot. An
+    /// older daemon drops fields it does not know, so the check runs here.
+    pub(super) fn vnc_options_unsupported(
+        &self,
+        options: &terminator_core::vnc::VncOptions,
+        features: bool,
+    ) -> Option<&'static str> {
+        if *options != terminator_core::vnc::VncOptions::default() && !features {
+            return Some("Restart the session service to use advanced VNC options");
+        }
+        let start_command = self
+            .state
+            .capabilities
+            .iter()
+            .any(|cap| cap == terminator_core::vnc::START_COMMAND_CAPABILITY);
+        (!options.ssh_start_command.is_empty() && !start_command)
+            .then_some("Restart the session service to run a start command on the host")
     }
     fn session_features(&self, sid: &str) -> bool {
         self.session_capability(sid, terminator_core::vnc::FEATURES_CAPABILITY)

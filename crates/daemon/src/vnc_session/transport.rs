@@ -72,7 +72,13 @@ pub(super) struct ConnectInput<'a> {
     pub(super) options: &'a VncOptions,
     pub(super) control: Option<&'a Path>,
 }
-pub(super) async fn connect(input: ConnectInput<'_>) -> Result<Stream> {
+/// A connected transport. A tunnel also returns its OpenSSH stderr reader,
+/// so a handshake that fails because SSH failed can report why.
+pub(super) struct Connected {
+    pub(super) stream: Stream,
+    pub(super) ssh_stderr: Option<tokio::task::JoinHandle<Vec<u8>>>,
+}
+pub(super) async fn connect(input: ConnectInput<'_>) -> Result<Connected> {
     let ConnectInput {
         host,
         port,
@@ -95,17 +101,21 @@ pub(super) async fn connect(input: ConnectInput<'_>) -> Result<Stream> {
             .arg(&options.ssh.host)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         let mut child = command
             .spawn()
             .context("Cannot start OpenSSH; install ssh and configure agent/key authentication")?;
         let stdin = child.stdin.take().context("SSH stdin unavailable")?;
         let stdout = child.stdout.take().context("SSH stdout unavailable")?;
-        Ok(Box::new(SshStream {
-            child,
-            stdin,
-            stdout,
-        }))
+        let ssh_stderr = child.stderr.take().map(super::ssh_steps::capture);
+        Ok(Connected {
+            stream: Box::new(SshStream {
+                child,
+                stdin,
+                stdout,
+            }),
+            ssh_stderr,
+        })
     } else {
         let tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect((host, port)))
             .await
@@ -116,7 +126,10 @@ pub(super) async fn connect(input: ConnectInput<'_>) -> Result<Stream> {
                 .with_time(Duration::from_secs(30))
                 .with_interval(Duration::from_secs(10)),
         )?;
-        Ok(Box::new(tcp))
+        Ok(Connected {
+            stream: Box::new(tcp),
+            ssh_stderr: None,
+        })
     }
 }
 pub(super) fn security(host: &str, options: &VncOptions) -> Result<vnc::SecurityPolicy> {

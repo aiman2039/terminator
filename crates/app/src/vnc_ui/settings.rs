@@ -7,6 +7,7 @@ use terminator_core::vnc::{ClipboardMode, Quality, Transport, VncOptions};
 pub(super) fn security(ui: &mut egui::Ui, value: &mut VncOptions, supported: bool) {
     ui.add_enabled_ui(supported, |ui| {
         form::section(ui, "Connect through");
+        let before = value.transport;
         form::segmented(
             ui,
             &mut value.transport,
@@ -16,6 +17,9 @@ pub(super) fn security(ui: &mut egui::Ui, value: &mut VncOptions, supported: boo
                 (Transport::Direct, "Direct"),
             ],
         );
+        if before != Transport::Ssh && value.transport == Transport::Ssh {
+            enable_ssh_defaults(value);
+        }
         ui.add_space(4.0);
         match value.transport {
             Transport::Direct => {
@@ -98,6 +102,15 @@ fn ssh(ui: &mut egui::Ui, value: &mut VncOptions) {
         &mut value.ssh.username,
         "Blank uses SSH config",
     );
+    form::text(
+        ui,
+        "Start command on host (optional)",
+        &mut value.ssh_start_command,
+        "~/bin/vnc2039",
+    )
+    .on_hover_text(
+        "Runs over SSH before each connection, for example to start the VNC server. It must exit 0.",
+    );
     egui::CollapsingHeader::new("SSH keys")
         .default_open(value.ssh.identity_file.is_some() || value.ssh.known_hosts_file.is_some())
         .show(ui, |ui| {
@@ -157,6 +170,12 @@ fn display(ui: &mut egui::Ui, value: &mut VncOptions) {
         }
     });
     form::hint(ui, "Changes apply when you connect again.", "");
+}
+
+/// Defaults for a host that just switched to an SSH tunnel: tunnels drop on
+/// sleep and network changes, so reconnect is on. The user can turn it off.
+pub(super) fn enable_ssh_defaults(value: &mut VncOptions) {
+    value.reconnect.enabled = true;
 }
 
 fn optional_path(
