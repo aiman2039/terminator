@@ -3,6 +3,7 @@ use super::{ExplorerCache, ExplorerRow};
 use crate::App;
 use crate::preferences::ExplorerView;
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -34,9 +35,11 @@ impl App {
                 reveal_file: reveal_file.as_deref(),
             },
             query: query.as_deref(),
+            changed_only: self.preferences.explorer_view.changed_only,
             rows: Vec::new(),
             dirs: Vec::new(),
             filter_budget: MAX_FILTER_DIRS,
+            nested: HashMap::new(),
         };
         walk.walk(root, 0);
         let ExplorerWalk { rows, dirs, .. } = walk;
@@ -90,22 +93,50 @@ struct ShownFilter<'a> {
 }
 
 impl ShownFilter<'_> {
+    fn excluded(self, entry: &Entry) -> bool {
+        self.app
+            .preferences
+            .explorer_view
+            .excluded
+            .contains(&entry.path)
+    }
+
     fn shown(self, entry: &Entry) -> bool {
-        !entry.ignored
+        (!entry.ignored && !self.excluded(entry))
             || self.app.preferences.show_ignored
             || self
                 .reveal_file
                 .is_some_and(|file| file.starts_with(&entry.path))
+    }
+
+    /// The entry a row keeps: excluded entries paint like ignored ones.
+    fn row_entry(self, entry: &Entry) -> Entry {
+        let mut entry = entry.clone();
+        entry.ignored |= self.excluded(&entry);
+        entry
+    }
+
+    /// Whether Git reports a change at `path` (a folder: under it).
+    fn changed(self, path: &Path) -> bool {
+        self.app
+            .context
+            .as_ref()
+            .and_then(|context| context.decorations.get(path))
+            .is_some_and(|status| *status != ' ')
     }
 }
 
 struct ExplorerWalk<'a> {
     filter: ShownFilter<'a>,
     query: Option<&'a str>,
+    /// "Changed files only" scope.
+    changed_only: bool,
     rows: Vec<ExplorerRow>,
     dirs: Vec<PathBuf>,
     /// Folders a filtered walk may still enter.
     filter_budget: usize,
+    /// Files nested under each parent file, for listings walked so far.
+    nested: HashMap<PathBuf, Vec<&'a Entry>>,
 }
 
 /// Listing order for non-default view options. Listings arrive folders
@@ -139,13 +170,18 @@ fn entry_name(entry: &Entry) -> String {
 }
 
 impl<'a> ExplorerWalk<'a> {
+    /// A name filter or a scope hides rows that do not match.
+    fn filtering(&self) -> bool {
+        self.query.is_some() || self.changed_only
+    }
+
     /// Rows for the listing of `path`. Returns whether any row matched
     /// the filter (always true without a filter).
     fn walk(&mut self, path: &Path, depth: usize) -> bool {
         if depth > MAX_DEPTH {
             return false;
         }
-        if self.query.is_some() {
+        if self.filtering() {
             if self.filter_budget == 0 {
                 return false;
             }
@@ -155,7 +191,7 @@ impl<'a> ExplorerWalk<'a> {
         let app = self.filter.app;
         // A filtered tree lists folders in the background: hide their
         // "Loading…" rows and show matches as they arrive.
-        if self.query.is_none()
+        if !self.filtering()
             && (app.directory_errors.contains_key(path) || !app.dirs.contains_key(path))
         {
             self.rows.push(ExplorerRow {
@@ -165,55 +201,66 @@ impl<'a> ExplorerWalk<'a> {
                 depth,
                 chain: Vec::new(),
                 filtered_open: false,
+                nests: false,
             });
         }
         let Some(entries) = app.dirs.get(path) else {
-            return self.query.is_none();
+            return !self.filtering();
         };
         let filter = self.filter;
         let mut shown: Vec<&'a Entry> =
             entries.iter().filter(|entry| filter.shown(entry)).collect();
         let view = &app.preferences.explorer_view;
-        if *view != ExplorerView::default() {
+        if view.folders_mixed || view.sort_by_type {
             shown.sort_by(|a, b| view_order(view, a, b));
         }
-        let mut matched = self.query.is_none();
+        if !view.nesting_off && !self.filtering() {
+            let (top, nested) = super::nesting::group(shown);
+            shown = top;
+            self.nested.extend(nested);
+        }
+        let mut matched = !self.filtering();
         for entry in shown {
             matched |= self.visit(entry, depth);
         }
         matched
     }
 
-    /// With a filter, a file stays when its name matches and a folder
-    /// stays when its name or something inside it matches. A matching
-    /// folder shows its contents unfiltered, as usual.
+    /// With a filter, a file stays when its name matches (and, in the
+    /// Changed scope, it has changes) and a folder stays when something
+    /// inside it stays. Without a scope, a folder whose name matches shows
+    /// its contents unfiltered, as usual.
     fn visit(&mut self, entry: &'a Entry, depth: usize) -> bool {
         let label = entry_name(entry);
-        let Some(query) = self.query else {
+        if !self.filtering() {
             self.visit_unfiltered(entry, label, depth);
             return true;
-        };
-        let name_matches = crate::sidebar_ui::explorer_query_keeps_file(&label, false, Some(query));
+        }
+        if self.changed_only && !self.filter.changed(&entry.path) {
+            return false;
+        }
+        let name_matches = crate::sidebar_ui::explorer_query_keeps_file(&label, false, self.query);
         if !entry.directory {
             if name_matches {
                 self.visit_unfiltered(entry, label, depth);
             }
             return name_matches;
         }
-        if name_matches {
-            self.query = None;
+        if name_matches && self.query.is_some() && !self.changed_only {
+            let query = self.query.take();
             self.visit_unfiltered(entry, label, depth);
-            self.query = Some(query);
+            self.query = query;
             return true;
         }
         let start = self.rows.len();
         self.rows.push(ExplorerRow {
-            entry: Some(entry.clone()),
+            entry: Some(self.filter.row_entry(entry)),
             path: entry.path.clone(),
             label,
             depth,
             chain: Vec::new(),
             filtered_open: true,
+            nests: false,
         });
         if self.walk(&entry.path, depth.saturating_add(1)) {
             return true;
@@ -227,23 +274,26 @@ impl<'a> ExplorerWalk<'a> {
         let Some(&deepest) = chain.last() else {
             return;
         };
-        let expanded = deepest.directory
-            && chain
-                .iter()
-                .any(|link| self.filter.app.expanded_dirs.contains(&link.path));
+        let expanded_dirs = &self.filter.app.expanded_dirs;
+        let expanded = chain.iter().any(|link| expanded_dirs.contains(&link.path));
+        let nested = self.nested.remove(&deepest.path).unwrap_or_default();
         let compact = chain.len() > 1;
+        let label = if compact {
+            chain
+                .iter()
+                .map(|link| entry_name(link))
+                .collect::<Vec<_>>()
+                .join("/")
+        } else if !nested.is_empty() && !expanded {
+            // A closed nesting parent says how many files it holds.
+            format!("{label} +{}", nested.len())
+        } else {
+            label
+        };
         self.rows.push(ExplorerRow {
-            entry: Some(deepest.clone()),
+            entry: Some(self.filter.row_entry(deepest)),
             path: deepest.path.clone(),
-            label: if compact {
-                chain
-                    .iter()
-                    .map(|link| entry_name(link))
-                    .collect::<Vec<_>>()
-                    .join("/")
-            } else {
-                label
-            },
+            label,
             depth,
             chain: if compact {
                 chain.iter().map(|link| link.path.clone()).collect()
@@ -251,7 +301,17 @@ impl<'a> ExplorerWalk<'a> {
                 Vec::new()
             },
             filtered_open: false,
+            nests: !nested.is_empty(),
         });
+        if !deepest.directory {
+            if expanded {
+                for child in nested {
+                    let label = entry_name(child);
+                    self.visit_unfiltered(child, label, depth.saturating_add(1));
+                }
+            }
+            return;
+        }
         if expanded {
             // Keep the chain's own listings fresh: they decide
             // whether it stays compact.
@@ -267,7 +327,7 @@ impl<'a> ExplorerWalk<'a> {
     fn compact_chain(&self, entry: &'a Entry) -> Vec<&'a Entry> {
         let mut chain = vec![entry];
         let app = self.filter.app;
-        if !entry.directory || self.query.is_some() || app.preferences.explorer_flat_folders {
+        if !entry.directory || self.filtering() || app.preferences.explorer_flat_folders {
             return chain;
         }
         let filter = self.filter;

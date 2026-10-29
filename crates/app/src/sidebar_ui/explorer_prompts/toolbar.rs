@@ -119,6 +119,7 @@ impl App {
             self.expanded_dirs.clear();
             ui.close();
         }
+        self.explorer_bookmarks_menu(ui, cwd);
         ui.separator();
         self.explorer_view_options(ui);
         focus_find
@@ -150,6 +151,65 @@ impl App {
             .clicked()
         {
             ui.close();
+        }
+        let mut nesting = !view.nesting_off;
+        if ui.checkbox(&mut nesting, "Nest related files").clicked() {
+            view.nesting_off = !nesting;
+            ui.close();
+        }
+        if ui
+            .checkbox(&mut view.changed_only, "Changed files only")
+            .clicked()
+        {
+            ui.close();
+        }
+    }
+
+    /// Bookmarked files and folders. A pick reveals it in the tree and
+    /// opens a file.
+    fn explorer_bookmarks_menu(&mut self, ui: &mut egui::Ui, cwd: &Path) {
+        if self.preferences.explorer_bookmarks.is_empty() {
+            return;
+        }
+        let mut picked: Option<PathBuf> = None;
+        ui.menu_button("Bookmarks", |ui| {
+            for path in &self.preferences.explorer_bookmarks {
+                let label = workspace_ops::relative_display(cwd, path);
+                if ui
+                    .button(label)
+                    .on_hover_text(path.display().to_string())
+                    .clicked()
+                {
+                    picked = Some(path.clone());
+                    ui.close();
+                }
+            }
+        });
+        if let Some(path) = picked {
+            self.explorer_jump_to(ui, cwd, path);
+        }
+    }
+
+    /// Open the folders above `path`, select it, and open it if a file.
+    fn explorer_jump_to(&mut self, ui: &mut egui::Ui, cwd: &Path, path: PathBuf) {
+        if !path.starts_with(cwd) {
+            self.error = Some(format!("{} is outside the Explorer folder", path.display()));
+            return;
+        }
+        let mut parent = path.parent();
+        while let Some(dir) = parent.filter(|dir| dir.starts_with(cwd) && *dir != cwd) {
+            self.expanded_dirs.insert(dir.to_path_buf());
+            parent = dir.parent();
+        }
+        self.explorer_query.clear();
+        self.preferences.explorer_search_mode = ExplorerSearchMode::Names;
+        self.explorer_selection = vec![path.clone()];
+        self.explorer_anchor = Some(path.clone());
+        self.explorer_scroll_to = Some(path.clone());
+        if path.is_dir() {
+            self.expanded_dirs.insert(path);
+        } else {
+            self.activate_file_action(ui, &path, FileAction::Open);
         }
     }
 

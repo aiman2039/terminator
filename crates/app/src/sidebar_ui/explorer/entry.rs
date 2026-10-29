@@ -1,6 +1,6 @@
 //! One Explorer folder or file row with its actions.
 use super::*;
-use crate::sidebar_ui::explorer_rows::ExplorerLocal;
+use crate::sidebar_ui::explorer_rows::{ExplorerLocal, FileRowMarks};
 
 impl App {
     pub(super) fn explorer_entry(&mut self, input: ExplorerEntryInput<'_, '_>) {
@@ -121,6 +121,28 @@ impl App {
         if menu_click(ui, "Reveal in file manager", "FolderOpen") {
             self.queue_workspace(workspace_ops::Op::Reveal(folder_path.to_owned()));
         }
+        let bookmarked = self
+            .preferences
+            .explorer_bookmarks
+            .iter()
+            .any(|p| p == folder_path);
+        let label = if bookmarked {
+            "Remove bookmark"
+        } else {
+            "Add bookmark"
+        };
+        if menu_click(ui, label, "Bookmark") {
+            self.explorer_toggle_bookmark(folder_path);
+        }
+        let excluded = self.explorer_excluded(folder_path);
+        let label = if excluded {
+            "Show in Explorer"
+        } else {
+            "Hide from Explorer"
+        };
+        if menu_click(ui, label, "EyeOff") {
+            self.explorer_toggle_excluded(folder_path);
+        }
         ui.separator();
         if menu_click(ui, "Rename", "Pencil") {
             self.explorer_rename(folder_path);
@@ -188,6 +210,14 @@ fn menu_click(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
 }
 
 impl App {
+    fn explorer_excluded(&self, path: &Path) -> bool {
+        self.preferences
+            .explorer_view
+            .excluded
+            .iter()
+            .any(|known| known == path)
+    }
+
     fn explorer_file_entry(&mut self, input: ExplorerEntryInput<'_, '_>) {
         let ExplorerEntryInput {
             ui,
@@ -219,6 +249,11 @@ impl App {
                     .as_ref()
                     .and_then(|context| context.root.as_ref())
                     .map(|_| self.git.branches.as_slice()),
+                marks: FileRowMarks {
+                    excluded: self.explorer_excluded(&entry.path),
+                    bookmarked: self.preferences.explorer_bookmarks.contains(&entry.path),
+                    nested: row.nests.then(|| self.explorer_row_expanded(row)),
+                },
             },
         );
         if let Some(response) = &outcome.response {

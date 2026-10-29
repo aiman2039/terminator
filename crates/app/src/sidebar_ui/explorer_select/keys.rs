@@ -233,18 +233,25 @@ impl App {
         let Some(row) = nav.current() else {
             return;
         };
-        if is_dir(row) && !row.filtered_open && self.explorer_row_expanded(row) {
+        if expandable(row) && !row.filtered_open && self.explorer_row_expanded(row) {
             self.set_explorer_row_expanded(row, false);
-        } else if let Some(parent) = row.chain.first().unwrap_or(&row.path).parent()
-            && nav.visible.iter().any(|row| row.path == parent)
-        {
-            self.explorer_select_one(parent.to_owned());
+        } else if let Some(parent) = nav.at.and_then(|at| {
+            // The parent row is the nearest row above at a lower depth
+            // (a folder, or the file a nested file sits under).
+            nav.visible
+                .get(..at)?
+                .iter()
+                .rev()
+                .find(|above| above.depth < row.depth)
+        }) {
+            self.explorer_select_one(parent.path.clone());
         }
     }
 
-    /// Right expands a closed folder, else selects its first child.
+    /// Right expands a closed folder or nesting file, else selects its
+    /// first child.
     fn explorer_key_right(&mut self, nav: &TreeNav<'_>) {
-        let Some(row) = nav.current().filter(|row| is_dir(row)) else {
+        let Some(row) = nav.current().filter(|row| expandable(row)) else {
             return;
         };
         if !self.explorer_row_expanded(row) {
@@ -252,7 +259,7 @@ impl App {
         } else if let Some(child) = nav
             .at
             .and_then(|i| nav.visible.get(i.saturating_add(1)))
-            .filter(|child| child.path.parent() == Some(row.path.as_path()))
+            .filter(|child| child.depth > row.depth)
         {
             self.explorer_select_one(child.path.clone());
         }

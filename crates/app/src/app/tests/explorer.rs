@@ -1165,3 +1165,111 @@ fn undo_renames_a_moved_selection_back_once() {
     assert!(app.explorer_undo.is_empty());
     assert!(app.explorer_undoing.is_empty());
 }
+
+fn scoped_tree() -> (App, tempfile::TempDir, PathBuf) {
+    let (mut app, _ctx, dir) = fixture();
+    let root = dir.path().to_path_buf();
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    app.dirs.insert(
+        root.clone(),
+        vec![
+            entry("docs", true),
+            entry("src", true),
+            entry("Cargo.lock", false),
+            entry("Cargo.toml", false),
+        ],
+    );
+    app.dirs.insert(
+        root.join("src"),
+        vec![entry("src/lib.rs", false), entry("src/main.rs", false)],
+    );
+    app.dirs
+        .insert(root.join("docs"), vec![entry("docs/guide.md", false)]);
+    (app, dir, root)
+}
+
+fn row_labels(app: &mut App, root: &Path) -> Vec<(String, usize)> {
+    app.explorer_rows(root)
+        .iter()
+        .map(|row| (row.label.clone(), row.depth))
+        .collect()
+}
+
+#[test]
+fn lock_files_nest_under_their_manifest_until_opened() {
+    let (mut app, _dir, root) = scoped_tree();
+    let labels = row_labels(&mut app, &root);
+    assert_eq!(labels[2], ("Cargo.toml +1".to_owned(), 0));
+    assert_eq!(labels.len(), 3);
+    let rows = app.explorer_rows(&root);
+    assert!(rows[2].nests);
+    app.set_explorer_row_expanded(&rows[2], true);
+    let labels = row_labels(&mut app, &root);
+    assert_eq!(
+        labels[2..],
+        [("Cargo.toml".to_owned(), 0), ("Cargo.lock".to_owned(), 1)]
+    );
+    app.preferences.explorer_view.nesting_off = true;
+    assert_eq!(row_labels(&mut app, &root).len(), 4);
+}
+
+#[test]
+fn changed_scope_shows_only_changed_files_and_their_folders() {
+    let (mut app, _dir, root) = scoped_tree();
+    let main = root.join("src/main.rs");
+    app.context = Some(services::ContextData {
+        cwd: root.clone(),
+        root: Some(root.clone()),
+        perforce: None,
+        git_dirs: vec![],
+        branch: "main".into(),
+        changes: vec![terminator_git::Change {
+            path: main.clone(),
+            status: " M".into(),
+        }],
+        decorations: terminator_git::decorations(
+            &root,
+            &[terminator_git::Change {
+                path: main,
+                status: " M".into(),
+            }],
+        ),
+        stats: HashMap::default(),
+        error: None,
+    });
+    app.preferences.explorer_view.changed_only = true;
+    assert_eq!(
+        row_labels(&mut app, &root),
+        [("src".to_owned(), 0), ("main.rs".to_owned(), 1)]
+    );
+}
+
+#[test]
+fn hidden_paths_leave_the_tree_until_ignored_files_are_shown() {
+    let (mut app, _dir, root) = scoped_tree();
+    let docs = root.join("docs");
+    app.explorer_toggle_excluded(&docs);
+    assert!(
+        !row_labels(&mut app, &root)
+            .iter()
+            .any(|(label, _)| label == "docs")
+    );
+    // Shown again with ignored files, painted as ignored.
+    app.preferences.show_ignored = true;
+    let rows = app.explorer_rows(&root);
+    let row = rows.iter().find(|row| row.path == docs).unwrap();
+    assert!(row.entry.as_ref().unwrap().ignored);
+    app.explorer_toggle_excluded(&docs);
+    assert!(app.preferences.explorer_view.excluded.is_empty());
+    app.explorer_toggle_bookmark(&docs);
+    assert_eq!(
+        app.preferences.explorer_bookmarks,
+        std::slice::from_ref(&docs)
+    );
+    app.explorer_toggle_bookmark(&docs);
+    assert!(app.preferences.explorer_bookmarks.is_empty());
+}

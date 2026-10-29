@@ -42,6 +42,11 @@ fn is_dir(row: &ExplorerRow) -> bool {
     row.entry.as_ref().is_some_and(|entry| entry.directory)
 }
 
+/// A folder, or a file with nested files: Left/Right close and open it.
+fn expandable(row: &ExplorerRow) -> bool {
+    is_dir(row) || row.nests
+}
+
 /// `path` moved from `from` to `to` (itself or anything under it).
 fn moved(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
     path.strip_prefix(from).ok().map(|rest| {

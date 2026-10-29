@@ -233,6 +233,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/folder-x.svg"),
     ),
     (
+        "Bookmark",
+        egui::include_image!("../../assets/icons/bookmark.svg"),
+    ),
+    (
         "FileCog",
         egui::include_image!("../../assets/icons/file-cog.svg"),
     ),
