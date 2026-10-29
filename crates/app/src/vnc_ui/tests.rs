@@ -58,6 +58,7 @@ fn vnc_forms_start_at_display_66_and_preserve_saved_ports() {
         last_connected: 0,
         options: terminator_core::vnc::VncOptions::default(),
         credential_saved: false,
+        labels: Vec::new(),
     };
     sidebar.begin_edit(&profile);
     assert_eq!(sidebar.port, "80");
@@ -89,6 +90,8 @@ fn frame(region: Option<VncRegion>, pixels: &[u8]) -> VncFrame {
         zlib_rgba: compressed(pixels),
         region,
         clipboard: None,
+        shm: None,
+        cursor_serial: 0,
     }
 }
 
@@ -101,7 +104,8 @@ fn a_partial_frame_decodes_to_region_pixels_only() {
         height: 2,
     };
     let pixels = [0u8, 255, 0, 255, 0, 0, 255, 255];
-    let decoded = decode_frame(frame(Some(region), &pixels)).expect("region frame decodes");
+    let decoded = decode_frame(frame(Some(region), &pixels), std::path::Path::new("/"))
+        .expect("region frame decodes");
     assert_eq!(decoded.region, Some(region));
     assert_eq!(decoded.width, 2, "the record keeps the remote size");
     assert_eq!(decoded.height, 2);
@@ -120,7 +124,8 @@ fn a_partial_frame_decodes_to_region_pixels_only() {
 #[test]
 fn a_frame_without_a_region_decodes_at_the_remote_size() {
     let pixels = [1u8, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255];
-    let decoded = decode_frame(frame(None, &pixels)).expect("full frame decodes");
+    let decoded =
+        decode_frame(frame(None, &pixels), std::path::Path::new("/")).expect("full frame decodes");
     assert_eq!(decoded.region, None);
     let image = decoded.image.expect("full pixels decode");
     assert_eq!(image.size, [2, 2]);
@@ -147,29 +152,31 @@ fn modifier_transitions_report_each_changed_key_once() {
 }
 
 #[test]
-fn modifier_bits_map_command_to_meta_without_double_counting_ctrl() {
+fn modifier_bits_map_command_to_the_chosen_key_without_double_counting_ctrl() {
+    use terminator_core::vnc::CommandKey::{Control, Super};
     let none = egui::Modifiers::default();
-    assert_eq!(modifier_bits(none), 0);
+    assert_eq!(modifier_bits(none, Control), 0);
     let shift_alt = egui::Modifiers {
         shift: true,
         alt: true,
         ..none
     };
-    assert_eq!(modifier_bits(shift_alt), 1 | 4);
+    assert_eq!(modifier_bits(shift_alt, Control), 1 | 4);
     // macOS Command is `command` without `ctrl`.
     let command = egui::Modifiers {
         command: true,
         mac_cmd: true,
         ..none
     };
-    assert_eq!(modifier_bits(command), 8);
+    assert_eq!(modifier_bits(command, Super), 8);
+    assert_eq!(modifier_bits(command, Control), 2, "Cmd+A acts as Ctrl+A");
     // Elsewhere `command` mirrors Ctrl: one Control key, not two.
     let ctrl = egui::Modifiers {
         ctrl: true,
         command: true,
         ..none
     };
-    assert_eq!(modifier_bits(ctrl), 2);
+    assert_eq!(modifier_bits(ctrl, Super), 2);
 }
 
 #[test]
@@ -266,10 +273,11 @@ fn focused_vnc_clipboard_commands_send_remote_shortcuts() {
             down: true
         }
     )));
+    // The held Command key (sent as Control by default) is released last.
     assert!(matches!(
         paste.last(),
         Some(VncInputEvent::Key {
-            keycode: 0xFFEB,
+            keycode: 0xFFE3,
             down: false
         })
     ));
@@ -411,4 +419,162 @@ fn a_selected_monitor_maps_pointer_input_to_that_monitor() {
         output.textures_delta.clear();
     }
     assert!(events.iter().any(|e|matches!(e,VncInputEvent::Pointer{x,y,buttons:1} if (590..=610).contains(x)&&(290..=310).contains(y))));
+}
+
+#[test]
+fn saving_a_form_connection_keeps_the_password_only_on_secure_daemons() {
+    let request = PendingVncConnect {
+        profile_id: None,
+        host: "localhost".into(),
+        port: 7939,
+        username: String::new(),
+        password: "fixture-password".into(),
+        shared: true,
+        view_only: false,
+        label: None,
+        save_profile: true,
+        options: Default::default(),
+    };
+    let (profile, forget) = connect::connect_profile(&request, "dev", true);
+    assert_eq!(profile.password, "fixture-password");
+    assert!(!forget);
+    let (profile, forget) = connect::connect_profile(&request, "dev", false);
+    assert!(profile.password.is_empty());
+    assert!(forget);
+}
+
+#[test]
+fn address_bar_reads_displays_ports_and_bracketed_ipv6() {
+    use super::address_book::parse_address;
+    assert_eq!(
+        parse_address("dc6.example.com:2039"),
+        Ok(("dc6.example.com".into(), 7939))
+    );
+    assert_eq!(parse_address("vnc://host::5901"), Ok(("host".into(), 5901)));
+    assert_eq!(parse_address("host"), Ok(("host".into(), 5900)));
+    assert_eq!(parse_address("[::1]:1"), Ok(("::1".into(), 5901)));
+    for bad in ["", ":1", "host:x", "host::0", "host:70000", "[::1"] {
+        assert!(parse_address(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn labels_are_trimmed_without_repeats() {
+    assert_eq!(
+        super::profiles::parse_labels(" lab, Team ,lab,, team "),
+        vec!["lab".to_owned(), "Team".to_owned()]
+    );
+}
+
+#[test]
+fn dropped_files_upload_into_an_absolute_folder_only() {
+    use super::transfer::remote_for_drop;
+    let file = std::path::Path::new("/Users/me/report.pdf");
+    assert_eq!(
+        remote_for_drop("/home/me/Desktop/", file),
+        Ok("/home/me/Desktop/report.pdf".to_owned())
+    );
+    assert_eq!(remote_for_drop("/", file), Ok("/report.pdf".to_owned()));
+    assert!(remote_for_drop("", file).is_err());
+    assert!(remote_for_drop("~/Desktop", file).is_err());
+}
+
+#[test]
+fn ctrl_and_cmd_chords_reach_the_remote_as_ctrl_chords() {
+    let ctx = egui::Context::default();
+    let mut view = VncViewState {
+        width: 800,
+        height: 600,
+        ..Default::default()
+    };
+    let texture = ctx.load_texture(
+        "keys-test",
+        ColorImage::filled([800, 600], Color32::BLACK),
+        egui::TextureOptions::NEAREST,
+    );
+    let mut paint = |mut events: Vec<egui::Event>, modifiers: egui::Modifiers| {
+        events.insert(0, egui::Event::ModifiersChanged(modifiers));
+        let mut result = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                result = Some(vnc_screen(VncScreenInput {
+                    ui,
+                    view: &mut view,
+                    texture: &texture,
+                    view_only: false,
+                    paste_shortcut: VncPasteShortcut::ShiftInsert,
+                }));
+            },
+        );
+        output.textures_delta.clear();
+        result.map(|outcome| outcome.events).unwrap_or_default()
+    };
+    let none = egui::Modifiers::NONE;
+    let pos = egui::pos2(120.0, 170.0);
+    paint(vec![], none);
+    // Click to focus the remote screen, as a user does.
+    for pressed in [true, false] {
+        paint(
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: none,
+                },
+            ],
+            none,
+        );
+    }
+    let key = |key, pressed, modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers,
+    };
+    let keys = |events: Vec<VncInputEvent>| -> Vec<(u32, bool)> {
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                VncInputEvent::Key { keycode, down } => Some((keycode, down)),
+                _ => None,
+            })
+            .collect()
+    };
+    const CONTROL: u32 = 0xFFE3;
+    let c = u32::from('c');
+    let a = u32::from('a');
+    // Physical Ctrl+C: Control down, c down/up, Control up.
+    let ctrl = egui::Modifiers { ctrl: true, ..none };
+    let mut sent = keys(paint(vec![key(egui::Key::C, true, ctrl)], ctrl));
+    sent.extend(keys(paint(vec![key(egui::Key::C, false, ctrl)], ctrl)));
+    sent.extend(keys(paint(vec![], none)));
+    assert_eq!(
+        sent,
+        vec![(CONTROL, true), (c, true), (c, false), (CONTROL, false)]
+    );
+    // Mac Cmd+A with the default Command key: also a Ctrl chord.
+    let cmd = egui::Modifiers {
+        command: true,
+        mac_cmd: true,
+        ..none
+    };
+    let mut sent = keys(paint(vec![key(egui::Key::A, true, cmd)], cmd));
+    sent.extend(keys(paint(vec![key(egui::Key::A, false, cmd)], cmd)));
+    sent.extend(keys(paint(vec![], none)));
+    assert_eq!(
+        sent,
+        vec![(CONTROL, true), (a, true), (a, false), (CONTROL, false)]
+    );
 }

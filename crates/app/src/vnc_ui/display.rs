@@ -95,16 +95,8 @@ impl ScreenGeometry {
         }
     }
 
-    fn display_size(&self, fit: bool) -> egui::Vec2 {
-        let (available, tex_size) = (self.available, self.tex_size);
-        if fit && tex_size.x > 0.0 && tex_size.y > 0.0 {
-            let scale = (available.x / tex_size.x)
-                .min(available.y / tex_size.y)
-                .max(0.05);
-            egui::vec2(tex_size.x * scale, tex_size.y * scale)
-        } else {
-            tex_size
-        }
+    fn display_size(&self, scale: super::scale::VncScale) -> egui::Vec2 {
+        scale.display_size(self.available, self.tex_size)
     }
 
     /// Pointer mapping: window point to remote pixel, clamped to the
@@ -184,16 +176,23 @@ struct ScreenPane<'a> {
 
 impl ScreenPane<'_> {
     fn show(&mut self, ui: &mut egui::Ui, texture: &TextureHandle) -> egui::Response {
-        let display_size = self.geometry.display_size(self.view.fit);
-        let size = if self.view.fit {
-            self.geometry.available.max(egui::Vec2::ZERO)
+        let display_size = self.geometry.display_size(self.view.scale);
+        // Fit fills the pane; the other modes are as large as the screen
+        // (scrolling) and a smaller screen stays centred.
+        let available = self.geometry.available.max(egui::Vec2::ZERO);
+        let size = if self.view.scale.fills_pane() {
+            available
         } else {
-            display_size
+            display_size.max(available)
         };
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         ui.painter()
             .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-        let image_rect = egui::Rect::from_center_size(rect.center(), display_size);
+        // Pixel-aligned so 100% maps one remote pixel to one screen pixel.
+        let image_rect = egui::emath::GuiRounding::round_to_pixels(
+            egui::Rect::from_center_size(rect.center(), display_size),
+            ui.pixels_per_point(),
+        );
         egui::Image::new(texture)
             .uv(self.geometry.uv)
             .paint_at(ui, image_rect);
@@ -212,8 +211,11 @@ impl ScreenPane<'_> {
         response: &egui::Response,
         image_rect: egui::Rect,
     ) {
+        // The daemon always asks for the cursor shape, so the server leaves
+        // it out of the framebuffer and the local pointer moves it with no
+        // lag. Older daemons send a shape only when the host enabled it.
         let view = &*self.view;
-        if !(view.draft_options.show_remote_cursor && view.cursor_signature.is_some()) {
+        if view.cursor_signature.is_none() {
             return;
         }
         let Some(pos) = response.hover_pos().filter(|pos| image_rect.contains(*pos)) else {
@@ -278,7 +280,7 @@ impl ScreenPane<'_> {
         // Wheel: forwarded only when the remote fills the pane; at
         // 100% the local scroll bars own the wheel.
         let scroll_delta = ui.input(|input| input.smooth_scroll_delta);
-        if self.view.fit && scroll_delta.y.abs() > 1.0 {
+        if self.view.scale.fills_pane() && scroll_delta.y.abs() > 1.0 {
             let wheel_bit = if scroll_delta.y > 0.0 { 8u8 } else { 16u8 };
             self.events.push(VncInputEvent::Pointer {
                 x,
@@ -312,7 +314,8 @@ impl ScreenKeys<'_> {
             response,
             paste_shortcut,
         } = input;
-        let modifiers = ui.input(|input| modifier_bits(input.modifiers));
+        let command_key = view.draft_options.command_key;
+        let modifiers = ui.input(|input| modifier_bits(input.modifiers, command_key));
         let window_focused = ui.ctx().input(|input| input.focused);
         let focused = response.has_focus() && window_focused;
         let mut keys = ScreenKeys {

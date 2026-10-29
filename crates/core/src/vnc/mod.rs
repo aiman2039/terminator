@@ -1,5 +1,9 @@
+mod errors;
 mod options;
+mod profile;
+pub use errors::*;
 pub use options::*;
+pub use profile::*;
 
 use serde::{Deserialize, Serialize};
 
@@ -8,112 +12,16 @@ pub const CAPABILITY: &str = "vnc-v1";
 /// carries `regions: true` with only the changed rectangle.
 pub const REGIONS_CAPABILITY: &str = "vnc-regions-v1";
 pub const DEFAULT_PORT: u16 = 5900;
-
-/// Why a saved VNC profile is invalid.
-#[derive(Debug, thiserror::Error)]
-pub enum VncProfileError {
-    #[error("Invalid VNC profile ID")]
-    InvalidId { id: String },
-    #[error("Invalid VNC username")]
-    InvalidUsername { username: String },
-    #[error("VNC password exceeds 4096 bytes")]
-    PasswordTooLong { bytes: usize },
-    #[error("VNC host must be 1–255 characters")]
-    InvalidHost { host: String },
-    #[error("VNC port must be between 1 and 65535")]
-    InvalidPort,
-    #[error("VNC profile name must be at most 255 characters")]
-    NameTooLong { bytes: usize },
-    #[error(transparent)]
-    Options(#[from] VncOptionsError),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VncProfile {
-    pub id: String,
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-    #[serde(default)]
-    pub username: String,
-    #[serde(default)]
-    pub password: String,
-    #[serde(default = "default_true")]
-    pub shared: bool,
-    #[serde(default)]
-    pub view_only: bool,
-    #[serde(default)]
-    pub last_connected: u64,
-    #[serde(default)]
-    pub options: VncOptions,
-    #[serde(default)]
-    pub credential_saved: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl VncProfile {
-    pub fn validate(&self) -> Result<(), VncProfileError> {
-        let valid_id = !self.id.is_empty()
-            && self.id.len() <= 128
-            && self
-                .id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
-        if !valid_id {
-            return Err(VncProfileError::InvalidId {
-                id: self.id.clone(),
-            });
-        }
-        if self.username.len() > 4096 || self.username.chars().any(char::is_control) {
-            return Err(VncProfileError::InvalidUsername {
-                username: self.username.clone(),
-            });
-        }
-        if self.password.len() > 4096 {
-            return Err(VncProfileError::PasswordTooLong {
-                bytes: self.password.len(),
-            });
-        }
-        if self.host.trim().is_empty() || self.host.len() > 255 {
-            return Err(VncProfileError::InvalidHost {
-                host: self.host.clone(),
-            });
-        }
-        if self.port == 0 {
-            return Err(VncProfileError::InvalidPort);
-        }
-        if self.name.len() > 255 {
-            return Err(VncProfileError::NameTooLong {
-                bytes: self.name.len(),
-            });
-        }
-        self.options.validate()?;
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn display_name(&self) -> String {
-        let trimmed = self.name.trim();
-        if trimmed.is_empty() {
-            format!("{}:{}", self.host.trim(), self.port)
-        } else {
-            trimmed.to_string()
-        }
-    }
-
-    #[must_use]
-    pub fn endpoint(&self) -> String {
-        let host = self.host.trim();
-        if host.contains(':') && !host.starts_with('[') {
-            format!("[{host}]:{}", self.port)
-        } else {
-            format!("{host}:{}", self.port)
-        }
-    }
-}
+/// Shared-memory frames, long-polled frame requests, and cursor images sent
+/// only when they change. See [`VncShmRequest`] and [`VncShmFrame`].
+pub const SHM_CAPABILITY: &str = "vnc-shm-v1";
+/// The daemon reads `Settings::vnc_detached_timeout_minutes`; older ones
+/// always disconnect after 30 minutes without a viewer.
+pub const DETACH_TIMEOUT_CAPABILITY: &str = "vnc-detach-timeout-v1";
+/// Longest a shared-memory frame request waits for a new revision.
+pub const MAX_FRAME_WAIT_MS: u32 = 500;
+/// Most changed rectangles one shared-memory frame lists.
+pub const MAX_SHM_REGIONS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -165,6 +73,9 @@ pub struct VncSession {
     pub retry_attempt: u8,
     #[serde(default)]
     pub retry_in_seconds: u64,
+    /// Why the session failed (`vnc-errors-v1` daemons); omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<VncErrorKind>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +157,49 @@ pub struct VncFrame {
     pub monitors: Vec<VncMonitor>,
     #[serde(default)]
     pub resize_supported: bool,
+    /// Pixels are in a shared-memory file instead of `zlib_rgba`. Only sent
+    /// to a request that carried [`VncShmRequest`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shm: Option<VncShmFrame>,
+    /// Counter of cursor image changes. With [`VncShmRequest`], `cursor` is
+    /// sent only when this is newer than the request's `cursor_serial`.
+    #[serde(default)]
+    pub cursor_serial: u64,
+}
+
+/// Shared-memory options of a frame request (`vnc-shm-v1` daemons only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncShmRequest {
+    /// Wait up to this long (capped at [`MAX_FRAME_WAIT_MS`]) for a revision
+    /// newer than `since` before answering `Unchanged`.
+    #[serde(default)]
+    pub wait_ms: u32,
+    /// The newest cursor the viewer has; older or equal cursors are omitted.
+    #[serde(default)]
+    pub cursor_serial: u64,
+}
+
+/// Where a shared-memory frame's pixels are: the file holds the whole
+/// framebuffer after the daemon copied `regions` (the whole frame when
+/// empty) under seqlock `sequence`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncShmFrame {
+    pub path: std::path::PathBuf,
+    pub sequence: u64,
+    #[serde(default)]
+    pub regions: Vec<VncRegion>,
+    /// Server-side speed, for the viewer's speed indicator.
+    #[serde(default)]
+    pub stats: VncStats,
+}
+
+/// How fast the VNC server answers the daemon's update requests.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncStats {
+    /// Complete framebuffer updates received in the last second.
+    pub updates_per_second: u16,
+    /// Smoothed time from an update request to the end of its answer.
+    pub update_ms: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,6 +296,7 @@ mod tests {
         let mut profile = VncProfile {
             options: VncOptions::default(),
             credential_saved: false,
+            labels: Vec::new(),
             id: "p1".into(),
             name: "Dev VM".into(),
             host: "127.0.0.1".into(),
@@ -360,6 +315,31 @@ mod tests {
         assert!(profile.validate().is_err());
         profile.host = "127.0.0.1".into();
         profile.port = 0;
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn profile_labels_are_bounded() {
+        let mut profile = VncProfile {
+            id: "p".into(),
+            name: String::new(),
+            host: "h".into(),
+            port: 5900,
+            username: String::new(),
+            password: String::new(),
+            shared: true,
+            view_only: false,
+            last_connected: 0,
+            options: VncOptions::default(),
+            credential_saved: false,
+            labels: vec!["lab".into()],
+        };
+        assert!(profile.validate().is_ok());
+        profile.labels = vec![" ".into()];
+        assert!(profile.validate().is_err());
+        profile.labels = vec!["x".repeat(MAX_LABEL_LEN + 1)];
+        assert!(profile.validate().is_err());
+        profile.labels = (0..=MAX_LABELS).map(|n| n.to_string()).collect();
         assert!(profile.validate().is_err());
     }
 
@@ -410,5 +390,6 @@ mod tests {
         let encoded = serde_json::to_string(&with_region).expect("frame encodes");
         let decoded: VncFrame = serde_json::from_str(&encoded).expect("frame decodes");
         assert_eq!(decoded.region, with_region.region);
+        assert!(!encoded.contains("shm"), "legacy frames stay unchanged");
     }
 }

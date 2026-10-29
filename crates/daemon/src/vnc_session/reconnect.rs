@@ -46,16 +46,17 @@ pub(super) async fn run(input: RunInput) {
             Err(Failure::Cancelled) | Ok(()) => {
                 break;
             }
-            Err(Failure::Permanent(message)) => {
+            Err(Failure::Permanent(kind, message)) => {
                 mark_failed(MarkFailedInput {
                     shared: &shared,
                     runtime: &runtime,
                     session_id: &sid,
                     message,
+                    kind,
                 });
                 break;
             }
-            Err(Failure::Network(message)) => {
+            Err(Failure::Network(kind, message)) => {
                 if started.elapsed() >= Duration::from_mins(1) {
                     attempt = 0;
                 }
@@ -66,6 +67,7 @@ pub(super) async fn run(input: RunInput) {
                         runtime: &runtime,
                         session_id: &sid,
                         reason: Some(message),
+                        kind: Some(kind),
                     });
                     break;
                 }

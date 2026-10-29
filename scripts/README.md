@@ -454,6 +454,7 @@ It does not use your configured server or workspace.
 | Rotate a fixture host key (`ChangedHostKey`) | `bash scripts/ssh-project-fixture.sh rekey [ssh-project\|ssh-project-pw]` |
 | Live SSH checks: host keys, master reuse, forwards, 50 MiB transfers | `cargo xtask ssh` (`--require` fails instead of skipping without Docker) |
 | Host-key trust dialog capture | `cargo xtask gui ssh-hostkey` (after the test-support build) |
+| VNC against TigerVNC in Docker: frame and cursor, Detached, reattach, disconnect | `cargo xtask gui vnc` (after the test-support build; skips without Docker) |
 
 Both xtask targets start an isolated fixture copy on free ports and remove its
 containers, volumes, masters and temporary keys afterwards. They skip with a

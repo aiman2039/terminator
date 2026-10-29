@@ -80,8 +80,103 @@ pub(super) fn to_x11_event(event: VncInputEvent) -> Option<X11Event> {
     })
 }
 
+/// Drop pointer moves that the next queued move replaces. A move is
+/// dropped only when the event before it had the same buttons (so it only
+/// moved) and the next event keeps them; presses, releases and all other
+/// events stay in order, so clicks and drags land where they were made.
+pub(super) fn coalesce_pointer_moves(events: Vec<VncInputEvent>) -> Vec<VncInputEvent> {
+    let mut out: Vec<VncInputEvent> = Vec::with_capacity(events.len());
+    for event in events {
+        if let VncInputEvent::Pointer { buttons, .. } = &event {
+            let before = out.len().checked_sub(2).and_then(|i| out.get(i));
+            let pure_move = matches!(
+                (before, out.last()),
+                (
+                    Some(VncInputEvent::Pointer { buttons: a, .. }),
+                    Some(VncInputEvent::Pointer { buttons: b, .. }),
+                ) if a == buttons && b == buttons
+            );
+            if pure_move {
+                out.pop();
+            }
+        }
+        out.push(event);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn queued_pointer_moves_collapse_but_clicks_stay() {
+        use terminator_core::vnc::VncInputEvent::{Key, Pointer};
+        let events = vec![
+            Pointer {
+                x: 1,
+                y: 1,
+                buttons: 0,
+            },
+            Pointer {
+                x: 2,
+                y: 2,
+                buttons: 0,
+            },
+            Pointer {
+                x: 3,
+                y: 3,
+                buttons: 0,
+            },
+            Pointer {
+                x: 4,
+                y: 4,
+                buttons: 1,
+            },
+            Pointer {
+                x: 5,
+                y: 5,
+                buttons: 1,
+            },
+            Pointer {
+                x: 6,
+                y: 6,
+                buttons: 1,
+            },
+            Key {
+                keycode: 97,
+                down: true,
+            },
+        ];
+        assert_eq!(
+            super::coalesce_pointer_moves(events),
+            vec![
+                Pointer {
+                    x: 1,
+                    y: 1,
+                    buttons: 0
+                },
+                Pointer {
+                    x: 3,
+                    y: 3,
+                    buttons: 0
+                },
+                Pointer {
+                    x: 4,
+                    y: 4,
+                    buttons: 1
+                },
+                Pointer {
+                    x: 6,
+                    y: 6,
+                    buttons: 1
+                },
+                Key {
+                    keycode: 97,
+                    down: true
+                },
+            ]
+        );
+    }
+
     use super::*;
     use terminator_core::vnc::ClipboardMode;
     #[test]

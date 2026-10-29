@@ -239,6 +239,9 @@ impl App {
             }
             return;
         }
+        if matches!(tool, StripeTool::Tool(SidebarTool::Vnc)) {
+            self.show_vnc_page();
+        }
         if right {
             match tool {
                 StripeTool::Projects => self.preferences.right_projects = true,

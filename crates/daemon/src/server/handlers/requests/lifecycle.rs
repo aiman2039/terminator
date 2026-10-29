@@ -41,10 +41,7 @@ impl Shared {
     pub(super) fn on_shutdown(&self) -> Result<Outcome> {
         let _creation_guard = relock(&self.worktree_operations);
         ensure!(
-            !relock(&self.state)
-                .sessions
-                .iter()
-                .any(|s| s.lifecycle.live()),
+            !has_live_sessions(&relock(&self.state)),
             "Stop running sessions before stopping daemon"
         );
         self.flush_history()?;
@@ -76,5 +73,32 @@ impl Shared {
             "Generation is active"
         );
         Ok(())
+    }
+}
+
+/// Live terminals or VNC connections. A VNC connection lives only in this
+/// process, so stopping the daemon would drop it like a terminal.
+fn has_live_sessions(state: &State) -> bool {
+    state.sessions.iter().any(|s| s.lifecycle.live())
+        || state.vnc_sessions.iter().any(|s| s.status.live())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_live_vnc_session_keeps_the_daemon_running() {
+        let mut state = State::default();
+        assert!(!has_live_sessions(&state));
+        state.vnc_sessions.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "v", "project_id": "", "label": "", "host": "h", "port": 5900,
+                "width": 0, "height": 0, "view_only": false, "status": "connected",
+                "created": 0, "generation": "g"
+            }))
+            .expect("minimal VNC session"),
+        );
+        assert!(has_live_sessions(&state));
     }
 }

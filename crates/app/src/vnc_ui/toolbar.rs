@@ -28,8 +28,11 @@ impl VncToolbar<'_> {
             self.fullscreen_toggle(ui);
             self.keys_menu(ui);
             self.monitor_menu(ui);
-            self.scale_toggle(ui);
+            self.scale_menu(ui);
+            self.speed_chip(ui);
+            self.capture_chip(ui);
         });
+        self.ctrl_alt_del_bar(ui);
         self.actions
     }
 
@@ -62,9 +65,18 @@ impl VncToolbar<'_> {
         {
             self.actions.refresh =
                 appearance::sidebar_action(ui, "RefreshCw", "Refresh remote screen").clicked();
-            self.actions.ctrl_alt_del =
-                appearance::sidebar_action(ui, "Keyboard", "Send Ctrl+Alt+Del to remote host")
-                    .clicked();
+            if appearance::sidebar_action(ui, "Keyboard", "Send Ctrl+Alt+Del to remote host")
+                .clicked()
+            {
+                self.view.confirm_ctrl_alt_del = true;
+            }
+            self.actions.disconnect =
+                appearance::sidebar_action(ui, "CircleStop", "Disconnect").clicked();
+        } else if self
+            .session
+            .is_some_and(|s| s.status == VncSessionStatus::Connecting)
+        {
+            // Connecting or waiting to retry: stopping must stay possible.
             self.actions.disconnect =
                 appearance::sidebar_action(ui, "CircleStop", "Disconnect").clicked();
         } else if !self.fields.host.is_empty()
@@ -131,16 +143,29 @@ impl VncToolbar<'_> {
         });
     }
 
+    /// Toolbar button, or F11 while this remote screen has focus (F11 in
+    /// fullscreen is handled earlier, by the app's escape keys).
     fn fullscreen_toggle(&mut self, ui: &mut egui::Ui) {
-        if !appearance::sidebar_action(ui, "Maximize", "Toggle remote fullscreen (F11)").clicked() {
+        let clicked =
+            appearance::sidebar_action(ui, "Maximize", "Toggle remote fullscreen (F11)").clicked();
+        let f11 = self.fullscreen.is_none()
+            && self.view.focused
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F11));
+        if !(clicked || f11) {
             return;
         }
         if self.fullscreen.is_some() {
             *self.fullscreen = None;
+            if let Some(previous) = self.view.capture_before_fullscreen.take() {
+                self.view.capture_shortcuts = previous;
+            }
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             return;
         }
+        // Fullscreen sends app shortcuts to the remote; leaving restores.
+        self.view.capture_before_fullscreen = Some(self.view.capture_shortcuts);
+        self.view.capture_shortcuts = true;
         let fields = self.fields;
         *self.fullscreen = Some(Tab::Vnc {
             id: fields.tab_id.into(),
@@ -162,6 +187,9 @@ impl VncToolbar<'_> {
                 &mut view.capture_shortcuts,
                 "Capture app shortcuts (F8 to release)",
             );
+            ui.label("Command key sends");
+            settings::command_key(ui, &mut view.draft_options.command_key);
+            ui.separator();
             for (name, key, modifier) in [
                 ("Alt+Tab", 0xFF09, 0xFFE9),
                 ("Command+Tab", 0xFF09, 0xFFEB),
@@ -238,20 +266,85 @@ impl VncToolbar<'_> {
         });
     }
 
-    fn scale_toggle(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .selectable_label(self.view.fit, "Fit")
-            .on_hover_text("Scale remote screen to pane")
-            .clicked()
+    /// Speed indicator while connected; hover for the details.
+    fn speed_chip(&self, ui: &mut egui::Ui) {
+        if !self
+            .session
+            .is_some_and(|s| s.status == VncSessionStatus::Connected)
         {
-            self.view.fit = true;
+            return;
         }
-        if ui
-            .selectable_label(!self.view.fit, "100%")
-            .on_hover_text("Actual pixel size")
-            .clicked()
-        {
-            self.view.fit = false;
+        ui.separator();
+        ui.label(
+            RichText::new(self.view.speed.label())
+                .size(11.0)
+                .color(ui.visuals().weak_text_color()),
+        )
+        .on_hover_text(self.view.speed.detail());
+    }
+
+    /// Scale modes, plus resizing the remote desktop to the pane when the
+    /// session was started with remote resize allowed.
+    fn scale_menu(&mut self, ui: &mut egui::Ui) {
+        let before = self.view.scale;
+        let resize_allowed = self.session.is_some_and(|s| s.options.remote_resize);
+        let view = &mut *self.view;
+        appearance::text_menu_button(ui, before.label(), |ui| {
+            for scale in VncScale::ALL {
+                if ui
+                    .selectable_value(&mut view.scale, scale, scale.label())
+                    .clicked()
+                {
+                    ui.close();
+                }
+            }
+            ui.separator();
+            ui.add_enabled(
+                resize_allowed,
+                egui::Checkbox::new(
+                    &mut view.draft_options.remote_resize,
+                    "Resize remote desktop to the pane",
+                ),
+            )
+            .on_disabled_hover_text(
+                "Turn on in Properties > Options; applies when you connect again",
+            );
+        });
+        // The texture filter follows the mode; reload it with the new one.
+        if self.view.scale != before {
+            self.view.force_full = true;
         }
     }
+
+    /// Shown while app shortcuts go to the remote.
+    fn capture_chip(&self, ui: &mut egui::Ui) {
+        if self.view.capture_shortcuts && self.view.focused {
+            ui.label(
+                RichText::new("Capturing shortcuts · F8 to release")
+                    .size(11.0)
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
+    }
+
+    /// In-pane confirmation for Ctrl+Alt+Del, which can log out or lock
+    /// the remote desktop.
+    fn ctrl_alt_del_bar(&mut self, ui: &mut egui::Ui) {
+        if !self.view.confirm_ctrl_alt_del {
+            return;
+        }
+        let host = self.fields.host;
+        ui.horizontal(|ui| {
+            ui.label(format!("Send Ctrl+Alt+Del to {host}?"));
+            if form::primary_button(ui, "Send").clicked() {
+                self.actions.ctrl_alt_del = true;
+                self.view.confirm_ctrl_alt_del = false;
+            }
+            if ui.button("Cancel").clicked() {
+                self.view.confirm_ctrl_alt_del = false;
+            }
+        });
+    }
 }
+
+use super::scale::VncScale;

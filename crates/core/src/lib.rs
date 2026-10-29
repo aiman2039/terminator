@@ -347,6 +347,24 @@ impl Paths {
     pub fn crash_dir(&self) -> PathBuf {
         self.data.join("crashes")
     }
+    /// Last screen of each saved VNC host, written by the daemon and shown
+    /// on address-book cards. Use the root data directory, not a daemon
+    /// generation's.
+    #[must_use]
+    pub fn vnc_thumbnail_dir(&self) -> PathBuf {
+        self.data.join("vnc-thumbnails")
+    }
+    /// `None` for a profile id that is not a plain file name.
+    #[must_use]
+    pub fn vnc_thumbnail(&self, profile_id: &str) -> Option<PathBuf> {
+        let plain = !profile_id.is_empty()
+            && profile_id.len() <= 128
+            && !profile_id.starts_with('.')
+            && profile_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        plain.then(|| self.vnc_thumbnail_dir().join(format!("{profile_id}.png")))
+    }
     #[must_use]
     pub fn editor_socket(&self, session: &str) -> PathBuf {
         self.runtime

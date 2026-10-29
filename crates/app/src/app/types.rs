@@ -322,6 +322,8 @@ pub(crate) enum Job {
         session: String,
         direction: terminator_core::vnc::TransferDirection,
         remote: String,
+        /// A file dropped on the screen; `None` opens a file picker.
+        local: Option<std::path::PathBuf>,
     },
     VncTransferPoll {
         session: String,
@@ -335,6 +337,8 @@ pub(crate) enum Job {
         session: String,
         since: u64,
         regions: bool,
+        /// Shared-memory long poll; `None` for daemons without `vnc-shm-v1`.
+        shm: Option<terminator_core::vnc::VncShmRequest>,
     },
     /// Load a commit-log or blame tab off the GUI thread.
     GitView(Tab),
@@ -448,6 +452,7 @@ pub(crate) enum Update {
         cwd: PathBuf,
     },
     PickedAudio(Vec<PathBuf>),
+    PickedVncFiles(Vec<PathBuf>),
     PickedPath {
         path: Option<PathBuf>,
         target: BrowseTarget,

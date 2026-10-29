@@ -7468,6 +7468,7 @@ dependencies = [
  "tempfile",
  "terminator-core",
  "terminator-git",
+ "terminator-sys",
  "tokio",
  "uuid",
  "vnc-rs",
@@ -7546,6 +7547,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
  "libc",
+ "memmap2",
  "windows-sys 0.61.2",
 ]
 

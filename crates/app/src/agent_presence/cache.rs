@@ -488,7 +488,7 @@ impl PresentationDeps {
     }
 }
 
-pub(super) fn ago(timestamp: u64, now: u64) -> String {
+pub(crate) fn ago(timestamp: u64, now: u64) -> String {
     let age = now.saturating_sub(timestamp);
     if age < 90 {
         format!("{age}s ago")

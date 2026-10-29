@@ -105,6 +105,7 @@ fn apply_cursor(runtime: &Arc<Mutex<VncRuntime>>, rect: vnc::Rect, pixels: Vec<u
             height: rect.height,
             rgba: B64.encode(pixels),
         });
+        rt.cursor_serial = rt.cursor_serial.saturating_add(1);
         rt.revision = rt.revision.saturating_add(1);
     }
     true
@@ -140,15 +141,28 @@ pub(super) fn apply_vnc_event(input: ApplyVncEventInput<'_>) -> bool {
             None => true,
         },
         VncEvent::RawImage(rect, bytes) => {
-            relock(runtime).blit_rgba(rect, &bytes);
+            let mut rt = relock(runtime);
+            rt.stats.update_started();
+            rt.blit_rgba(rect, &bytes);
             true
         }
         VncEvent::Copy(dst, src) => {
-            relock(runtime).copy_rect(dst, src);
+            let mut rt = relock(runtime);
+            rt.stats.update_started();
+            rt.copy_rect(dst, src);
             true
         }
-        VncEvent::JpegImage(rect, bytes) => apply_jpeg(runtime, rect, bytes),
+        VncEvent::JpegImage(rect, bytes) => {
+            relock(runtime).stats.update_started();
+            apply_jpeg(runtime, rect, bytes)
+        }
         VncEvent::SetCursor(rect, pixels) => apply_cursor(runtime, rect, pixels),
+        VncEvent::UpdateEnd => {
+            let mut rt = relock(runtime);
+            rt.update_pending = false;
+            rt.stats.update_ended();
+            true
+        }
         VncEvent::Text(text) => {
             let mut rt = relock(runtime);
             if rt.options.clipboard.receive() && text.len() <= terminator_core::vnc::MAX_CLIPBOARD {
@@ -163,6 +177,7 @@ pub(super) fn apply_vnc_event(input: ApplyVncEventInput<'_>) -> bool {
                 runtime,
                 session_id,
                 message: err,
+                kind: terminator_core::vnc::VncErrorKind::Protocol,
             });
             false
         }

@@ -32,4 +32,6 @@ pub enum SettingsError {
     FontSize { size: f32 },
     #[error("Editor close timeout must be 1–30 seconds")]
     EditorCloseTimeout { seconds: u64 },
+    #[error("Detached VNC timeout must be 0–1440 minutes")]
+    VncDetachedTimeout { minutes: u32 },
 }

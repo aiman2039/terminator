@@ -231,6 +231,7 @@ mod tests {
             last_connected: 0,
             options: terminator_core::vnc::VncOptions::default(),
             credential_saved: true,
+            labels: Vec::new(),
         }
     }
 
@@ -310,6 +311,7 @@ mod tests {
             last_connected: 0,
             options: terminator_core::vnc::VncOptions::default(),
             credential_saved: false,
+            labels: Vec::new(),
         };
         let original = credential_account(&p).unwrap();
         p.password = "new secret".into();
