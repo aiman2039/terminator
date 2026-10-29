@@ -31,6 +31,18 @@ impl App {
 
     pub(crate) fn connect_vnc_profile(&mut self, profile: &VncProfile, split: Option<&str>) {
         self.hide_center_overlay();
+        // A host that is already connected (possibly detached) reattaches
+        // instead of opening a second connection.
+        let live = self
+            .state
+            .vnc_sessions
+            .iter()
+            .find(|s| s.profile_id.as_deref() == Some(profile.id.as_str()) && s.status.live())
+            .cloned();
+        if let Some(session) = live {
+            self.focus_or_open_vnc_session(&session);
+            return;
+        }
         let Some(project) = self.selected.clone() else {
             return;
         };

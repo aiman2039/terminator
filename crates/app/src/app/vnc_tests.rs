@@ -341,3 +341,37 @@ fn hidden_vnc_views_do_not_capture_application_shortcuts() {
         .visible_last_frame = false;
     assert!(!app.vnc_captures_shortcuts(&ctx));
 }
+
+#[test]
+fn connecting_a_host_with_a_live_session_reattaches_it() {
+    let (mut app, _ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.selected = Some("a".into());
+    let mut session = vnc_session("s1", VncSessionStatus::Connected);
+    session.profile_id = Some("p1".into());
+    app.state.vnc_sessions = vec![session];
+    let profile = terminator_core::vnc::VncProfile {
+        id: "p1".into(),
+        name: "dev".into(),
+        host: "127.0.0.1".into(),
+        port: 5900,
+        username: String::new(),
+        password: String::new(),
+        shared: true,
+        view_only: false,
+        last_connected: 0,
+        options: Default::default(),
+        credential_saved: true,
+        labels: Vec::new(),
+    };
+    app.connect_vnc_profile(&profile, None);
+    while let Ok(job) = requests.try_recv() {
+        if let Job::Control(request, _) = job {
+            assert!(
+                !matches!(*request, Request::VncConnect { .. }),
+                "a live session must not get a second connection"
+            );
+        }
+    }
+}

@@ -166,6 +166,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     let mut last_request = Instant::now()
         .checked_sub(Duration::from_secs(1))
         .unwrap_or_else(Instant::now);
+    let connected_at = Instant::now();
     let mut adaptive = quality::Adaptive::default();
     let result = 'connection: loop {
         tokio::select! {
@@ -207,6 +208,12 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                 }
             },
             _=tick.tick()=>{
+                if detached_too_long(runtime,connected_at){
+                    // Nobody has looked at it for a long time: free the
+                    // connection like an explicit Disconnect would.
+                    let _=shared.vnc_disconnect(sid);
+                    break Err(Failure::Cancelled);
+                }
                 if let Err(e)=request_refresh(&client,runtime,spec.options.quality,&mut last_request).await{break Err(e);}
                 let update_ms=relock(runtime).stats.snapshot().update_ms;
                 if let Some(encodings)=adaptive.check(spec.options.quality,update_ms)
@@ -220,6 +227,19 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     }
     let _ = client.close().await;
     result
+}
+
+/// A session no viewer has polled for this long is disconnected.
+const DETACHED_IDLE: Duration = Duration::from_mins(30);
+
+/// True when no viewer has asked for a frame for [`DETACHED_IDLE`] since
+/// this connection started.
+fn detached_too_long(runtime: &Arc<Mutex<VncRuntime>>, connected_at: Instant) -> bool {
+    let since_connect = connected_at.elapsed();
+    let since_poll = relock(runtime)
+        .last_poll
+        .map_or(since_connect, |polled| polled.elapsed());
+    since_connect.min(since_poll) >= DETACHED_IDLE
 }
 
 /// How often the loop checks whether a new update request is due.
@@ -294,5 +314,27 @@ async fn handshake_failure(
         Failure::Network(VncErrorKind::Unreachable, message)
     } else {
         Failure::Permanent(VncErrorKind::from_handshake(&error.to_string()), message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_session_without_a_viewer_for_long_is_detached_too_long() {
+        let (tx, _rx) = mpsc::channel(1);
+        let runtime = Arc::new(Mutex::new(VncRuntime::new(false, tx)));
+        let long_ago = Instant::now().checked_sub(DETACHED_IDLE).unwrap();
+        assert!(
+            !detached_too_long(&runtime, Instant::now()),
+            "just connected"
+        );
+        assert!(detached_too_long(&runtime, long_ago), "never watched since");
+        relock(&runtime).last_poll = Some(Instant::now());
+        assert!(
+            !detached_too_long(&runtime, long_ago),
+            "a viewer just looked"
+        );
     }
 }
