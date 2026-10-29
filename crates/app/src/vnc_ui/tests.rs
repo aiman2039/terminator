@@ -58,6 +58,7 @@ fn vnc_forms_start_at_display_66_and_preserve_saved_ports() {
         last_connected: 0,
         options: terminator_core::vnc::VncOptions::default(),
         credential_saved: false,
+        labels: Vec::new(),
     };
     sidebar.begin_edit(&profile);
     assert_eq!(sidebar.port, "80");
@@ -452,4 +453,12 @@ fn address_bar_reads_displays_ports_and_bracketed_ipv6() {
     for bad in ["", ":1", "host:x", "host::0", "host:70000", "[::1"] {
         assert!(parse_address(bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn labels_are_trimmed_without_repeats() {
+    assert_eq!(
+        super::profiles::parse_labels(" lab, Team ,lab,, team "),
+        vec!["lab".to_owned(), "Team".to_owned()]
+    );
 }

@@ -304,6 +304,7 @@ impl App {
                 .get(state_key)
                 .map_or_else(Default::default, |v| v.draft_options.clone()),
             credential_saved: false,
+            labels: Vec::new(),
             id: new_id.clone(),
             name: label.to_owned(),
             host: host.to_owned(),

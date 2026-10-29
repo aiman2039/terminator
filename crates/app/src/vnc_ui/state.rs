@@ -151,6 +151,12 @@ pub(crate) struct VncSidebarState {
     /// Address-book card selected for keyboard actions.
     pub(crate) selected_host: Option<String>,
     pub(crate) thumbnails: super::thumbnails::ThumbnailCache,
+    /// Labels of the edited host, comma-separated.
+    pub(crate) labels: String,
+    /// Address book shows only hosts with this label.
+    pub(crate) label_filter: Option<String>,
+    /// Address book shows rows instead of cards.
+    pub(crate) list_view: bool,
 }
 
 /// Pages of the host Properties editor.
@@ -190,6 +196,9 @@ impl Default for VncSidebarState {
             ssh_probe: super::ssh_probe::SshProbe::default(),
             selected_host: None,
             thumbnails: super::thumbnails::ThumbnailCache::default(),
+            labels: String::new(),
+            label_filter: None,
+            list_view: false,
         }
     }
 }
@@ -210,6 +219,7 @@ impl VncSidebarState {
         self.save_password = true;
         self.shared = true;
         self.view_only = false;
+        self.labels.clear();
         self.reset_editor_extras(false);
     }
 
@@ -236,6 +246,7 @@ impl VncSidebarState {
         self.save_password = profile.credential_saved || !profile.password.is_empty();
         self.shared = profile.shared;
         self.view_only = profile.view_only;
+        self.labels = profile.labels.join(", ");
         self.reset_editor_extras(profile.credential_saved);
     }
 }

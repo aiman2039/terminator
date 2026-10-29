@@ -6,6 +6,7 @@ pub(super) const CARD_WIDTH: f32 = 184.0;
 const THUMB_HEIGHT: f32 = 112.0;
 pub(super) const CARD_HEIGHT: f32 = THUMB_HEIGHT + 48.0;
 const CARD_RADIUS: f32 = 8.0;
+pub(super) const ROW_HEIGHT: f32 = 44.0;
 
 pub(super) struct PaintCardInput<'a> {
     pub(super) ui: &'a egui::Ui,
@@ -70,16 +71,8 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
         truncate(ui, name, width),
         visuals.strong_text_color(),
     );
-    let subtitle = match profile.last_connected {
-        0 => profile.endpoint(),
-        ts => format!(
-            "{} · {}",
-            profile.endpoint(),
-            crate::agent_presence::ago(ts, terminator_core::now())
-        ),
-    };
     let endpoint = painter.layout(
-        subtitle,
+        subtitle(profile),
         egui::FontId::proportional(11.0),
         visuals.weak_text_color(),
         width,
@@ -87,6 +80,75 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
     painter.galley(
         egui::pos2(text_left, thumb.bottom() + 26.0),
         truncate(ui, endpoint, width),
+        visuals.weak_text_color(),
+    );
+}
+
+/// Endpoint, last connection and labels.
+fn subtitle(profile: &VncProfile) -> String {
+    let mut text = profile.endpoint();
+    if profile.last_connected > 0 {
+        text.push_str(" · ");
+        text.push_str(&crate::agent_presence::ago(
+            profile.last_connected,
+            terminator_core::now(),
+        ));
+    }
+    for label in &profile.labels {
+        text.push_str(" · #");
+        text.push_str(label);
+    }
+    text
+}
+
+/// A list-view row: status dot, name, and subtitle. `texture` is unused.
+pub(super) fn paint_row(input: PaintCardInput<'_>) {
+    let PaintCardInput {
+        ui,
+        rect,
+        hovered,
+        selected,
+        profile,
+        status,
+        ..
+    } = input;
+    let visuals = ui.visuals();
+    let painter = ui.painter();
+    if hovered {
+        painter.rect_filled(rect, 6.0, visuals.widgets.hovered.weak_bg_fill);
+    }
+    if selected {
+        painter.rect_stroke(
+            rect,
+            6.0,
+            visuals.selection.stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+    let dot = status.unwrap_or_else(|| visuals.weak_text_color());
+    painter.circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 4.0, dot);
+    let left = rect.left() + 28.0;
+    let width = (rect.width() - 36.0).max(40.0);
+    let name = painter.layout(
+        profile.display_name(),
+        egui::FontId::proportional(13.0),
+        visuals.strong_text_color(),
+        width,
+    );
+    painter.galley(
+        egui::pos2(left, rect.top() + 5.0),
+        truncate(ui, name, width),
+        visuals.strong_text_color(),
+    );
+    let detail = painter.layout(
+        subtitle(profile),
+        egui::FontId::proportional(11.0),
+        visuals.weak_text_color(),
+        width,
+    );
+    painter.galley(
+        egui::pos2(left, rect.top() + 24.0),
+        truncate(ui, detail, width),
         visuals.weak_text_color(),
     );
 }

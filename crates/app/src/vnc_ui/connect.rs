@@ -150,6 +150,7 @@ pub(super) fn connect_profile(
     let profile = VncProfile {
         options: request.options.clone(),
         credential_saved: false,
+        labels: Vec::new(),
         id: id(),
         name: name.to_owned(),
         host: request.host.clone(),

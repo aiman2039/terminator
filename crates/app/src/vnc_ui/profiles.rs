@@ -65,6 +65,11 @@ impl App {
     }
 
     fn vnc_properties_general(&mut self, ui: &mut egui::Ui, features: bool) {
+        let labels_supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == terminator_core::vnc::LABELS_CAPABILITY);
         let editor = &mut self.vnc_sidebar;
         form::section(ui, "Server");
         form::endpoint(ui, &mut editor.host, &mut editor.port, &mut editor.display);
@@ -74,6 +79,14 @@ impl App {
             &mut editor.name,
             "Optional, for example Build VM",
         );
+        ui.add_enabled_ui(labels_supported, |ui| {
+            form::text(
+                ui,
+                "Labels",
+                &mut editor.labels,
+                "Optional, comma-separated: lab, team",
+            )
+        });
         form::section(ui, "Sign in");
         form::text(ui, "Username", &mut editor.username, "Optional");
         form::label(ui, "Password");
@@ -158,6 +171,7 @@ impl App {
             let profile = VncProfile {
                 options,
                 credential_saved: false,
+                labels: parse_labels(&self.vnc_sidebar.labels),
                 id: self.vnc_sidebar.editing_id.clone().unwrap_or_else(id),
                 name: self.vnc_sidebar.name.trim().to_owned(),
                 host,
@@ -224,4 +238,15 @@ fn display_title(editor: &VncSidebarState) -> String {
     } else {
         name.to_owned()
     }
+}
+
+/// Comma-separated labels, trimmed, without empties or repeats.
+pub(super) fn parse_labels(text: &str) -> Vec<String> {
+    let mut labels: Vec<String> = Vec::new();
+    for label in text.split(',').map(str::trim).filter(|l| !l.is_empty()) {
+        if !labels.iter().any(|l| l.eq_ignore_ascii_case(label)) {
+            labels.push(label.to_owned());
+        }
+    }
+    labels
 }

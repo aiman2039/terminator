@@ -2,11 +2,12 @@
 //! adds a host, and saved hosts as cards. All host editing happens in
 //! Properties on this page; the sidebar only lists hosts.
 use super::*;
+use book_keys::{CARD_GAP, grid_key_action};
 use card::{CARD_HEIGHT, CARD_WIDTH, PaintCardInput, new_host_card, paint_card};
 use terminator_core::vnc::{DEFAULT_PORT, VncSessionStatus};
 
 /// What the user did on one card this frame.
-enum CardAction {
+pub(super) enum CardAction {
     Connect,
     Properties,
     Duplicate,
@@ -127,29 +128,32 @@ impl App {
             .get(state_key)
             .map(|view| view.address.trim().to_lowercase())
             .unwrap_or_default();
+        let labels = all_labels(&self.state.vnc_profiles);
+        if self
+            .vnc_sidebar
+            .label_filter
+            .as_ref()
+            .is_some_and(|label| !labels.contains(label))
+        {
+            self.vnc_sidebar.label_filter = None;
+        }
+        let label = self.vnc_sidebar.label_filter.clone();
         let mut profiles: Vec<VncProfile> = self
             .state
             .vnc_profiles
             .iter()
             .filter(|p| filter.is_empty() || profile_matches(p, &filter))
+            .filter(|p| label.as_ref().is_none_or(|l| p.labels.contains(l)))
             .cloned()
             .collect();
         profiles.sort_by_key(|p| std::cmp::Reverse(p.last_connected));
+        self.vnc_book_controls(ui, &labels);
+        ui.add_space(8.0);
         let mut actions: Vec<(VncProfile, CardAction)> =
             grid_key_action(ui, &profiles, &mut self.vnc_sidebar.selected_host)
                 .into_iter()
                 .collect();
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(CARD_GAP, CARD_GAP);
-            for profile in &profiles {
-                if let Some(action) = self.vnc_host_card(ui, profile) {
-                    actions.push((profile.clone(), action));
-                }
-            }
-            if new_host_card(ui).clicked() {
-                self.vnc_sidebar.begin_new();
-            }
-        });
+        actions.extend(self.vnc_host_items(ui, &profiles));
         ui.add_space(10.0);
         let count = profiles.len();
         form::hint(
@@ -163,6 +167,66 @@ impl App {
         for (profile, action) in actions {
             self.vnc_card_action(&profile, action);
         }
+    }
+
+    /// Label chips to filter by, and the Grid / List switch.
+    fn vnc_book_controls(&mut self, ui: &mut egui::Ui, labels: &[String]) {
+        let editor = &mut self.vnc_sidebar;
+        ui.horizontal_wrapped(|ui| {
+            if !labels.is_empty() {
+                if ui
+                    .selectable_label(editor.label_filter.is_none(), "All")
+                    .clicked()
+                {
+                    editor.label_filter = None;
+                }
+                for label in labels {
+                    let on = editor.label_filter.as_ref() == Some(label);
+                    if ui.selectable_label(on, label).clicked() {
+                        editor.label_filter = (!on).then(|| label.clone());
+                    }
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                form::segmented(
+                    ui,
+                    &mut editor.list_view,
+                    &[(true, "List"), (false, "Grid")],
+                );
+            });
+        });
+    }
+
+    /// Hosts as cards or rows, then the "New host" item.
+    fn vnc_host_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        profiles: &[VncProfile],
+    ) -> Vec<(VncProfile, CardAction)> {
+        let mut actions = Vec::new();
+        if self.vnc_sidebar.list_view {
+            for profile in profiles {
+                if let Some(action) = self.vnc_host_row(ui, profile) {
+                    actions.push((profile.clone(), action));
+                }
+            }
+            if ui.button("+ New host").clicked() {
+                self.vnc_sidebar.begin_new();
+            }
+            return actions;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(CARD_GAP, CARD_GAP);
+            for profile in profiles {
+                if let Some(action) = self.vnc_host_card(ui, profile) {
+                    actions.push((profile.clone(), action));
+                }
+            }
+            if new_host_card(ui).clicked() {
+                self.vnc_sidebar.begin_new();
+            }
+        });
+        actions
     }
 
     fn vnc_card_action(&mut self, profile: &VncProfile, action: CardAction) {
@@ -202,6 +266,35 @@ impl App {
             texture: texture.as_ref(),
             status,
         });
+        self.vnc_item_response(response, profile)
+    }
+
+    fn vnc_host_row(&mut self, ui: &mut egui::Ui, profile: &VncProfile) -> Option<CardAction> {
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), card::ROW_HEIGHT),
+            egui::Sense::click(),
+        );
+        let status = self
+            .vnc_profile_session(&profile.id)
+            .map(|s| self.vnc_status_color(s.status));
+        card::paint_row(PaintCardInput {
+            ui,
+            rect,
+            hovered: response.hovered(),
+            selected: self.vnc_sidebar.selected_host.as_deref() == Some(profile.id.as_str()),
+            profile,
+            texture: None,
+            status,
+        });
+        self.vnc_item_response(response, profile)
+    }
+
+    /// Selection, double-click and the context menu of a card or row.
+    fn vnc_item_response(
+        &mut self,
+        response: egui::Response,
+        profile: &VncProfile,
+    ) -> Option<CardAction> {
         if response.clicked() || response.secondary_clicked() {
             self.vnc_sidebar.selected_host = Some(profile.id.clone());
         }
@@ -239,75 +332,6 @@ impl App {
     }
 }
 
-/// Space between cards, both directions.
-const CARD_GAP: f32 = 12.0;
-
-/// Keyboard control of the cards while no text field has focus: arrows
-/// move the selection, Enter connects, Delete asks to remove, and
-/// Command/Ctrl+I opens Properties.
-fn grid_key_action(
-    ui: &egui::Ui,
-    profiles: &[VncProfile],
-    selected: &mut Option<String>,
-) -> Option<(VncProfile, CardAction)> {
-    if profiles.is_empty() || ui.ctx().memory(|m| m.focused().is_some()) {
-        return None;
-    }
-    let columns = card_columns(ui.available_width());
-    let (step, action) = ui.input(|i| {
-        let step = if i.key_pressed(egui::Key::ArrowRight) {
-            Step::Forward(1)
-        } else if i.key_pressed(egui::Key::ArrowLeft) {
-            Step::Back(1)
-        } else if i.key_pressed(egui::Key::ArrowDown) {
-            Step::Forward(columns)
-        } else if i.key_pressed(egui::Key::ArrowUp) {
-            Step::Back(columns)
-        } else {
-            Step::Forward(0)
-        };
-        let action = if i.key_pressed(egui::Key::Enter) {
-            Some(CardAction::Connect)
-        } else if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
-            Some(CardAction::Remove)
-        } else if i.modifiers.command && i.key_pressed(egui::Key::I) {
-            Some(CardAction::Properties)
-        } else {
-            None
-        };
-        (step, action)
-    });
-    let current = selected
-        .as_ref()
-        .and_then(|id| profiles.iter().position(|p| &p.id == id));
-    let last = profiles.len().saturating_sub(1);
-    let index = match (current, step) {
-        (None, Step::Forward(0)) => return None,
-        (None, _) => 0,
-        (Some(at), Step::Forward(n)) => at.saturating_add(n).min(last),
-        (Some(at), Step::Back(n)) => at.saturating_sub(n),
-    };
-    let profile = profiles.get(index)?;
-    *selected = Some(profile.id.clone());
-    action.map(|action| (profile.clone(), action))
-}
-
-enum Step {
-    Forward(usize),
-    Back(usize),
-}
-
-/// Cards per row in `width`, at least one.
-fn card_columns(width: f32) -> usize {
-    let mut columns = 1usize;
-    let mut used = CARD_WIDTH;
-    while used + CARD_GAP + CARD_WIDTH <= width {
-        columns = columns.saturating_add(1);
-        used += CARD_GAP + CARD_WIDTH;
-    }
-    columns
-}
-
 /// One context-menu row; closes the menu when clicked.
 fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
     let clicked = appearance::menu_item(appearance::MenuItemInput {
@@ -323,7 +347,22 @@ fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
     clicked
 }
 
+/// Every label used by a saved host, sorted, once each.
+fn all_labels(profiles: &[VncProfile]) -> Vec<String> {
+    let mut labels: Vec<String> = profiles.iter().flat_map(|p| p.labels.clone()).collect();
+    labels.sort_by_key(|l| l.to_lowercase());
+    labels.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    labels
+}
+
 fn profile_matches(profile: &VncProfile, filter: &str) -> bool {
+    if profile
+        .labels
+        .iter()
+        .any(|l| l.to_lowercase().contains(filter))
+    {
+        return true;
+    }
     [
         profile.name.as_str(),
         profile.host.as_str(),
@@ -394,88 +433,4 @@ pub(super) fn parse_address(input: &str) -> Result<(String, u16), String> {
         .filter(|p| *p > 0)
         .ok_or("Port must be between 1 and 65535")?;
     Ok((host.to_owned(), port))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn profiles(count: usize) -> Vec<VncProfile> {
-        (0..count)
-            .map(|n| VncProfile {
-                id: format!("p{n}"),
-                name: String::new(),
-                host: "localhost".into(),
-                port: 5900,
-                username: String::new(),
-                password: String::new(),
-                shared: true,
-                view_only: false,
-                last_connected: 0,
-                options: Default::default(),
-                credential_saved: false,
-            })
-            .collect()
-    }
-
-    fn press(key: egui::Key, modifiers: egui::Modifiers) -> egui::RawInput {
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(CARD_WIDTH * 2.0 + CARD_GAP, 400.0),
-            )),
-            events: vec![egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn arrows_move_the_selection_and_enter_connects_it() {
-        let ctx = egui::Context::default();
-        let hosts = profiles(5);
-        let mut selected = None;
-        let mut run = |key, modifiers| {
-            let mut result = None;
-            let mut output = ctx.run_ui(press(key, modifiers), |ui| {
-                result = grid_key_action(ui, &hosts, &mut selected);
-            });
-            output.textures_delta.clear();
-            (
-                result.map(|(p, a)| (p.id, matches!(a, CardAction::Connect))),
-                selected.clone(),
-            )
-        };
-        assert_eq!(
-            run(egui::Key::ArrowRight, egui::Modifiers::NONE)
-                .1
-                .as_deref(),
-            Some("p0")
-        );
-        assert_eq!(
-            run(egui::Key::ArrowDown, egui::Modifiers::NONE)
-                .1
-                .as_deref(),
-            Some("p2")
-        );
-        assert_eq!(
-            run(egui::Key::ArrowLeft, egui::Modifiers::NONE)
-                .1
-                .as_deref(),
-            Some("p1")
-        );
-        let (action, _) = run(egui::Key::Enter, egui::Modifiers::NONE);
-        assert_eq!(action, Some(("p1".into(), true)));
-    }
-
-    #[test]
-    fn cards_per_row_fit_the_width() {
-        assert_eq!(card_columns(10.0), 1);
-        assert_eq!(card_columns(CARD_WIDTH * 3.0 + CARD_GAP * 2.0), 3);
-    }
 }
