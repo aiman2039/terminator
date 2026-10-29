@@ -70,3 +70,51 @@ fn stepping_wraps_around_the_caret() {
     assert_eq!(step(&matches, (1, 0), false), Some(0));
     assert_eq!(step(&matches, (0, 0), false), Some(1));
 }
+
+#[test]
+fn in_selection_scopes_matches_and_replace_all_to_the_selection() {
+    let mut doc = Doc::new("foo\nfoo foo\nfoo\n");
+    let mut engine = VimEngine::new();
+    let mut find = bar("foo");
+    // Scope: the second "foo" on line 1.
+    let from = doc.char_at_line_col(1, 4);
+    find.scope = Some((from, from.saturating_add(3)));
+    find.in_selection = true;
+    assert_eq!(
+        find.matches(&doc).as_slice(),
+        [FindMatch {
+            line: 1,
+            start: 4,
+            end: 7
+        }]
+    );
+    find.replacement = "barbaz".into();
+    let request = ReplaceRequest {
+        one: false,
+        all: true,
+    };
+    assert!(!find.apply_replace(&mut doc, &mut engine, request));
+    assert_eq!(doc.text(), "foo\nfoo barbaz\nfoo\n");
+    // The scope still covers the replaced text.
+    assert_eq!(find.scope, Some((from, from.saturating_add(6))));
+    // Turning the toggle off searches the whole buffer again.
+    find.in_selection = false;
+    assert_eq!(find.matches(&doc).len(), 3);
+}
+
+#[test]
+fn a_multi_line_selection_sets_the_scope() {
+    let mut doc = Doc::new("one\ntwo\nthree\n");
+    let mut engine = VimEngine::new();
+    let _ = engine.place_cursor(&mut doc, 0, 1);
+    engine.extend_selection_to(&mut doc, 1, 2);
+    let mut find = bar("");
+    assert!(find.scope_to_selection(&engine, &doc));
+    let (from, to) = find.scope.unwrap();
+    assert_eq!(from, 1);
+    assert!(to > doc.char_at_line_col(1, 0), "scope reaches line two");
+    // No selection: nothing to scope to, the toggle stays off.
+    let plain = VimEngine::new();
+    assert!(!find.scope_to_selection(&plain, &doc));
+    assert!(!find.in_selection);
+}

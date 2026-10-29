@@ -85,6 +85,7 @@ impl App {
         let density = self.theme_draft.density;
         let divider = self.theme_draft.pane_divider_width;
         let border = self.theme_draft.border_width;
+        let editor = self.theme_draft.editor;
         self.theme_draft = match choice {
             1 => AppearanceConfig::intellij_dark(),
             2 => AppearanceConfig::high_contrast(),
@@ -95,6 +96,7 @@ impl App {
         self.theme_draft.density = density;
         self.theme_draft.pane_divider_width = divider;
         self.theme_draft.border_width = border;
+        self.theme_draft.editor = editor;
     }
 
     fn accent_row(&mut self, ui: &mut egui::Ui) {

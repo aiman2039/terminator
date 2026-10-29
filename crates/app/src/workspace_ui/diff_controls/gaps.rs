@@ -72,6 +72,14 @@ impl ControlsFrame<'_> {
         } = *view;
         let row_h = self.row_h;
         let step = diff::GAP_STEP;
+        // Same monospace font as the rows, so the step labels line up.
+        let font = super::super::diff_paint::diff_row_font(ui);
+        let label_w = ui
+            .painter()
+            .layout_no_wrap(format!("↓{step}"), font.clone(), Color32::WHITE)
+            .size()
+            .x;
+        let button_w = label_w + row_h * 0.5;
         for (offset, part, label, tip) in [
             (
                 2.0,
@@ -86,9 +94,10 @@ impl ControlsFrame<'_> {
                 format!("Show {step} more lines above the change below"),
             ),
         ] {
+            let left = rect.right() - offset * (button_w + 2.0);
             let button = egui::Rect::from_min_size(
-                egui::pos2(rect.right() - offset * row_h * 1.6, rect.top()),
-                egui::vec2(row_h * 1.5, row_h),
+                super::super::diff_paint::snap(ui, egui::pos2(left, rect.top())),
+                egui::vec2(button_w, row_h),
             )
             .intersect(rect);
             if !button.is_positive() {
@@ -110,7 +119,7 @@ impl ControlsFrame<'_> {
                 button.center(),
                 egui::Align2::CENTER_CENTER,
                 format!("{label}{step}"),
-                egui::FontId::proportional(11.0),
+                font.clone(),
                 ui.visuals().weak_text_color(),
             );
             if response.clicked() {

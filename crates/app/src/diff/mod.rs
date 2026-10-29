@@ -1,6 +1,6 @@
 //! Read-only Git snapshots rendered with similar + syntect. Never runs on the GUI thread.
 use anyhow::{Context, Result, ensure};
-use similar::{ChangeTag, DiffTag, TextDiff};
+use similar::{DiffTag, TextDiff};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -27,7 +27,11 @@ use terminator_core::CommandOptions;
 pub(crate) mod actions;
 mod build;
 mod highlight;
+pub(crate) mod live;
+#[cfg(test)]
+mod live_tests;
 mod load;
+mod options;
 pub(crate) mod review;
 #[cfg(test)]
 mod tests;
@@ -42,6 +46,7 @@ pub use load::{DocumentAsyncInput, document_async};
 pub(crate) use load::{
     DocumentWithContextInput, RemoteDocumentInput, document_with_context, remote_document,
 };
+pub use options::{DiffOptions, Highlight, Whitespace};
 
 const CONTEXT: usize = 3;
 
@@ -130,8 +135,9 @@ pub struct DiffDocument {
     pub(crate) gaps: Vec<review::Gap>,
     pub(crate) revealed: Vec<std::ops::Range<usize>>,
     pub(crate) context: usize,
-    /// Lines were compared ignoring whitespace (display keeps originals).
-    pub(crate) whitespace: bool,
+    /// Compare options and highlight mode this document was built with
+    /// (display always keeps the original text).
+    pub(crate) options: DiffOptions,
     pub(crate) source: Option<actions::Source>,
     pub(crate) generation: DiffGeneration,
 }
@@ -150,13 +156,20 @@ pub(crate) enum GapPart {
 pub(crate) const GAP_STEP: usize = 20;
 
 /// How a refreshed diff should look: the context size, the unchanged
-/// ranges the user expanded, and the whitespace mode, so a refresh keeps
+/// ranges the user expanded, and the compare options, so a refresh keeps
 /// the view the user built up.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DiffView {
     pub context: usize,
     pub revealed: Vec<std::ops::Range<usize>>,
-    pub whitespace: bool,
+    pub options: DiffOptions,
+}
+
+impl DiffView {
+    /// A freshly loaded document must be laid out again for this view.
+    pub(crate) fn needs_rebuild(&self) -> bool {
+        self.options != DiffOptions::default() || !self.revealed.is_empty()
+    }
 }
 
 impl DiffDocument {
@@ -194,7 +207,7 @@ impl DiffDocument {
             &DiffView {
                 context: self.context,
                 revealed,
-                whitespace: self.whitespace,
+                options: self.options,
             },
         ))
     }
@@ -282,90 +295,4 @@ fn human_size(bytes: usize) -> String {
     } else {
         format!("{value:.1} {name}")
     }
-}
-
-/// Left pane for the editable split view: one row per line of `right`
-/// (the live buffer), so both panes share row positions. Equal and
-/// replaced lines show the original beside their buffer line, inserted
-/// lines get a blank filler, and deleted lines (which have no buffer row)
-/// are returned as markers: `(row, lines)` deleted just above `row`.
-pub(crate) struct AlignedLeft {
-    pub doc: DiffDocument,
-    pub deleted: Vec<(usize, Vec<String>)>,
-}
-
-pub(crate) fn align_left(left: &str, right: &str, left_spans: &[Vec<DiffSpan>]) -> AlignedLeft {
-    let diff = TextDiff::configure()
-        .timeout(DIFF_TIMEOUT)
-        .diff_lines(left, right);
-    let lines: Vec<&str> = left.split_inclusive('\n').collect();
-    let number = |index: usize| Some(u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1));
-    let row = |kind: LineKind, old: usize, new: usize| {
-        let text = lines.get(old).copied().unwrap_or_default();
-        SplitRow {
-            left: Some(DiffLine {
-                kind,
-                old_no: number(old),
-                new_no: number(new),
-                spans: line_spans(left_spans, Some(old), text),
-            }),
-            right: None,
-        }
-    };
-    let deleted_text = |range: std::ops::Range<usize>| -> Vec<String> {
-        range
-            .filter_map(|index| lines.get(index))
-            .map(|line| line.trim_end_matches(['\n', '\r']).to_owned())
-            .collect()
-    };
-    let mut out = AlignedLeft {
-        doc: DiffDocument::default(),
-        deleted: Vec::new(),
-    };
-    for op in diff.ops() {
-        let (old, new) = (op.old_range(), op.new_range());
-        match op.tag() {
-            DiffTag::Equal => {
-                for offset in 0..old.len() {
-                    out.doc.split.push(row(
-                        LineKind::Equal,
-                        old.start.saturating_add(offset),
-                        new.start.saturating_add(offset),
-                    ));
-                }
-            }
-            DiffTag::Insert => {
-                for _ in new {
-                    out.doc.split.push(SplitRow {
-                        left: None,
-                        right: None,
-                    });
-                }
-            }
-            DiffTag::Delete => out.deleted.push((new.start, deleted_text(old))),
-            DiffTag::Replace => {
-                let paired = old.len().min(new.len());
-                for offset in 0..paired {
-                    out.doc.split.push(row(
-                        LineKind::Delete,
-                        old.start.saturating_add(offset),
-                        new.start.saturating_add(offset),
-                    ));
-                }
-                for _ in paired..new.len() {
-                    out.doc.split.push(SplitRow {
-                        left: None,
-                        right: None,
-                    });
-                }
-                if old.len() > paired {
-                    out.deleted.push((
-                        new.start.saturating_add(paired),
-                        deleted_text(old.start.saturating_add(paired)..old.end),
-                    ));
-                }
-            }
-        }
-    }
-    out
 }

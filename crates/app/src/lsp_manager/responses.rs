@@ -148,6 +148,13 @@ impl LspManager {
                 self.edit_answers.format =
                     Some((path, revision, L::parse_text_edits(&answer.value())));
             }
+            Pending::OnTypeFormat { path, revision } => {
+                self.edit_answers.on_type =
+                    Some((path, revision, L::parse_text_edits(&answer.value())));
+            }
+            Pending::DocumentHighlight { path, revision } => {
+                self.on_document_highlight(path, revision, &answer.value());
+            }
             Pending::CodeActions { path, generation } => {
                 self.edit_answers.actions =
                     Some((path, generation, L::parse_code_actions(&answer.value())));

@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod body;
+mod files;
+mod notice;
+mod options_menu;
 mod requests;
 mod split;
 mod toolbar;
@@ -94,7 +97,7 @@ pub(crate) type DiffFingerprints = std::collections::HashMap<String, Option<(Str
 impl App {
     /// The view a refresh of `key` should rebuild: its context size (or
     /// `context` when the user picked a new one), the ranges already
-    /// expanded, and the whitespace mode.
+    /// expanded, and the compare options from the UI preferences.
     pub(crate) fn diff_view_for(&self, key: &str, context: Option<usize>) -> diff::DiffView {
         let review = self.diff_reviews.get(key);
         diff::DiffView {
@@ -105,7 +108,7 @@ impl App {
                 .and_then(|doc| doc.as_ref().ok())
                 .map(|doc| doc.revealed.clone())
                 .unwrap_or_default(),
-            whitespace: review.is_some_and(|review| review.ignore_whitespace),
+            options: self.preferences.diff_options,
         }
     }
 

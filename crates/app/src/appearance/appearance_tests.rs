@@ -943,3 +943,41 @@ mod row_tests {
         assert_eq!(text, Some(menu_text()));
     }
 }
+
+mod editor_style_tests {
+    use super::super::editor::editor_style_for;
+    use super::*;
+
+    #[test]
+    fn editor_tokens_are_quiet_tints_of_each_theme() {
+        for theme in [
+            AppearanceConfig::intellij_dark(),
+            AppearanceConfig::intellij_light(),
+        ] {
+            let background = color(&theme.window);
+            let palette = editor_style_for(&theme).palette;
+            assert_ne!(palette.current_line, background);
+            // A few percent off the background: subtle, never a stripe.
+            for (a, b) in palette
+                .current_line
+                .to_array()
+                .iter()
+                .zip(background.to_array())
+            {
+                assert!(a.abs_diff(b) <= 12, "{theme:?}");
+            }
+            assert_eq!(palette.status_rule, color(&theme.border));
+            assert_eq!(palette.modes.normal, color(&theme.accent));
+        }
+    }
+
+    #[test]
+    fn editor_prefs_come_from_the_theme_clamped() {
+        let mut theme = AppearanceConfig::default();
+        theme.editor.editor_font_size = 4.0;
+        theme.editor.editor_line_spacing = 1.5;
+        let prefs = editor_style_for(&theme).prefs;
+        assert_eq!(prefs.editor_font_size, 8.0);
+        assert_eq!(prefs.editor_line_spacing, 1.5);
+    }
+}

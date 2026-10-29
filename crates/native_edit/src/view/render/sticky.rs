@@ -59,7 +59,10 @@ impl<B: Buffer> SourceView<'_, B> {
             .rect_filled(band, 0.0, visuals.extreme_bg_color);
         if self.options.show_line_numbers {
             canvas.painter.text(
-                Pos2::new(origin.x + geometry.gutter - geometry.advance, y),
+                Pos2::new(
+                    origin.x + geometry.rule_x - geometry.advance,
+                    y + geometry.text_dy,
+                ),
                 egui::Align2::RIGHT_TOP,
                 format!("{}", first.saturating_add(1)),
                 geometry.font.clone(),
@@ -73,9 +76,12 @@ impl<B: Buffer> SourceView<'_, B> {
             hints: &[],
             spans: canvas.highlight.line(first),
             x: origin.x + geometry.gutter,
-            y,
+            y: y + geometry.text_dy,
             geometry,
             plain: visuals.text_color(),
+            theme_plain: crate::highlight::theme(visuals.dark_mode)
+                .and_then(|theme| theme.settings.foreground)
+                .map(|color| [color.r, color.g, color.b]),
         }
         .paint();
         let hit = canvas

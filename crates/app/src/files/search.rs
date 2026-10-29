@@ -40,7 +40,7 @@ pub const MAX_HITS: usize = 2000;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LINE_CHARS: usize = 200;
 
-fn split_patterns(input: &str) -> Vec<&str> {
+pub(crate) fn split_patterns(input: &str) -> Vec<&str> {
     input
         .split([',', ' ', '\n'])
         .map(str::trim)
@@ -51,7 +51,7 @@ fn split_patterns(input: &str) -> Vec<&str> {
 /// Build a glob set from Orca-style include/exclude patterns. A pattern is
 /// matched against the relative path both as written and as `**/<pattern>`, so
 /// `*.ts` finds nested files and `src/**` keeps a subtree.
-fn build_set(patterns: &[&str]) -> Option<GlobSet> {
+pub(crate) fn build_set(patterns: &[&str]) -> Option<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut any = false;
     for pattern in patterns {
@@ -72,7 +72,7 @@ fn build_set(patterns: &[&str]) -> Option<GlobSet> {
     if any { builder.build().ok() } else { None }
 }
 
-fn build_regex(query: &Query) -> Result<Regex, String> {
+pub(crate) fn build_regex(query: &Query) -> Result<Regex, String> {
     let text = query.text.trim();
     if text.is_empty() {
         return Err("Type to search in files".into());
@@ -104,7 +104,7 @@ fn matches(include: &Option<GlobSet>, exclude: &Option<GlobSet>, relative: &Path
     }
 }
 
-fn truncate(line: &str) -> String {
+pub(crate) fn truncate(line: &str) -> String {
     let trimmed = line.trim();
     if trimmed.chars().count() <= MAX_LINE_CHARS {
         return trimmed.to_string();

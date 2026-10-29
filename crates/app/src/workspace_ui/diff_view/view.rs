@@ -35,15 +35,17 @@ impl App {
             ..DiffPass::default()
         };
         let frame = self.diff_frame(ui, source, &pass.review);
-        Self::diff_read_only_notices(ui, &frame);
         Self::diff_change_keys(ui, &frame, &mut pass);
         ui.horizontal(|ui| self.diff_toolbar(ui, &frame, &mut pass));
         Self::diff_open_source_key(ui, &frame, &mut pass);
-        Self::diff_discard_prompt(ui, &frame, &mut pass);
-        Self::diff_status(ui, &pass.review);
+        Self::diff_notice_bar(ui, &frame, &mut pass);
+        if let Some(message) = pass.review.message.clone() {
+            self.offer_merge(ui, frame.tab, &message);
+        }
         self.request_missing_diff(&frame);
+        self.sync_diff_options(&frame, &mut pass);
         Self::seed_diff_buffer(&frame, &mut pass.review);
-        self.diff_body(ui, &frame, &mut pass);
+        self.diff_main(ui, &frame, &mut pass);
         self.submit_diff_request(&frame, &mut pass);
         self.expand_diff_gap(&frame, &mut pass);
         self.refresh_diff_view(&frame, &mut pass);
@@ -126,33 +128,35 @@ impl App {
     /// Sibling files on the same side (staged or working tree), in Git's
     /// reported order, for prev/next-file navigation.
     fn diff_siblings(&self, staged_side: bool) -> Vec<PathBuf> {
-        self.context
-            .as_ref()
-            .map(|context| {
-                context
-                    .changes
-                    .iter()
-                    .filter(|change| {
-                        if staged_side {
-                            change.in_group(terminator_git::GitGroup::Staged)
-                        } else {
-                            change.in_group(terminator_git::GitGroup::Changes)
-                                || change.in_group(terminator_git::GitGroup::Untracked)
-                        }
-                    })
-                    .map(|change| change.path.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.diff_changed_files(staged_side)
+            .into_iter()
+            .map(|file| file.path)
+            .collect()
     }
 
-    fn diff_read_only_notices(ui: &mut egui::Ui, frame: &DiffFrame<'_>) {
-        if frame.remote {
-            ui.weak("Remote snapshot · read-only. Use the SSH terminal to edit Git state.");
+    /// The changed-files panel (when open) beside the diff body.
+    fn diff_main(&mut self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        if !self.preferences.diff_file_tree || frame.remote {
+            self.diff_body(ui, frame, pass);
+            return;
         }
-        if !frame.remote && frame.read_only {
-            ui.weak("Perforce snapshot · read-only. Use Open file to edit the workspace file.");
-        }
+        let full = ui.available_rect_before_wrap();
+        let tree_w = (full.width() * 0.3).clamp(140.0, 260.0);
+        let tree = egui::Rect::from_min_size(full.min, egui::vec2(tree_w, full.height()));
+        let body = egui::Rect::from_min_max(egui::pos2(tree.right() + 1.0, full.top()), full.max);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(tree), |ui| {
+            ui.set_clip_rect(tree.intersect(ui.clip_rect()));
+            self.diff_file_tree(ui, frame, pass);
+        });
+        ui.painter().vline(
+            ui.painter().round_to_pixel_center(tree.right()),
+            full.y_range(),
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+            self.diff_body(ui, frame, pass);
+        });
+        ui.allocate_rect(full, egui::Sense::hover());
     }
 
     /// F7 / Shift+F7 walk changes, and past the last (or first) change of
@@ -187,36 +191,20 @@ impl App {
         }
     }
 
-    fn diff_discard_prompt(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
-        let Some(index) = pass.review.confirm_discard else {
-            return;
-        };
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!(
-                "Discard change {} from disk?",
-                index.saturating_add(1)
-            ));
-            let discard = ui.add_enabled(frame.enabled, egui::Button::new("Discard hunk"));
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "diff-confirm-discard", discard.rect);
-            if discard.clicked() {
-                pass.confirmed = Some(index);
-            }
-            if ui.button("Cancel").clicked() {
-                pass.review.confirm_discard = None;
-            }
-        });
-    }
-
-    fn diff_status(ui: &mut egui::Ui, review: &diff::review::State) {
-        if let Some(message) = &review.message {
-            ui.label(message);
-        }
-        if review.busy {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Applying hunk…");
-            });
+    /// A document built under other compare options (loaded before the
+    /// options were applied, or changed from another diff) is rebuilt once
+    /// with the current ones.
+    fn sync_diff_options(&self, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        let wanted = self.preferences.diff_options;
+        if let Some(doc) = &frame.doc
+            && doc.options != wanted
+            && pass.review.options_requested != Some(wanted)
+            && !pass.review.busy
+            && !pass.review.unsaved_edits()
+            && !self.loading.contains(&frame.key)
+        {
+            pass.refresh = true;
+            pass.review.options_requested = Some(wanted);
         }
     }
 

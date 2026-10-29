@@ -26,7 +26,8 @@ mod tests {
     fn section_titles_match_fixture_targets() {
         assert_eq!(SettingsSection::Terminal.title(), "Terminal & Editor");
         assert_eq!(SettingsSection::Updates.title(), "Updates");
-        assert_eq!(SettingsSection::ALL.len(), 7);
+        assert_eq!(SettingsSection::ALL.len(), 8);
+        assert_eq!(SettingsSection::Editor.title(), "Editor");
     }
 
     #[test]

@@ -140,7 +140,8 @@ impl App {
                 Tab::CommitLog { cwd }
                 | Tab::Blame { cwd, .. }
                 | Tab::RevisionDiff { cwd, .. }
-                | Tab::FileHistory { cwd, .. } => Some(cwd.clone()),
+                | Tab::FileHistory { cwd, .. }
+                | Tab::Merge { cwd, .. } => Some(cwd.clone()),
             })
     }
 

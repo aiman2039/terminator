@@ -3,6 +3,7 @@ use super::super::*;
 use super::diff_paint::{diff_row_count, diff_row_height};
 use diff::actions::Kind;
 
+mod chevrons;
 mod gaps;
 mod hunks;
 #[cfg(test)]
@@ -19,7 +20,9 @@ pub(crate) struct JumpInput<'a> {
     pub(crate) ui: &'a egui::Ui,
     pub(crate) doc: &'a diff::DiffDocument,
     pub(crate) split: bool,
-    pub(crate) aligned: bool,
+    /// Row pitch of the panes when it is not the painted diff font's
+    /// (the editable split follows the editor's rows).
+    pub(crate) row_h: Option<f32>,
     pub(crate) review: &'a mut diff::review::State,
     pub(crate) scroll: &'a [egui::scroll_area::ScrollAreaOutput<()>],
     pub(crate) sync: &'a mut f32,
@@ -30,7 +33,7 @@ pub(super) fn jump(input: JumpInput<'_>) {
         ui,
         doc,
         split,
-        aligned,
+        row_h,
         review,
         scroll,
         sync,
@@ -43,11 +46,12 @@ pub(super) fn jump(input: JumpInput<'_>) {
     let Some(hunk) = review.selected.and_then(|index| doc.hunks.get(index)) else {
         return;
     };
-    let top = hunk_row(hunk, split, aligned) as f32 * diff_row_height(ui);
+    let row_h = row_h.unwrap_or_else(|| diff_row_height(ui));
+    let top = hunk.row(split) as f32 * row_h;
     for output in scroll {
         let mut state = output.state;
         let mut offset = state.unclamped_offset();
-        offset.y = (top - diff_row_height(ui))
+        offset.y = (top - row_h)
             .max(0.0)
             .min((output.content_size.y - output.inner_rect.height()).max(0.0));
         if split {
@@ -57,16 +61,6 @@ pub(super) fn jump(input: JumpInput<'_>) {
         state.store(ui.ctx(), output.id);
     }
     ui.ctx().request_repaint();
-}
-
-/// First row of a hunk. In the aligned editable split both panes are laid
-/// out on the buffer's lines, so a hunk sits at its right-side line.
-fn hunk_row(hunk: &diff::review::Hunk, split: bool, aligned: bool) -> usize {
-    if aligned {
-        hunk.new.start
-    } else {
-        hunk.row(split)
-    }
 }
 
 /// The changed line a diff row shows on one side: `(old side, line)` for
@@ -125,6 +119,7 @@ pub(crate) struct PaintConnectorInput<'a> {
     pub(crate) right: egui::Rect,
     pub(crate) clip: egui::Rect,
     pub(crate) color: Color32,
+    pub(crate) tints: appearance::DiffTints,
 }
 
 pub(super) fn paint_connector(input: PaintConnectorInput<'_>) {
@@ -134,8 +129,10 @@ pub(super) fn paint_connector(input: PaintConnectorInput<'_>) {
         right,
         clip,
         color,
+        tints,
     } = input;
 
+    let fill = super::diff_paint::tint(color, tints.band);
     let mut mesh = egui::Mesh::default();
     let mut top = Vec::new();
     let mut bottom = Vec::new();
@@ -147,8 +144,8 @@ pub(super) fn paint_connector(input: PaintConnectorInput<'_>) {
         let b = egui::pos2(x, egui::lerp(left.bottom()..=right.bottom(), blend));
         top.push(a);
         bottom.push(b);
-        mesh.colored_vertex(a, super::diff_paint::tint(color, 36));
-        mesh.colored_vertex(b, super::diff_paint::tint(color, 36));
+        mesh.colored_vertex(a, fill);
+        mesh.colored_vertex(b, fill);
         if step > 0 {
             let index = step.saturating_mul(2);
             mesh.add_triangle(index.saturating_sub(2), index.saturating_sub(1), index);
@@ -157,7 +154,7 @@ pub(super) fn paint_connector(input: PaintConnectorInput<'_>) {
     }
     let painter = ui.painter().with_clip_rect(clip);
     painter.add(egui::Shape::mesh(mesh));
-    let stroke = egui::Stroke::new(1.0, super::diff_paint::tint(color, 110));
+    let stroke = egui::Stroke::new(1.0, super::diff_paint::tint(color, tints.edge));
     painter.add(egui::Shape::line(top, stroke));
     painter.add(egui::Shape::line(bottom, stroke));
 }
@@ -174,6 +171,8 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) rail: egui::Rect,
     pub(crate) unified_gutter: egui::Rect,
     pub(crate) colors: super::diff_paint::DiffColors,
+    /// Row pitch override, as in [`JumpInput::row_h`].
+    pub(crate) row_h: Option<f32>,
 }
 
 type PaneOutput = egui::scroll_area::ScrollAreaOutput<()>;
@@ -191,7 +190,6 @@ struct ControlsFrame<'a> {
     rail: egui::Rect,
     unified_gutter: egui::Rect,
     colors: super::diff_paint::DiffColors,
-    aligned: bool,
     count: usize,
     row_h: f32,
     pointer: Option<egui::Pos2>,
@@ -216,6 +214,7 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
         rail,
         unified_gutter,
         colors,
+        row_h,
     } = input;
 
     let mut state = ControlsState {
@@ -225,14 +224,8 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
     let (Some(first), Some(last)) = (scroll.first(), scroll.last()) else {
         return state.result;
     };
-    let row_h = diff_row_height(ui);
-    // Editable split: both panes are the buffer's lines (see `align_left`).
-    let aligned = split && editor_pane;
-    let count = if aligned {
-        doc.right_text.split_inclusive('\n').count().max(1)
-    } else {
-        diff_row_count(doc, split).max(1)
-    };
+    let row_h = row_h.unwrap_or_else(|| diff_row_height(ui));
+    let count = diff_row_count(doc, split).max(1);
     let frame = ControlsFrame {
         doc,
         split,
@@ -245,7 +238,6 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
         rail,
         unified_gutter,
         colors,
-        aligned,
         count,
         row_h,
         pointer: ui.ctx().input(|input| input.pointer.hover_pos()),

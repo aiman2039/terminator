@@ -45,7 +45,7 @@ impl App {
 
     /// Push the live buffer text past the sync debounce so the server sees
     /// what was just typed. Returns the pushed revision.
-    fn push_live_text(&mut self, path: &Path, language: Language) -> Option<u64> {
+    pub(super) fn push_live_text(&mut self, path: &Path, language: Language) -> Option<u64> {
         let (revision, text) = self
             .native_docs
             .get(path)
@@ -77,8 +77,15 @@ impl App {
         let Some(revision) = self.push_live_text(path, language) else {
             return;
         };
-        if requests.format_now && !self.lsp.request_format(path, revision) {
-            self.info = Some("The language server is not ready to format".into());
+        if requests.format_now {
+            // A selection formats only itself when the server can.
+            let sent = match requests.format_range.take() {
+                Some(range) if self.lsp.request_range_format(path, revision, range) => true,
+                _ => self.lsp.request_format(path, revision),
+            };
+            if !sent {
+                self.info = Some("The language server is not ready to format".into());
+            }
         }
         if let Some(range) = requests.actions_at.take() {
             self.native_view_code_actions(path, range, requests.caret_rect);
@@ -228,6 +235,14 @@ impl App {
         }
         if let Some(position) = requests.references_at.take() {
             self.lsp.request_references(path, position);
+        }
+        if let Some((position, kind)) = requests.locate_at.take()
+            && let Err(note) = self.lsp.request_locate(path, position, kind)
+        {
+            self.info = Some(note);
+        }
+        if let Some(seed) = requests.find_in_files.take() {
+            self.open_find_in_files(site.project, seed);
         }
         if let Some((position, kind)) = requests.hierarchy_at.take() {
             self.start_hierarchy(path, position, kind);

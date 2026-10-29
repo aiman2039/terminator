@@ -329,6 +329,8 @@ pub struct App {
     pub(crate) hierarchy: Option<crate::native_editor::HierarchyView>,
     /// Find/replace bar of one native editor.
     pub(crate) find_bar: Option<crate::native_editor::FindBar>,
+    /// The Find in Files window and its search in flight.
+    pub(crate) find_in_files: Option<crate::native_editor::FindInFiles>,
     /// Completion popup of one native editor.
     pub(crate) completion: Option<crate::native_editor::CompletionPopup>,
     /// Parameter info of one native editor.
@@ -348,8 +350,10 @@ pub struct App {
     pub(crate) gutter_popup: Option<crate::native_editor::GutterPopup>,
     /// Files showing blame in the gutter, with their annotations.
     pub(crate) editor_blame: std::collections::HashMap<PathBuf, crate::native_editor::EditorBlame>,
-    /// Merge conflict resolver window.
-    pub(crate) merge: Option<crate::merge::MergeWindow>,
+    /// Three-way merge tabs by tab key.
+    pub(crate) merge: crate::merge::MergeTabs,
+    /// Binary image comparisons by diff tab key.
+    pub(crate) image_diffs: std::collections::HashMap<String, crate::workspace_ui::ImageDiff>,
     /// Changed files per commit hash (`None` while loading).
     pub(crate) commit_files: HashMap<String, Option<CommitFiles>>,
     /// Jump history for Back/Forward.

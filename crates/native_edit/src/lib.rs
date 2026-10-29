@@ -14,6 +14,7 @@ pub mod highlight;
 pub mod inlay;
 pub mod lsp;
 mod rows;
+pub mod spacers;
 pub mod treesitter;
 pub mod view;
 pub mod vim;

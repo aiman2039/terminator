@@ -1,5 +1,5 @@
 //! Text painting for one row: highlight spans, plain gaps and inlay hints.
-use super::geometry::Geometry;
+use super::geometry::{Geometry, snap};
 use crate::highlight::{Span, SpanStyle};
 use crate::rows::{RowCells, RowHint, display_x, expand_tabs};
 use egui::{Color32, FontId, Pos2, Rect, Vec2};
@@ -27,6 +27,8 @@ pub(super) struct RowPaint<'a> {
     /// Fonts and cell advance.
     pub geometry: &'a Geometry,
     pub plain: Color32,
+    /// The syntax theme's default foreground; spans in it paint `plain`.
+    pub theme_plain: Option<[u8; 3]>,
 }
 
 impl RowPaint<'_> {
@@ -70,8 +72,9 @@ impl RowPaint<'_> {
             let part: String = chars.by_ref().take(to.saturating_sub(from)).collect();
             if !part.is_empty() {
                 let x = self.x + geometry.char_x(from) as f32 * self.geometry.advance;
+                let ppp = self.geometry.ppp;
                 self.painter.text(
-                    Pos2::new(x, self.y),
+                    Pos2::new(snap(x, ppp), snap(self.y, ppp)),
                     egui::Align2::LEFT_TOP,
                     expand_tabs(&part, display_x(self.text, from)),
                     font.clone(),
@@ -114,11 +117,16 @@ impl RowPaint<'_> {
             let piece: String = chars.by_ref().take(span.end.saturating_sub(col)).collect();
             if !piece.is_empty() {
                 let [red, green, blue] = span.color;
+                let color = if self.theme_plain == Some(span.color) {
+                    self.plain
+                } else {
+                    Color32::from_rgb(red, green, blue)
+                };
                 self.piece(PieceInput {
                     col,
                     piece: &piece,
                     font: &self.font_for(span.style),
-                    color: Color32::from_rgb(red, green, blue),
+                    color,
                 });
             }
             col = span.end;
@@ -152,7 +160,10 @@ impl RowPaint<'_> {
             seen_at = Some((hint.col, offset.saturating_add(hint.cells)));
             let cell = geometry.caret_x(hint.col).saturating_add(offset);
             let rect = Rect::from_min_size(
-                Pos2::new(self.x + cell as f32 * advance, self.y + 1.0),
+                Pos2::new(
+                    snap(self.x + cell as f32 * advance, self.geometry.ppp),
+                    self.y + 1.0,
+                ),
                 Vec2::new(hint.cells as f32 * advance, self.geometry.font.size + 2.0),
             );
             let label = hint.label.trim();

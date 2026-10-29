@@ -317,9 +317,27 @@ impl HighlightCache {
     /// Lay out the painted rows for this revision and wrap width, reusing
     /// the previous frame's rows until either changes.
     pub fn ensure_rows<B: Buffer>(&mut self, doc: &B, wrap_columns: Option<usize>) {
+        self.ensure_rows_spaced(doc, wrap_columns, &[]);
+    }
+
+    /// [`HighlightCache::ensure_rows`] with host filler rows before some
+    /// lines (see [`crate::spacers`]).
+    pub fn ensure_rows_spaced<B: Buffer>(
+        &mut self,
+        doc: &B,
+        wrap_columns: Option<usize>,
+        spacers: &[(usize, usize)],
+    ) {
         self.folds
             .ensure(doc, self.language.unwrap_or(Language::Plain));
-        self.rows.ensure(doc, wrap_columns, Some(&self.folds));
+        self.rows.ensure_spaced(
+            doc,
+            crate::rows::RowLayout {
+                wrap_columns,
+                folds: Some(&self.folds),
+                spacers,
+            },
+        );
     }
 
     /// This view's code folds.

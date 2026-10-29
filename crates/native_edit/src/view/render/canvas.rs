@@ -1,7 +1,7 @@
 //! The painted file area of one frame: allocation, pointer mapping and
 //! per-row cell geometry.
 use super::SourceView;
-use super::geometry::{Geometry, Viewport};
+use super::geometry::{Geometry, Viewport, snap};
 use crate::doc::Buffer;
 use crate::fold::Folds;
 use crate::highlight::HighlightCache;
@@ -56,7 +56,12 @@ impl<'a, B: Buffer> SourceView<'a, B> {
         self.out.content_rect = response.rect;
         self.out.activated = response.clicked() || response.secondary_clicked();
         let rows = highlight.rows();
-        let origin = response.rect.min;
+        // Rows, gutter and text start on whole physical pixels; the
+        // scroll offset may be fractional.
+        let origin = Pos2::new(
+            snap(response.rect.min.x, geometry.ppp),
+            snap(response.rect.min.y, geometry.ppp),
+        );
         let clip = painter.clip_rect();
         #[expect(
             clippy::cast_possible_truncation,
@@ -140,9 +145,13 @@ impl Canvas<'_> {
         self.ui.memory_mut(|memory| memory.request_focus(focus_id));
     }
 
-    /// Screen x of display cell `cells` in the text area.
+    /// Screen x of display cell `cells` in the text area, snapped to a
+    /// physical pixel.
     pub fn text_x(&self, cells: usize) -> f32 {
-        self.origin.x + self.geometry.gutter + cells as f32 * self.geometry.advance
+        snap(
+            self.origin.x + self.geometry.gutter + cells as f32 * self.geometry.advance,
+            self.geometry.ppp,
+        )
     }
 
     /// The rows inside the clip rect, with their layout index.
@@ -188,14 +197,13 @@ impl<'r> PaintRow<'r> {
             return None;
         }
         let start_cell = self.cells.char_x(start_col.saturating_sub(visual.start));
-        let cells = self
-            .cells
-            .caret_x(end_col.saturating_sub(visual.start))
-            .saturating_sub(start_cell);
-        let advance = canvas.geometry.advance;
-        Some(Rect::from_min_size(
+        let end_cell = self.cells.caret_x(end_col.saturating_sub(visual.start));
+        Some(Rect::from_min_max(
             Pos2::new(canvas.text_x(start_cell), self.y),
-            Vec2::new(cells as f32 * advance, canvas.geometry.row_height),
+            Pos2::new(
+                canvas.text_x(end_cell.max(start_cell)),
+                self.y + canvas.geometry.row_height,
+            ),
         ))
     }
 
@@ -203,13 +211,13 @@ impl<'r> PaintRow<'r> {
     pub fn cell_rect(&self, canvas: &Canvas<'_>, col: usize, cells: usize) -> Rect {
         let local = col.saturating_sub(self.visual.start);
         let start = self.cells.char_x(local);
-        let end = self.cells.caret_x(local.saturating_add(cells));
-        Rect::from_min_size(
+        let end = self
+            .cells
+            .caret_x(local.saturating_add(cells))
+            .max(start.saturating_add(1));
+        Rect::from_min_max(
             Pos2::new(canvas.text_x(start), self.y),
-            Vec2::new(
-                end.saturating_sub(start).max(1) as f32 * canvas.geometry.advance,
-                canvas.geometry.row_height,
-            ),
+            Pos2::new(canvas.text_x(end), self.y + canvas.geometry.row_height),
         )
     }
 }

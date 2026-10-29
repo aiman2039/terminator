@@ -64,88 +64,32 @@ pub(crate) struct State {
     pub undo: Vec<super::actions::Undo>,
     pub context: usize,
     pub message: Option<String>,
-    /// Compare lines ignoring whitespace (a view option; staging still
-    /// applies the real hunks).
-    pub ignore_whitespace: bool,
+    /// Compare options last requested for this tab, so a document built
+    /// with older options is rebuilt once instead of on every frame.
+    pub options_requested: Option<super::DiffOptions>,
     /// Lines picked inside one hunk for line-level stage/unstage/discard.
     pub picked: Option<(usize, super::actions::LineSelection)>,
 }
 
-/// One row of the live unified editor, recomputed from the left text vs the
-/// current buffer on every revision: the whole file, not just hunk windows.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum LiveRow {
-    /// A line present in the buffer; `changed` marks insert/replace lines.
-    Edit {
-        old: Option<usize>,
-        new: usize,
-        changed: Option<LiveTint>,
-    },
-    /// A line only in the left text, painted read-only between buffer lines.
-    Gone { old: usize, text: String },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LiveTint {
-    Added,
-    Changed,
-}
-
-/// `(key, per-line syntax spans, per-line span validity)`.
-pub(crate) type SpanCache = (
-    u64,
-    std::sync::Arc<Vec<Vec<super::DiffSpan>>>,
-    std::sync::Arc<Vec<bool>>,
-);
-
+/// The working-tree side of an editable diff: a native editor buffer.
 pub(crate) struct Edit {
     pub document: std::sync::Arc<super::DiffDocument>,
+    /// The buffer as it would be saved, mirrored from `editor` after each
+    /// edit; unsaved edits are `text != document.right_text`.
     pub text: String,
-    /// Syntax spans for `text`, keyed by a hash of the text and tint colors.
-    /// The `bool` per line says the spans reproduce that line exactly, so the
-    /// layouter never has to re-validate them on the hot path.
-    pub right_spans: Option<SpanCache>,
-    /// Diff tints recomputed live from `document.left_text` vs `text`,
-    /// under the same key as `right_spans`.
-    pub live_tints: Option<(u64, std::sync::Arc<Vec<Option<eframe::egui::Color32>>>)>,
-    /// Buffer-level undo/redo for the unified editor (split uses the text
-    /// widget's own undoer). Snapshots are whole-buffer text; `burst` is the
-    /// last snapshot time so a typing burst is one undo unit.
-    pub undo: Vec<String>,
-    pub redo: Vec<String>,
-    pub burst: f64,
-    /// Live unified rows for the current revision, same key as `right_spans`.
-    pub live_rows: Option<(u64, std::sync::Arc<Vec<LiveRow>>)>,
-    /// Syntax spans for the immutable left text, computed once.
-    pub left_spans: Option<std::sync::Arc<Vec<Vec<super::DiffSpan>>>>,
-    /// The text changed since `key` was computed: only then is the whole
-    /// buffer rehashed, instead of on every frame.
-    pub stale: bool,
-    /// Cache key of the current text plus tint palette.
-    pub key: u64,
-    /// Key of the tint palette alone, so a theme change rehashes too.
-    pub palette: u64,
-    /// Left pane aligned to the buffer's lines (editable split view),
-    /// under the same key as `right_spans`.
-    pub aligned_left: Option<(u64, std::sync::Arc<super::AlignedLeft>)>,
+    pub editor: super::live::LiveEditor,
+    /// The left text re-diffed against the buffer, and the editor marks
+    /// derived from it.
+    pub live: super::live::LiveDiff,
 }
 
 impl Edit {
     pub fn new(document: std::sync::Arc<super::DiffDocument>) -> Self {
         Self {
             text: document.right_text.clone(),
+            editor: super::live::LiveEditor::new(&document.right_text),
+            live: super::live::LiveDiff::default(),
             document,
-            right_spans: None,
-            live_tints: None,
-            live_rows: None,
-            undo: Vec::new(),
-            redo: Vec::new(),
-            burst: 0.0,
-            left_spans: None,
-            stale: true,
-            key: 0,
-            palette: 0,
-            aligned_left: None,
         }
     }
 }

@@ -2,7 +2,9 @@
 //! stripe on the scroll rail, and the status footer.
 use super::SourceView;
 use super::canvas::Canvas;
+use super::geometry::snap;
 use super::helpers::RenderHelpers;
+use super::palette::EditorPalette;
 use crate::doc::Buffer;
 use crate::fold::Folds;
 use crate::highlight::HighlightCache;
@@ -12,6 +14,11 @@ use crate::view::command_prompt;
 use crate::vim::Cursor;
 use crate::vim::ModalEngine;
 use egui::{Pos2, Rect, Sense, Vec2};
+
+/// Status bar text size, horizontal padding and gap between cells.
+const STATUS_FONT: f32 = 12.0;
+const STATUS_PAD: f32 = 10.0;
+const STATUS_GAP: f32 = 16.0;
 
 impl<B: Buffer> SourceView<'_, B> {
     /// Yank sync (`clipboard=unnamed`): every unnamed-register write lands
@@ -117,9 +124,10 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     /// Reserve the footer on every frame so entering or leaving command
-    /// mode does not move the source viewport. The command prompt owns the
-    /// left half; the cursor position always sits at the right edge, so
-    /// code editing gets the same Ln/Col readout as the Markdown preview.
+    /// mode does not move the source viewport. A status band with a top
+    /// hairline (`JetBrains` status bar): the command prompt owns the
+    /// left, and `Ln, Col`, the host's cells and the vim mode sit
+    /// right-aligned.
     pub(super) fn paint_footer(&self, ui: &mut egui::Ui) -> Option<Rect> {
         if !self.options.show_status {
             return None;
@@ -128,30 +136,64 @@ impl<B: Buffer> SourceView<'_, B> {
             Vec2::new(ui.available_width(), self.geometry.footer_height),
             Sense::hover(),
         );
-        let font = self.geometry.font.clone();
+        let palette = self.palette(ui.visuals());
+        let painter = ui.painter();
+        let ppp = self.geometry.ppp;
+        painter.rect_filled(rect, 0.0, palette.status_fill);
+        painter.hline(
+            rect.x_range(),
+            snap(rect.top(), ppp) + 0.5 / ppp,
+            egui::Stroke::new(1.0 / ppp, palette.status_rule),
+        );
         if let Some(prompt) = command_prompt(self.engine) {
-            ui.painter().text(
-                Pos2::new(rect.left(), rect.center().y),
+            painter.text(
+                Pos2::new(rect.left() + STATUS_PAD, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 prompt,
-                font,
+                self.geometry.font.clone(),
                 ui.visuals().text_color(),
             );
-        } else {
-            let cursor = self.engine.cursor();
-            ui.painter().text(
-                Pos2::new(rect.right(), rect.center().y),
-                egui::Align2::RIGHT_CENTER,
-                format!(
-                    "Ln {}, Col {}",
-                    cursor.line.saturating_add(1),
-                    cursor.col.saturating_add(1)
-                ),
-                font,
-                ui.visuals().weak_text_color(),
+        }
+        let font = egui::FontId::proportional(STATUS_FONT);
+        let mut right = rect.right() - STATUS_PAD;
+        for (text, color) in self.status_cells(&palette).into_iter().rev() {
+            let galley = painter.layout_no_wrap(text, font.clone(), color);
+            let size = galley.size();
+            let at = Pos2::new(
+                snap(right - size.x, ppp),
+                snap(rect.center().y - size.y * 0.5, ppp),
             );
+            painter.galley(at, galley, color);
+            right = at.x - STATUS_GAP;
         }
         Some(rect)
+    }
+
+    /// Status cells, left to right: caret position, host cells, mode.
+    fn status_cells(&self, palette: &EditorPalette) -> Vec<(String, egui::Color32)> {
+        let cursor = self.engine.cursor();
+        let mut cells = vec![(
+            format!(
+                "Ln {}, Col {}",
+                cursor.line.saturating_add(1),
+                cursor.col.saturating_add(1)
+            ),
+            palette.status_text,
+        )];
+        cells.extend(
+            self.options
+                .status_items
+                .iter()
+                .map(|item| (item.clone(), palette.status_text)),
+        );
+        if self.options.vim {
+            let mode = self.engine.mode();
+            cells.push((
+                crate::view::mode_name(mode).to_owned(),
+                crate::view::mode_color(mode, &palette.modes),
+            ));
+        }
+        cells
     }
 }
 

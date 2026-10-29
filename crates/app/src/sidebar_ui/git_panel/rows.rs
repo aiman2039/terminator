@@ -118,7 +118,11 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
         ),
         response.rect,
     );
-    if let Some(action) = row.click_action(response.clicked() || response.double_clicked()) {
+    let clicked = response.clicked() || response.double_clicked();
+    if clicked && row.group == terminator_git::GitGroup::Conflicts {
+        // Conflicted files open the three-way merge tool.
+        outcome.resolve = Some(change.path.clone());
+    } else if let Some(action) = row.click_action(clicked) {
         outcome.clicked.push(GitFileAction {
             action,
             path: change.path.clone(),

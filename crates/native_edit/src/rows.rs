@@ -20,16 +20,28 @@ pub struct VisualRow {
     pub text: String,
     /// Last row of a folded region's first line: paint the fold marker.
     pub folded: bool,
+    /// A host filler row (diff alignment) before `line`: no text, never
+    /// owns the cursor; a click lands at the start of `line`.
+    pub spacer: bool,
 }
 
 impl VisualRow {
     /// True when this row owns the cursor at `line`/`col`.
     #[must_use]
     pub fn owns_cursor(&self, line: usize, col: usize) -> bool {
-        self.line == line
+        !self.spacer
+            && self.line == line
             && col >= self.start
             && (col < self.end || (col == self.end && self.end == self.line_len))
     }
+}
+
+/// How [`RowCache::ensure_spaced`] lays the rows out: the wrap width, the
+/// folds that hide lines, and host filler rows.
+pub struct RowLayout<'a> {
+    pub wrap_columns: Option<usize>,
+    pub folds: Option<&'a crate::fold::Folds>,
+    pub spacers: &'a [(usize, usize)],
 }
 
 /// Revision-keyed row layout cache: one per open buffer, owned next to the
@@ -39,6 +51,7 @@ pub struct RowCache {
     revision: u64,
     columns: Option<usize>,
     folds: u64,
+    spacers: u64,
     ready: bool,
     rows: Vec<VisualRow>,
     max_cells: usize,
@@ -47,22 +60,49 @@ pub struct RowCache {
 impl RowCache {
     /// Recompute when the buffer revision or the wrap width changed; every
     /// other frame reuses the rows as-is.
+    #[cfg(test)]
     pub fn ensure<B: Buffer>(
         &mut self,
         doc: &B,
         wrap_columns: Option<usize>,
         folds: Option<&crate::fold::Folds>,
     ) {
+        self.ensure_spaced(
+            doc,
+            RowLayout {
+                wrap_columns,
+                folds,
+                spacers: &[],
+            },
+        );
+    }
+
+    /// [`RowCache::ensure`] with host filler rows (see
+    /// [`crate::spacers::insert_spacers`]); a changed spacer list re-lays
+    /// the rows like an edit does.
+    pub fn ensure_spaced<B: Buffer>(&mut self, doc: &B, layout: RowLayout<'_>) {
+        let RowLayout {
+            wrap_columns,
+            folds,
+            spacers,
+        } = layout;
         let fold_generation = folds.map_or(0, crate::fold::Folds::generation);
+        let spacer_key = crate::spacers::spacer_key(spacers);
         if self.ready
             && self.revision == doc.revision()
             && self.columns == wrap_columns
             && self.folds == fold_generation
+            && self.spacers == spacer_key
         {
             return;
         }
         self.folds = fold_generation;
-        self.rows = visual_rows_folded(doc, wrap_columns, folds);
+        self.spacers = spacer_key;
+        self.rows = crate::spacers::insert_spacers(
+            visual_rows_folded(doc, wrap_columns, folds),
+            spacers,
+            folds,
+        );
         self.max_cells = self.rows.iter().map(row_cells).max().unwrap_or(0);
         self.revision = doc.revision();
         self.columns = wrap_columns;
@@ -119,6 +159,7 @@ pub fn visual_rows_folded<B: Buffer>(
                 line_len,
                 text,
                 folded: false,
+                spacer: false,
             });
             mark_folded(MarkFoldedInput {
                 rows: &mut rows,
@@ -160,6 +201,7 @@ pub fn visual_rows_folded<B: Buffer>(
                 line_len,
                 text: chars.get(start..end).unwrap_or(&[]).iter().collect(),
                 folded: false,
+                spacer: false,
             });
             start = end;
         }

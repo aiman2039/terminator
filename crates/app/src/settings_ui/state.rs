@@ -19,6 +19,7 @@ pub(crate) enum SettingsPending {
 pub(crate) enum SettingsSection {
     Appearance,
     Terminal,
+    Editor,
     Notifications,
     History,
     Shortcuts,
@@ -27,9 +28,10 @@ pub(crate) enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Appearance,
         Self::Terminal,
+        Self::Editor,
         Self::Notifications,
         Self::History,
         Self::Shortcuts,
@@ -41,6 +43,7 @@ impl SettingsSection {
         match self {
             Self::Appearance => "Appearance",
             Self::Terminal => "Terminal & Editor",
+            Self::Editor => "Editor",
             Self::Notifications => "Notifications",
             Self::History => "History",
             Self::Shortcuts => "Shortcuts",
@@ -53,6 +56,7 @@ impl SettingsSection {
         match self {
             Self::Appearance | Self::Updates => "Settings2",
             Self::Terminal => "Terminal",
+            Self::Editor => "Pencil",
             Self::Notifications => "PanelsTopLeft",
             Self::History => "FileText",
             Self::Shortcuts => "SquareDashed",
@@ -66,6 +70,7 @@ impl SettingsSection {
             Self::Terminal => {
                 "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout"
             }
+            Self::Editor => "native font size line spacing height caret blink cursor",
             Self::Notifications => "alert os desktop dismiss sound ntfy channel machine test",
             Self::History => "days mib scrollback disk",
             Self::Shortcuts => "keymap command shortcut chord palette",

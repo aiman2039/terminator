@@ -216,6 +216,7 @@ pub fn install(ctx: &egui::Context) {
 pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     let light = theme.is_light();
     set_chrome(theme);
+    super::editor::set_editor_style(theme);
     let mut style = egui::Style {
         visuals: if light {
             egui::Visuals::light()

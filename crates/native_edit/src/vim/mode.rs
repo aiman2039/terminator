@@ -69,6 +69,14 @@ pub enum Effect {
     /// Jump to the definition under the cursor (`gd`, F12); the GUI
     /// owns servers and opening the target.
     GotoDefinition,
+    /// Jump to the implementations of the symbol under the cursor
+    /// (Cmd/Ctrl+Alt+B); several open the chooser.
+    GotoImplementation,
+    /// Jump to the type of the symbol under the cursor (Cmd/Ctrl+Shift+B).
+    GotoTypeDefinition,
+    /// Open Find in Files (Cmd/Ctrl+Shift+F), seeded from a one-line
+    /// selection; the GUI owns the project search.
+    FindInFiles,
     /// List references for the symbol under the cursor. The GUI owns
     /// language servers and the results window.
     FindReferences,

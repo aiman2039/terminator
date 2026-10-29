@@ -36,6 +36,8 @@ pub struct AppearanceConfig {
     pub border_width: f32,
     pub pane_divider_width: f32,
     pub density: Density,
+    #[serde(flatten)]
+    pub editor: crate::editor_prefs::EditorPrefs,
 }
 impl Default for AppearanceConfig {
     fn default() -> Self {
@@ -71,6 +73,7 @@ impl AppearanceConfig {
             border_width: 1.0,
             pane_divider_width: 8.0,
             density: Density::Comfortable,
+            editor: crate::editor_prefs::EditorPrefs::default(),
         }
     }
     /// Pre-IDE palette, kept as a selectable preset.
@@ -96,9 +99,7 @@ impl AppearanceConfig {
             status_running: "#79BAA3".into(),
             status_waiting: "#E2C08D".into(),
             status_failed: "#C74E39".into(),
-            border_width: 1.0,
-            pane_divider_width: 8.0,
-            density: Density::Comfortable,
+            ..Self::intellij_dark()
         }
     }
 }

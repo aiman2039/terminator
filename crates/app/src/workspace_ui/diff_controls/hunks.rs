@@ -1,7 +1,10 @@
 use super::super::super::*;
+#[cfg(feature = "test-support")]
+use super::chevrons::action_target;
+use super::chevrons::{ChevronBand, action_tip};
 use super::{
     ChangedLineInput, ControlsFrame, ControlsState, PaintConnectorInput, PaneOutput, change_color,
-    changed_line, hunk_row, paint_connector,
+    changed_line, paint_connector,
 };
 use diff::actions::Kind;
 
@@ -12,7 +15,6 @@ struct HunkBand<'a> {
     color: Color32,
     selected: bool,
     left: egui::Rect,
-    right: egui::Rect,
 }
 
 /// A hunk band as shown in one pane.
@@ -44,9 +46,8 @@ impl ControlsFrame<'_> {
             color,
             selected,
             left,
-            right,
         };
-        if self.split && !self.editor_pane {
+        if self.split {
             let gap_clip = egui::Rect::from_min_max(
                 egui::pos2(self.first.inner_rect.right(), self.first.inner_rect.top()),
                 egui::pos2(self.last.inner_rect.left(), self.last.inner_rect.bottom()),
@@ -57,6 +58,7 @@ impl ControlsFrame<'_> {
                 right,
                 clip: gap_clip,
                 color,
+                tints: self.colors.tints(),
             });
         }
         for (side, (rect, output)) in [(left, self.first), (right, self.last)]
@@ -71,11 +73,22 @@ impl ControlsFrame<'_> {
             };
             self.paint_hunk_side(ui, &view, state.review);
         }
-        let union = left.union(right);
-        if !selected && !self.pointer.is_some_and(|pos| union.contains(pos)) {
-            return;
+        // Actions are always visible: chevrons in the split band, buttons
+        // in the unified gutter.
+        if self.split {
+            self.paint_chevrons(
+                ui,
+                &ChevronBand {
+                    index,
+                    color,
+                    left,
+                    right,
+                },
+                state,
+            );
+        } else {
+            self.hunk_actions(ui, &band, state);
         }
-        self.hunk_actions(ui, &band, state);
     }
 
     fn paint_rail_marker(
@@ -85,7 +98,7 @@ impl ControlsFrame<'_> {
         review: &mut diff::review::State,
     ) {
         let rail = self.rail;
-        let fraction = hunk_row(hunk, self.split, self.aligned) as f32 / self.count as f32;
+        let fraction = hunk.row(self.split) as f32 / self.count as f32;
         let marker = egui::Rect::from_center_size(
             egui::pos2(
                 rail.center().x,
@@ -116,11 +129,8 @@ impl ControlsFrame<'_> {
     /// the last pane, in screen coordinates.
     fn hunk_bands(&self, hunk: &diff::review::Hunk) -> (egui::Rect, egui::Rect) {
         let (row_h, first, last) = (self.row_h, self.first, self.last);
-        let row_top = hunk_row(hunk, self.split, self.aligned) as f32 * row_h;
-        let old_height = if self.aligned {
-            // Removed lines have no row of their own once aligned.
-            hunk.new.len() as f32 * row_h
-        } else if self.split {
+        let row_top = hunk.row(self.split) as f32 * row_h;
+        let old_height = if self.split {
             hunk.old.len() as f32 * row_h
         } else {
             hunk.rows(false).len() as f32 * row_h
@@ -167,10 +177,7 @@ impl ControlsFrame<'_> {
         if !visible.is_positive() {
             return;
         }
-        // The editor pane's rows are buffer lines, not diff rows: an
-        // outline there would frame the wrong lines (unless the panes are
-        // aligned on those lines). Rail + tints speak.
-        if band.selected && (self.aligned || !(self.editor_pane && side == 1)) {
+        if band.selected {
             ui.painter().with_clip_rect(clip).rect_stroke(
                 rect,
                 0.0,
@@ -231,6 +238,7 @@ impl ControlsFrame<'_> {
         }
         let row_h = self.row_h;
         let clip = output.inner_rect;
+        let font = super::super::diff_paint::diff_row_font(ui);
         for row in band.hunk.rows(self.split) {
             let Some((old, line)) = changed_line(ChangedLineInput {
                 doc: self.doc,
@@ -244,34 +252,30 @@ impl ControlsFrame<'_> {
                 let y = output.inner_rect.top() + row as f32 * row_h
                     - output.state.unclamped_offset().y;
                 ui.painter().with_clip_rect(clip).text(
-                    egui::pos2(output.inner_rect.left() + 2.0, y + row_h / 2.0),
-                    egui::Align2::LEFT_CENTER,
+                    super::super::diff_paint::snap(
+                        ui,
+                        egui::pos2(output.inner_rect.left() + 2.0, y),
+                    ),
+                    egui::Align2::LEFT_TOP,
                     "✓",
-                    egui::FontId::proportional(row_h * 0.8),
+                    font.clone(),
                     band.color,
                 );
             }
         }
     }
 
-    /// Stage/unstage and discard buttons over the hovered or selected hunk.
+    /// Stage/unstage and discard buttons in the unified gutter, at the top
+    /// of the hunk's visible rows.
     fn hunk_actions(&self, ui: &mut egui::Ui, band: &HunkBand<'_>, state: &mut ControlsState<'_>) {
-        let (left, right, first) = (band.left, band.right, self.first);
-        let width = if self.split {
-            (right.left() - left.right()).max(48.0)
-        } else {
-            self.unified_gutter.width()
-        };
-        let x = if self.split {
-            left.right()
-        } else {
-            self.unified_gutter.left()
-        };
-        let y = left.top().max(first.inner_rect.top()).min(
+        let (left, first) = (band.left, self.first);
+        let width = self.unified_gutter.width();
+        let last_row = left.bottom().max(left.top() + self.row_h) - self.row_h;
+        let y = left.top().max(first.inner_rect.top().min(last_row)).min(
             (first.inner_rect.bottom() - appearance::TOOLBAR_BUTTON).max(first.inner_rect.top()),
         );
         let controls = egui::Rect::from_min_size(
-            egui::pos2(x, y),
+            egui::pos2(self.unified_gutter.left(), y),
             egui::vec2(width, appearance::TOOLBAR_BUTTON),
         );
         ui.scope_builder(
@@ -291,52 +295,24 @@ impl ControlsFrame<'_> {
     }
 
     fn hunk_action_buttons(&self, ui: &mut egui::Ui, index: usize, state: &mut ControlsState<'_>) {
-        let staged = self.staged;
-        let kind = if staged { Kind::Unstage } else { Kind::Stage };
         let picked = state
             .review
             .picked
             .as_ref()
             .filter(|(picked_hunk, _)| *picked_hunk == index)
             .map_or(0, |(_, lines)| lines.len());
-        let target = if picked > 0 {
-            format!(
-                "{picked} selected line{}",
-                if picked == 1 { "" } else { "s" }
-            )
+        let kinds: &[(Kind, &str)] = if self.staged {
+            &[(Kind::Unstage, "ArrowLeft")]
         } else {
-            "this hunk (Alt+click lines to pick some)".to_owned()
+            &[(Kind::Stage, "Plus"), (Kind::Discard, "Eraser")]
         };
-        let action = appearance::sidebar_action(
-            ui,
-            if staged { "ArrowLeft" } else { "Plus" },
-            &format!("{} {target}", kind.label()),
-        );
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), &format!("diff-hunk-action-{index}"), action.rect);
-        if action.clicked() {
-            state.result.action = Some((index, kind));
-        }
-        if staged {
-            return;
-        }
-        let discard = appearance::sidebar_action(
-            ui,
-            "Eraser",
-            &if picked > 0 {
-                format!("Discard {target}…")
-            } else {
-                "Discard this hunk…".to_owned()
-            },
-        );
-        #[cfg(feature = "test-support")]
-        diagnostics::record(
-            ui.ctx(),
-            &format!("diff-hunk-discard-{index}"),
-            discard.rect,
-        );
-        if discard.clicked() {
-            state.result.action = Some((index, Kind::Discard));
+        for &(kind, icon) in kinds {
+            let button = appearance::sidebar_action(ui, icon, &action_tip(kind, picked));
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), &action_target(kind, index), button.rect);
+            if button.clicked() {
+                state.result.action = Some((index, kind));
+            }
         }
     }
 }

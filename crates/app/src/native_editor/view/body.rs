@@ -26,6 +26,7 @@ struct SourceMarks {
     popup_keys: bool,
     find_matches: FindMatches,
     find_current: Option<usize>,
+    crlf: bool,
 }
 
 struct GutterMarksInput<'a> {
@@ -176,6 +177,7 @@ impl ViewPass<'_> {
             base: frame.git_base.as_ref(),
         });
         let popup_keys = self.popups.popup_keys();
+        let crlf = doc.crlf;
         let (find_matches, find_current) = Self::find_pass(
             ui,
             &mut self.popups.find,
@@ -199,6 +201,7 @@ impl ViewPass<'_> {
                 popup_keys,
                 find_matches,
                 find_current,
+                crlf,
             },
         );
         let outcome = Self::render_source(
@@ -318,7 +321,11 @@ impl ViewPass<'_> {
             popup_keys,
             find_matches,
             find_current,
+            crlf,
         } = marks;
+        let style = appearance::editor_style();
+        // Markdown keeps its one-point bump over the code font.
+        let bump = if frame.is_markdown { 1.0 } else { 0.0 };
         SourceOptions {
             vim: frame.vim,
             read_only,
@@ -333,7 +340,13 @@ impl ViewPass<'_> {
                 })
             }),
             soft_wrap,
-            font_size: if frame.is_markdown { 14.0 } else { 13.0 },
+            font_size: style.prefs.editor_font_size + bump,
+            line_height: style.prefs.editor_line_spacing,
+            caret_blink: style.prefs.editor_caret_blink,
+            palette: Some(style.palette),
+            status_items: [if crlf { "CRLF" } else { "LF" }, "UTF-8", "4 spaces"]
+                .map(str::to_owned)
+                .to_vec(),
             scroll_fraction: if mode == markdown::Mode::Split {
                 frame.preview.scroll
             } else {

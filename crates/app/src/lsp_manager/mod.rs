@@ -35,6 +35,7 @@ mod answers;
 use answers::{Answer, RenameAnswer};
 mod docs;
 mod edits;
+mod gated;
 mod navigation;
 mod problems;
 mod symbols;
@@ -130,6 +131,14 @@ enum Pending {
         path: PathBuf,
         revision: u64,
     },
+    OnTypeFormat {
+        path: PathBuf,
+        revision: u64,
+    },
+    DocumentHighlight {
+        path: PathBuf,
+        revision: u64,
+    },
     CodeActions {
         path: PathBuf,
         generation: u64,
@@ -163,6 +172,9 @@ pub enum HierarchyAnswer {
 pub struct EditAnswers {
     /// `(path, buffer revision formatted, edits)`.
     pub format: Option<(PathBuf, u64, Vec<L::RenameTextEdit>)>,
+    /// On-type formatting: `(path, buffer revision, edits)`; dropped
+    /// silently when the buffer moved on.
+    pub on_type: Option<(PathBuf, u64, Vec<L::RenameTextEdit>)>,
     /// `(path, generation, actions)`.
     pub actions: Option<(PathBuf, u64, Vec<L::CodeActionItem>)>,
     /// `(path, resolved action)` for an action picked without an edit.
@@ -243,6 +255,9 @@ pub struct LspManager {
     /// Hierarchy answers in arrival order (see [`HierarchyAnswer`]).
     pub hierarchy_answers: Vec<HierarchyAnswer>,
     hierarchy_generation: u64,
+    /// Latest document-highlight answer, and the last request sent.
+    highlights: Option<gated::DocHighlights>,
+    highlight_asked: Option<(PathBuf, u64, L::Position)>,
     /// Latest signature-help answer: `(path, generation, signature)`.
     signature: Option<(PathBuf, u64, Option<L::SignatureHelp>)>,
     rename: Option<RenameResults>,
@@ -293,6 +308,8 @@ impl LspManager {
             edit_answers: EditAnswers::default(),
             hierarchy_answers: Vec::new(),
             hierarchy_generation: 0,
+            highlights: None,
+            highlight_asked: None,
             rename: None,
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),

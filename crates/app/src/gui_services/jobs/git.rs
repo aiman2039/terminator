@@ -131,9 +131,9 @@ impl Services {
                 })
                 .await
             };
-            // Expanded ranges and the whitespace mode survive a refresh.
+            // Expanded ranges and the compare options survive a refresh.
             let result = match result {
-                Ok(doc) if view.whitespace || !view.revealed.is_empty() => {
+                Ok(doc) if view.needs_rebuild() => {
                     let (path, staged) = (path.clone(), *staged);
                     self.cpu()
                         .run(&cancel, move || Ok(doc.rebuild(&path, staged, &view)))

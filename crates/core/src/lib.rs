@@ -9,6 +9,7 @@ pub mod async_process;
 #[cfg(feature = "async-client")]
 pub mod async_service;
 pub mod crash;
+pub mod editor_prefs;
 pub mod generations;
 pub mod git;
 pub mod idle_close;

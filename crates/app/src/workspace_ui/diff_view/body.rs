@@ -23,6 +23,11 @@ pub(super) struct DiffPanes<'a> {
     pub(super) editable: bool,
     /// Shared vertical offset that keeps both split panes in step.
     pub(super) sync: f32,
+    /// The live re-diff of the buffer when the panes show it instead of
+    /// `doc` (the editable split, or unified with unsaved edits).
+    pub(super) live: Option<Arc<diff::DiffDocument>>,
+    /// Row pitch of the editable split (the editor's), when it is shown.
+    pub(super) row_h: Option<f32>,
 }
 
 struct DiffPaneControlsInput<'a, 'p> {
@@ -42,7 +47,12 @@ impl App {
         if frame.doc.is_some() {
             self.diff_document(ui, frame, pass);
         } else if let Some(Err(error)) = self.diffs.get(&frame.key) {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            // Binary images and conflicted files get their own tools.
+            let error = error.clone();
+            if !self.binary_image_diff(ui, frame.tab, &error) {
+                ui.colored_label(ui.visuals().error_fg_color, &error);
+                self.offer_merge(ui, frame.tab, &error);
+            }
         } else {
             ui.spinner();
         }
@@ -101,12 +111,7 @@ impl App {
     }
 
     fn diff_colors(&self) -> DiffColors {
-        DiffColors {
-            added: appearance::color(&self.theme.git_added),
-            deleted: appearance::color(&self.theme.git_deleted),
-            accent: appearance::color(&self.theme.accent),
-            text: appearance::color(&self.theme.text),
-        }
+        DiffColors::from_theme(&self.theme)
     }
 
     /// The document panes inside the body rect, with the hunk rail and
@@ -142,10 +147,11 @@ impl App {
             rail,
             unified_gutter,
             body,
-            // Working tree: split right pane and unified rows are live
-            // editors beside/between the painted lines.
+            // Working tree: the split right pane is the native editor.
             editable: !frame.read_only && split && !frame.staged && pass.review.buffer.is_some(),
             sync,
+            live: None,
+            row_h: None,
         };
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
             ui.set_clip_rect(full);
@@ -167,26 +173,23 @@ impl App {
         panes: &mut DiffPanes<'_>,
         pass: &mut DiffPass,
     ) -> Vec<PaneOutput> {
-        let frame = panes.frame;
-        let unified_editor =
-            !frame.read_only && !panes.split && !frame.staged && pass.review.buffer.is_some();
-        if unified_editor {
-            return match &mut pass.review.buffer {
-                Some(buffer) => vec![super::super::diff_edit::paint_unified_editor(
-                    super::super::diff_edit::PaintUnifiedEditorInput {
-                        ui,
-                        doc: panes.doc,
-                        buffer,
-                        path: &frame.cwd.join(frame.path),
-                        colors: panes.colors,
-                        key: &frame.key,
-                    },
-                )],
-                None => self.paint_plain_diff(ui, panes),
-            };
-        }
         if panes.editable {
             return self.paint_split_editor(ui, panes, pass);
+        }
+        // Unified working tree is read-only; with unsaved edits (made in
+        // the split editor) it shows the live diff of the buffer.
+        if !panes.split
+            && !panes.frame.staged
+            && pass.review.unsaved_edits()
+            && let Some(buffer) = pass.review.buffer.as_mut()
+        {
+            let path = panes.frame.cwd.join(panes.frame.path);
+            let (live, waiting) = buffer.live_document(&path, ui.input(|input| input.time));
+            if waiting {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
+            panes.live = Some(live);
         }
         self.paint_plain_diff(ui, panes)
     }
@@ -198,7 +201,7 @@ impl App {
     ) -> Vec<PaneOutput> {
         paint_diff_document(PaintDiffDocumentInput {
             ui,
-            doc: panes.doc,
+            doc: panes.live.as_ref().unwrap_or(panes.doc),
             split: panes.split,
             colors: panes.colors,
             scroll_key: &panes.frame.key,
@@ -217,19 +220,23 @@ impl App {
             outputs,
         } = input;
         let frame = panes.frame;
+        let doc = panes.live.as_ref().unwrap_or(panes.doc);
+        // Hunk actions address the document's hunks: a live diff of
+        // unsaved edits has other hunks, so they wait for Save.
+        let enabled = frame.enabled && (panes.live.is_none() || !pass.review.unsaved_edits());
         let interaction = diff_controls::paint(diff_controls::PaintInput {
             ui,
-            doc: panes.doc,
+            doc,
             split: panes.split,
             staged: frame.staged,
-            editor_pane: panes.editable
-                || (!panes.split && !frame.staged && pass.review.buffer.is_some()),
-            enabled: frame.enabled,
+            editor_pane: panes.editable,
+            enabled,
             review: &mut pass.review,
             scroll: outputs,
             rail: panes.rail,
             unified_gutter: panes.unified_gutter,
             colors: panes.colors,
+            row_h: panes.row_h,
         });
         if interaction.action.is_some() {
             pass.action = interaction.action;
@@ -240,9 +247,9 @@ impl App {
         pass.gap = interaction.gap;
         diff_controls::jump(diff_controls::JumpInput {
             ui,
-            doc: panes.doc,
+            doc,
             split: panes.split,
-            aligned: panes.editable,
+            row_h: panes.row_h,
             review: &mut pass.review,
             scroll: outputs,
             sync: &mut panes.sync,

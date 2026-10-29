@@ -154,8 +154,33 @@ modified, added, renamed, or untracked file to open a diff (working-tree side
 when that side is dirty, otherwise staged). Deleted entries open a diff
 immediately. Staged and working-tree diffs remain in the file menu.
 
-Git diffs default to the native viewer (syntax highlighting and word-level
-hunks, Unified or Split in the tab). Settings → Terminal & Editor → Diff viewer
+Git diffs default to the native viewer. It shows HEAD → index for staged changes
+and index → working tree for working changes, with syntax highlighting, Unified
+or Side by side layout, and collapsed unchanged lines (click a gap row, or use
+the `↓20` / `↑20` steps). Changed lines use the Git sidebar colors: added
+`git_added`, deleted `git_deleted`, and modified `git_modified`, with a soft row
+tint and a stronger tint on the changed words. The toolbar is one row: the
+changed-files panel toggle, previous/next change (F7 / Shift+F7, which continue
+into the next or previous file), Open at change (F4), Refresh, previous/next
+file, the gear menu, the layout toggles, Undo, and the change counter. A
+one-row header names each side, and a fixed notification bar under the toolbar
+shows results, the discard confirmation, and hunk progress without moving the
+panes. The changed-files panel lists every changed file on the same side,
+grouped by folder with Git status colors; click a file to show its diff in the
+same pane.
+
+In Side by side, the narrow band between the panes connects each change and
+always shows its action chevrons. Working tree: `>>` reverts the change
+(discard, after a confirmation) and `<<` stages it. Staged: `>>` unstages it.
+Unified shows the same actions as gutter buttons. Alt+click changed lines to
+act on those lines only. The gear menu holds the unchanged-line context,
+whitespace mode (do not ignore / trim / ignore all), Ignore case, and highlight
+granularity (words, characters, lines, or none); these options are saved in
+`ui-preferences.json` and apply to every native diff. They change only the
+comparison: rows show the real text, and staging or discarding applies the real
+lines. Remote and Perforce diffs are read-only.
+
+Settings → Terminal & Editor → Diff viewer
 can switch to Neovim review (bundled CodeDiff). Neovim 0.10+ must be on PATH;
 users do not install plugins. The review uses an isolated Neovim profile, without
 loading user configuration. Ordinary file editors still use the editor settings.
@@ -163,11 +188,11 @@ In Neovim review, use `]c` / `[c` for changes, `t` for inline/side-by-side layou
 `gc` to fold unchanged context, and `q` or the tab X to close without a session
 prompt.
 
-Reviews are read-only snapshots: HEAD → index for staged changes, index → disk
+Neovim reviews are read-only snapshots: HEAD → index for staged changes, index → disk
 for working changes. Reopen or Refresh a review to reload it. Renames, added/deleted
 files, untracked files and partially staged files are supported. Two-way reviews
 reject unresolved conflicts, binary/non-UTF-8 files, symlinks/submodules, and
-files over 1 MiB with an error. Git mutations remain terminal operations. The GUI
+files over 1 MiB with an error. Neovim reviews never change Git state. The GUI
 checks the running daemon’s advertised capabilities before opening a Neovim
 review. Native review does not need that capability. With Diff viewer set to
 Neovim and an older daemon, the built-in viewer is used and the GUI explains that
@@ -413,3 +438,33 @@ In a native editor selection (including Markdown), Tab indents all selected
 lines by four spaces. Shift+Tab removes up to four leading spaces or one
 leading tab. The selection stays active. Vim Visual mode also accepts `>`
 and `<` for these actions. Each action is one undo step.
+
+### Merge conflicts and image diffs
+
+Click a file in the Git **Conflicts** group (or use **Resolve conflicts…** in
+its menu) to open the three-way merge tab. A diff that refuses a conflicted
+file also shows **Resolve…**. The tab shows **Ours** (left), **Result**
+(center, editable), and **Theirs** (right). The sides come from the index
+stages `:2:` and `:3:`; the result starts as the base (`:1:`). The panes stay
+aligned chunk by chunk. Red marks a conflict, yellow a one-sided change, and
+green the same change on both sides.
+
+- `>` in the left gutter accepts ours; `<` in the right gutter accepts
+  theirs; `+` accepts both (ours, then theirs); `x` keeps the base.
+- Typing in a change chunk resolves it by hand.
+- **Apply non-conflicting changes** accepts every one-sided or identical change.
+- F7 and Shift+F7 (or the arrow buttons) go to the next and previous
+  unresolved change. The counter shows the conflicts and changes left.
+- **Save** writes the file. Unresolved conflicts are saved with diff3 markers.
+- **Mark resolved** is available when no change is left. It saves and then
+  stages the file (`git add`). Only this click stages the file.
+- **Reload** reads the stages from Git again and discards edits.
+
+Long lines are clipped, not wrapped. Binary conflicts must be resolved in a
+terminal. The tab is saved in layout version 10.
+
+When a native diff refuses a binary PNG, JPEG, WebP, GIF, BMP, ICO, or TIFF
+file, the diff shows the old and new images. The captions give file size and
+pixel dimensions. Select **Side by side**, **Swipe** (drag on the image or use
+the slider), or **Onion skin** (the slider sets the opacity of the new image).
+Other binary files keep the size message.

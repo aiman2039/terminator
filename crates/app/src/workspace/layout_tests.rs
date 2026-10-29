@@ -198,6 +198,21 @@ mod tests {
     }
 
     #[test]
+    fn merge_tabs_raise_the_layout_to_version_ten_and_round_trip() {
+        let mut workspace = Workspace::empty();
+        let merge = Tab::Merge {
+            cwd: "/repo".into(),
+            path: "/repo/src/lib.rs".into(),
+        };
+        workspace.add("merge".into(), merge.clone());
+        assert_eq!(workspace.version, 10);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&merge));
+        assert_eq!(merge.git_title(), "Merge lib.rs");
+    }
+
+    #[test]
     fn media_layout_version_round_trips_and_preserves_legacy_tabs() {
         let mut workspace = Workspace::empty();
         workspace.add("shell".into(), Tab::Terminal("shell".into()));
@@ -277,7 +292,7 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(10);
+        saved["version"] = serde_json::json!(11);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()

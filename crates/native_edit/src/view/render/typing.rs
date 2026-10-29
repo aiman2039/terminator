@@ -211,7 +211,7 @@ impl<B: Buffer> SourceView<'_, B> {
                 Some(Effect::FindReferences)
             }
             egui::Key::F2 if server && bare => Some(Effect::RenameSymbol),
-            _ => None,
+            _ => crate::view::ide_navigation_shortcut(key, modifiers, server),
         }
     }
 

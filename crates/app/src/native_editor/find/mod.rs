@@ -1,10 +1,14 @@
 //! Find / replace bar for native editors (`IntelliJ` Cmd+F / Cmd+R): case,
 //! whole-word, and regex toggles, a live match count, all matches
 //! highlighted in the view, next/previous, and replace one or all (one
-//! undo step).
+//! undo step). "In selection" scopes search and replace to the text that
+//! was selected (a multi-line selection at open turns it on).
 
 use super::*;
 use std::sync::Arc;
+
+mod matching;
+use matching::{ReplaceMatchesInput, find_in, replace_matches, select, selection_scope, step};
 
 /// Matches counted and highlighted per search; more are reported as "+".
 const MAX_MATCHES: usize = 10_000;
@@ -25,6 +29,12 @@ pub(crate) struct FindBar {
     pub word: bool,
     pub regex: bool,
     pub replacing: bool,
+    /// Search only inside [`FindBar::scope`].
+    pub in_selection: bool,
+    /// The selection the search is scoped to, as buffer char offsets
+    /// `[from, to)`. Kept while matches are selected; Replace All moves
+    /// its end by the length change.
+    pub scope: Option<(usize, usize)>,
     /// Give the query field focus on the next paint.
     pub focus: bool,
     /// Index of the selected match, when one is selected.
@@ -52,6 +62,8 @@ impl FindBar {
             word: false,
             regex: false,
             replacing,
+            in_selection: false,
+            scope: None,
             focus: true,
             current: None,
             cache: None,
@@ -61,7 +73,28 @@ impl FindBar {
     }
 
     fn key(&self) -> String {
-        format!("{}|{}|{}|{}", self.case, self.word, self.regex, self.query)
+        format!(
+            "{}|{}|{}|{:?}|{}",
+            self.case,
+            self.word,
+            self.regex,
+            self.active_scope(),
+            self.query
+        )
+    }
+
+    /// The scope search runs in: `None` searches the whole buffer.
+    pub fn active_scope(&self) -> Option<(usize, usize)> {
+        self.scope.filter(|_| self.in_selection)
+    }
+
+    /// Scope search to the current selection, when one exists. Returns
+    /// whether a scope was set.
+    pub fn scope_to_selection(&mut self, engine: &VimEngine, buffer: &Doc) -> bool {
+        self.scope = selection_scope(engine, buffer);
+        self.in_selection = self.scope.is_some();
+        self.current = None;
+        self.in_selection
     }
 
     fn pattern(&self) -> Result<regex::Regex, String> {
@@ -98,7 +131,7 @@ impl FindBar {
             match self.pattern() {
                 Ok(pattern) => {
                     self.error = None;
-                    find_all(buffer, &pattern)
+                    find_in(buffer, &pattern, self.active_scope())
                 }
                 Err(error) => {
                     self.error = Some(error);
@@ -109,58 +142,6 @@ impl FindBar {
         self.cache = Some((buffer.revision(), key, Arc::clone(&matches)));
         matches
     }
-}
-
-/// Every match of `pattern`, line by line, in char columns. Empty matches
-/// are skipped (they would select nothing).
-pub(crate) fn find_all(buffer: &Doc, pattern: &regex::Regex) -> Vec<FindMatch> {
-    let mut out = Vec::new();
-    for line in 0..buffer.line_count() {
-        let text = buffer.line_text(line);
-        for found in pattern.find_iter(&text) {
-            if found.start() == found.end() {
-                continue;
-            }
-            let start = text
-                .get(..found.start())
-                .map_or(0, |head| head.chars().count());
-            let len = found.as_str().chars().count();
-            out.push(FindMatch {
-                line,
-                start,
-                end: start.saturating_add(len),
-            });
-            if out.len() >= MAX_MATCHES {
-                return out;
-            }
-        }
-    }
-    out
-}
-
-/// Select match `index` in the editor (caret at its end, IDE-style).
-fn select(engine: &mut VimEngine, buffer: &mut Doc, found: FindMatch) {
-    let _ = engine.place_cursor(buffer, found.line, found.start);
-    engine.extend_selection_to(buffer, found.line, found.end);
-}
-
-/// The match after (or before) the caret, wrapping around.
-fn step(matches: &[FindMatch], caret: (usize, usize), forward: bool) -> Option<usize> {
-    if matches.is_empty() {
-        return None;
-    }
-    let found = if forward {
-        matches
-            .iter()
-            .position(|m| (m.line, m.start) >= caret)
-            .unwrap_or(0)
-    } else {
-        matches
-            .iter()
-            .rposition(|m| (m.line, m.end) < caret)
-            .unwrap_or(matches.len().saturating_sub(1))
-    };
-    Some(found)
 }
 
 /// Paint the bar and act on it. Returns the matches to highlight.
@@ -184,6 +165,11 @@ pub(crate) fn find_bar(input: FindBarInput<'_>) -> (FindOutcome, Arc<Vec<FindMat
     let mut go = ui
         .horizontal(|ui| bar.query_row(ui, buffer, &mut outcome))
         .inner;
+    // "In selection" turned on without a scope takes the selection now;
+    // with nothing selected it stays off.
+    if bar.in_selection && bar.scope.is_none() {
+        bar.scope_to_selection(engine, buffer);
+    }
     let request = if bar.replacing && !read_only {
         ui.horizontal(|ui| bar.replace_row(ui)).inner
     } else {
@@ -260,6 +246,7 @@ impl FindBar {
             (&mut self.case, "CaseSensitive", "Match case"),
             (&mut self.word, "WholeWord", "Words"),
             (&mut self.regex, "Regex", "Regex"),
+            (&mut self.in_selection, "TextSelect", "In selection"),
         ] {
             if appearance::selectable_icon(appearance::SelectableIconInput {
                 ui,
@@ -350,6 +337,7 @@ impl FindBar {
         let matches = self.matches(buffer);
         if request.all && !matches.is_empty() {
             if let Ok(pattern) = self.pattern() {
+                let before = buffer.len_chars();
                 replace_matches(ReplaceMatchesInput {
                     buffer,
                     engine,
@@ -358,6 +346,7 @@ impl FindBar {
                     matches: &matches,
                     regex: self.regex,
                 });
+                self.shift_scope_end(before, buffer.len_chars());
             }
             self.current = None;
             return false;
@@ -369,6 +358,7 @@ impl FindBar {
         if let (Some(index), Ok(pattern)) = (self.current, self.pattern())
             && let Some(found) = matches.get(index).copied()
         {
+            let before = buffer.len_chars();
             replace_matches(ReplaceMatchesInput {
                 buffer,
                 engine,
@@ -377,8 +367,22 @@ impl FindBar {
                 matches: &[found],
                 regex: self.regex,
             });
+            self.shift_scope_end(before, buffer.len_chars());
         }
         true
+    }
+
+    /// Keep the scope over the same text after a replacement inside it
+    /// changed the buffer length from `before` to `after` chars.
+    fn shift_scope_end(&mut self, before: usize, after: usize) {
+        if let Some((from, to)) = self.scope.as_mut() {
+            *to = if after >= before {
+                to.saturating_add(after.saturating_sub(before))
+            } else {
+                to.saturating_sub(before.saturating_sub(after))
+            }
+            .max(*from);
+        }
     }
 
     /// The current matches; with `go`, step from the selected match (or
@@ -405,51 +409,6 @@ impl FindBar {
             select(engine, buffer, found);
         }
         matches
-    }
-}
-
-/// Replace `matches` (sorted) with `replacement`, last first so earlier
-/// positions stay valid, as one undo step. Regex mode expands `$1`-style
-/// groups against each matched text.
-pub(crate) struct ReplaceMatchesInput<'a> {
-    pub(crate) buffer: &'a mut Doc,
-    pub(crate) engine: &'a mut VimEngine,
-    pub(crate) pattern: &'a regex::Regex,
-    pub(crate) replacement: &'a str,
-    pub(crate) matches: &'a [FindMatch],
-    pub(crate) regex: bool,
-}
-
-fn replace_matches(input: ReplaceMatchesInput<'_>) {
-    let ReplaceMatchesInput {
-        buffer,
-        engine,
-        pattern,
-        replacement,
-        matches,
-        regex,
-    } = input;
-    buffer.begin_undo_group();
-    for found in matches.iter().rev() {
-        let from = buffer.char_at_line_col(found.line, found.start);
-        let to = buffer.char_at_line_col(found.line, found.end);
-        let line = buffer.line_text(found.line);
-        let matched: String = line
-            .chars()
-            .skip(found.start)
-            .take(found.end.saturating_sub(found.start))
-            .collect();
-        let text = if regex {
-            pattern.replace(&matched, replacement).into_owned()
-        } else {
-            replacement.to_owned()
-        };
-        buffer.delete(from..to);
-        buffer.insert(from, &text);
-    }
-    buffer.end_undo_group();
-    if let Some(first) = matches.first() {
-        let _ = engine.place_cursor(buffer, first.line, first.start);
     }
 }
 

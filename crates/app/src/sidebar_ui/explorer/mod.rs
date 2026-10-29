@@ -105,7 +105,8 @@ impl App {
             | Tab::Diff { path, .. }
             | Tab::Blame { path, .. }
             | Tab::RevisionDiff { path, .. }
-            | Tab::FileHistory { path, .. } => Some(path.clone()),
+            | Tab::FileHistory { path, .. }
+            | Tab::Merge { path, .. } => Some(path.clone()),
             Tab::Browser { target, .. } => target.file().map(Path::to_path_buf),
             Tab::Terminal(sid) => self
                 .state

@@ -1372,13 +1372,15 @@ mod tests {
                 label: ": i32".into(),
             }]
         };
-        let advance = caret_x(1, Vec::new()) - caret_x(0, Vec::new());
+        // Caret x snaps to whole pixels, so measure the advance over five
+        // cells and allow one pixel of rounding.
+        let advance = (caret_x(5, Vec::new()) - caret_x(0, Vec::new())) / 5.0;
         // Before the hinted char the caret stays put; after it, the caret
         // moves right by the hint's five cells.
         assert!((caret_x(5, hint()) - caret_x(5, Vec::new())).abs() < 0.01);
         let shifted = caret_x(6, hint()) - caret_x(6, Vec::new());
         assert!(
-            (shifted - 5.0 * advance).abs() < 0.01,
+            (shifted - 5.0 * advance).abs() <= 1.0,
             "{shifted} vs {advance}"
         );
     }
