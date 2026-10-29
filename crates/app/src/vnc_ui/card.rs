@@ -49,20 +49,7 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
         egui::pos2(rect.left() + 8.0, rect.top() + 8.0),
         egui::vec2(rect.width() - 16.0, THUMB_HEIGHT - 8.0),
     );
-    painter.rect_filled(thumb, 4.0, visuals.extreme_bg_color);
-    match texture {
-        Some(texture) => {
-            let fitted = fit_rect(thumb, texture.size_vec2());
-            egui::Image::new((texture.id(), fitted.size())).paint_at(ui, fitted);
-        }
-        None => appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
-            ui,
-            rect: thumb,
-            icon: "Monitor",
-            size: 32.0,
-            tint: visuals.weak_text_color(),
-        }),
-    }
+    paint_thumbnail(ui, thumb, texture);
     if let Some(color) = status {
         painter.circle_filled(
             egui::pos2(thumb.left() + 10.0, thumb.top() + 10.0),
@@ -102,6 +89,26 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
         truncate(ui, endpoint, width),
         visuals.weak_text_color(),
     );
+}
+
+/// The screen image fitted into `thumb`, or a monitor glyph without one.
+fn paint_thumbnail(ui: &egui::Ui, thumb: egui::Rect, texture: Option<&TextureHandle>) {
+    let visuals = ui.visuals();
+    ui.painter()
+        .rect_filled(thumb, 4.0, visuals.extreme_bg_color);
+    match texture {
+        Some(texture) => {
+            let fitted = fit_rect(thumb, texture.size_vec2());
+            egui::Image::new((texture.id(), fitted.size())).paint_at(ui, fitted);
+        }
+        None => appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
+            ui,
+            rect: thumb,
+            icon: "Monitor",
+            size: 32.0,
+            tint: visuals.weak_text_color(),
+        }),
+    }
 }
 
 /// Single-line galley cut with an ellipsis to `width`.
