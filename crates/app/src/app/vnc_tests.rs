@@ -121,43 +121,19 @@ fn pruning_keeps_view_state_for_open_tabs_and_drafts_only() {
 }
 
 #[test]
-fn a_closed_vnc_tab_disconnects_only_when_no_copy_remains() {
+fn a_detached_vnc_session_is_reported_without_a_tab() {
     let (mut app, _ctx, _dir) = fixture();
-    let (jobs, requests) = mpsc::channel();
-    app.jobs = jobs.into();
-    // Two tabs still show the session: the close must keep it connected.
     app.layouts.insert(
         "a".into(),
-        Workspace::from_layout(DockState::new(vec![
-            vnc_tab("t1", "s1", "dev"),
-            vnc_tab("t2", "s1", "dev"),
-        ])),
+        Workspace::from_layout(DockState::new(vec![vnc_tab("t1", "s1", "dev")])),
     );
-    app.pending_vnc_disconnect = Some("s1".into());
-    app.drain_pending_vnc_disconnect();
     assert!(
-        requests.try_recv().is_err(),
-        "a remaining tab keeps the remote session"
+        app.vnc_session_has_tab("s1"),
+        "an open tab shows the session"
     );
-    assert_eq!(app.pending_vnc_disconnect, None, "the request is consumed");
-
-    // The last copy is gone: the disconnect lands exactly once.
-    app.layouts.insert(
-        "a".into(),
-        Workspace::from_layout(DockState::new(vec![vnc_tab("t1", "other", "dev")])),
-    );
-    app.pending_vnc_disconnect = Some("s1".into());
-    app.drain_pending_vnc_disconnect();
-    match requests.try_recv() {
-        Ok(Job::Control(request, _)) => assert!(
-            matches!(*request, Request::VncDisconnect { session } if session == "s1"),
-            "the deferred close disconnects the session"
-        ),
-        _ => panic!("expected one VNC disconnect request"),
-    }
     assert!(
-        requests.try_recv().is_err(),
-        "a drained close never queues a second disconnect"
+        !app.vnc_session_has_tab("s2"),
+        "a session whose tab closed is detached, not disconnected"
     );
 }
 

@@ -94,13 +94,12 @@ impl App {
                 label,
             },
         });
-        self.vnc_status_lines(ui, &state_key, daemon_session.as_ref());
-        ui.separator();
-
-        let is_live = daemon_session.as_ref().is_some_and(|s| s.status.live());
-        let form_connect = (!is_live)
-            .then(|| self.vnc_connect_form(ui, &state_key, features))
-            .flatten();
+        let page = VncConnectPage {
+            state_key: &state_key,
+            features,
+            profile_id: profile_id.as_deref(),
+        };
+        let (form_connect, is_live) = self.vnc_view_body(ui, page, daemon_session.as_ref());
         if let Some(request) = form_connect.or(connect)
             && let Some(project) = self.selected.clone()
         {
@@ -118,17 +117,36 @@ impl App {
             });
             return;
         }
-        if !is_live {
-            return;
+        if is_live {
+            let view_only = daemon_session.is_some_and(|s| s.view_only);
+            self.vnc_live_screen(
+                ui,
+                VncLiveInput {
+                    session_id,
+                    view_only,
+                    features,
+                },
+            );
         }
-        self.vnc_live_screen(
-            ui,
-            VncLiveInput {
-                session_id,
-                view_only: daemon_session.as_ref().is_some_and(|s| s.view_only),
-                features,
-            },
-        );
+    }
+
+    /// Status lines, then the connect page while the session is not live.
+    /// Returns the page's connection request and whether the session is live.
+    fn vnc_view_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        page: VncConnectPage<'_>,
+        session: Option<&VncSession>,
+    ) -> (Option<PendingVncConnect>, bool) {
+        self.vnc_status_lines(ui, page.state_key, session);
+        ui.separator();
+        let is_live = session.is_some_and(|s| s.status.live());
+        let request = if is_live {
+            None
+        } else {
+            self.vnc_connect_page(ui, page)
+        };
+        (request, is_live)
     }
 
     fn vnc_daemon_session(&self, session_id: &str) -> Option<VncSession> {

@@ -114,6 +114,7 @@ impl App {
                 collect(tab);
             }
         }
+        live.insert(page::PAGE_KEY.to_owned());
         // Views painted this frame are kept even if their tab is mid-move:
         // a transient dock check-out must not drop a live texture.
         live.extend(self.visible_vnc.iter().cloned());
@@ -138,20 +139,6 @@ impl App {
                     .any(|(_, tab)| matches!(tab, Tab::Vnc { session: sid, .. } if sid == session))
             })
         })
-    }
-
-    /// Send the deferred disconnect for a closed VNC tab, unless another
-    /// tab still shows the session. Called after the dock is checked back
-    /// in: counting tabs while the workspace is checked out missed the
-    /// remaining copies and dropped a session still on screen.
-    pub(crate) fn drain_pending_vnc_disconnect(&mut self) {
-        let Some(session) = self.pending_vnc_disconnect.take() else {
-            return;
-        };
-        if session.is_empty() || self.vnc_session_has_tab(&session) {
-            return;
-        }
-        self.send(Request::VncDisconnect { session });
     }
 
     pub(crate) fn focus_or_open_vnc_session(&mut self, session: &VncSession) {

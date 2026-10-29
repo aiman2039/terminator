@@ -1,64 +1,174 @@
 //! Connection settings are saved per host and enforced by the daemon.
 use super::*;
 use terminator_core::vnc::{ClipboardMode, Quality, Transport, VncOptions};
-pub(super) fn options(ui: &mut egui::Ui, value: &mut VncOptions, supported: bool) {
-    ui.add_enabled_ui(supported,|ui|{
-        egui::CollapsingHeader::new("Connection options").show(ui,|ui|{
-            ui.horizontal_wrapped(|ui|{
-                ui.label("Transport");
-                ui.selectable_value(&mut value.transport,Transport::Direct,"Direct VNC");
-                ui.selectable_value(&mut value.transport,Transport::Tls,"TLS");
-                ui.selectable_value(&mut value.transport,Transport::Ssh,"SSH tunnel");
-            });
-            match value.transport{
-                Transport::Direct=>{ui.weak("Direct VNC does not encrypt screen, keyboard, or clipboard traffic.");}
-                Transport::Tls=>{
-                    ui.label("TLS certificate name (blank uses the VNC host)");
-                    ui.add(appearance::singleline(&mut value.tls_server_name).desired_width(f32::INFINITY));
-                    optional_path(ui,"CA certificate file (blank uses OS trust)",&mut value.tls_ca_file);
-                    ui.weak("A valid certificate is required. TLS does not fall back to Direct VNC.");
-                }
-                Transport::Ssh=>{
-                    ui.label("SSH host");ui.add(appearance::singleline(&mut value.ssh.host).hint_text("Host name or SSH config alias").desired_width(f32::INFINITY));
-                    ui.label("SSH port (blank uses SSH config)");appearance::optional_port(ui,&mut value.ssh.port,"22 or config");
-                    ui.label("SSH user");ui.add(appearance::singleline(&mut value.ssh.username).desired_width(f32::INFINITY));
-                    optional_path(ui,"SSH identity file (optional)",&mut value.ssh.identity_file);
-                    optional_path(ui,"Known hosts file (optional)",&mut value.ssh.known_hosts_file);
-                    ui.weak("Uses OpenSSH config, an agent, or a signed-in SSH terminal's connection. The host key must be trusted first; an SSH terminal asks on first connect. SFTP uses the same host.");
-                }
+
+/// Transport and authentication, the Properties "Security" page.
+/// `supported`: the running daemon advertises the VNC features capability.
+pub(super) fn security(ui: &mut egui::Ui, value: &mut VncOptions, supported: bool) {
+    ui.add_enabled_ui(supported, |ui| {
+        form::section(ui, "Connect through");
+        form::segmented(
+            ui,
+            &mut value.transport,
+            &[
+                (Transport::Ssh, "SSH tunnel"),
+                (Transport::Tls, "TLS"),
+                (Transport::Direct, "Direct"),
+            ],
+        );
+        ui.add_space(4.0);
+        match value.transport {
+            Transport::Direct => {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    RichText::new("Not encrypted: screen, keys and clipboard are sent in clear.")
+                        .size(11.0),
+                );
             }
-            ui.checkbox(&mut value.allow_no_auth,"Allow a VNC server without authentication");
-            ui.checkbox(&mut value.reconnect.enabled,"Reconnect after a network interruption");
-            if value.reconnect.enabled{
-                ui.horizontal(|ui|{ui.label("Maximum retries");ui.add(egui::DragValue::new(&mut value.reconnect.max_attempts).range(1..=10));});
-                ui.weak("Retries stop on authentication, SSH, or certificate errors.");
-            }
-            ui.label("Clipboard sharing");
-            ui.horizontal_wrapped(|ui|{
-                for (mode,label) in [(ClipboardMode::Both,"Both ways"),(ClipboardMode::SendOnly,"Send only"),(ClipboardMode::ReceiveOnly,"Receive only"),(ClipboardMode::Disabled,"Off")]{ui.selectable_value(&mut value.clipboard,mode,label);}
-            });
-            ui.label("Image quality");
-            ui.horizontal_wrapped(|ui|{
-                for (quality,label) in [(Quality::Auto,"Automatic"),(Quality::LowBandwidth,"Low bandwidth"),(Quality::Sharp,"Sharp text")]{ui.selectable_value(&mut value.quality,quality,label);}
-            });
-            ui.checkbox(&mut value.remote_resize,"Resize remote desktop to fit the pane");
-            ui.checkbox(&mut value.show_remote_cursor,"Show the remote cursor");
-            ui.weak("Connection options apply when you connect again.");
-        });
+            Transport::Tls => tls(ui, value),
+            Transport::Ssh => ssh(ui, value),
+        }
+        form::section(ui, "Authentication");
+        ui.checkbox(
+            &mut value.allow_no_auth,
+            "Allow a server without authentication",
+        );
     });
+    unsupported_hint(ui, supported);
+}
+
+/// Display, input and clipboard, the Properties "Options" page.
+pub(super) fn options(ui: &mut egui::Ui, value: &mut VncOptions, supported: bool) {
+    ui.add_enabled_ui(supported, |ui| display(ui, value));
+    unsupported_hint(ui, supported);
+}
+
+fn unsupported_hint(ui: &mut egui::Ui, supported: bool) {
     if !supported {
-        ui.weak("Restart the session service to enable advanced VNC options.");
+        form::hint(
+            ui,
+            "Restart the session service to enable these options.",
+            "",
+        );
     }
 }
-fn optional_path(ui: &mut egui::Ui, label: &str, path: &mut Option<std::path::PathBuf>) {
-    ui.label(label);
+
+fn tls(ui: &mut egui::Ui, value: &mut VncOptions) {
+    form::text(
+        ui,
+        "Certificate name",
+        &mut value.tls_server_name,
+        "Blank uses the VNC host",
+    );
+    optional_path(
+        ui,
+        "CA certificate file",
+        &mut value.tls_ca_file,
+        "Blank uses OS trust",
+    );
+    form::hint(
+        ui,
+        "A valid certificate is required.",
+        "TLS does not fall back to Direct VNC.",
+    );
+}
+
+fn ssh(ui: &mut egui::Ui, value: &mut VncOptions) {
+    ui.horizontal(|ui| {
+        let spacing = ui.spacing().item_spacing.x;
+        let width = (ui.available_width() - form::NUMBER_WIDTH - spacing).max(80.0);
+        ui.vertical(|ui| {
+            ui.set_width(width);
+            form::label(ui, "SSH host");
+            ui.add(
+                appearance::singleline(&mut value.ssh.host)
+                    .hint_text("Same as the address")
+                    .desired_width(width),
+            );
+        });
+        ui.vertical(|ui| {
+            ui.set_width(form::NUMBER_WIDTH);
+            form::label(ui, "SSH port");
+            appearance::optional_port(ui, &mut value.ssh.port, "Config");
+        });
+    });
+    form::text(
+        ui,
+        "SSH user",
+        &mut value.ssh.username,
+        "Blank uses SSH config",
+    );
+    egui::CollapsingHeader::new("SSH keys")
+        .default_open(value.ssh.identity_file.is_some() || value.ssh.known_hosts_file.is_some())
+        .show(ui, |ui| {
+            optional_path(
+                ui,
+                "Identity file",
+                &mut value.ssh.identity_file,
+                "Optional",
+            );
+            optional_path(
+                ui,
+                "Known hosts file",
+                &mut value.ssh.known_hosts_file,
+                "Optional",
+            );
+        });
+}
+
+fn display(ui: &mut egui::Ui, value: &mut VncOptions) {
+    form::section(ui, "Display");
+    form::label(ui, "Image quality");
+    form::segmented(
+        ui,
+        &mut value.quality,
+        &[
+            (Quality::Auto, "Automatic"),
+            (Quality::LowBandwidth, "Low bandwidth"),
+            (Quality::Sharp, "Sharp text"),
+        ],
+    );
+    ui.checkbox(
+        &mut value.remote_resize,
+        "Resize remote desktop to fit the pane",
+    );
+    form::section(ui, "Clipboard");
+    form::segmented(
+        ui,
+        &mut value.clipboard,
+        &[
+            (ClipboardMode::Both, "Both ways"),
+            (ClipboardMode::SendOnly, "Send"),
+            (ClipboardMode::ReceiveOnly, "Receive"),
+            (ClipboardMode::Disabled, "Off"),
+        ],
+    );
+    form::section(ui, "Connection");
+    ui.horizontal(|ui| {
+        ui.checkbox(
+            &mut value.reconnect.enabled,
+            "Reconnect after a network drop",
+        );
+        if value.reconnect.enabled {
+            ui.add(egui::DragValue::new(&mut value.reconnect.max_attempts).range(1..=10))
+                .on_hover_text(
+                    "Maximum retries. Retries stop on authentication, SSH, or certificate errors.",
+                );
+        }
+    });
+    form::hint(ui, "Changes apply when you connect again.", "");
+}
+
+fn optional_path(
+    ui: &mut egui::Ui,
+    label: &str,
+    path: &mut Option<std::path::PathBuf>,
+    hint: &str,
+) {
     let mut text = path
         .as_ref()
         .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
-    if ui
-        .add(appearance::singleline(&mut text).desired_width(f32::INFINITY))
-        .changed()
-    {
+    if form::text(ui, label, &mut text, hint).changed() {
         *path = (!text.trim().is_empty()).then(|| text.trim().into());
     }
 }

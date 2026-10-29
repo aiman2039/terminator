@@ -229,14 +229,8 @@ impl Viewer<'_> {
             self.app.native_close_prompt = Some((path.clone(), self.close_issuer(pane)));
             return OnCloseResponse::Ignore;
         }
-        if let Tab::Vnc { session, .. } = tab
-            && !session.is_empty()
-        {
-            // Deferred: the workspace is checked out while the dock renders,
-            // so deciding here would miss the copies that are still docked.
-            // The drain disconnects only when no tab still shows it.
-            self.app.pending_vnc_disconnect = Some(session.clone());
-        }
+        // A closed VNC tab detaches, like a terminal: the daemon keeps the
+        // session connected and the VNC sidebar reattaches it.
         // Buffer pruning runs after the dock is checked back in and keeps
         // the buffer (including undo history) while another view exists.
         OnCloseResponse::Close

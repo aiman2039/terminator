@@ -16,33 +16,51 @@ pub(super) struct StartVncConnect<'a> {
     pub(super) tab: VncConnectTab<'a>,
 }
 
+/// What the not-yet-connected pane needs to draw itself.
+pub(super) struct VncConnectPage<'a> {
+    pub(super) state_key: &'a str,
+    pub(super) features: bool,
+    pub(super) profile_id: Option<&'a str>,
+}
+
 impl App {
-    /// The direct connection form shown while the session is not live.
-    /// Saved hosts live in the VNC sidebar; repeating them here duplicated
-    /// every row and its two controls, so this pane only carries the form.
-    pub(super) fn vnc_connect_form(
+    /// The pane while no session is live: the address book, or a password
+    /// prompt when a saved host without a stored password was opened.
+    pub(super) fn vnc_connect_page(
         &mut self,
         ui: &mut egui::Ui,
-        state_key: &str,
-        features: bool,
+        page: VncConnectPage<'_>,
     ) -> Option<PendingVncConnect> {
-        // The pane header already shows the error. The form scrolls because
-        // the expanded connection options can exceed the pane height.
+        let VncConnectPage {
+            state_key,
+            features,
+            profile_id,
+        } = page;
+        let prompt = self
+            .vnc_views
+            .get(state_key)
+            .is_some_and(|view| !view.save_profile);
+        if !prompt {
+            self.vnc_address_book(ui, state_key);
+            return None;
+        }
+        let profile =
+            profile_id.and_then(|id| self.state.vnc_profiles.iter().find(|p| p.id == id).cloned());
         let view = self.vnc_views.entry(state_key.to_owned()).or_default();
-        egui::ScrollArea::vertical()
-            .id_salt("vnc-connect-form")
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.strong("Connect to VNC Server");
-                ui.add_space(4.0);
-                let request = ui
-                    .horizontal_wrapped(|ui| VncConnectForm::endpoint_row(ui, view))
-                    .inner;
-                ui.horizontal_wrapped(|ui| VncConnectForm::label_row(ui, view));
-                settings::options(ui, &mut view.draft_options, features);
-                request
-            })
-            .inner
+        let mut request = form::card(ui, |ui| PasswordPrompt::show(ui, view))?;
+        request.profile_id = profile_id.map(str::to_owned);
+        if let Some(mut profile) = profile
+            && view.draft_remember
+            && features
+            && !request.password.is_empty()
+        {
+            profile.password.clone_from(&request.password);
+            self.send(Request::VncProfileSave {
+                profile,
+                forget_password: false,
+            });
+        }
+        Some(request)
     }
 
     pub(super) fn start_vnc_connect(&mut self, input: StartVncConnect<'_>) {
@@ -69,7 +87,7 @@ impl App {
             label.clone_from(l);
         }
         let effective_profile_id = if request.save_profile && request.profile_id.is_none() {
-            Some(self.save_connect_profile(&request, label))
+            Some(self.save_connect_profile(&request, label, features))
         } else {
             request.profile_id.clone()
         };
@@ -104,58 +122,97 @@ impl App {
     }
 
     /// Save the host being connected to the sidebar; returns the new id.
-    fn save_connect_profile(&mut self, request: &PendingVncConnect, name: &str) -> String {
-        let pid = id();
-        let profile = VncProfile {
-            options: request.options.clone(),
-            credential_saved: false,
-            id: pid.clone(),
-            name: name.to_owned(),
-            host: request.host.clone(),
-            port: request.port,
-            username: request.username.clone(),
-            password: String::new(),
-            shared: request.shared,
-            view_only: request.view_only,
-            last_connected: 0,
-        };
+    fn save_connect_profile(
+        &mut self,
+        request: &PendingVncConnect,
+        name: &str,
+        features: bool,
+    ) -> String {
+        let (profile, forget_password) = connect_profile(request, name, features);
+        let pid = profile.id.clone();
         self.send(Request::VncProfileSave {
             profile,
-            forget_password: false,
+            forget_password,
         });
         pid
     }
 }
 
-/// Rows of the direct connection form.
-struct VncConnectForm;
+/// The sidebar profile for a form connection, and whether to forget its
+/// password. The password goes to the OS keychain only when the daemon
+/// stores it securely (`features`); older daemons keep it in plaintext.
+pub(super) fn connect_profile(
+    request: &PendingVncConnect,
+    name: &str,
+    features: bool,
+) -> (VncProfile, bool) {
+    let save_password = features && !request.password.is_empty();
+    let profile = VncProfile {
+        options: request.options.clone(),
+        credential_saved: false,
+        id: id(),
+        name: name.to_owned(),
+        host: request.host.clone(),
+        port: request.port,
+        username: request.username.clone(),
+        password: if save_password {
+            request.password.clone()
+        } else {
+            String::new()
+        },
+        shared: request.shared,
+        view_only: request.view_only,
+        last_connected: 0,
+    };
+    (profile, !save_password)
+}
 
-impl VncConnectForm {
-    fn endpoint_row(ui: &mut egui::Ui, view: &mut VncViewState) -> Option<PendingVncConnect> {
-        ui.label("Host:");
-        let host_resp = ui.add(
-            appearance::singleline(&mut view.draft_host)
-                .hint_text("Host name or IP address")
-                .desired_width(200.0),
+/// Password entry for a saved host that has no stored password.
+struct PasswordPrompt;
+
+impl PasswordPrompt {
+    fn show(ui: &mut egui::Ui, view: &mut VncViewState) -> Option<PendingVncConnect> {
+        let title = if view.draft_name.trim().is_empty() {
+            view.draft_host.clone()
+        } else {
+            view.draft_name.clone()
+        };
+        ui.label(
+            RichText::new(format!("Connect to {title}"))
+                .size(16.0)
+                .strong(),
         );
-        let endpoint_lost_focus =
-            port_display_fields(ui, &mut view.draft_port, &mut view.draft_display, false);
-        ui.label("Username:");
-        ui.add(
-            appearance::singleline(&mut view.draft_username)
-                .hint_text("Optional")
-                .desired_width(130.0),
+        form::hint(ui, &format!("{}:{}", view.draft_host, view.draft_port), "");
+        form::section(ui, "Sign in");
+        form::text(ui, "Username", &mut view.draft_username, "Optional");
+        form::label(ui, "Password");
+        let field = form::password(
+            ui,
+            &mut view.draft_password,
+            &mut view.draft_show_password,
+            false,
         );
-        ui.label("Password:");
-        let pass_resp = ui.add(
-            appearance::singleline(&mut view.draft_password)
-                .password(true)
-                .hint_text("VNC password")
-                .desired_width(150.0),
-        );
-        let enter = (host_resp.lost_focus() || endpoint_lost_focus || pass_resp.lost_focus())
-            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if !(ui.button("Connect").clicked() || enter) {
+        if !field.has_focus() && view.draft_password.is_empty() {
+            field.request_focus();
+        }
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.checkbox(&mut view.draft_remember, "Remember password")
+            .on_hover_text("Saved in the OS keychain");
+        ui.add_space(8.0);
+        ui.separator();
+        let (connect, back) = ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let connect = form::primary_button(ui, "Connect").clicked();
+                let back = ui.button("All hosts").clicked();
+                (connect, back)
+            })
+            .inner;
+        if back {
+            view.save_profile = true;
+            view.draft_password.clear();
+            return None;
+        }
+        if !(connect || enter) {
             return None;
         }
         Self::draft_request(view)
@@ -184,20 +241,8 @@ impl VncConnectForm {
             shared: view.draft_shared,
             view_only: view.draft_view_only,
             label: Some(title),
-            save_profile: view.save_profile,
+            save_profile: false,
             options: view.draft_options.clone(),
         })
-    }
-
-    fn label_row(ui: &mut egui::Ui, view: &mut VncViewState) {
-        ui.label("Label:");
-        ui.add(
-            appearance::singleline(&mut view.draft_name)
-                .hint_text("Optional name")
-                .desired_width(160.0),
-        );
-        ui.checkbox(&mut view.draft_shared, "Shared");
-        ui.checkbox(&mut view.draft_view_only, "View only");
-        ui.checkbox(&mut view.save_profile, "Save to VNC sidebar");
     }
 }

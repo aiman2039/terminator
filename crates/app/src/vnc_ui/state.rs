@@ -50,9 +50,16 @@ pub(crate) struct VncViewState {
     pub(crate) draft_display: String,
     pub(crate) draft_username: String,
     pub(crate) draft_password: String,
+    pub(crate) draft_show_password: bool,
+    /// Save the password typed into the prompt to the keychain.
+    pub(crate) draft_remember: bool,
     pub(crate) draft_shared: bool,
     pub(crate) draft_view_only: bool,
+    /// False when the draft came from a saved host: the pane then only
+    /// asks for that host's password.
     pub(crate) save_profile: bool,
+    /// Quick-connect text in the address book: `host:display` or `host::port`.
+    pub(crate) address: String,
 }
 
 impl Default for VncViewState {
@@ -97,9 +104,12 @@ impl Default for VncViewState {
             draft_display: display_for_port(&DEFAULT_CONNECTION_PORT.to_string()),
             draft_username: String::new(),
             draft_password: String::new(),
+            draft_show_password: false,
+            draft_remember: true,
             draft_shared: true,
             draft_view_only: false,
             save_profile: true,
+            address: String::new(),
         }
     }
 }
@@ -122,6 +132,23 @@ pub(crate) struct VncSidebarState {
     pub(crate) view_only: bool,
     /// Saved host awaiting removal confirmation.
     pub(crate) confirm_remove: Option<String>,
+    pub(crate) tab: PropertiesTab,
+    /// The edited host has a password in the OS keychain.
+    pub(crate) credential_saved: bool,
+    /// Remove the saved password on Save.
+    pub(crate) forget_password: bool,
+    /// Shown under the form after `~/.ssh/config` filled the SSH settings.
+    pub(crate) ssh_notice: Option<String>,
+    pub(crate) ssh_probe: super::ssh_probe::SshProbe,
+}
+
+/// Pages of the host Properties editor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PropertiesTab {
+    #[default]
+    General,
+    Security,
+    Options,
 }
 
 impl Default for VncSidebarState {
@@ -145,6 +172,11 @@ impl Default for VncSidebarState {
             shared: true,
             view_only: false,
             confirm_remove: None,
+            tab: PropertiesTab::General,
+            credential_saved: false,
+            forget_password: false,
+            ssh_notice: None,
+            ssh_probe: super::ssh_probe::SshProbe::default(),
         }
     }
 }
@@ -165,6 +197,15 @@ impl VncSidebarState {
         self.save_password = true;
         self.shared = true;
         self.view_only = false;
+        self.reset_editor_extras(false);
+    }
+
+    fn reset_editor_extras(&mut self, credential_saved: bool) {
+        self.tab = PropertiesTab::General;
+        self.credential_saved = credential_saved;
+        self.forget_password = false;
+        self.ssh_notice = None;
+        self.ssh_probe = super::ssh_probe::SshProbe::default();
     }
 
     pub(crate) fn begin_edit(&mut self, profile: &VncProfile) {
@@ -182,5 +223,6 @@ impl VncSidebarState {
         self.save_password = profile.credential_saved || !profile.password.is_empty();
         self.shared = profile.shared;
         self.view_only = profile.view_only;
+        self.reset_editor_extras(profile.credential_saved);
     }
 }

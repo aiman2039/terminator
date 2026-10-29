@@ -412,3 +412,40 @@ fn a_selected_monitor_maps_pointer_input_to_that_monitor() {
     }
     assert!(events.iter().any(|e|matches!(e,VncInputEvent::Pointer{x,y,buttons:1} if (590..=610).contains(x)&&(290..=310).contains(y))));
 }
+
+#[test]
+fn saving_a_form_connection_keeps_the_password_only_on_secure_daemons() {
+    let request = PendingVncConnect {
+        profile_id: None,
+        host: "localhost".into(),
+        port: 7939,
+        username: String::new(),
+        password: "fixture-password".into(),
+        shared: true,
+        view_only: false,
+        label: None,
+        save_profile: true,
+        options: Default::default(),
+    };
+    let (profile, forget) = connect::connect_profile(&request, "dev", true);
+    assert_eq!(profile.password, "fixture-password");
+    assert!(!forget);
+    let (profile, forget) = connect::connect_profile(&request, "dev", false);
+    assert!(profile.password.is_empty());
+    assert!(forget);
+}
+
+#[test]
+fn address_bar_reads_displays_ports_and_bracketed_ipv6() {
+    use super::address_book::parse_address;
+    assert_eq!(
+        parse_address("dc6.example.com:2039"),
+        Ok(("dc6.example.com".into(), 7939))
+    );
+    assert_eq!(parse_address("vnc://host::5901"), Ok(("host".into(), 5901)));
+    assert_eq!(parse_address("host"), Ok(("host".into(), 5900)));
+    assert_eq!(parse_address("[::1]:1"), Ok(("::1".into(), 5901)));
+    for bad in ["", ":1", "host:x", "host::0", "host:70000", "[::1"] {
+        assert!(parse_address(bad).is_err(), "{bad}");
+    }
+}

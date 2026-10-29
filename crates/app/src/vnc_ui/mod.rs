@@ -1,21 +1,25 @@
+mod address_book;
 mod clipboard;
 mod connect;
 mod display;
 pub(crate) use display::VncScreenInput;
 mod endpoint;
+mod form;
 mod frame;
 mod keyboard;
 mod live;
+mod page;
 mod profiles;
 mod settings;
 mod sidebar;
+mod ssh_probe;
 mod state;
 mod tabs;
 mod toolbar;
 mod transfer;
 mod view;
 use clipboard::remote_clipboard_events;
-use connect::{StartVncConnect, VncConnectTab};
+use connect::{StartVncConnect, VncConnectPage, VncConnectTab};
 use display::vnc_screen;
 #[cfg(test)]
 use endpoint::port_for_display;
@@ -24,7 +28,7 @@ pub(crate) use frame::{VncDecodedFrame, decode_frame};
 use keyboard::{
     MODIFIER_KEYSYMS, accelerator_keysym, egui_key_to_x11, modifier_bits, modifier_transitions,
 };
-pub(crate) use state::{VncSidebarState, VncViewState};
+pub(crate) use state::{PropertiesTab, VncSidebarState, VncViewState};
 use std::{
     io::Read,
     time::{Duration, Instant},

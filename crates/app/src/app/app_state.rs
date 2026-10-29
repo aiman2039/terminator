@@ -114,9 +114,6 @@ pub struct App {
     pub(crate) vnc_views: HashMap<String, crate::vnc_ui::VncViewState>,
     pub(crate) vnc_sidebar: crate::vnc_ui::VncSidebarState,
     pub(crate) visible_vnc: HashSet<String>,
-    /// Session whose last VNC tab closed: the disconnect is sent after the
-    /// dock is checked back in, and only when no tab still shows it.
-    pub(crate) pending_vnc_disconnect: Option<String>,
     pub(crate) player: player::Controller,
     pub(crate) markdown: markdown::Previews,
     pub(crate) visible_images: HashSet<PathBuf>,
@@ -235,6 +232,8 @@ pub struct App {
     pub(crate) settings_session: bool,
     pub(crate) settings_pending: Option<settings_ui::SettingsPending>,
     pub(crate) player_open: bool,
+    /// The VNC address book fills the main pane (same pattern as Player).
+    pub(crate) vnc_page_open: bool,
     pub(crate) editor_preset: usize,
     pub(crate) test_editor: bool,
     pub(crate) settings_draft: Settings,
