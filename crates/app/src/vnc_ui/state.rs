@@ -148,6 +148,8 @@ pub(crate) struct VncSidebarState {
     /// Shown under the form after `~/.ssh/config` filled the SSH settings.
     pub(crate) ssh_notice: Option<String>,
     pub(crate) ssh_probe: super::ssh_probe::SshProbe,
+    /// Address-book card selected for keyboard actions.
+    pub(crate) selected_host: Option<String>,
 }
 
 /// Pages of the host Properties editor.
@@ -185,6 +187,7 @@ impl Default for VncSidebarState {
             forget_password: false,
             ssh_notice: None,
             ssh_probe: super::ssh_probe::SshProbe::default(),
+            selected_host: None,
         }
     }
 }

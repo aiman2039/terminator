@@ -87,7 +87,7 @@ impl Shared {
         let mut state = relock(&self.state);
         validate_project(&state, &spec.project)?;
         let stale = Self::drop_dead_duplicates(&mut state, spec);
-        Self::merge_saved_profile(&mut state, spec, now_ts);
+        Self::merge_saved_profile(&mut state, spec);
         let label = spec
             .label
             .take()
@@ -140,11 +140,7 @@ impl Shared {
 
     /// Fills missing credentials and the sharing flags from the saved
     /// profile, and stamps its last connection time.
-    fn merge_saved_profile(
-        state: &mut terminator_core::State,
-        spec: &mut VncConnectSpec,
-        now_ts: u64,
-    ) {
+    fn merge_saved_profile(state: &mut terminator_core::State, spec: &mut VncConnectSpec) {
         let Some(pid) = &spec.profile_id else {
             return;
         };
@@ -159,7 +155,6 @@ impl Shared {
         }
         spec.shared = profile.shared;
         spec.view_only = profile.view_only;
-        profile.last_connected = now_ts;
     }
 
     fn start_vnc_runtime(

@@ -1,4 +1,5 @@
 mod address_book;
+mod card;
 mod clipboard;
 mod connect;
 mod display;

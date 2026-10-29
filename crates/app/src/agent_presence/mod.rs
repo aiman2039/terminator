@@ -4,6 +4,7 @@
 mod cache;
 pub(crate) use cache::AttentionInput;
 pub(crate) use cache::GetInput;
+pub(crate) use cache::ago;
 mod counts;
 mod owner;
 #[cfg(test)]

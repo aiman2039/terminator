@@ -2,12 +2,8 @@
 //! adds a host, and saved hosts as cards. All host editing happens in
 //! Properties on this page; the sidebar only lists hosts.
 use super::*;
+use card::{CARD_HEIGHT, CARD_WIDTH, PaintCardInput, new_host_card, paint_card};
 use terminator_core::vnc::{DEFAULT_PORT, VncSessionStatus};
-
-const CARD_WIDTH: f32 = 184.0;
-const THUMB_HEIGHT: f32 = 112.0;
-const CARD_HEIGHT: f32 = THUMB_HEIGHT + 48.0;
-const CARD_RADIUS: f32 = 8.0;
 
 /// What the user did on one card this frame.
 enum CardAction {
@@ -52,6 +48,10 @@ impl App {
                     view.error = None;
                 }
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter {
+                    // The cards below must not also see this Enter.
+                    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                }
                 let clicked = form::primary_button(ui, "Connect").clicked();
                 (enter || clicked, view.address.trim().to_owned())
             })
@@ -135,9 +135,12 @@ impl App {
             .cloned()
             .collect();
         profiles.sort_by_key(|p| std::cmp::Reverse(p.last_connected));
-        let mut actions = Vec::new();
+        let mut actions: Vec<(VncProfile, CardAction)> =
+            grid_key_action(ui, &profiles, &mut self.vnc_sidebar.selected_host)
+                .into_iter()
+                .collect();
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+            ui.spacing_mut().item_spacing = egui::vec2(CARD_GAP, CARD_GAP);
             for profile in &profiles {
                 if let Some(action) = self.vnc_host_card(ui, profile) {
                     actions.push((profile.clone(), action));
@@ -152,7 +155,7 @@ impl App {
         form::hint(
             ui,
             &format!(
-                "{count} host{} · Double-click to connect · Right-click for more",
+                "{count} host{} · Double-click or Enter to connect · Right-click for more",
                 if count == 1 { "" } else { "s" }
             ),
             "",
@@ -189,10 +192,14 @@ impl App {
             ui,
             rect,
             hovered: response.hovered(),
+            selected: self.vnc_sidebar.selected_host.as_deref() == Some(profile.id.as_str()),
             profile,
             texture: texture.as_ref(),
             status,
         });
+        if response.clicked() || response.secondary_clicked() {
+            self.vnc_sidebar.selected_host = Some(profile.id.clone());
+        }
         let response = response.on_hover_text(profile_details(profile));
         let mut action = response.double_clicked().then_some(CardAction::Connect);
         appearance::context_menu(&response, |ui| {
@@ -227,6 +234,75 @@ impl App {
     }
 }
 
+/// Space between cards, both directions.
+const CARD_GAP: f32 = 12.0;
+
+/// Keyboard control of the cards while no text field has focus: arrows
+/// move the selection, Enter connects, Delete asks to remove, and
+/// Command/Ctrl+I opens Properties.
+fn grid_key_action(
+    ui: &egui::Ui,
+    profiles: &[VncProfile],
+    selected: &mut Option<String>,
+) -> Option<(VncProfile, CardAction)> {
+    if profiles.is_empty() || ui.ctx().memory(|m| m.focused().is_some()) {
+        return None;
+    }
+    let columns = card_columns(ui.available_width());
+    let (step, action) = ui.input(|i| {
+        let step = if i.key_pressed(egui::Key::ArrowRight) {
+            Step::Forward(1)
+        } else if i.key_pressed(egui::Key::ArrowLeft) {
+            Step::Back(1)
+        } else if i.key_pressed(egui::Key::ArrowDown) {
+            Step::Forward(columns)
+        } else if i.key_pressed(egui::Key::ArrowUp) {
+            Step::Back(columns)
+        } else {
+            Step::Forward(0)
+        };
+        let action = if i.key_pressed(egui::Key::Enter) {
+            Some(CardAction::Connect)
+        } else if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+            Some(CardAction::Remove)
+        } else if i.modifiers.command && i.key_pressed(egui::Key::I) {
+            Some(CardAction::Properties)
+        } else {
+            None
+        };
+        (step, action)
+    });
+    let current = selected
+        .as_ref()
+        .and_then(|id| profiles.iter().position(|p| &p.id == id));
+    let last = profiles.len().saturating_sub(1);
+    let index = match (current, step) {
+        (None, Step::Forward(0)) => return None,
+        (None, _) => 0,
+        (Some(at), Step::Forward(n)) => at.saturating_add(n).min(last),
+        (Some(at), Step::Back(n)) => at.saturating_sub(n),
+    };
+    let profile = profiles.get(index)?;
+    *selected = Some(profile.id.clone());
+    action.map(|action| (profile.clone(), action))
+}
+
+enum Step {
+    Forward(usize),
+    Back(usize),
+}
+
+/// Cards per row in `width`, at least one.
+fn card_columns(width: f32) -> usize {
+    let mut columns = 1usize;
+    let mut used = CARD_WIDTH;
+    while used + CARD_GAP + CARD_WIDTH <= width {
+        columns = columns.saturating_add(1);
+        used += CARD_GAP + CARD_WIDTH;
+    }
+    columns
+}
+
 /// One context-menu row; closes the menu when clicked.
 fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
     let clicked = appearance::menu_item(appearance::MenuItemInput {
@@ -240,148 +316,6 @@ fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
         ui.close();
     }
     clicked
-}
-
-struct PaintCardInput<'a> {
-    ui: &'a egui::Ui,
-    rect: egui::Rect,
-    hovered: bool,
-    profile: &'a VncProfile,
-    texture: Option<&'a TextureHandle>,
-    status: Option<egui::Color32>,
-}
-
-/// Card body: thumbnail (live screen or a monitor glyph), status dot,
-/// name and endpoint.
-fn paint_card(input: PaintCardInput<'_>) {
-    let PaintCardInput {
-        ui,
-        rect,
-        hovered,
-        profile,
-        texture,
-        status,
-    } = input;
-    let visuals = ui.visuals();
-    let painter = ui.painter();
-    let fill = if hovered {
-        visuals.widgets.hovered.weak_bg_fill
-    } else {
-        visuals.faint_bg_color
-    };
-    painter.rect_filled(rect, CARD_RADIUS, fill);
-    let thumb = egui::Rect::from_min_size(
-        egui::pos2(rect.left() + 8.0, rect.top() + 8.0),
-        egui::vec2(rect.width() - 16.0, THUMB_HEIGHT - 8.0),
-    );
-    painter.rect_filled(thumb, 4.0, visuals.extreme_bg_color);
-    match texture {
-        Some(texture) => {
-            let fitted = fit_rect(thumb, texture.size_vec2());
-            egui::Image::new((texture.id(), fitted.size())).paint_at(ui, fitted);
-        }
-        None => appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
-            ui,
-            rect: thumb,
-            icon: "Monitor",
-            size: 32.0,
-            tint: visuals.weak_text_color(),
-        }),
-    }
-    if let Some(color) = status {
-        painter.circle_filled(
-            egui::pos2(thumb.left() + 10.0, thumb.top() + 10.0),
-            5.0,
-            color,
-        );
-    }
-    let text_left = rect.left() + 10.0;
-    let width = rect.width() - 20.0;
-    let name = painter.layout(
-        profile.display_name(),
-        egui::FontId::proportional(13.0),
-        visuals.strong_text_color(),
-        width,
-    );
-    painter.galley(
-        egui::pos2(text_left, thumb.bottom() + 8.0),
-        truncate(ui, name, width),
-        visuals.strong_text_color(),
-    );
-    let endpoint = painter.layout(
-        profile.endpoint(),
-        egui::FontId::proportional(11.0),
-        visuals.weak_text_color(),
-        width,
-    );
-    painter.galley(
-        egui::pos2(text_left, thumb.bottom() + 26.0),
-        truncate(ui, endpoint, width),
-        visuals.weak_text_color(),
-    );
-}
-
-/// Single-line galley cut with an ellipsis to `width`.
-fn truncate(
-    ui: &egui::Ui,
-    galley: std::sync::Arc<egui::Galley>,
-    width: f32,
-) -> std::sync::Arc<egui::Galley> {
-    if galley.rows.len() <= 1 {
-        return galley;
-    }
-    let mut job = egui::text::LayoutJob::single_section(
-        galley.text().to_owned(),
-        galley
-            .job
-            .sections
-            .first()
-            .map(|section| section.format.clone())
-            .unwrap_or_default(),
-    );
-    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
-    ui.fonts_mut(|fonts| fonts.layout_job(job))
-}
-
-/// Largest rectangle with `size`'s aspect ratio centered in `outer`.
-fn fit_rect(outer: egui::Rect, size: egui::Vec2) -> egui::Rect {
-    if size.x <= 0.0 || size.y <= 0.0 {
-        return outer;
-    }
-    let scale = (outer.width() / size.x).min(outer.height() / size.y);
-    egui::Rect::from_center_size(outer.center(), egui::vec2(size.x * scale, size.y * scale))
-}
-
-fn new_host_card(ui: &mut egui::Ui) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(CARD_WIDTH, CARD_HEIGHT), egui::Sense::click());
-    let visuals = ui.visuals();
-    let stroke = egui::Stroke::new(1.0, visuals.weak_text_color());
-    let fill = if response.hovered() {
-        visuals.widgets.hovered.weak_bg_fill
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter()
-        .rect(rect, CARD_RADIUS, fill, stroke, egui::StrokeKind::Inside);
-    appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
-        ui,
-        rect: egui::Rect::from_center_size(
-            egui::pos2(rect.center().x, rect.center().y - 10.0),
-            egui::vec2(32.0, 32.0),
-        ),
-        icon: "Plus",
-        size: 24.0,
-        tint: visuals.weak_text_color(),
-    });
-    ui.painter().text(
-        egui::pos2(rect.center().x, rect.center().y + 18.0),
-        egui::Align2::CENTER_CENTER,
-        "New host",
-        egui::FontId::proportional(12.0),
-        visuals.weak_text_color(),
-    );
-    response.on_hover_text("Add a VNC host")
 }
 
 fn profile_matches(profile: &VncProfile, filter: &str) -> bool {
@@ -455,4 +389,88 @@ pub(super) fn parse_address(input: &str) -> Result<(String, u16), String> {
         .filter(|p| *p > 0)
         .ok_or("Port must be between 1 and 65535")?;
     Ok((host.to_owned(), port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profiles(count: usize) -> Vec<VncProfile> {
+        (0..count)
+            .map(|n| VncProfile {
+                id: format!("p{n}"),
+                name: String::new(),
+                host: "localhost".into(),
+                port: 5900,
+                username: String::new(),
+                password: String::new(),
+                shared: true,
+                view_only: false,
+                last_connected: 0,
+                options: Default::default(),
+                credential_saved: false,
+            })
+            .collect()
+    }
+
+    fn press(key: egui::Key, modifiers: egui::Modifiers) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(CARD_WIDTH * 2.0 + CARD_GAP, 400.0),
+            )),
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn arrows_move_the_selection_and_enter_connects_it() {
+        let ctx = egui::Context::default();
+        let hosts = profiles(5);
+        let mut selected = None;
+        let mut run = |key, modifiers| {
+            let mut result = None;
+            let mut output = ctx.run_ui(press(key, modifiers), |ui| {
+                result = grid_key_action(ui, &hosts, &mut selected);
+            });
+            output.textures_delta.clear();
+            (
+                result.map(|(p, a)| (p.id, matches!(a, CardAction::Connect))),
+                selected.clone(),
+            )
+        };
+        assert_eq!(
+            run(egui::Key::ArrowRight, egui::Modifiers::NONE)
+                .1
+                .as_deref(),
+            Some("p0")
+        );
+        assert_eq!(
+            run(egui::Key::ArrowDown, egui::Modifiers::NONE)
+                .1
+                .as_deref(),
+            Some("p2")
+        );
+        assert_eq!(
+            run(egui::Key::ArrowLeft, egui::Modifiers::NONE)
+                .1
+                .as_deref(),
+            Some("p1")
+        );
+        let (action, _) = run(egui::Key::Enter, egui::Modifiers::NONE);
+        assert_eq!(action, Some(("p1".into(), true)));
+    }
+
+    #[test]
+    fn cards_per_row_fit_the_width() {
+        assert_eq!(card_columns(10.0), 1);
+        assert_eq!(card_columns(CARD_WIDTH * 3.0 + CARD_GAP * 2.0), 3);
+    }
 }

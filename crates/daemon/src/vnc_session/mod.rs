@@ -413,6 +413,13 @@ fn mark_connected(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, sessio
         rec.retry_attempt = 0;
         rec.retry_in_seconds = 0;
         rec.error = None;
+        // Only a connection that worked counts as the host's last use.
+        let profile_id = rec.profile_id.clone();
+        if let Some(profile) =
+            profile_id.and_then(|pid| state.vnc_profiles.iter_mut().find(|p| p.id == pid))
+        {
+            profile.last_connected = now();
+        }
         state.revision = state.revision.saturating_add(1);
     }
 }
