@@ -1,5 +1,18 @@
 # Validation evidence — 2026-09-08
 
+## Windows Git history path assertion — 2026-10-29
+
+Actions run `40931234238`, job `123650002272`, passed 1,557 tests and failed
+only `history_files_and_revision_diffs_follow_commits`. Git returned ordinary
+Windows paths while the assertion expected Rust's canonical verbatim prefix
+(`\\?\`). Both name the same existing fixture files. The assertion now
+canonicalizes the returned fixture paths before comparison. Production path
+handling is unchanged.
+
+Validation: all seven Git history tests passed on macOS. Strict Windows-target
+Clippy passed for all workspace targets and features with the Zig wrapper.
+Formatting and diff whitespace checks passed. No push or hosted rerun was made.
+
 ## Windows release checks — 2026-10-29
 
 Actions run `40924198229`, job `123625314257` (`checks / Checks

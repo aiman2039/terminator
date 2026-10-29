@@ -158,7 +158,13 @@ fn history_files_and_revision_diffs_follow_commits() {
         ["grow a, add b", "add a"]
     );
     let newest = &history[0].hash;
-    let mut changed = commit_files(root, newest).unwrap();
+    // Git uses ordinary Windows paths; canonicalize the existing fixture
+    // files so the comparison accepts Rust's verbatim Windows prefix too.
+    let mut changed: Vec<_> = commit_files(root, newest)
+        .unwrap()
+        .into_iter()
+        .map(|(status, path)| (status, path.canonicalize().unwrap()))
+        .collect();
     changed.sort();
     let root_real = root.canonicalize().unwrap();
     assert_eq!(
