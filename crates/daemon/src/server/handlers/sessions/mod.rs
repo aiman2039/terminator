@@ -101,6 +101,7 @@ impl Shared {
             review_files,
         });
         if record.remote.is_some() && record.kind == SessionKind::Shell {
+            self.touch_remote_project(&project);
             self.auto_start_forwards(&project);
         }
         Ok(record)

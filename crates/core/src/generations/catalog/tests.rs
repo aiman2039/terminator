@@ -26,6 +26,7 @@ fn an_older_workspace_writer_does_not_erase_remote_projects() {
             remote_port: 5432,
             auto_start: true,
         }],
+        last_connected: 1_700_000_000,
     };
     let state = State {
         generation: "fixture".into(),

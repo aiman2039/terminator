@@ -28,6 +28,7 @@ impl RequestClass {
                 | Request::AddRemoteProject { .. }
                 | Request::RemoveRemoteProject { .. }
                 | Request::SetRemoteProjectGroup { .. }
+                | Request::UpdateRemoteProject { .. }
                 | Request::SetRemoteProjectForwards { .. }
                 | Request::SaveLayout { .. }
                 | Request::SelectProject { .. }

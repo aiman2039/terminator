@@ -1,5 +1,6 @@
 mod hooks;
 mod notifications;
+mod ssh;
 mod terminal;
 mod theme;
 
@@ -30,6 +31,7 @@ impl App {
                     SettingsSection::History => self.history_settings(ui),
                     SettingsSection::Shortcuts => self.shortcut_settings(ui),
                     SettingsSection::AgentHooks => self.hook_settings(ui),
+                    SettingsSection::Ssh => self.ssh_settings(ui),
                     SettingsSection::Updates => {
                         self.installation_settings(ui);
                         ui.add_space(12.0);

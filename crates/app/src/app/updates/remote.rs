@@ -17,6 +17,10 @@ impl App {
             self.apply_quick_connect(&project, generation, result);
             return;
         }
+        if self.import_owns(&project) {
+            self.apply_import_result(&project, result);
+            return;
+        }
         if self.remote_ui.active.as_ref() != Some(&project) {
             return;
         }
@@ -44,6 +48,7 @@ impl App {
             draft.root = root;
         }
         self.remote_ui.error = None;
+        self.remote_ui.failure = None;
         self.info = Some("SSH connection verified.".into());
     }
 
@@ -58,8 +63,17 @@ impl App {
         if self.selection_generation == generation
             && let Some(id) = id
         {
-            self.reveal_project(id);
+            if self.remote_ui.connect_after {
+                self.open_host_terminal(id);
+            } else {
+                self.reveal_project(id);
+            }
         }
+        self.info = Some(if project.id.is_empty() {
+            "SSH host added.".into()
+        } else {
+            "SSH host saved.".into()
+        });
     }
 
     fn remote_form_failed(
@@ -85,6 +99,7 @@ impl App {
             );
         }
         self.remote_ui.error = Some(failure.text);
+        self.remote_ui.failure = failure.ssh;
     }
 
     pub(super) fn handle_ssh_config_hosts(

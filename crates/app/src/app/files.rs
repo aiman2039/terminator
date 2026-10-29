@@ -469,6 +469,8 @@ impl App {
         self.settings_open = false;
         self.player_open = false;
         self.vnc_page_open = false;
+        self.remote_ui.close();
+        self.remote_ui.import = None;
         self.close_scrollback_search();
         self.worktree_open = false;
         self.shortcut_capture = None;

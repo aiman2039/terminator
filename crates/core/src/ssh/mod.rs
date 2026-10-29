@@ -7,8 +7,10 @@ use std::{
 
 mod config;
 mod failure;
+mod tuning;
 pub use config::{ConfigHost, ConfigSource, config_hosts, parse_config_aliases, parse_config_host};
 pub use failure::{SshError, SshFailure, classify};
+pub use tuning::{TUNING_CAPABILITY, Tuning, set_tuning};
 
 /// `ScanHostKey`, `TrustHostKey` and `Response::SshError`.
 pub const HOST_KEYS_CAPABILITY: &str = "ssh-hostkeys-v1";
@@ -149,14 +151,13 @@ fn build(
         "-oPermitLocalCommand=no",
         strict,
         "-oClearAllForwardings=yes",
-        "-oConnectTimeout=10",
-        "-oServerAliveInterval=15",
-        "-oServerAliveCountMax=3",
         "-oLogLevel=ERROR",
     ]
     .into_iter()
     .map(OsString::from)
     .collect();
+    let tuning = tuning::current();
+    args.extend(tuning.connect_args().map(OsString::from));
     if !terminal {
         args.push("-oBatchMode=yes".into());
     }
@@ -177,9 +178,9 @@ fn build(
     }
     if let Some((path, dedicated)) = control {
         let (master, persist) = if dedicated {
-            ("-oControlMaster=yes", "-oControlPersist=yes")
+            ("-oControlMaster=yes", "-oControlPersist=yes".to_owned())
         } else {
-            ("-oControlMaster=auto", "-oControlPersist=10m")
+            ("-oControlMaster=auto", tuning.persist_arg())
         };
         args.extend([
             master.into(),

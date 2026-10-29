@@ -69,6 +69,7 @@ pub(crate) fn open_state(
     catalog_paths: &Option<Paths>,
 ) -> Result<(storage::Store, State)> {
     let (mut store, mut state) = storage::Store::open(paths)?;
+    terminator_core::ssh::set_tuning(state.settings.ssh_tuning());
     recover_loaded(&mut state);
     drop_non_resumable(paths, &mut state);
     if let Some(root) = &catalog_paths {
@@ -152,6 +153,8 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::remote::HOSTS_CAPABILITY.into(),
         terminator_core::remote::FORWARDING_CAPABILITY.into(),
         terminator_core::remote::TRANSFER_CAPABILITY.into(),
+        terminator_core::remote::EDIT_CAPABILITY.into(),
+        terminator_core::ssh::TUNING_CAPABILITY.into(),
         vnc::FEATURES_CAPABILITY.into(),
         vnc::LABELS_CAPABILITY.into(),
         vnc::ERRORS_CAPABILITY.into(),

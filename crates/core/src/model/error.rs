@@ -34,4 +34,6 @@ pub enum SettingsError {
     EditorCloseTimeout { seconds: u64 },
     #[error("Detached VNC timeout must be 0–1440 minutes")]
     VncDetachedTimeout { minutes: u32 },
+    #[error("SSH keep-alive must be 5–300 s, reuse 1–1440 min, connect timeout 3–120 s")]
+    SshTuning { tuning: crate::ssh::Tuning },
 }

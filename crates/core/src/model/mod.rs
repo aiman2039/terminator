@@ -225,6 +225,12 @@ pub struct Settings {
     /// Disconnect a VNC session no viewer has watched for this many
     /// minutes; 0 keeps detached sessions connected.
     pub vnc_detached_timeout_minutes: u32,
+    /// OpenSSH `ServerAliveInterval` (`ssh-settings-v1`).
+    pub ssh_keepalive_seconds: u32,
+    /// How long an idle shared SSH connection stays open (`ControlPersist`).
+    pub ssh_reuse_minutes: u32,
+    /// OpenSSH `ConnectTimeout`.
+    pub ssh_connect_timeout_seconds: u32,
 }
 mod error;
 mod hooks;
