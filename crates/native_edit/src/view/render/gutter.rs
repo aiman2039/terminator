@@ -1,15 +1,48 @@
 //! Per-row gutter: change band, diagnostic strip, fold arrow, blame
 //! annotation and line number.
 use super::canvas::{Canvas, PaintRow};
+use super::geometry::snap;
 use super::helpers::RenderHelpers;
+use super::palette::EditorPalette;
 use super::{ANNOTATION_CELLS, CHANGE_BAND, ChangeKind, SourceView};
 use crate::doc::Buffer;
 use crate::lsp::Severity;
 use egui::{Pos2, Rect, Sense, Vec2};
 
 impl<B: Buffer> SourceView<'_, B> {
-    /// Gutter cells of a row's first visual line.
-    pub(super) fn paint_gutter(&mut self, canvas: &Canvas<'_>, row: &PaintRow<'_>) {
+    /// The gutter's tinted band and the 1px hairline between it and the
+    /// text, over the visible height.
+    pub(super) fn paint_gutter_band(&self, canvas: &Canvas<'_>, palette: &EditorPalette) {
+        if !self.options.show_line_numbers {
+            return;
+        }
+        let (origin, clip) = (canvas.origin, canvas.clip);
+        let rule_x = origin.x + self.geometry.rule_x;
+        canvas.painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(origin.x, clip.top()),
+                Pos2::new(rule_x, clip.bottom()),
+            ),
+            0.0,
+            palette.gutter_fill,
+        );
+        // Centered on one physical pixel, so the hairline stays 1px sharp.
+        let ppp = self.geometry.ppp;
+        canvas.painter.vline(
+            snap(rule_x, ppp) - 0.5 / ppp,
+            clip.top()..=clip.bottom(),
+            egui::Stroke::new(1.0 / ppp, palette.gutter_rule),
+        );
+    }
+
+    /// Gutter cells of a row's first visual line; `number_color` is the
+    /// line number's color unless a diagnostic tints it.
+    pub(super) fn paint_gutter(
+        &mut self,
+        canvas: &Canvas<'_>,
+        row: &PaintRow<'_>,
+        number_color: egui::Color32,
+    ) {
         if row.visual.start != 0 {
             return;
         }
@@ -33,7 +66,10 @@ impl<B: Buffer> SourceView<'_, B> {
         }
         self.paint_fold_arrow(canvas, row);
         self.paint_annotation(canvas, row);
-        self.paint_line_number(canvas, row, severity);
+        let number_color = severity.map_or(number_color, |severity| {
+            RenderHelpers::severity_color(canvas.ui.visuals(), severity)
+        });
+        self.paint_line_number(canvas, row, number_color);
     }
 
     fn row_severity(&self, line: usize) -> Option<Severity> {
@@ -92,12 +128,14 @@ impl<B: Buffer> SourceView<'_, B> {
         if !self.options.show_line_numbers || canvas.folds.region_at(line).is_none() {
             return;
         }
-        let (origin, gutter) = (canvas.origin, self.geometry.gutter);
+        let (origin, gutter) = (canvas.origin, self.geometry.rule_x);
         let folded = canvas.folds.is_folded(line);
         let pointer_in_gutter = canvas
             .ui
             .input(|input| input.pointer.hover_pos())
-            .is_some_and(|pos| canvas.response.rect.contains(pos) && pos.x < origin.x + gutter);
+            .is_some_and(|pos| {
+                canvas.response.rect.contains(pos) && pos.x < origin.x + self.geometry.gutter
+            });
         if !folded && !pointer_in_gutter {
             return;
         }
@@ -156,7 +194,7 @@ impl<B: Buffer> SourceView<'_, B> {
         }
         let text: String = annotation.text.chars().take(ANNOTATION_CELLS).collect();
         canvas.painter.text(
-            cell.left_top(),
+            Pos2::new(cell.left(), cell.top() + geometry.text_dy),
             egui::Align2::LEFT_TOP,
             text,
             geometry.font.clone(),
@@ -183,21 +221,19 @@ impl<B: Buffer> SourceView<'_, B> {
         &self,
         canvas: &Canvas<'_>,
         row: &PaintRow<'_>,
-        severity: Option<Severity>,
+        number_color: egui::Color32,
     ) {
         if !self.options.show_line_numbers {
             return;
         }
-        let visuals = canvas.ui.visuals();
-        let number_color = severity.map_or_else(
-            || visuals.weak_text_color(),
-            |severity| RenderHelpers::severity_color(visuals, severity),
-        );
         let geometry = self.geometry;
         canvas.painter.text(
             Pos2::new(
-                canvas.origin.x + geometry.gutter - geometry.advance,
-                row.y + geometry.text_top,
+                snap(
+                    canvas.origin.x + geometry.rule_x - geometry.advance,
+                    geometry.ppp,
+                ),
+                row.y + geometry.text_dy,
             ),
             egui::Align2::RIGHT_TOP,
             format!("{}", row.line().saturating_add(1)),

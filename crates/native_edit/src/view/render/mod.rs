@@ -1,7 +1,9 @@
 //! The editable source view. [`show_source`] runs one flat frame:
 //! geometry, layout, pointer and keyboard input, painting and
 //! scroll-follow, each step in its own file below.
+mod blink;
 mod canvas;
+mod decorations;
 mod geometry;
 mod gutter;
 mod helpers;
@@ -9,6 +11,7 @@ mod keyboard;
 mod marks;
 mod menu;
 mod options;
+mod palette;
 mod pointer;
 mod row_paint;
 mod rows;
@@ -18,11 +21,15 @@ mod sticky;
 mod tests;
 mod typing;
 
+pub use geometry::source_row_height;
 #[cfg(test)]
 pub(super) use helpers::RenderHelpers;
 pub use helpers::status_line;
-pub use marks::{Annotation, ChangeKind, ChangeMark, DiagnosticMark, Squiggle, squiggles};
+pub use marks::{
+    Annotation, ChangeKind, ChangeMark, DiagnosticMark, LineFill, RangeFill, Squiggle, squiggles,
+};
 pub use options::{ShowSourceInput, SourceOptions, SourceOutcome};
+pub use palette::EditorPalette;
 
 use crate::doc::Buffer;
 use crate::highlight::{HighlightCache, Language};
@@ -71,14 +78,25 @@ pub fn show_source<B: Buffer>(input: ShowSourceInput<'_, B>) -> SourceOutcome {
     view.derive_layout(ui, highlight);
     let viewport = Viewport::measure(ui, &geometry, highlight);
     let scroll_output = viewport
-        .scroll_area(id, options.scroll_fraction)
+        .scroll_area(id, (options.scroll_fraction, options.scroll_offset))
         .show(ui, |ui| view.show_frame(ui, &viewport, highlight));
     view.apply_folds(highlight);
     view.paint_squiggle_rail(ui, scroll_output.inner_rect);
-    let scroll_fraction = Viewport::scroll_fraction(&scroll_output);
     let footer_rect = view.paint_footer(ui);
-    view.out
-        .into_outcome(footer_rect, scroll_fraction, viewport.row_count)
+    view.out.into_outcome(OutcomeInput {
+        footer_rect,
+        scroll: scroll_output,
+        visual_rows: viewport.row_count,
+        row_height: geometry.row_height,
+    })
+}
+
+/// Frame-level results folded into the [`SourceOutcome`].
+struct OutcomeInput {
+    footer_rect: Option<egui::Rect>,
+    scroll: egui::scroll_area::ScrollAreaOutput<()>,
+    visual_rows: usize,
+    row_height: f32,
 }
 
 /// One frame of one source view: the buffer and engine it edits, the
@@ -113,7 +131,7 @@ impl<B: Buffer> SourceView<'_, B> {
                 text: &text,
             });
         }
-        highlight.ensure_rows(doc, self.geometry.wrap_columns);
+        highlight.ensure_rows_spaced(doc, self.geometry.wrap_columns, &self.options.spacers);
     }
 
     /// Everything inside the scroll area, in egui call order: allocation,
@@ -128,9 +146,11 @@ impl<B: Buffer> SourceView<'_, B> {
         self.handle_drag(&canvas);
         self.show_context_menu(&canvas);
         let focused = self.update_focus(&canvas);
-        let marks = self.row_marks(&canvas);
+        let marks = self.row_marks(&canvas, focused);
         self.paint_rows(&canvas, &marks);
-        self.paint_sticky_headers(&canvas);
+        if self.options.sticky_headers {
+            self.paint_sticky_headers(&canvas);
+        }
         self.handle_caret_chords(&canvas, focused);
         self.handle_keyboard(&canvas, focused);
         self.sync_clipboard(&canvas);
@@ -179,12 +199,14 @@ impl FrameOut {
         }
     }
 
-    fn into_outcome(
-        self,
-        footer_rect: Option<egui::Rect>,
-        scroll_fraction: f32,
-        visual_rows: usize,
-    ) -> SourceOutcome {
+    fn into_outcome(self, input: OutcomeInput) -> SourceOutcome {
+        let OutcomeInput {
+            footer_rect,
+            scroll,
+            visual_rows,
+            row_height,
+        } = input;
+        let scroll_fraction = Viewport::scroll_fraction(&scroll);
         let Self {
             effects,
             fold_actions: _,
@@ -214,6 +236,8 @@ impl FrameOut {
             change_clicked,
             annotation_clicked,
             toggle_blame,
+            scroll,
+            row_height,
         }
     }
 }

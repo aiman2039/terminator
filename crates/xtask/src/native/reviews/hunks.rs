@@ -36,18 +36,14 @@ pub fn hunks(o: &Options) -> Result<()> {
         &json!({"version":1,"tool":"Git","visible":true,"typography_migrated":true}),
     )?;
     let before = sessions(&h.state()?).len();
-    let log = drive_hunks(&h, o, (&root, &source, &texts))?;
-    ensure!(
-        log.contains("Fixture copied text: \"line 0\""),
-        "Unified undo did not restore the original row"
-    );
+    drive_hunks(&h, o, (&root, &source, &texts))?;
     ensure!(
         git(&root, &["show", ":hunks.txt"])? == texts.middle.as_bytes(),
         "Hunk stage changed the wrong lines"
     );
     ensure!(
         fs::read_to_string(&source)?.contains("unified edit"),
-        "Unified editing and save did not update the working file"
+        "Edit from unified, then save, did not update the working file"
     );
     ensure!(
         sessions(&h.state()?).len() == before,
@@ -104,7 +100,8 @@ fn drive_hunks(
             h,
             opts: o,
             name: "diff-hunks",
-            actions: json!([
+            actions: with_buffer_edit(
+                json!([
                 {"at_ms":1200,"target":"git-file-hunks.txt","right_click":true},
                 {"at_ms":1600,"target":"Open changes"},
                 {"at_ms":2200,"target":"diff-next"},
@@ -118,20 +115,18 @@ fn drive_hunks(
                 {"at_ms":8200,"target":"diff-marker-0"},
                 {"at_ms":8600,"target":"diff-menu"},
                 {"at_ms":9000,"target":"Collapse unchanged lines"},
-                {"at_ms":9700,"target":"diff-right-editor"},
-                {"at_ms":10100,"target":"diff-right-editor","text":edited},
                 {"at_ms":10700,"target":"diff-edit-save"},
                 {"at_ms":11700,"target":"diff-undo"},
                 {"at_ms":12700,"target":"diff-unified"},
-                {"at_ms":13000,"target":"diff-unified-edit-1"},
-                {"at_ms":13300,"target":"diff-unified-edit-1","input":"unified edit"},
-                {"at_ms":13900,"target":"diff-unified-edit-1","key":"Z","command":true},
-                {"at_ms":14500,"target":"diff-unified-edit-1"},
-                {"at_ms":14800,"target":"diff-unified-edit-1","key":"A","command":true},
-                {"at_ms":15100,"target":"diff-unified-edit-1","copy":true},
-                {"at_ms":15400,"target":"diff-unified-edit-1","input":"unified edit"},
+                {"at_ms":13000,"target":"diff-edit-split"},
+                {"at_ms":13400,"target":"diff-right-editor"},
+                {"at_ms":13700,"target":"diff-right-editor","key":"I"},
+                {"at_ms":14000,"target":"diff-right-editor","input":"unified edit"},
+                {"at_ms":14300,"target":"diff-right-editor","key":"Escape"},
                 {"at_ms":16000,"target":"diff-edit-save"}
-            ]),
+                ]),
+                edited,
+            ),
             after: 17100,
         },
         |_| {
@@ -164,4 +159,24 @@ fn drive_hunks(
             Ok(())
         },
     )
+}
+
+/// `actions` plus the Vim keys that replace the split editor's buffer with
+/// `edited` (`ggdG`, then insert), in time order.
+fn with_buffer_edit(mut actions: Value, edited: &str) -> Value {
+    let edit = json!([
+        {"at_ms":9700,"target":"diff-right-editor"},
+        {"at_ms":9850,"target":"diff-right-editor","key":"G"},
+        {"at_ms":9950,"target":"diff-right-editor","key":"G"},
+        {"at_ms":10050,"target":"diff-right-editor","key":"D"},
+        {"at_ms":10150,"target":"diff-right-editor","key":"G","shift":true},
+        {"at_ms":10250,"target":"diff-right-editor","key":"I"},
+        {"at_ms":10350,"target":"diff-right-editor","input":edited},
+        {"at_ms":10450,"target":"diff-right-editor","key":"Escape"}
+    ]);
+    if let (Some(all), Some(edit)) = (actions.as_array_mut(), edit.as_array()) {
+        all.extend(edit.iter().cloned());
+        all.sort_by_key(|action| action["at_ms"].as_u64().unwrap_or_default());
+    }
+    actions
 }

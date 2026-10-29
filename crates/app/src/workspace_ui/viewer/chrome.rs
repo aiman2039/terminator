@@ -122,7 +122,9 @@ impl Viewer<'_> {
                 path.file_name().unwrap_or_default().to_string_lossy()
             )
             .into(),
-            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } => tab.git_title().into(),
+            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } | Tab::Merge { .. } => {
+                tab.git_title().into()
+            }
             Tab::Vnc {
                 label, host, port, ..
             } => if !label.trim().is_empty() {
@@ -207,7 +209,9 @@ impl Viewer<'_> {
         tab: &mut Tab,
         pane: egui_dock::NodePath,
     ) -> OnCloseResponse {
-        if matches!(tab, Tab::Diff { .. }) && self.app.block_unsaved_diff(Some(&tab.key())) {
+        if matches!(tab, Tab::Diff { .. } | Tab::Merge { .. })
+            && self.app.block_unsaved_diff(Some(&tab.key()))
+        {
             return OnCloseResponse::Ignore;
         }
         if let Tab::Terminal(sid) = tab {

@@ -18,31 +18,16 @@ impl ViewPass<'_> {
         if self.read_only() || self.doc.markdown_mode == markdown::Mode::Preview {
             return;
         }
+        // The header lays out right to left; draw in reverse there so the
+        // buttons still read Heading, Bold, Italic, List.
+        let mut buttons: [fn(&mut egui::Ui) -> Option<Format>; 4] =
+            [heading_button, bold_button, italic_button, list_button];
+        if ui.layout().prefer_right_to_left() {
+            buttons.reverse();
+        }
         let mut action = None;
-        appearance::icon_menu_button(ui, "Heading", |ui| {
-            for (level, label) in [
-                (1, "Heading 1"),
-                (2, "Heading 2"),
-                (3, "Heading 3"),
-                (4, "Heading 4"),
-                (0, "Body text"),
-            ] {
-                if ui.button(label).clicked() {
-                    action = Some(Format::Heading(level));
-                    ui.close();
-                }
-            }
-        })
-        .response
-        .on_hover_text("Heading level");
-        if appearance::sidebar_action(ui, "Bold", "Bold").clicked() {
-            action = Some(Format::Wrap("**"));
-        }
-        if appearance::sidebar_action(ui, "Italic", "Italic").clicked() {
-            action = Some(Format::Wrap("*"));
-        }
-        if appearance::sidebar_action(ui, "List", "Bullet list").clicked() {
-            action = Some(Format::List);
+        for button in buttons {
+            action = button(ui).or(action);
         }
         let Some(action) = action else {
             return;
@@ -54,6 +39,45 @@ impl ViewPass<'_> {
         }
         ui.memory_mut(|memory| memory.request_focus(focus));
     }
+}
+
+fn heading_button(ui: &mut egui::Ui) -> Option<Format> {
+    let mut action = None;
+    appearance::icon_menu_button(ui, "Heading", |ui| {
+        for (level, label) in [
+            (1, "Heading 1"),
+            (2, "Heading 2"),
+            (3, "Heading 3"),
+            (4, "Heading 4"),
+            (0, "Body text"),
+        ] {
+            if ui.button(label).clicked() {
+                action = Some(Format::Heading(level));
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Heading level");
+    action
+}
+
+fn bold_button(ui: &mut egui::Ui) -> Option<Format> {
+    appearance::sidebar_action(ui, "Bold", "Bold")
+        .clicked()
+        .then_some(Format::Wrap("**"))
+}
+
+fn italic_button(ui: &mut egui::Ui) -> Option<Format> {
+    appearance::sidebar_action(ui, "Italic", "Italic")
+        .clicked()
+        .then_some(Format::Wrap("*"))
+}
+
+fn list_button(ui: &mut egui::Ui) -> Option<Format> {
+    appearance::sidebar_action(ui, "List", "Bullet list")
+        .clicked()
+        .then_some(Format::List)
 }
 
 fn apply(engine: &mut VimEngine, buffer: &mut Doc, action: Format) {

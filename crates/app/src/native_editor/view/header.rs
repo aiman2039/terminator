@@ -9,23 +9,36 @@ impl ViewPass<'_> {
         source_focus_id(&self.frame.source_id)
     }
 
-    /// Draw the header. Returns a heading line picked from the Markdown
-    /// heading menu, if any.
+    /// Draw the header: one fixed-height row. Returns a heading line
+    /// picked from the Markdown heading menu, if any.
     pub(super) fn header(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-        // Wrapped: on a narrow pane the mode badge and buttons move to
-        // a second row instead of being clipped off the edge.
-        ui.horizontal_wrapped(|ui| self.header_row(ui)).inner
+        let size = egui::vec2(ui.available_width(), appearance::TOOLBAR_BUTTON + 4.0);
+        ui.allocate_ui_with_layout(
+            size,
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.set_min_size(size);
+                ui.set_max_height(size.y);
+                self.header_row(ui)
+            },
+        )
+        .inner
     }
 
+    /// Right to left: actions keep their place at the right edge, and
+    /// the breadcrumb takes the rest, truncated with an ellipsis on a
+    /// narrow pane instead of wrapping to a second row.
     fn header_row(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-        self.header_title(ui);
-        let heading_jump = self.header_mode(ui);
-        self.header_status(ui);
-        self.header_save(ui);
-        self.header_reload(ui);
-        self.header_references(ui);
-        self.header_bookmark(ui);
         self.header_recent(ui);
+        self.header_bookmark(ui);
+        self.header_references(ui);
+        self.header_reload(ui);
+        self.header_save(ui);
+        self.header_status(ui);
+        let heading_jump = self.header_mode(ui);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            self.header_title(ui);
+        });
         heading_jump
     }
 
@@ -40,50 +53,65 @@ impl ViewPass<'_> {
         })
     }
 
+    /// Dirty dot, then breadcrumb and caret symbol in the UI font as one
+    /// label, so a narrow pane truncates them together.
     fn header_title(&self, ui: &mut egui::Ui) {
         let files = &self.frame.files;
-        let reserved = if self.frame.is_markdown { 370.0 } else { 200.0 };
-        let title_width = (ui.available_width() - reserved).clamp(48.0, 260.0);
-        ui.add_sized(
-            [title_width, appearance::TOOLBAR_BUTTON],
-            egui::Label::new(egui::RichText::new(&files.breadcrumb).weak()).truncate(),
-        )
-        .on_hover_text(&files.file_location);
-        if self.doc.crlf {
-            ui.weak("CRLF")
-                .on_hover_text("Windows line endings; saving keeps them");
-        }
-        if let Some(symbol) = self.current_symbol() {
-            ui.weak("›");
-            ui.monospace(symbol);
-        }
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let visuals = ui.visuals();
+        let (weak, text) = (visuals.weak_text_color(), visuals.text_color());
         if self.doc.dirty() {
-            ui.monospace("●");
+            ui.label(egui::RichText::new("●").small().color(text))
+                .on_hover_text("Unsaved changes");
         }
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &files.breadcrumb,
+            0.0,
+            egui::TextFormat::simple(font.clone(), weak),
+        );
+        if let Some(symbol) = self.current_symbol() {
+            job.append(
+                &format!("  ›  {symbol}"),
+                0.0,
+                egui::TextFormat::simple(font, text),
+            );
+        }
+        ui.add(egui::Label::new(job).truncate())
+            .on_hover_text(&files.file_location);
     }
 
     /// Markdown mode toggles and heading menu, else the Vim mode badge.
     fn header_mode(&mut self, ui: &mut egui::Ui) -> Option<usize> {
         if self.frame.is_markdown {
-            self.markdown_modes(ui);
-            let jump = self.heading_menu(ui);
+            // Right to left: modes, then the heading menu, then the
+            // format buttons at the right.
             self.markdown_format(ui);
-            return jump;
+            let heading_jump = self.heading_menu(ui);
+            self.markdown_modes(ui);
+            return heading_jump;
         }
         if self.frame.vim {
             // Modeless editing has no mode to report: the badge
             // would always read NORMAL and only add noise.
             let mode = self.doc.engine.mode();
-            ui.colored_label(mode_color(mode), format!("-- {} --", mode_name(mode)));
+            let colors = appearance::editor_style().palette.modes;
+            ui.label(
+                egui::RichText::new(mode_name(mode))
+                    .small()
+                    .color(mode_color(mode, &colors)),
+            );
         }
         None
     }
 
+    /// Edit, Preview, Split from the left: listed in reverse for the
+    /// right-to-left header.
     fn markdown_modes(&mut self, ui: &mut egui::Ui) {
         for (option, icon) in [
-            (markdown::Mode::Edit, "Pencil"),
-            (markdown::Mode::Preview, "Eye"),
             (markdown::Mode::Split, "Columns2"),
+            (markdown::Mode::Preview, "Eye"),
+            (markdown::Mode::Edit, "Pencil"),
         ] {
             let response = appearance::selectable_icon(appearance::SelectableIconInput {
                 ui,
@@ -128,9 +156,17 @@ impl ViewPass<'_> {
             found = true;
             let title = buffer.line_text(block.start_line);
             let title = title.trim_start_matches('#').trim();
-            if ui
-                .button(format!("{} {title}", "·".repeat(level.into())))
-                .clicked()
+            let label = format!(
+                "{}{title}",
+                "  ".repeat(usize::from(level).saturating_sub(1))
+            );
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: &label,
+                icon: "ListTree",
+                shortcut: "",
+            })
+            .clicked()
             {
                 jump = Some(block.start_line);
                 ui.close();
@@ -232,15 +268,15 @@ impl ViewPass<'_> {
         let mut picked = None;
         for item in &files.recent_files {
             let name = item.file_name().unwrap_or_default().to_string_lossy();
-            let marker = if files.pinned_files.contains(item) {
-                "◆ "
-            } else {
-                ""
-            };
-            if ui
-                .button(format!("{marker}{name}"))
-                .on_hover_text(item.display().to_string())
-                .clicked()
+            let pinned = files.pinned_files.contains(item);
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: &name,
+                icon: "FileText",
+                shortcut: if pinned { "Bookmarked" } else { "" },
+            })
+            .on_hover_text(item.display().to_string())
+            .clicked()
             {
                 picked = Some(item.clone());
                 ui.close();

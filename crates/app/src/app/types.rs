@@ -104,6 +104,11 @@ pub(crate) enum Tab {
         cwd: PathBuf,
         path: PathBuf,
     },
+    /// Three-way merge of one conflicted file (layout v10).
+    Merge {
+        cwd: PathBuf,
+        path: PathBuf,
+    },
     Vnc {
         #[serde(default)]
         id: String,
@@ -144,35 +149,9 @@ impl Tab {
         }
     }
 
-    /// Tab title for revision diffs and file history.
-    pub(crate) fn git_title(&self) -> String {
-        let name = |path: &std::path::Path| {
-            path.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        };
-        let short = |revision: &str| -> String {
-            if revision.is_empty() {
-                "local".into()
-            } else if revision.trim_end_matches('^').len() >= 12 {
-                let suffix = if revision.ends_with('^') { "^" } else { "" };
-                format!("{}{suffix}", revision.chars().take(7).collect::<String>())
-            } else {
-                revision.to_owned()
-            }
-        };
-        match self {
-            Self::RevisionDiff {
-                path, left, right, ..
-            } => format!("{} ({} ↔ {})", name(path), short(left), short(right)),
-            Self::FileHistory { path, .. } => format!("History {}", name(path)),
-            _ => String::new(),
-        }
-    }
-
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
+            Self::Merge { .. } => 10,
             Self::RevisionDiff { .. } | Self::FileHistory { .. } => 9,
             Self::Diff {
                 remote: Some(_), ..

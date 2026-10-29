@@ -134,7 +134,7 @@ fn delete_sign_stays_right_of_line_numbers() {
         },
         false,
     );
-    let number = require_text(&painted, "3");
+    let number = require_text(&painted, "100");
     let sign = require_text(&painted, "-");
     let code = require_text(&painted, "removed-line");
     assert!(
@@ -171,7 +171,7 @@ fn insert_sign_stays_right_of_line_numbers() {
         },
         false,
     );
-    let number = require_text(&painted, "3");
+    let number = require_text(&painted, "102");
     let sign = require_text(&painted, "+");
     assert!(
         sign.0.x > number.0.x,
@@ -287,7 +287,7 @@ fn equal_line_keeps_old_and_new_numbers_apart() {
         },
         false,
     );
-    let numbers: Vec<_> = painted.iter().filter(|(_, text)| text == "3").collect();
+    let numbers: Vec<_> = painted.iter().filter(|(_, text)| text == "97").collect();
     assert_eq!(
         numbers.len(),
         2,
@@ -354,7 +354,7 @@ fn five_digit_line_numbers_still_clear_the_sign() {
         },
         false,
     );
-    let number = require_text(&painted, "3");
+    let number = require_text(&painted, "10000");
     let sign = require_text(&painted, "+");
     assert!(
         sign.0.x > number.0.x + 8.0,

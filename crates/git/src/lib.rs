@@ -33,8 +33,10 @@ pub enum Error {
     MissingPath { header: String },
     #[error("Missing rename target")]
     MissingRenameTarget { header: String },
-    #[error("Resolve this file's merge conflict in your editor before opening a two-way diff")]
+    #[error("Resolve this file's merge conflict before opening a two-way diff")]
     Conflicted { path: PathBuf },
+    #[error("This file is no longer in conflict; refresh Git status")]
+    NotConflicted { path: PathBuf },
     #[error("This file has no staged changes; refresh Git status")]
     NoStagedChanges { path: PathBuf },
     #[error("This file has no working-tree changes; refresh Git status")]
@@ -55,11 +57,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub mod diffstat;
 pub mod ignore;
+pub mod merge;
 pub mod snapshot;
 pub mod status;
 
 pub use diffstat::{Stat, parse_numstat};
 pub use ignore::{DISPLAY_LIMIT, Entry, compare_entries, entries, entries_known, natural_cmp};
+pub use merge::{ConflictStages, conflict_stages, parse_unmerged};
 pub use snapshot::{
     SNAPSHOT_LIMIT, SnapshotsInput, blob, check_text, find_record, relative_path, snapshots,
     worktree_file,

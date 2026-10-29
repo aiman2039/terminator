@@ -98,12 +98,7 @@ impl App {
             ui.weak("No differences");
             return;
         }
-        let colors = super::super::diff_paint::DiffColors {
-            added: appearance::color(&self.theme.git_added),
-            deleted: appearance::color(&self.theme.git_deleted),
-            accent: appearance::color(&self.theme.accent),
-            text: appearance::color(&self.theme.text),
-        };
+        let colors = super::super::diff_paint::DiffColors::from_theme(&self.theme);
         let mut sync = self.diff_split_scroll.get(key).copied().unwrap_or(0.0);
         super::super::diff_paint::paint_diff_document(
             super::super::diff_paint::PaintDiffDocumentInput {

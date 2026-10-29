@@ -77,13 +77,13 @@ impl<B: Buffer> SourceView<'_, B> {
     /// A click on a fold arrow (the gutter's last cell) toggles it.
     fn fold_click(&self, canvas: &Canvas<'_>) -> Option<usize> {
         let left = canvas.response.rect.left();
-        let gutter = self.geometry.gutter;
+        let (rule_x, gutter) = (self.geometry.rule_x, self.geometry.gutter);
         let advance = self.geometry.advance;
         canvas
             .click_pos()
             .filter(|pos| {
                 self.options.show_line_numbers
-                    && pos.x >= left + gutter - advance
+                    && pos.x >= left + rule_x - advance
                     && pos.x < left + gutter
             })
             .and_then(|pos| canvas.cursor_at(pos))

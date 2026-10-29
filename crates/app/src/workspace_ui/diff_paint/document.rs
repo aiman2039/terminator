@@ -147,7 +147,10 @@ pub(in super::super) fn paint_diff_document(
     }
 }
 
-pub(in super::super) const DIFF_SPLIT_GAP: f32 = 72.0;
+/// Connector band between split panes: room for the hunk action chevrons.
+pub(in super::super) const DIFF_SPLIT_GAP: f32 = 32.0;
+/// One-row pane header above the diff panes.
+pub(in super::super) const DIFF_HEADER_HEIGHT: f32 = 28.0;
 pub(in super::super) const DIFF_SPLIT_MIN_PANE: f32 = 40.0;
 
 /// `(left, gap, right)` rects for a split diff at the given pane ratio.
@@ -260,7 +263,6 @@ pub(in super::super) fn paint_diff_split(
         gap_rect,
         scroll_key,
         ratio,
-        colors,
         usable,
         min_pane,
     });
@@ -273,7 +275,6 @@ pub(crate) struct PaintDiffDividerInput<'a> {
     pub(crate) gap_rect: egui::Rect,
     pub(crate) scroll_key: &'a str,
     pub(crate) ratio: &'a mut f32,
-    pub(crate) colors: DiffColors,
     pub(crate) usable: f32,
     pub(crate) min_pane: f32,
 }
@@ -285,7 +286,6 @@ pub(in super::super) fn paint_diff_divider(input: PaintDiffDividerInput<'_>) {
         gap_rect,
         scroll_key,
         ratio,
-        colors,
         usable,
         min_pane,
     } = input;
@@ -306,12 +306,15 @@ pub(in super::super) fn paint_diff_divider(input: PaintDiffDividerInput<'_>) {
         *ratio = ((pos.x - full.left()) / usable).clamp(min_pane / usable, 1.0 - min_pane / usable);
     }
     let stroke = if response.hovered() || response.dragged() {
-        egui::Stroke::new(1.5, colors.accent)
+        egui::Stroke::new(1.5, ui.visuals().selection.stroke.color)
     } else {
         egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
     };
-    ui.painter()
-        .vline(gap_rect.center().x, full.y_range(), stroke);
+    ui.painter().vline(
+        ui.painter().round_to_pixel_center(gap_rect.center().x),
+        full.y_range(),
+        stroke,
+    );
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), "diff-split-handle", handle);
 }

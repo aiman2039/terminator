@@ -11,7 +11,8 @@ impl App {
         pass: &mut DiffPass,
     ) {
         ui.spacing_mut().item_spacing.x = 4.0;
-        Self::diff_edit_buttons(ui, frame, pass);
+        self.diff_file_tree_toggle(ui, frame);
+        self.diff_edit_buttons(ui, frame, pass);
         Self::diff_change_buttons(ui, frame, pass);
         ui.separator();
         Self::diff_source_buttons(ui, frame, pass);
@@ -22,14 +23,47 @@ impl App {
         });
     }
 
-    /// Open the editable working tree from a staged diff, and save or
-    /// discard the working-tree buffer while it has unsaved edits.
-    fn diff_edit_buttons(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+    /// Show or hide the changed-files panel (not for remote snapshots).
+    fn diff_file_tree_toggle(&mut self, ui: &mut egui::Ui, frame: &DiffFrame<'_>) {
+        if frame.remote {
+            return;
+        }
+        let open = self.preferences.diff_file_tree;
+        let toggle = appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "ListTree",
+            tip: if open {
+                "Hide changed files"
+            } else {
+                "Show changed files"
+            },
+            selected: open,
+        });
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "diff-file-tree", toggle.rect);
+        if toggle.clicked() {
+            self.preferences.diff_file_tree = !open;
+        }
+    }
+
+    /// Open the editable working tree from a staged diff, edit the
+    /// read-only unified working tree side by side, and save or discard
+    /// the working-tree buffer while it has unsaved edits.
+    fn diff_edit_buttons(&mut self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
         if frame.staged && !frame.read_only {
             let open = appearance::sidebar_action(ui, "Pencil", "Open working tree (editable)");
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "diff-open-working", open.rect);
             pass.open_working = open.clicked();
+        }
+        if !frame.staged && !frame.split && pass.review.buffer.is_some() {
+            let edit = appearance::sidebar_action(ui, "Pencil", "Edit (side by side)");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "diff-edit-split", edit.rect);
+            if edit.clicked() {
+                self.diff_split.insert(frame.key.clone());
+                pass.review.jump = true;
+            }
         }
         let buffer_dirty = !frame.staged && pass.review.unsaved_edits();
         if !buffer_dirty {
@@ -199,16 +233,7 @@ impl App {
             ui.close();
         }
         ui.separator();
-        if ui
-            .checkbox(&mut pass.review.ignore_whitespace, "Ignore whitespace")
-            .on_hover_text(
-                "Compare lines without whitespace; staging still applies the real changes",
-            )
-            .changed()
-        {
-            pass.refresh = true;
-            ui.close();
-        }
+        self.diff_options_menu(ui, pass);
         let key = &frame.key;
         if frame.is_md
             && appearance::menu_item(appearance::MenuItemInput {

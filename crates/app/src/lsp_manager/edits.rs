@@ -60,7 +60,7 @@ impl LspManager {
 
     /// Send one request for `path` built from its URI, recording what the
     /// answer is for. False when no ready server tracks the file.
-    fn send_for(
+    pub(super) fn send_for(
         &mut self,
         path: &Path,
         build: impl FnOnce(&L::RequestId, &url::Url) -> Vec<u8>,

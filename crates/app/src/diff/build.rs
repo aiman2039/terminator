@@ -54,23 +54,8 @@ pub(crate) fn build_with_context(input: BuildWithContextInput<'_>) -> DiffDocume
     })
 }
 
-/// `text` with every whitespace char removed from each line (line breaks
-/// kept), so the line count, and every line index, matches the original.
-fn strip_whitespace(text: &str) -> String {
-    text.split_inclusive('\n')
-        .map(|line| {
-            let body = line.trim_end_matches(['\n', '\r']);
-            let mut out: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-            if line.ends_with('\n') {
-                out.push('\n');
-            }
-            out
-        })
-        .collect()
-}
-
-/// Original lines by index, for whitespace-insensitive diffs that compare
-/// stripped text but must display what is really in the file.
+/// Original lines by index: the diff compares normalized text when compare
+/// options are on, but rows always display what is really in the file.
 struct Originals<'a> {
     old: Vec<&'a str>,
     new: Vec<&'a str>,
@@ -92,25 +77,26 @@ pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocume
         staged,
         view,
     } = input;
+    let options = view.options;
     let old_hl = highlight_file(path, left);
     let new_hl = highlight_file(path, right);
-    let (compare_left, compare_right) = if view.whitespace {
-        (strip_whitespace(left), strip_whitespace(right))
-    } else {
+    let (compare_left, compare_right) = if options.exact() {
         (String::new(), String::new())
+    } else {
+        (options.normalize(left), options.normalize(right))
     };
-    let originals = view.whitespace.then(|| Originals {
+    let originals = Originals {
         old: left.split_inclusive('\n').collect(),
         new: right.split_inclusive('\n').collect(),
-    });
-    let diff = if view.whitespace {
-        TextDiff::configure()
-            .timeout(DIFF_TIMEOUT)
-            .diff_lines(compare_left.as_str(), compare_right.as_str())
-    } else {
+    };
+    let diff = if options.exact() {
         TextDiff::configure()
             .timeout(DIFF_TIMEOUT)
             .diff_lines(left, right)
+    } else {
+        TextDiff::configure()
+            .timeout(DIFF_TIMEOUT)
+            .diff_lines(compare_left.as_str(), compare_right.as_str())
     };
     let mut doc = DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
@@ -118,7 +104,7 @@ pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocume
         left_text: left.into(),
         right_text: right.into(),
         context: view.context,
-        whitespace: view.whitespace,
+        options,
         revealed: view.revealed.clone(),
         ..Default::default()
     };
@@ -126,14 +112,15 @@ pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocume
         diff: &diff,
         old_hl: &old_hl,
         new_hl: &new_hl,
-        originals: originals.as_ref(),
+        originals: &originals,
+        options,
     };
     let (old_end, new_end) = sides.emit_groups(&mut doc, view.context);
     if !doc.hunks.is_empty() {
         sides.emit_gap(
             &mut doc,
-            old_end..left.split_inclusive('\n').count(),
-            new_end..right.split_inclusive('\n').count(),
+            old_end..originals.old.len(),
+            new_end..originals.new.len(),
         );
     }
     doc
@@ -145,10 +132,11 @@ struct Sides<'a, 'b> {
     diff: &'a TextDiff<'b, 'b, str>,
     old_hl: &'a [Vec<DiffSpan>],
     new_hl: &'a [Vec<DiffSpan>],
-    originals: Option<&'a Originals<'b>>,
+    originals: &'a Originals<'b>,
+    options: DiffOptions,
 }
 
-impl<'b> Sides<'_, 'b> {
+impl Sides<'_, '_> {
     /// Emits each group of changes with its context and the gap before it.
     /// Returns where the last group ended on each side.
     fn emit_groups(self, doc: &mut DiffDocument, context: usize) -> (usize, usize) {
@@ -212,76 +200,55 @@ impl<'b> Sides<'_, 'b> {
     }
 
     fn emit_op(self, op: &similar::DiffOp, doc: &mut DiffDocument) {
-        match op.tag() {
-            DiffTag::Equal => self.emit_equal(op, doc),
-            DiffTag::Delete => self.emit_one_side(op, doc, true),
-            DiffTag::Insert => self.emit_one_side(op, doc, false),
-            DiffTag::Replace => self.emit_replace(op, doc),
+        let old = op.old_range();
+        let new = op.new_range();
+        if op.tag() != DiffTag::Equal {
+            self.emit_change(old, new, doc);
+            return;
         }
-    }
-
-    fn emit_equal(self, op: &similar::DiffOp, doc: &mut DiffDocument) {
-        for change in self.diff.iter_changes(op) {
-            let line = equal_line(EqualLineInput {
-                change,
-                highlighted: self.old_hl,
-                originals: self.originals.map(|o| o.old.as_slice()),
-                old_side: true,
-            });
-            // Whitespace-insensitive equal lines may still differ in
-            // whitespace: each side shows its own text.
-            let right = match self.originals {
-                Some(originals) => equal_line(EqualLineInput {
-                    change,
-                    highlighted: self.new_hl,
-                    originals: Some(originals.new.as_slice()),
-                    old_side: false,
-                }),
-                None => line.clone(),
-            };
+        for offset in 0..old.len() {
+            // Equal under the compare options; each side still shows its
+            // own text.
+            let old_index = Some(old.start.saturating_add(offset));
+            let new_index = Some(new.start.saturating_add(offset));
+            let left = self.line(LineKind::Equal, (old_index, new_index), true);
+            let right = self.line(LineKind::Equal, (old_index, new_index), false);
             doc.unified.push(right.clone());
             doc.split.push(SplitRow {
-                left: Some(line),
+                left: Some(left),
                 right: Some(right),
             });
         }
     }
 
-    /// A pure deletion (`old_side`) or insertion: rows on one side only.
-    fn emit_one_side(self, op: &similar::DiffOp, doc: &mut DiffDocument, old_side: bool) {
-        for change in self.diff.iter_inline_changes(op) {
-            let line = self.change(change, old_side);
-            doc.unified.push(line.clone());
-            doc.split.push(if old_side {
-                SplitRow {
-                    left: Some(line),
-                    right: None,
-                }
-            } else {
-                SplitRow {
-                    left: None,
-                    right: Some(line),
-                }
-            });
-        }
-    }
-
-    fn emit_replace(self, op: &similar::DiffOp, doc: &mut DiffDocument) {
-        let mut deletes = Vec::new();
-        let mut inserts = Vec::new();
-        for change in self.diff.iter_inline_changes(op) {
-            match change.tag() {
-                ChangeTag::Delete => deletes.push(self.change(change, true)),
-                ChangeTag::Insert => inserts.push(self.change(change, false)),
-                ChangeTag::Equal => {}
+    /// Removed lines, then added lines; split rows pair them by position,
+    /// and each pair gets in-line change marks for the highlight mode.
+    fn emit_change(
+        self,
+        old: std::ops::Range<usize>,
+        new: std::ops::Range<usize>,
+        doc: &mut DiffDocument,
+    ) {
+        let mut deletes: Vec<DiffLine> = old
+            .clone()
+            .map(|index| self.line(LineKind::Delete, (Some(index), None), true))
+            .collect();
+        let mut inserts: Vec<DiffLine> = new
+            .clone()
+            .map(|index| self.line(LineKind::Insert, (None, Some(index)), false))
+            .collect();
+        for ((delete, insert), (old_index, new_index)) in
+            deletes.iter_mut().zip(inserts.iter_mut()).zip(old.zip(new))
+        {
+            let old_text = line_text(&self.originals.old, old_index);
+            let new_text = line_text(&self.originals.new, new_index);
+            if let Some(fragments) = self.options.intra(old_text, new_text) {
+                delete.spans = overlay(std::mem::take(&mut delete.spans), &fragments.old);
+                insert.spans = overlay(std::mem::take(&mut insert.spans), &fragments.new);
             }
         }
-        for line in &deletes {
-            doc.unified.push(line.clone());
-        }
-        for line in &inserts {
-            doc.unified.push(line.clone());
-        }
+        doc.unified.extend(deletes.iter().cloned());
+        doc.unified.extend(inserts.iter().cloned());
         let rows = deletes.len().max(inserts.len());
         for i in 0..rows {
             doc.split.push(SplitRow {
@@ -291,20 +258,36 @@ impl<'b> Sides<'_, 'b> {
         }
     }
 
-    /// A deleted (`old_side`) or inserted line.
-    fn change(self, change: similar::InlineChange<'b, str>, old_side: bool) -> DiffLine {
-        change_line(ChangeLineInput {
-            change,
-            kind: if old_side {
-                LineKind::Delete
-            } else {
-                LineKind::Insert
-            },
-            highlighted: if old_side { self.old_hl } else { self.new_hl },
-            old_side,
-            originals: self.originals,
-        })
+    /// A row with the original text of one side's line (`old_side`).
+    fn line(
+        self,
+        kind: LineKind,
+        (old, new): (Option<usize>, Option<usize>),
+        old_side: bool,
+    ) -> DiffLine {
+        let (lines, highlighted, index) = if old_side {
+            (&self.originals.old, self.old_hl, old)
+        } else {
+            (&self.originals.new, self.new_hl, new)
+        };
+        let text = index.map_or("", |index| line_text(lines, index));
+        let number = |index: Option<usize>| {
+            index.map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1))
+        };
+        DiffLine {
+            kind,
+            old_no: number(old),
+            new_no: number(new),
+            spans: line_spans(highlighted, index, text),
+        }
     }
+}
+
+/// One original line without its line break.
+fn line_text<'a>(lines: &[&'a str], index: usize) -> &'a str {
+    lines
+        .get(index)
+        .map_or("", |line| line.trim_end_matches(['\n', '\r']))
 }
 
 /// A collapsed run of unchanged lines, expandable from its row.
@@ -331,103 +314,4 @@ fn push_gap_row(doc: &mut DiffDocument, old: std::ops::Range<usize>, new: std::o
         left: Some(line.clone()),
         right: Some(line),
     });
-}
-
-struct EqualLineInput<'a> {
-    change: similar::Change<&'a str>,
-    highlighted: &'a [Vec<DiffSpan>],
-    originals: Option<&'a [&'a str]>,
-    old_side: bool,
-}
-
-fn equal_line(input: EqualLineInput<'_>) -> DiffLine {
-    let EqualLineInput {
-        change,
-        highlighted,
-        originals,
-        old_side,
-    } = input;
-    let index = if old_side {
-        change.old_index()
-    } else {
-        change.new_index()
-    };
-    let text = originals
-        .zip(index)
-        .and_then(|(lines, index)| lines.get(index).copied())
-        .unwrap_or_else(|| change.value());
-    DiffLine {
-        kind: LineKind::Equal,
-        old_no: change
-            .old_index()
-            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
-        new_no: change
-            .new_index()
-            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
-        spans: line_spans(highlighted, index, text),
-    }
-}
-
-struct ChangeLineInput<'a, 'b> {
-    change: similar::InlineChange<'b, str>,
-    kind: LineKind,
-    highlighted: &'a [Vec<DiffSpan>],
-    old_side: bool,
-    originals: Option<&'a Originals<'b>>,
-}
-
-fn change_line(input: ChangeLineInput<'_, '_>) -> DiffLine {
-    let ChangeLineInput {
-        change,
-        kind,
-        highlighted,
-        old_side,
-        originals,
-    } = input;
-    let side_index = if old_side {
-        change.old_index()
-    } else {
-        change.new_index()
-    };
-    // Whitespace-insensitive: show the real line, without word marks that
-    // would point into the stripped comparison text.
-    if let Some(original) = originals.zip(side_index).and_then(|(originals, index)| {
-        if old_side {
-            originals.old.get(index)
-        } else {
-            originals.new.get(index)
-        }
-    }) {
-        return DiffLine {
-            kind,
-            old_no: change
-                .old_index()
-                .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
-            new_no: change
-                .new_index()
-                .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
-            spans: line_spans(highlighted, side_index, original),
-        };
-    }
-    let fragments: Vec<(bool, String)> = change
-        .iter_strings_lossy()
-        .map(|(changed, text)| (changed, text.trim_end_matches(['\n', '\r']).to_string()))
-        .collect();
-    let joined: String = fragments.iter().map(|(_, t)| t.as_str()).collect();
-    let index = if old_side {
-        change.old_index()
-    } else {
-        change.new_index()
-    };
-    let spans = overlay(line_spans(highlighted, index, &joined), &fragments);
-    DiffLine {
-        kind,
-        old_no: change
-            .old_index()
-            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
-        new_no: change
-            .new_index()
-            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
-        spans,
-    }
 }

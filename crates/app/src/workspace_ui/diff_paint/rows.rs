@@ -1,4 +1,5 @@
 use super::*;
+use egui::emath::GuiRounding as _;
 
 pub(in super::super) fn paint_diff_side(ui: &mut egui::Ui, paint: DiffSidePaint<'_>) {
     let DiffSidePaint {
@@ -48,8 +49,10 @@ pub(in super::super) fn comparison_headers(input: ComparisonHeadersInput<'_>) {
     } = input;
 
     let full = ui.available_rect_before_wrap();
-    let header =
-        egui::Rect::from_min_size(full.min, egui::vec2((full.width() - 10.0).max(1.0), 54.0));
+    let header = egui::Rect::from_min_size(
+        full.min,
+        egui::vec2((full.width() - 10.0).max(1.0), DIFF_HEADER_HEIGHT),
+    );
     let usable = (header.width() - DIFF_SPLIT_GAP).max(1.0);
     let min = DIFF_SPLIT_MIN_PANE.min(usable / 2.0);
     let left_width = (ratio * usable).clamp(min, usable - min);
@@ -72,17 +75,20 @@ pub(in super::super) fn comparison_headers(input: ComparisonHeadersInput<'_>) {
     };
     for (index, (rect, label)) in labels.into_iter().enumerate() {
         let side_editable = editable && (!split || index == 1);
-        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        let builder = egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center));
+        ui.scope_builder(builder, |ui| {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
-            ui.horizontal(|ui| {
-                ui.strong(label);
-                ui.weak(if side_editable {
-                    "Editable"
-                } else if staged {
-                    "Staged · Read-only"
-                } else {
-                    "Read-only"
-                });
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.add_space(4.0);
+            ui.strong(label);
+            ui.weak(if side_editable {
+                "Editable"
+            } else if staged {
+                "Staged · Read-only"
+            } else {
+                "Read-only"
             });
             ui.add(
                 egui::Label::new(
@@ -115,10 +121,11 @@ pub(in super::super) fn diff_code_job(
         break_on_newline: false,
         ..Default::default()
     };
+    let word = colors.tints().word;
     for span in &line.spans {
         let intra = match (line.kind, span.intra) {
-            (diff::LineKind::Insert, diff::Intra::Change) => tint(colors.added, 90),
-            (diff::LineKind::Delete, diff::Intra::Change) => tint(colors.deleted, 90),
+            (diff::LineKind::Insert, diff::Intra::Change) => tint(colors.added, word),
+            (diff::LineKind::Delete, diff::Intra::Change) => tint(colors.deleted, word),
             _ => Color32::TRANSPARENT,
         };
         job.append(
@@ -165,13 +172,23 @@ pub(in super::super) fn fill_diff_row(input: FillDiffRowInput<'_>) {
         bg,
     } = input;
 
+    // Whole device pixels: tinted rows meet without seams or blur.
+    let rect = rect.round_to_pixels(ui.pixels_per_point());
     if bg != Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, 0.0, bg);
     }
-    let gutter =
-        egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + gutter_w, rect.bottom()));
-    ui.painter()
-        .rect_filled(gutter, 0.0, Color32::from_black_alpha(40));
+    let gutter_right = snap(ui, egui::pos2(rect.left() + gutter_w, rect.bottom()));
+    let gutter = egui::Rect::from_min_max(rect.min, gutter_right);
+    ui.painter().rect_filled(
+        gutter,
+        0.0,
+        appearance::diff_tints(ui.visuals().dark_mode).gutter,
+    );
+}
+
+/// `pos` on the device pixel grid, so glyphs and fills render crisp.
+pub(in super::super) fn snap(ui: &egui::Ui, pos: egui::Pos2) -> egui::Pos2 {
+    pos.round_to_pixels(ui.pixels_per_point())
 }
 
 pub(in super::super) fn paint_diff_number(ui: &egui::Ui, paint: DiffNumberPaint<'_>) {
@@ -189,7 +206,7 @@ pub(in super::super) fn paint_diff_number(ui: &egui::Ui, paint: DiffNumberPaint<
         .painter()
         .layout_no_wrap(number.to_string(), metrics.font.clone(), color);
     ui.painter().galley(
-        egui::pos2(right - galley.size().x, top).round(),
+        snap(ui, egui::pos2(right - galley.size().x, top)),
         galley,
         color,
     );
@@ -238,11 +255,17 @@ pub(in super::super) fn paint_diff_gutter(ui: &egui::Ui, paint: DiffGutterPaint<
             diff::LineKind::Delete => colors.deleted,
             diff::LineKind::Hunk | diff::LineKind::Equal => weak,
         };
+        // "Do not highlight" clears the change colors; the sign stays.
+        let color = if color == Color32::TRANSPARENT {
+            weak
+        } else {
+            color
+        };
         let galley = ui
             .painter()
             .layout_no_wrap(sign.to_owned(), metrics.font.clone(), color);
         ui.painter().galley(
-            egui::pos2(rect.left() + cols.sign, rect.top()).round(),
+            snap(ui, egui::pos2(rect.left() + cols.sign, rect.top())),
             galley,
             color,
         );
@@ -280,7 +303,7 @@ pub(in super::super) fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>)
             metrics,
         },
     );
-    let pos = egui::pos2(rect.left() + cols.code, rect.top()).round();
+    let pos = snap(ui, egui::pos2(rect.left() + cols.code, rect.top()));
     let response = ui.interact(
         egui::Rect::from_min_size(pos, code.size()),
         ui.auto_id_with("diff-code-selection"),

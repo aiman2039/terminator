@@ -5,6 +5,7 @@
 //! borrowed for the header, source view, and popups ([`ViewPass`]), and
 //! the requests that pass queued run once the borrow ends ([`after`]).
 mod after;
+mod assist;
 mod body;
 mod effects;
 mod format;
@@ -98,6 +99,10 @@ struct ViewRequests {
     splits: Vec<NativeSplit>,
     hover_at: Option<(native_lsp::Position, (usize, usize))>,
     goto_at: Option<native_lsp::Position>,
+    /// Go to Implementation / Type Declaration at a position.
+    locate_at: Option<(native_lsp::Position, native_lsp::Locate)>,
+    /// Find in Files asked for, with its seed query.
+    find_in_files: Option<String>,
     references_at: Option<native_lsp::Position>,
     hierarchy_at: Option<(native_lsp::Position, native_lsp::HierarchyKind)>,
     rename_at: Option<native_lsp::Position>,
@@ -110,6 +115,8 @@ struct ViewRequests {
     complete_now: bool,
     signature_request: Option<(native_lsp::Position, usize, usize)>,
     format_now: bool,
+    /// The selection when formatting was asked for (range formatting).
+    format_range: Option<native_lsp::Range>,
     actions_at: Option<native_lsp::Range>,
     picked_action: Option<native_lsp::CodeActionItem>,
     completion_request: Option<(native_lsp::Position, usize, usize)>,
@@ -161,6 +168,7 @@ impl App {
         let (frame, decor) = self.native_view_frame(ui, site, services);
         let mut popups = self.native_view_checkout(path);
         let mut requests = ViewRequests::default();
+        let revision_before = self.native_revision(path);
         let pass = ViewPass {
             doc: self.native_doc(path, frame.vim),
             frame: &frame,
@@ -173,6 +181,7 @@ impl App {
         };
         self.native_view_check_in(path, popups, &requests);
         self.native_view_edit_requests(path, frame.language, &mut requests);
+        self.native_view_on_type(path, frame.language, revision_before);
         self.drain_edit_answers();
         self.native_view_signature(path, frame.language, &requests);
         self.native_view_completion(path, frame.language, &requests);
@@ -203,6 +212,7 @@ impl App {
         self.native_lsp_sync(path, frame.language);
         self.request_editor_blame(ui.ctx(), path);
         self.native_view_lsp_requests(site, &mut requests);
+        self.native_view_highlights(ui.ctx(), path, &frame.source_id);
         self.show_hover_popup(ui, path);
         self.native_view_deferred(ui, path, requests);
     }

@@ -86,7 +86,7 @@ impl App {
             &frame.key,
             Some(pass.context.unwrap_or(review.context.max(3))),
         );
-        view.whitespace = review.ignore_whitespace;
+        review.options_requested = Some(view.options);
         if pass.collapse {
             view.revealed.clear();
         }

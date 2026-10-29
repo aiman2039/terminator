@@ -99,7 +99,7 @@ fn rebuild_keeps_revealed_ranges_and_whitespace_mode() {
     let view = DiffView {
         context: 3,
         revealed: expanded.revealed.clone(),
-        whitespace: false,
+        options: DiffOptions::default(),
     };
     let refreshed = doc.rebuild(Path::new("f.txt"), false, &view);
     assert_eq!(refreshed.gaps.len(), 2);
@@ -124,7 +124,10 @@ fn ignore_whitespace_hides_indent_only_changes_and_keeps_text() {
         &DiffView {
             context: 3,
             revealed: Vec::new(),
-            whitespace: true,
+            options: DiffOptions {
+                whitespace: Whitespace::All,
+                ..DiffOptions::default()
+            },
         },
     );
     // Only the added line is a change; the re-indent is not.
@@ -138,24 +141,6 @@ fn ignore_whitespace_hides_indent_only_changes_and_keeps_text() {
         .map(|s| s.text.as_str())
         .collect();
     assert_eq!(shown, "    x();");
-}
-
-#[test]
-fn aligned_left_has_one_row_per_buffer_line() {
-    let left = "a\nb\nc\nd\n";
-    let right = "a\nB\nnew\nd\n";
-    let aligned = align_left(left, right, &[]);
-    assert_eq!(aligned.doc.split.len(), 4);
-    let left_no = |row: usize| aligned.doc.split[row].left.as_ref().and_then(|l| l.old_no);
-    assert_eq!(left_no(0), Some(1));
-    // `b`/`c` replaced by `B`/`new`: paired rows show the originals.
-    assert_eq!(left_no(1), Some(2));
-    assert_eq!(left_no(2), Some(3));
-    assert_eq!(left_no(3), Some(4));
-    assert!(aligned.deleted.is_empty());
-    let removed = align_left("a\nb\nc\n", "a\nc\n", &[]);
-    assert_eq!(removed.doc.split.len(), 2);
-    assert_eq!(removed.deleted, [(1, vec!["b".to_owned()])]);
 }
 
 #[test]
@@ -236,4 +221,123 @@ fn staged_and_working_sides_and_word_highlights() {
     assert!(joined.contains("working"));
     assert!(!joined.contains("base"));
     assert!(!working.split.is_empty());
+}
+
+fn build_view(left: &str, right: &str, options: DiffOptions) -> DiffDocument {
+    build_with_options(BuildWithOptionsInput {
+        path: Path::new("f.txt"),
+        left,
+        right,
+        staged: false,
+        view: &DiffView {
+            context: 3,
+            revealed: Vec::new(),
+            options,
+        },
+    })
+}
+
+/// Changed fragments of one painted line.
+fn changed_runs(line: &DiffLine) -> Vec<String> {
+    line.spans
+        .iter()
+        .filter(|span| span.intra == Intra::Change)
+        .map(|span| span.text.clone())
+        .collect()
+}
+
+#[test]
+fn ignore_case_hides_case_only_changes_and_keeps_text() {
+    let left = "Hello World\nkeep\n";
+    let right = "hello world\nkeep\nadded\n";
+    assert_eq!(
+        build_view(left, right, DiffOptions::default()).hunks.len(),
+        2
+    );
+    let loose = build_view(
+        left,
+        right,
+        DiffOptions {
+            ignore_case: true,
+            ..DiffOptions::default()
+        },
+    );
+    assert_eq!(loose.hunks.len(), 1);
+    assert_eq!(loose.hunks[0].old, 2..2);
+    assert_eq!(loose.hunks[0].new, 2..3);
+    let shown: String = loose.unified[0]
+        .spans
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(shown, "hello world");
+}
+
+#[test]
+fn trim_ignores_edge_whitespace_but_not_inner_whitespace() {
+    let options = DiffOptions {
+        whitespace: Whitespace::Trim,
+        ..DiffOptions::default()
+    };
+    let trimmed = build_view("  a b\nx\n", "a b  \nx y\n", options);
+    assert_eq!(trimmed.hunks.len(), 1);
+    assert_eq!(trimmed.hunks[0].old, 1..2);
+    let inner = build_view("a b\n", "ab\n", options);
+    assert_eq!(inner.hunks.len(), 1, "trim keeps inner whitespace changes");
+    let all = build_view(
+        "a b\n",
+        "ab\n",
+        DiffOptions {
+            whitespace: Whitespace::All,
+            ..DiffOptions::default()
+        },
+    );
+    assert!(all.hunks.is_empty());
+}
+
+#[test]
+fn highlight_granularity_marks_words_chars_or_whole_lines() {
+    let with = |highlight| {
+        build_view(
+            "let total = count;\n",
+            "let totals = count;\n",
+            DiffOptions {
+                highlight,
+                ..DiffOptions::default()
+            },
+        )
+    };
+    assert_eq!(changed_runs(&with(Highlight::Words).unified[1]), ["totals"]);
+    assert_eq!(changed_runs(&with(Highlight::Words).unified[0]), ["total"]);
+    assert_eq!(changed_runs(&with(Highlight::Chars).unified[1]), ["s"]);
+    for highlight in [Highlight::Lines, Highlight::None] {
+        let doc = with(highlight);
+        assert!(
+            doc.unified.iter().all(|line| changed_runs(line).is_empty()),
+            "{highlight:?} marks no words"
+        );
+        assert_eq!(doc.options.highlight, highlight);
+    }
+}
+
+#[test]
+fn ignored_whitespace_is_never_marked_as_a_word_change() {
+    let options = DiffOptions {
+        whitespace: Whitespace::All,
+        ..DiffOptions::default()
+    };
+    let fragments = options.intra("a  =  b", "a = c").unwrap();
+    let changed: Vec<&str> = fragments
+        .new
+        .iter()
+        .filter(|(changed, _)| *changed)
+        .map(|(_, text)| text.as_str())
+        .collect();
+    assert_eq!(changed, ["c"]);
+    let joined: String = fragments
+        .old
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect();
+    assert_eq!(joined, "a  =  b");
 }

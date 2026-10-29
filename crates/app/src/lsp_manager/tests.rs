@@ -1326,3 +1326,99 @@ impl LiveHierarchy<'_> {
         }
     }
 }
+
+#[test]
+fn gated_requests_are_not_sent_without_the_server_capability() {
+    let mut manager = LspManager::new();
+    let path = crate::test_path("/tmp/gated.rs");
+    tracked(&mut manager, &path);
+    let (key, mut sent) = ready_server(&mut manager, &path);
+    let at = L::Position {
+        line: 0,
+        character: 0,
+    };
+    let range = L::Range { start: at, end: at };
+    assert!(
+        manager
+            .request_locate(&path, at, L::Locate::Implementation)
+            .is_err()
+    );
+    assert!(!manager.request_document_highlight(&path, 1, at));
+    assert!(!manager.request_range_format(&path, 1, range));
+    assert!(!manager.request_on_type_format(&path, 1, (at, '}')));
+    assert!(
+        sent.try_recv().is_err(),
+        "nothing sent without capabilities"
+    );
+
+    manager.servers.get_mut(&key).expect("server").capabilities = serde_json::json!({
+        "implementationProvider": true,
+        "documentHighlightProvider": true,
+        "documentRangeFormattingProvider": true,
+        "documentOnTypeFormattingProvider": { "firstTriggerCharacter": "}" },
+    });
+    assert!(
+        manager
+            .request_locate(&path, at, L::Locate::Implementation)
+            .is_ok()
+    );
+    assert!(manager.request_document_highlight(&path, 1, at));
+    // The same caret and revision is asked once.
+    assert!(!manager.request_document_highlight(&path, 1, at));
+    // Text the server does not hold yet is never asked about.
+    assert!(!manager.request_document_highlight(&path, 2, at));
+    assert!(manager.request_range_format(&path, 1, range));
+    assert!(!manager.request_on_type_format(&path, 1, (at, ';')));
+    assert!(manager.request_on_type_format(&path, 1, (at, '}')));
+    let methods: Vec<String> = std::iter::from_fn(|| sent.try_recv().ok())
+        .filter_map(|bytes| {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let body = text.split("\r\n\r\n").nth(1)?.to_owned();
+            let value: serde_json::Value = serde_json::from_str(&body).ok()?;
+            value.get("method")?.as_str().map(str::to_owned)
+        })
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "textDocument/implementation",
+            "textDocument/documentHighlight",
+            "textDocument/rangeFormatting",
+            "textDocument/onTypeFormatting",
+        ]
+    );
+}
+
+#[test]
+fn document_highlight_answers_apply_to_their_revision_only() {
+    let mut manager = LspManager::new();
+    let path = crate::test_path("/tmp/highlight.rs");
+    tracked(&mut manager, &path);
+    let (key, _sent) = ready_server(&mut manager, &path);
+    manager.servers.get_mut(&key).expect("server").capabilities =
+        serde_json::json!({ "documentHighlightProvider": true });
+    let at = L::Position {
+        line: 0,
+        character: 1,
+    };
+    assert!(manager.request_document_highlight(&path, 1, at));
+    let id = manager.servers[&key]
+        .pending
+        .keys()
+        .copied()
+        .next()
+        .expect("pending");
+    manager.on_response(OnResponseInput {
+        key: &key,
+        id: L::RequestId::Number(id),
+        result: Some(serde_json::json!([
+            { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 3 } } },
+        ])),
+        error: None,
+    });
+    assert_eq!(
+        manager.document_highlights(&path, 1).map(|r| r.len()),
+        Some(1)
+    );
+    assert!(manager.document_highlights(&path, 2).is_none());
+}

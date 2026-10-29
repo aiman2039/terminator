@@ -1,3 +1,4 @@
+mod editor;
 mod hooks;
 mod notifications;
 mod ssh;
@@ -27,6 +28,7 @@ impl App {
                         frame.browse = self.terminal_settings(ui, &mut grant);
                         frame.grant_folder |= grant;
                     }
+                    SettingsSection::Editor => self.editor_settings(ui),
                     SettingsSection::Notifications => self.notification_settings(ui),
                     SettingsSection::History => self.history_settings(ui),
                     SettingsSection::Shortcuts => self.shortcut_settings(ui),

@@ -4,6 +4,36 @@ use terminator_core::*;
 
 use super::super::*;
 
+impl Tab {
+    /// Tab title for revision diffs, file history and merges.
+    pub(crate) fn git_title(&self) -> String {
+        let name = |path: &std::path::Path| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let short = |revision: &str| -> String {
+            if revision.is_empty() {
+                "local".into()
+            } else if revision.trim_end_matches('^').len() >= 12 {
+                let suffix = if revision.ends_with('^') { "^" } else { "" };
+                format!("{}{suffix}", revision.chars().take(7).collect::<String>())
+            } else {
+                revision.to_owned()
+            }
+        };
+        match self {
+            Self::RevisionDiff {
+                path, left, right, ..
+            } => format!("{} ({} ↔ {})", name(path), short(left), short(right)),
+            Self::FileHistory { path, .. } => format!("History {}", name(path)),
+            Self::Merge { path, .. } => format!("Merge {}", name(path)),
+            _ => String::new(),
+        }
+    }
+}
+
 pub(crate) struct HistorySessionRowCanShowInput<'a> {
     pub(crate) session_id: &'a str,
     pub(crate) project_id: &'a str,

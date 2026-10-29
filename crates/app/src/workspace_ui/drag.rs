@@ -106,7 +106,9 @@ impl App {
                 "Blame {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
-            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } => tab.git_title(),
+            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } | Tab::Merge { .. } => {
+                tab.git_title()
+            }
             Tab::Vnc {
                 label, host, port, ..
             } => {

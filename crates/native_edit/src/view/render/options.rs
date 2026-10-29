@@ -1,5 +1,6 @@
 //! Host-facing options, inputs and results of one source-view frame.
-use super::marks::{Annotation, ChangeMark, DiagnosticMark, Squiggle};
+use super::marks::{Annotation, ChangeMark, DiagnosticMark, LineFill, RangeFill, Squiggle};
+use super::palette::EditorPalette;
 use crate::highlight::{HighlightCache, Language};
 use crate::vim::{Effect, VimEngine};
 use egui::Color32;
@@ -8,9 +9,17 @@ pub type MenuItemRenderer = fn(&mut egui::Ui, &str, &str, &str) -> egui::Respons
 
 pub struct SourceOptions {
     pub font_size: f32,
-    /// Row height as a multiple of the font's row height; text stays
-    /// vertically centered in the taller row.
-    pub line_spacing: f32,
+    /// Row pitch as a multiple of the font's row height (1.0..=2.0);
+    /// text stays vertically centered in the taller row.
+    pub line_height: f32,
+    /// Blink the caret (530 ms on/off) while the view has focus.
+    pub caret_blink: bool,
+    /// Host theme colors for the editor surface; `None` derives them
+    /// from the egui visuals.
+    pub palette: Option<EditorPalette>,
+    /// Extra status-bar cells after `Ln, Col` (line ending, encoding,
+    /// indent), right-aligned like the `JetBrains` status bar.
+    pub status_items: Vec<String>,
     pub show_line_numbers: bool,
     pub show_status: bool,
     /// Gutter marks, sorted by row; binary-searched per painted row, so
@@ -60,13 +69,30 @@ pub struct SourceOptions {
     pub soft_wrap: bool,
     /// Set the visible position as a fraction of the scrollable document.
     pub scroll_fraction: Option<f32>,
+    /// Set the vertical scroll offset in points (a pane scrolled in step
+    /// with another one); wins over `scroll_fraction`.
+    pub scroll_offset: Option<f32>,
+    /// Host filler rows `(line, rows)` before buffer lines, sorted by line
+    /// (see [`crate::spacers`]); lines past the end fill after the last.
+    pub spacers: std::sync::Arc<Vec<(usize, usize)>>,
+    /// Background of filler rows; `None` leaves them blank.
+    pub spacer_fill: Option<Color32>,
+    /// Full-row backgrounds, sorted by line.
+    pub line_fills: std::sync::Arc<Vec<LineFill>>,
+    /// Char-range backgrounds, sorted by line and start.
+    pub range_fills: std::sync::Arc<Vec<RangeFill>>,
+    /// Pin the headers of enclosing blocks at the top while scrolling.
+    pub sticky_headers: bool,
 }
 
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
             font_size: 13.0,
-            line_spacing: 1.0,
+            line_height: 1.2,
+            caret_blink: true,
+            palette: None,
+            status_items: Vec::new(),
             show_line_numbers: true,
             show_status: true,
             autofocus: true,
@@ -77,6 +103,12 @@ impl Default for SourceOptions {
             menu_item: None,
             soft_wrap: false,
             scroll_fraction: None,
+            scroll_offset: None,
+            spacers: std::sync::Arc::new(Vec::new()),
+            spacer_fill: None,
+            line_fills: std::sync::Arc::new(Vec::new()),
+            range_fills: std::sync::Arc::new(Vec::new()),
+            sticky_headers: true,
             diagnostics: Vec::new(),
             squiggles: Vec::new(),
             find_matches: std::sync::Arc::new(Vec::new()),
@@ -124,6 +156,11 @@ pub struct SourceOutcome {
     pub annotation_clicked: Option<usize>,
     /// The context menu asked to show or hide blame annotations.
     pub toggle_blame: bool,
+    /// The source scroll area this frame: id, offset, viewport and
+    /// content size, for hosts that keep another pane in step.
+    pub scroll: egui::scroll_area::ScrollAreaOutput<()>,
+    /// Painted row pitch, filler rows included.
+    pub row_height: f32,
 }
 
 pub struct ShowSourceInput<'a, B> {

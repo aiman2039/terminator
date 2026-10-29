@@ -226,6 +226,17 @@ impl<B: Buffer> SourceView<'_, B> {
         };
         let response = self.item(ui, open);
         self.effect_on_click(ui, &response, Effect::OpenFilePicker);
+        let find = MenuRow {
+            label: "Find in files…",
+            icon: "Search",
+            shortcut: if cfg!(target_os = "macos") {
+                "⇧⌘F"
+            } else {
+                "Ctrl+Shift+F"
+            },
+        };
+        let response = self.item(ui, find);
+        self.effect_on_click(ui, &response, Effect::FindInFiles);
     }
 
     fn menu_lsp_items(&mut self, ui: &mut egui::Ui) {
@@ -238,12 +249,29 @@ impl<B: Buffer> SourceView<'_, B> {
         } else {
             "Ctrl+Alt+H"
         };
+        let (implementation_keys, type_keys) = if cfg!(target_os = "macos") {
+            ("⌥⌘B", "⇧⌘B")
+        } else {
+            ("Ctrl+Alt+B", "Ctrl+Shift+B")
+        };
         let rows = [
             (
                 "Go to definition",
                 "ExternalLink",
                 "",
                 Effect::GotoDefinition,
+            ),
+            (
+                "Go to implementation",
+                "ExternalLink",
+                implementation_keys,
+                Effect::GotoImplementation,
+            ),
+            (
+                "Go to type declaration",
+                "ExternalLink",
+                type_keys,
+                Effect::GotoTypeDefinition,
             ),
             ("Find references", "ListTree", "", Effect::FindReferences),
             (

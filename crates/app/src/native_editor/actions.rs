@@ -17,6 +17,48 @@ pub(crate) struct ActionsPopup {
 /// Apply LSP text edits (UTF-16 ranges) to a buffer, last first so earlier
 /// ranges stay valid, as one undo step. Returns whether anything changed.
 pub(crate) fn apply_text_edits(buffer: &mut Doc, edits: &[native_lsp::RenameTextEdit]) -> bool {
+    let mut ranges = edit_ranges(buffer, edits);
+    ranges.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    if ranges.is_empty() {
+        return false;
+    }
+    buffer.begin_undo_group();
+    for (from, to, text) in ranges {
+        buffer.delete(from..to);
+        buffer.insert(from, text);
+    }
+    buffer.end_undo_group();
+    true
+}
+
+/// Apply edits (on-type formatting) and keep the caret on the same text:
+/// edits that end before it shift it by their length change.
+pub(crate) fn apply_edits_keep_caret(
+    buffer: &mut Doc,
+    engine: &mut VimEngine,
+    edits: &[native_lsp::RenameTextEdit],
+) {
+    let caret = engine.cursor();
+    let at = buffer.char_at_line_col(caret.line, caret.col);
+    let moved = edit_ranges(buffer, edits)
+        .into_iter()
+        .filter(|(_, to, _)| *to <= at)
+        .fold(at, |caret, (from, to, text)| {
+            caret
+                .saturating_sub(to.saturating_sub(from))
+                .saturating_add(text.chars().count())
+        });
+    if apply_text_edits(buffer, edits) {
+        let (line, col) = buffer.line_col_at(moved.min(buffer.len_chars()));
+        let _ = engine.place_cursor(buffer, line, col);
+    }
+}
+
+/// Edits as ordered buffer char ranges `(from, to, text)`.
+fn edit_ranges<'a>(
+    buffer: &Doc,
+    edits: &'a [native_lsp::RenameTextEdit],
+) -> Vec<(usize, usize, &'a str)> {
     let char_at = |buffer: &Doc, position: native_lsp::Position| {
         let line = usize::try_from(position.line).unwrap_or(usize::MAX);
         if line >= buffer.line_count() {
@@ -28,28 +70,16 @@ pub(crate) fn apply_text_edits(buffer: &mut Doc, edits: &[native_lsp::RenameText
             native_lsp::utf16_to_char_col(&text, position.character),
         )
     };
-    let mut ranges: Vec<(usize, usize, &str)> = edits
+    edits
         .iter()
         .map(|edit| {
-            (
+            let (a, b) = (
                 char_at(buffer, edit.range.start),
                 char_at(buffer, edit.range.end),
-                edit.new_text.as_str(),
-            )
+            );
+            (a.min(b), a.max(b), edit.new_text.as_str())
         })
-        .collect();
-    ranges.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-    if ranges.is_empty() {
-        return false;
-    }
-    buffer.begin_undo_group();
-    for (from, to, text) in ranges {
-        let (from, to) = (from.min(to), from.max(to));
-        buffer.delete(from..to);
-        buffer.insert(from, text);
-    }
-    buffer.end_undo_group();
-    true
+        .collect()
 }
 
 /// What the popup asked for this frame.
@@ -211,6 +241,14 @@ impl App {
                 self.info = Some("The file changed while formatting; format again".into());
             }
         }
+        // On-type edits for older text are dropped: typing moved on.
+        if let Some((path, revision, edits)) = self.lsp.edit_answers.on_type.take()
+            && let Some(doc) = self.native_docs.get_mut(&path)
+            && let Some(buffer) = doc.doc.as_mut()
+            && buffer.revision() == revision
+        {
+            apply_edits_keep_caret(buffer, &mut doc.engine, &edits);
+        }
         if let Some((path, generation, items)) = self.lsp.edit_answers.actions.take()
             && let Some(popup) = self.code_actions.as_mut()
             && popup.path == path
@@ -297,5 +335,24 @@ mod tests {
         engine.undo(&mut buffer);
         assert_eq!(buffer.text(), "fn a(){\nx\n}\n");
         assert!(!apply_text_edits(&mut buffer, &[]));
+    }
+
+    #[test]
+    fn on_type_edits_keep_the_caret_on_the_typed_text() {
+        let mut buffer = Doc::new("        }\n");
+        let mut engine = VimEngine::new();
+        let _ = engine.place_cursor(&mut buffer, 0, 8);
+        apply_edits_keep_caret(
+            &mut buffer,
+            &mut engine,
+            &[edit(EditInput {
+                line: 0,
+                from: 0,
+                to: 8,
+                text: "    ",
+            })],
+        );
+        assert_eq!(buffer.text(), "    }\n");
+        assert_eq!(engine.cursor().col, 4);
     }
 }

@@ -1,38 +1,36 @@
 use super::super::super::*;
 use super::super::diff_edit::{
-    PaintDeletedMarkersInput, PaintRightEditorInput, aligned_left, paint_deleted_markers,
-    paint_right_editor,
+    DiffEditorOptionsInput, PaintRightEditorInput, diff_editor_options, paint_right_editor,
 };
 use super::super::diff_paint::{
-    DIFF_SPLIT_GAP, DiffContentWidthInput, DiffMetrics, PaintDiffPaneInput, SplitPane,
-    diff_content_width, diff_doc_digits, diff_row_count, paint_diff_pane, split_rects,
+    DIFF_SPLIT_GAP, DiffColors, DiffContentWidthInput, DiffMetrics, PaintDiffPaneInput, SplitPane,
+    diff_content_width, diff_doc_digits, paint_diff_pane, split_rects,
 };
 use super::DiffPass;
 use super::body::DiffPanes;
+use terminator_native_edit::highlight::language_for_path;
+use terminator_native_edit::view::source_row_height;
 
 type PaneOutput = egui::scroll_area::ScrollAreaOutput<()>;
 
-/// Shared geometry for the two panes of the editable split view.
-struct SplitGeometry<'a> {
-    metrics: &'a DiffMetrics,
-    content: f32,
-    rows: usize,
-    left_rect: egui::Rect,
-    right_rect: egui::Rect,
-    frame_sync: f32,
-}
-
-struct PaintSplitRightInput<'a> {
-    ui: &'a mut egui::Ui,
-    panes: &'a DiffPanes<'a>,
-    pass: &'a mut DiffPass,
-    geometry: &'a SplitGeometry<'a>,
+/// Editor marks are painted in the theme's change colors and tint tokens.
+pub(super) fn mark_colors(colors: DiffColors) -> diff::live::MarkColors {
+    let tints = colors.tints();
+    diff::live::MarkColors {
+        added: colors.added,
+        modified: colors.accent,
+        row: tints.row,
+        word: tints.word,
+    }
 }
 
 impl App {
-    /// Working tree split view. The right pane is the whole buffer, one row
-    /// per line; the left pane is laid out on those rows so both scroll in
-    /// step (no collapsed or filler rows that only one side has).
+    /// Working tree split view: the left pane paints the original text of
+    /// the live diff (deleted lines included), and the right pane is the
+    /// native editor over the buffer, with filler rows where the left side
+    /// has rows the buffer does not. Both share one row pitch and one
+    /// vertical offset, so the connector band and chevrons sit on the
+    /// rows they join.
     pub(super) fn paint_split_editor(
         &mut self,
         ui: &mut egui::Ui,
@@ -40,98 +38,68 @@ impl App {
         pass: &mut DiffPass,
     ) -> Vec<PaneOutput> {
         let frame = panes.frame;
-        let doc = panes.doc;
-        let metrics = DiffMetrics::measure(ui, diff_doc_digits(doc, true));
+        let busy = pass.review.busy;
+        let Some(buffer) = pass.review.buffer.as_mut() else {
+            return Vec::new();
+        };
+        let path = frame.cwd.join(frame.path);
+        let (live, waiting) = buffer.live_document(&path, ui.input(|input| input.time));
+        if waiting {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        let marks = buffer.editor_marks(&live, mark_colors(panes.colors));
+        let options = diff_editor_options(DiffEditorOptionsInput {
+            vim: self.state.settings.native_vim,
+            read_only: busy,
+            marks: &marks,
+            sync: panes.sync,
+        });
+        let row_h = source_row_height(ui, &options);
+        let metrics = DiffMetrics::with_rows(
+            ui,
+            diff_doc_digits(&live, true),
+            egui::FontId::monospace(options.font_size),
+            row_h,
+        );
         let content = diff_content_width(DiffContentWidthInput {
             ui,
-            doc,
+            doc: &live,
             split: true,
             metrics: &metrics,
             scroll_key: &frame.key,
         });
-        let aligned = pass
-            .review
-            .buffer
-            .as_mut()
-            .map(|buffer| aligned_left(buffer, &frame.cwd.join(frame.path), panes.colors));
-        let (left_doc, rows) = match &aligned {
-            Some(aligned) => (&aligned.doc, aligned.doc.split.len().max(1)),
-            None => (doc.as_ref(), diff_row_count(doc, true)),
-        };
         let (left_rect, gap_rect, right_rect) = split_rects(panes.body, self.diff_split_ratio);
-        let geometry = SplitGeometry {
-            metrics: &metrics,
-            content,
-            rows,
-            left_rect,
-            right_rect,
-            frame_sync: panes.sync,
-        };
         let left = paint_diff_pane(PaintDiffPaneInput {
             ui,
             rect: left_rect,
-            doc: left_doc,
+            doc: &live,
             pane: SplitPane::Left,
             colors: panes.colors,
             metrics: &metrics,
             content,
-            rows,
+            rows: live.split.len().max(1),
             scroll_key: &frame.key,
-            sync: geometry.frame_sync,
+            sync: panes.sync,
         });
-        if let Some(aligned) = &aligned {
-            paint_deleted_markers(PaintDeletedMarkersInput {
-                ui,
-                output: &left,
-                deleted: &aligned.deleted,
-                row_h: metrics.row_h,
-                color: panes.colors.deleted,
-                key: &frame.key,
-            });
-        }
-        let right = Self::paint_split_right(PaintSplitRightInput {
+        let right = paint_right_editor(PaintRightEditorInput {
             ui,
-            panes,
-            pass,
-            geometry: &geometry,
+            rect: right_rect,
+            buffer,
+            options: &options,
+            language: language_for_path(&path.to_string_lossy()),
+            key: &frame.key,
         });
+        pass.save_edits |= right.save && pass.review.unsaved_edits();
         self.drag_diff_split(ui, panes, gap_rect);
-        panes.sync = Self::followed_split_offset(ui, &geometry, [&left, &right]);
-        vec![left, right]
-    }
-
-    /// The right pane: the live buffer editor, or the plain right side.
-    fn paint_split_right(input: PaintSplitRightInput<'_>) -> PaneOutput {
-        let PaintSplitRightInput {
+        panes.sync = Self::followed_split_offset(
             ui,
-            panes,
-            pass,
-            geometry,
-        } = input;
-        let frame = panes.frame;
-        match &mut pass.review.buffer {
-            Some(buffer) => paint_right_editor(PaintRightEditorInput {
-                ui,
-                rect: geometry.right_rect,
-                buffer,
-                path: &frame.cwd.join(frame.path),
-                colors: panes.colors,
-                sync: geometry.frame_sync,
-                key: &frame.key,
-            }),
-            None => paint_diff_pane(PaintDiffPaneInput {
-                ui,
-                rect: geometry.right_rect,
-                doc: panes.doc,
-                pane: SplitPane::Right,
-                colors: panes.colors,
-                metrics: geometry.metrics,
-                content: geometry.content,
-                rows: geometry.rows,
-                scroll_key: &frame.key,
-                sync: geometry.frame_sync,
-            }),
-        }
+            panes.sync,
+            [(left_rect, &left), (right_rect, &right.pane)],
+        );
+        panes.live = Some(live);
+        panes.row_h = Some(row_h);
+        vec![left, right.pane]
     }
 
     /// The draggable divider between the panes, and its line.
@@ -161,28 +129,25 @@ impl App {
     }
 
     /// The offset both panes follow next frame: the hovered pane's, else
-    /// whichever pane moved further from the shared offset.
+    /// whichever pane moved further from the shared offset (a wheel turn,
+    /// or the editor following its caret).
     fn followed_split_offset(
         ui: &egui::Ui,
-        geometry: &SplitGeometry<'_>,
-        [left, right]: [&PaneOutput; 2],
+        frame_sync: f32,
+        [(left_rect, left), (right_rect, right)]: [(egui::Rect, &PaneOutput); 2],
     ) -> f32 {
-        let frame_sync = geometry.frame_sync;
         let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
-        let over_left = pointer.is_some_and(|pos| geometry.left_rect.contains(pos));
-        let over_right = pointer.is_some_and(|pos| geometry.right_rect.contains(pos));
+        let over_left = pointer.is_some_and(|pos| left_rect.contains(pos));
+        let over_right = pointer.is_some_and(|pos| right_rect.contains(pos));
+        let (left, right) = (
+            left.state.unclamped_offset().y,
+            right.state.unclamped_offset().y,
+        );
         match (over_left, over_right) {
-            (true, false) => left.state.unclamped_offset().y,
-            (false, true) => right.state.unclamped_offset().y,
-            _ => {
-                if (left.state.unclamped_offset().y - frame_sync).abs()
-                    >= (right.state.unclamped_offset().y - frame_sync).abs()
-                {
-                    left.state.unclamped_offset().y
-                } else {
-                    right.state.unclamped_offset().y
-                }
-            }
+            (true, false) if left != frame_sync => left,
+            (false, true) if right != frame_sync => right,
+            _ if (left - frame_sync).abs() >= (right - frame_sync).abs() => left,
+            _ => right,
         }
     }
 }

@@ -239,6 +239,12 @@ pub struct UiPreferences {
     /// Git sidebar "View as list": flat file list instead of grouped sections.
     #[serde(default)]
     pub git_view_list: bool,
+    /// Native diff compare options and highlight mode (gear menu).
+    #[serde(default)]
+    pub diff_options: crate::diff::DiffOptions,
+    /// Native diff changed-files panel is open.
+    #[serde(default)]
+    pub diff_file_tree: bool,
     /// Recent commit messages, newest first, for the commit box history.
     #[serde(default)]
     pub commit_messages: Vec<String>,
@@ -331,6 +337,8 @@ impl Default for UiPreferences {
             explorer_whole_word: false,
             explorer_regex: false,
             git_view_list: false,
+            diff_options: crate::diff::DiffOptions::default(),
+            diff_file_tree: false,
             commit_messages: Vec::new(),
             info_process_open: true,
             info_resources_open: true,

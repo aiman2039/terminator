@@ -25,6 +25,23 @@ pub struct ChangeMark {
     pub kind: ChangeKind,
 }
 
+/// A host background behind one buffer line's text area (diff row tint).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineFill {
+    pub line: usize,
+    pub color: egui::Color32,
+}
+
+/// A host background behind char columns `start..end` of one line (diff
+/// word marks), painted over any [`LineFill`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RangeFill {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+    pub color: egui::Color32,
+}
+
 /// One line's gutter annotation (blame): `text` in the column, `hover`
 /// on hover. Lines of one commit share `group`, which alternates the
 /// column shading between commits.

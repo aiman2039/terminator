@@ -2,7 +2,9 @@
 //! placeholders, diagnostic underlines and carets.
 use super::SourceView;
 use super::canvas::{Canvas, PaintRow};
+use super::geometry::snap;
 use super::helpers::{RenderHelpers, SelectionSpanForLineInput};
+use super::palette::EditorPalette;
 use super::row_paint::RowPaint;
 use crate::doc::Buffer;
 use crate::highlight::Span;
@@ -10,6 +12,9 @@ use crate::rows::{display_x, row_hints};
 use crate::vim::ModalEngine;
 use crate::vim::{Caret, Cursor, Mode};
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
+
+/// Corner radius of selection and match fills.
+const SELECTION_RADIUS: f32 = 2.0;
 
 /// Caret and selection state the rows paint, read once before painting.
 pub(super) struct RowMarks {
@@ -22,23 +27,30 @@ pub(super) struct RowMarks {
     extra_carets: Vec<Caret>,
     cursor: Cursor,
     cursor_visible: bool,
+    /// Blink phase: `false` while the caret is in its hidden half.
+    caret_on: bool,
+    /// Fill the caret's row: only without a selection, like `IntelliJ`.
+    current_line: Option<usize>,
+    palette: EditorPalette,
+    /// The syntax theme's default foreground: spans in it paint in the
+    /// app's text color, so editor and chrome text match.
+    theme_plain: Option<[u8; 3]>,
     /// Occurrences of the identifier at the caret, and the bracket pair
     /// around it: both paint as quiet backgrounds/outlines.
     caret_word: Option<String>,
+    /// Language-server occurrences of the symbol at the caret; they
+    /// replace `caret_word` while one of them holds the caret.
+    symbol_ranges: Option<crate::view::SymbolRanges>,
     brackets: Option<(Cursor, Cursor)>,
     occurrence_fill: Color32,
     bracket_stroke: egui::Stroke,
     guide_color: Color32,
-    /// The caret's line gets a quiet full-width band while nothing is
-    /// selected.
-    current_line: Option<usize>,
-    current_line_fill: Color32,
     /// A bar caret sits before a hint; a block covers the char after it.
     bar: bool,
 }
 
 impl<B: Buffer> SourceView<'_, B> {
-    pub(super) fn row_marks(&self, canvas: &Canvas<'_>) -> RowMarks {
+    pub(super) fn row_marks(&self, canvas: &Canvas<'_>, focused: bool) -> RowMarks {
         let engine = &*self.engine;
         let visuals = canvas.ui.visuals();
         let selection = engine.selection().map(|(a, b)| {
@@ -52,13 +64,30 @@ impl<B: Buffer> SourceView<'_, B> {
         let caret_word = (cursor_visible && selection.is_none())
             .then(|| engine.word_at_caret(&*self.doc))
             .flatten();
+        let symbol_ranges = caret_word.as_ref().and_then(|_| {
+            crate::view::caret_symbol_highlights(canvas.ui.ctx(), self.id, engine.cursor())
+        });
+        let caret_word = caret_word.filter(|_| symbol_ranges.is_none());
+        let has_selection = selection.is_some()
+            || engine.block_span().is_some()
+            || engine
+                .extra_carets()
+                .iter()
+                .any(|caret| caret.selection().is_some());
         RowMarks {
             selection,
             block: engine.block_span(),
             extra_carets: engine.extra_carets().to_vec(),
             cursor: engine.cursor(),
             cursor_visible,
+            caret_on: self.caret_on(canvas.ui, focused),
+            current_line: (cursor_visible && !has_selection).then(|| engine.cursor().line),
+            palette: self.palette(visuals),
+            theme_plain: crate::highlight::theme(visuals.dark_mode)
+                .and_then(|theme| theme.settings.foreground)
+                .map(|color| [color.r, color.g, color.b]),
             caret_word,
+            symbol_ranges,
             brackets: cursor_visible
                 .then(|| engine.matching_bracket(&*self.doc))
                 .flatten(),
@@ -71,9 +100,6 @@ impl<B: Buffer> SourceView<'_, B> {
                 .bg_stroke
                 .color
                 .gamma_multiply(0.6),
-            current_line: (cursor_visible && selection.is_none() && engine.block_span().is_none())
-                .then(|| engine.cursor().line),
-            current_line_fill: visuals.text_color().gamma_multiply(0.05),
             bar: engine.mode() == Mode::Insert || !self.options.vim,
         }
     }
@@ -81,6 +107,7 @@ impl<B: Buffer> SourceView<'_, B> {
     pub(super) fn paint_rows(&mut self, canvas: &Canvas<'_>, marks: &RowMarks) {
         let row_height = self.geometry.row_height;
         let mut guide_cells = 0usize;
+        self.paint_gutter_band(canvas, &marks.palette);
         for (visual_line, visual) in canvas.visible_rows() {
             let hints = row_hints(canvas.inlay_hints, visual);
             let y = canvas.origin.y + visual_line as f32 * row_height;
@@ -88,30 +115,36 @@ impl<B: Buffer> SourceView<'_, B> {
             if y + row_height < canvas.clip.top() || y > canvas.clip.bottom() {
                 continue;
             }
-            Self::paint_current_line(canvas, &row, marks);
-            self.paint_gutter(canvas, &row);
+            if visual.spacer {
+                self.paint_spacer(canvas, y);
+                continue;
+            }
+            if marks.current_line == Some(visual.line) {
+                canvas.painter.rect_filled(
+                    Rect::from_min_max(
+                        Pos2::new(canvas.origin.x + self.geometry.rule_x + 1.0, y),
+                        Pos2::new(canvas.clip.right(), y + row_height),
+                    ),
+                    0.0,
+                    marks.palette.current_line,
+                );
+            }
+            let number_color = if marks.current_line == Some(visual.line) {
+                marks.palette.current_line_number
+            } else {
+                marks.palette.line_number
+            };
+            self.paint_gutter(canvas, &row, number_color);
+            self.paint_fills(canvas, &row);
             guide_cells = canvas.paint_indent_guides(&row, guide_cells, marks.guide_color);
             self.paint_selections(canvas, &row, marks);
             self.paint_match_marks(canvas, &row, marks);
-            self.paint_row_text(canvas, &row);
+            self.paint_row_text(canvas, &row, marks);
             self.paint_fold_placeholder(canvas, &row);
             self.paint_row_squiggles(canvas, &row);
             self.paint_extra_carets(canvas, &row, marks);
             self.paint_caret(canvas, &row, marks);
         }
-    }
-
-    fn paint_current_line(canvas: &Canvas<'_>, row: &PaintRow<'_>, marks: &RowMarks) {
-        if marks.current_line != Some(row.line()) {
-            return;
-        }
-        let rect = Rect::from_x_y_ranges(
-            canvas.clip.x_range(),
-            row.y..=row.y + canvas.geometry.row_height,
-        );
-        canvas
-            .painter
-            .rect_filled(rect, 0.0, marks.current_line_fill);
     }
 
     /// Selection background for this row: the primary selection (or
@@ -134,7 +167,7 @@ impl<B: Buffer> SourceView<'_, B> {
         };
         let fill = canvas.ui.visuals().selection.bg_fill;
         if let Some(rect) = span.and_then(|(start, end)| row.span_rect(canvas, start, end)) {
-            canvas.painter.rect_filled(rect, 0.0, fill);
+            canvas.painter.rect_filled(rect, SELECTION_RADIUS, fill);
         }
         for caret in &marks.extra_carets {
             let span = caret.selection().and_then(|(a, b)| {
@@ -147,7 +180,7 @@ impl<B: Buffer> SourceView<'_, B> {
                 })
             });
             if let Some(rect) = span.and_then(|(start, end)| row.span_rect(canvas, start, end)) {
-                canvas.painter.rect_filled(rect, 0.0, fill);
+                canvas.painter.rect_filled(rect, SELECTION_RADIUS, fill);
             }
         }
     }
@@ -159,6 +192,14 @@ impl<B: Buffer> SourceView<'_, B> {
         if let Some(word) = marks.caret_word.as_deref() {
             for (start, len) in RenderHelpers::word_occurrences(&visual.text, word) {
                 let rect = row.cell_rect(canvas, visual.start.saturating_add(start), len);
+                canvas.painter.rect_filled(rect, 2.0, marks.occurrence_fill);
+            }
+        }
+        let symbols = marks.symbol_ranges.iter().flat_map(|ranges| ranges.iter());
+        for (_, start, end) in symbols.filter(|(at, _, _)| *at == line) {
+            let (start, end) = ((*start).max(visual.start), (*end).min(visual.end));
+            if start < end {
+                let rect = row.cell_rect(canvas, start, end.saturating_sub(start));
                 canvas.painter.rect_filled(rect, 2.0, marks.occurrence_fill);
             }
         }
@@ -174,15 +215,15 @@ impl<B: Buffer> SourceView<'_, B> {
             if start >= end {
                 continue;
             }
-            let alpha = if self.options.find_current == Some(index) {
-                0.9
+            let fill = if self.options.find_current == Some(index) {
+                marks.palette.find_current
             } else {
-                0.4
+                marks.palette.find_match
             };
             canvas.painter.rect_filled(
                 row.cell_rect(canvas, start, end.saturating_sub(start)),
-                2.0,
-                canvas.ui.visuals().warn_fg_color.gamma_multiply(alpha),
+                SELECTION_RADIUS,
+                fill,
             );
         }
         let Some((open, close)) = marks.brackets else {
@@ -201,7 +242,7 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     /// Highlighted row text, spans clipped to this visual row.
-    fn paint_row_text(&self, canvas: &Canvas<'_>, row: &PaintRow<'_>) {
+    fn paint_row_text(&self, canvas: &Canvas<'_>, row: &PaintRow<'_>, marks: &RowMarks) {
         let visual = row.visual;
         let spans: Vec<Span> = canvas
             .highlight
@@ -224,9 +265,10 @@ impl<B: Buffer> SourceView<'_, B> {
             hints: row.cells.hints,
             spans: &spans,
             x: canvas.origin.x + self.geometry.gutter,
-            y: row.y + self.geometry.text_top,
+            y: row.y + self.geometry.text_dy,
             geometry: self.geometry,
             plain: canvas.ui.visuals().text_color(),
+            theme_plain: marks.theme_plain,
         }
         .paint();
     }
@@ -304,15 +346,15 @@ impl<B: Buffer> SourceView<'_, B> {
     fn paint_extra_carets(&self, canvas: &Canvas<'_>, row: &PaintRow<'_>, marks: &RowMarks) {
         let visual = row.visual;
         for caret in &marks.extra_carets {
-            if marks.cursor_visible && visual.owns_cursor(caret.cursor.line, caret.cursor.col) {
+            if marks.cursor_visible
+                && marks.caret_on
+                && visual.owns_cursor(caret.cursor.line, caret.cursor.col)
+            {
                 let cells = row
                     .cells
                     .caret_x(caret.cursor.col.saturating_sub(visual.start));
                 canvas.painter.rect_filled(
-                    Rect::from_min_size(
-                        Pos2::new(canvas.text_x(cells), row.y),
-                        Vec2::new(2.0, self.geometry.row_height),
-                    ),
+                    self.bar_rect(canvas.text_x(cells), row.y),
                     0.0,
                     canvas.ui.visuals().text_color(),
                 );
@@ -342,13 +384,14 @@ impl<B: Buffer> SourceView<'_, B> {
             at,
             Vec2::new(geometry.advance, geometry.row_height),
         ));
+        if !marks.caret_on {
+            return;
+        }
         // Modeless carets are always a bar: they sit between chars.
         if marks.bar {
-            canvas.painter.rect_filled(
-                Rect::from_min_size(at, Vec2::new(2.0, geometry.row_height)),
-                0.0,
-                visuals.text_color(),
-            );
+            canvas
+                .painter
+                .rect_filled(self.bar_rect(x, row.y), 0.0, visuals.text_color());
             return;
         }
         // A tab's block covers the cells up to its stop.
@@ -359,7 +402,7 @@ impl<B: Buffer> SourceView<'_, B> {
         } else {
             1
         };
-        let cursor_w = cell_cells as f32 * geometry.advance;
+        let cursor_w = canvas.text_x(cells.saturating_add(cell_cells)) - x;
         // Opaque caret in the text color (IntelliJ's block caret), not the
         // muted selection blue: a #214283 block on the #1E1F22 surface is
         // nearly invisible.
@@ -371,7 +414,7 @@ impl<B: Buffer> SourceView<'_, B> {
         // Keep the covered cell legible on the block cursor.
         if let Some(cell) = cell {
             canvas.painter.text(
-                Pos2::new(at.x, at.y + geometry.text_top),
+                Pos2::new(x, row.y + geometry.text_dy),
                 egui::Align2::LEFT_TOP,
                 cell.to_string(),
                 geometry.font.clone(),
@@ -399,14 +442,27 @@ impl Canvas<'_> {
             guide_cells
         };
         let y = row.y;
+        let ppp = self.geometry.ppp;
         for cell in (0..guide_cells).step_by(crate::rows::TAB_WIDTH) {
-            let x = self.text_x(cell) + 1.0;
+            // Centered on a physical pixel so the 1px guide stays sharp.
+            let x = snap(self.text_x(cell) + 1.0, ppp) + 0.5 / ppp;
             self.painter.vline(
                 x,
                 y..=y + self.geometry.row_height,
-                egui::Stroke::new(1.0, color),
+                egui::Stroke::new(1.0 / ppp, color),
             );
         }
         guide_cells
+    }
+}
+
+impl<B: Buffer> SourceView<'_, B> {
+    /// A 2px bar caret at `x`, whole physical pixels wide.
+    fn bar_rect(&self, x: f32, y: f32) -> Rect {
+        let ppp = self.geometry.ppp;
+        Rect::from_min_size(
+            Pos2::new(x, y),
+            Vec2::new(snap(2.0, ppp).max(1.0 / ppp), self.geometry.row_height),
+        )
     }
 }

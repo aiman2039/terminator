@@ -1,14 +1,6 @@
 //! Scripted pointer and key input for the live diff editor tests.
 use super::*;
 
-pub(super) struct ClickAndTypeInput<'a> {
-    pub(super) app: &'a mut App,
-    pub(super) ctx: &'a egui::Context,
-    pub(super) tab: &'a Tab,
-    pub(super) target: &'a str,
-    pub(super) text: &'a str,
-}
-
 pub(super) struct ClickAndKeyInput<'a> {
     pub(super) app: &'a mut App,
     pub(super) ctx: &'a egui::Context,
@@ -64,52 +56,6 @@ pub(super) fn run_diff_frames(input: RunDiffFramesInput<'_>) {
         );
         output.textures_delta.clear();
     }
-}
-
-pub(super) fn click_and_type(input: ClickAndTypeInput<'_>) {
-    let ClickAndTypeInput {
-        app,
-        ctx,
-        tab,
-        target,
-        text,
-    } = input;
-
-    // Times keep moving forward across calls within one test.
-    let base = ctx.input(|input| input.time);
-    run_diff_frames(RunDiffFramesInput {
-        app,
-        ctx,
-        tab,
-        frames: &[(base + 0.1, vec![]), (base + 0.2, vec![])],
-    });
-    let rect = fixture_target(ctx, target)
-        .unwrap_or_else(|| panic!("editor target {target} was not painted"));
-    let pos = rect.center();
-    let click = |pressed: bool| {
-        vec![
-            egui::Event::PointerMoved(pos),
-            egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ]
-    };
-    run_diff_frames(RunDiffFramesInput {
-        app,
-        ctx,
-        tab,
-        frames: &[
-            (base + 0.3, click(true)),
-            (base + 0.4, click(false)),
-            (base + 0.45, vec![]),
-            (base + 0.5, vec![egui::Event::Text(text.to_owned())]),
-            (base + 0.6, vec![]),
-            (base + 0.7, vec![]),
-        ],
-    });
 }
 
 pub(super) fn buffer_text(app: &App, tab: &Tab) -> String {

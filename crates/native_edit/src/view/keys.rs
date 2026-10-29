@@ -1,5 +1,5 @@
 use super::super::highlight::Language;
-use super::super::vim::{IdeMotion, Key as VKey, ModalEngine, Mode};
+use super::super::vim::{Effect, IdeMotion, Key as VKey, ModalEngine, Mode};
 use egui;
 use egui::Color32;
 pub fn egui_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
@@ -106,11 +106,38 @@ pub fn ide_shortcut(key: egui::Key, modifiers: egui::Modifiers) -> Option<IdeAct
         egui::Key::Z => IdeAction::Undo,
         egui::Key::V => IdeAction::PasteKey,
         egui::Key::S => IdeAction::Save,
+        // Cmd/Ctrl+Shift+F is Find in Files (see [`ide_navigation_shortcut`]).
+        egui::Key::F if modifiers.shift => return None,
         egui::Key::F => IdeAction::Find,
         egui::Key::H | egui::Key::R => IdeAction::Replace,
         egui::Key::K => IdeAction::Hover,
         _ => return None,
     })
+}
+
+/// Project navigation chords (`IntelliJ` keymap) that queue an effect in
+/// every mode, vim included: Cmd/Ctrl+Shift+F Find in Files, and with a
+/// language `server`, Cmd/Ctrl+Alt+B Go to Implementation and
+/// Cmd/Ctrl+Shift+B Go to Type Declaration.
+#[must_use]
+pub fn ide_navigation_shortcut(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    server: bool,
+) -> Option<Effect> {
+    if !modifiers.command {
+        return None;
+    }
+    match key {
+        egui::Key::F if modifiers.shift && !modifiers.alt => Some(Effect::FindInFiles),
+        egui::Key::B if server && modifiers.alt && !modifiers.shift => {
+            Some(Effect::GotoImplementation)
+        }
+        egui::Key::B if server && modifiers.shift && !modifiers.alt => {
+            Some(Effect::GotoTypeDefinition)
+        }
+        _ => None,
+    }
 }
 
 /// IDE caret motion or line edit (`IntelliJ` keymap). `Move` carries the
@@ -322,13 +349,35 @@ pub fn mode_name(mode: Mode) -> &'static str {
     }
 }
 
-/// Header badge color for the current vim mode (readable on dark/light).
+/// Vim mode badge colors, from the host theme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModeColors {
+    pub normal: Color32,
+    pub insert: Color32,
+    pub visual: Color32,
+    pub command: Color32,
+}
+
+impl ModeColors {
+    /// Theme-derived fallback: accent, text, warning and weak text.
+    #[must_use]
+    pub fn from_visuals(visuals: &egui::Visuals) -> Self {
+        Self {
+            normal: visuals.selection.stroke.color,
+            insert: visuals.text_color(),
+            visual: visuals.warn_fg_color,
+            command: visuals.weak_text_color(),
+        }
+    }
+}
+
+/// Badge color for the current vim mode.
 #[must_use]
-pub fn mode_color(mode: Mode) -> Color32 {
+pub fn mode_color(mode: Mode, colors: &ModeColors) -> Color32 {
     match mode {
-        Mode::Normal => Color32::LIGHT_BLUE,
-        Mode::Insert => Color32::LIGHT_GREEN,
-        Mode::Visual | Mode::VisualLine | Mode::VisualBlock => Color32::GOLD,
-        Mode::Command => Color32::ORANGE,
+        Mode::Normal => colors.normal,
+        Mode::Insert => colors.insert,
+        Mode::Visual | Mode::VisualLine | Mode::VisualBlock => colors.visual,
+        Mode::Command => colors.command,
     }
 }

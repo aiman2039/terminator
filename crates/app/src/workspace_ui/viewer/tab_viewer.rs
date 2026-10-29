@@ -133,6 +133,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
             Tab::RevisionDiff { .. } => self.app.revision_diff_view(ui, tab),
             Tab::FileHistory { .. } => self.app.file_history_view(ui, tab),
+            Tab::Merge { .. } => self.app.merge_view(ui, tab),
             Tab::Vnc {
                 id,
                 session,

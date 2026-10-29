@@ -66,6 +66,7 @@ impl App {
                     "FileDiff"
                 },
             ),
+            Some(tab @ Tab::Merge { .. }) => TabFace::plain(tab.git_title(), "GitCompareArrows"),
             Some(Tab::Vnc {
                 label,
                 session,

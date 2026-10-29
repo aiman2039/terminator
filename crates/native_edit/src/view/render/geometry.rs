@@ -6,6 +6,46 @@ use crate::highlight::HighlightCache;
 use crate::view::{BOLD_FAMILY, ITALIC_FAMILY, source_focus_id};
 use egui::FontId;
 
+/// Gap between the gutter hairline and the first text cell.
+const GUTTER_GAP: f32 = 6.0;
+/// Minimum height of the status bar under the source view.
+const STATUS_HEIGHT: f32 = 22.0;
+
+/// Round a coordinate to the nearest physical pixel, so glyphs, carets
+/// and fills land on the pixel grid instead of blurring across two.
+pub(super) fn snap(value: f32, ppp: f32) -> f32 {
+    if ppp > 0.0 {
+        (value * ppp).round() / ppp
+    } else {
+        value
+    }
+}
+
+/// Row pitch and text offset for a font whose glyph row is `font_row`
+/// tall: `line_height` (clamped to 1.0..=2.0) scales the pitch, which
+/// rounds to whole physical pixels, and the text sits centered in it.
+pub(super) fn row_metrics(font_row: f32, line_height: f32, ppp: f32) -> (f32, f32) {
+    let factor = if line_height.is_finite() {
+        line_height.clamp(1.0, 2.0)
+    } else {
+        1.0
+    };
+    let row_height = snap(font_row * factor, ppp)
+        .max(snap(font_row, ppp))
+        .max(1.0);
+    let text_dy = snap(((row_height - font_row) * 0.5).max(0.0), ppp);
+    (row_height, text_dy)
+}
+
+/// Row pitch [`super::show_source`] paints with `options`, for hosts that
+/// lay another pane out on the same rows.
+#[must_use]
+pub fn source_row_height(ui: &egui::Ui, options: &SourceOptions) -> f32 {
+    let font = FontId::monospace(options.font_size);
+    let font_row = ui.fonts_mut(|fonts| fonts.row_height(&font).max(1.0));
+    row_metrics(font_row, options.line_height, ui.ctx().pixels_per_point()).0
+}
+
 /// Fonts, cell metrics and gutter layout, measured once per frame before
 /// the scroll area opens.
 pub(super) struct Geometry {
@@ -14,13 +54,20 @@ pub(super) struct Geometry {
     pub bold_font: FontId,
     /// Width of one monospace cell.
     pub advance: f32,
+    /// Painted row pitch: the font's row height times the line-spacing
+    /// factor, whole physical pixels.
     pub row_height: f32,
-    /// Gap above the glyphs inside a row taller than the font.
-    pub text_top: f32,
+    /// Offset from a row's top to its text, centering the glyph row.
+    pub text_dy: f32,
+    /// Physical pixels per point, for snapping painted positions.
+    pub ppp: f32,
     /// Blame column: as wide as the widest annotation (capped), between
     /// the change band and the line numbers; 0 without annotations.
     pub annotation_w: f32,
-    /// Change band, annotations, line numbers and fold arrows.
+    /// Change band, annotations, line numbers and fold arrows end here:
+    /// the hairline between gutter and text.
+    pub rule_x: f32,
+    /// Text starts here: `rule_x` plus a small gap.
     pub gutter: f32,
     /// Soft-wrap width in cells, `None` when long lines pan instead.
     pub wrap_columns: Option<usize>,
@@ -63,19 +110,15 @@ impl Geometry {
                 fonts.row_height(&font).max(1.0),
             )
         });
-        // Spacing 1.0 keeps the font's exact row height (code views).
-        let row_height = if options.line_spacing > 1.0 {
-            (font_row * options.line_spacing).round().max(font_row)
-        } else {
-            font_row
-        };
-        let text_top = ((row_height - font_row) * 0.5).floor().max(0.0);
+        let ppp = ui.ctx().pixels_per_point();
+        let (row_height, text_dy) = row_metrics(font_row, options.line_height, ppp);
         let annotation_w = Self::annotation_width(options, advance);
-        let gutter = if options.show_line_numbers {
+        let (rule_x, gutter) = if options.show_line_numbers {
             let digits = doc.line_count().max(1).to_string().len() as f32;
-            (digits + 2.0) * advance + annotation_w
+            let rule_x = snap((digits + 2.0) * advance + annotation_w, ppp);
+            (rule_x, rule_x + snap(GUTTER_GAP, ppp))
         } else {
-            0.0
+            (0.0, 0.0)
         };
         #[expect(
             clippy::cast_possible_truncation,
@@ -94,11 +137,17 @@ impl Geometry {
             bold_font,
             advance,
             row_height,
-            text_top,
+            text_dy,
+            ppp,
             annotation_w,
+            rule_x,
             gutter,
             wrap_columns,
-            footer_height: if options.show_status { row_height } else { 0.0 },
+            footer_height: if options.show_status {
+                snap(font_row.max(STATUS_HEIGHT), ppp)
+            } else {
+                0.0
+            },
             focus_id,
             mouse_drag_key: focus_id.with("native-source-drag"),
         }
@@ -153,7 +202,13 @@ impl Viewport {
         }
     }
 
-    pub fn scroll_area(&self, id: &str, scroll_fraction: Option<f32>) -> egui::ScrollArea {
+    /// `(scroll_fraction, scroll_offset)`: a host-set position, as a
+    /// fraction of the document or in points (the offset wins).
+    pub fn scroll_area(
+        &self,
+        id: &str,
+        (scroll_fraction, scroll_offset): (Option<f32>, Option<f32>),
+    ) -> egui::ScrollArea {
         let mut scroll = if self.h_scroll {
             egui::ScrollArea::both()
         } else {
@@ -163,7 +218,9 @@ impl Viewport {
             .id_salt(("native-source", id))
             .max_height(self.max_scroll)
             .auto_shrink([!self.h_scroll, false]);
-        if let Some(fraction) = scroll_fraction {
+        if let Some(offset) = scroll_offset {
+            scroll = scroll.vertical_scroll_offset(offset.max(0.0));
+        } else if let Some(fraction) = scroll_fraction {
             scroll = scroll.vertical_scroll_offset(
                 (self.content_height - self.max_scroll).max(0.0) * fraction.clamp(0.0, 1.0),
             );
