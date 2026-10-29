@@ -9,6 +9,8 @@ pub(super) struct SpawnVncThreadInput {
     pub shared: bool,
     pub options: terminator_core::vnc::VncOptions,
     pub input_rx: mpsc::Receiver<VncInputEvent>,
+    /// Saved profile whose keychain password the session thread loads.
+    pub saved_credential: Option<terminator_core::vnc::VncProfile>,
 }
 impl VncConnectSpec {
     fn validate(&self) -> Result<()> {
@@ -33,7 +35,7 @@ impl Shared {
         let host = spec.host.trim().to_owned();
         spec.host = host;
         spec.validate()?;
-        self.apply_saved_endpoint(&mut spec)?;
+        let saved_credential = self.apply_saved_endpoint(&mut spec)?;
         spec.options.validate()?;
         let sid = id();
         let (record, stale) = self.record_vnc_session(&mut spec, &sid)?;
@@ -44,13 +46,18 @@ impl Shared {
         let _ = self.persist();
 
         self.clear_stale_vnc_runtimes(&stale);
-        self.start_vnc_runtime(sid, spec);
+        self.start_vnc_runtime(sid, spec, saved_credential);
         Ok(record)
     }
 
-    /// A saved profile pins the endpoint and supplies its options and,
-    /// unless one was typed, the stored password.
-    fn apply_saved_endpoint(&self, spec: &mut VncConnectSpec) -> Result<()> {
+    /// A saved profile pins the endpoint and supplies its options. Returns
+    /// the profile whose stored password the session thread must load when
+    /// none was typed: an OS keychain read can wait on a permission prompt,
+    /// so it never runs inside the request.
+    fn apply_saved_endpoint(
+        &self,
+        spec: &mut VncConnectSpec,
+    ) -> Result<Option<terminator_core::vnc::VncProfile>> {
         let saved_profile = spec.profile_id.as_ref().and_then(|pid| {
             relock(&self.state)
                 .vnc_profiles
@@ -58,19 +65,15 @@ impl Shared {
                 .find(|p| &p.id == pid)
                 .cloned()
         });
-        let Some(profile) = &saved_profile else {
-            return Ok(());
+        let Some(profile) = saved_profile else {
+            return Ok(None);
         };
         ensure!(
             profile.host == spec.host && profile.port == spec.port,
             "Saved credentials cannot be used for another VNC endpoint"
         );
         spec.options = profile.options.clone();
-        if spec.password.is_empty() && profile.credential_saved {
-            spec.password =
-                credentials::load(self.catalog_paths.as_ref().unwrap_or(&self.paths), profile)?;
-        }
-        Ok(())
+        Ok((spec.password.is_empty() && profile.credential_saved).then_some(profile))
     }
 
     /// Adds the connecting session's record and returns it with the ids of
@@ -159,7 +162,12 @@ impl Shared {
         profile.last_connected = now_ts;
     }
 
-    fn start_vnc_runtime(self: &Arc<Self>, sid: String, spec: VncConnectSpec) {
+    fn start_vnc_runtime(
+        self: &Arc<Self>,
+        sid: String,
+        spec: VncConnectSpec,
+        saved_credential: Option<terminator_core::vnc::VncProfile>,
+    ) {
         let VncConnectSpec {
             options,
             project: _,
@@ -186,6 +194,7 @@ impl Shared {
             shared,
             options,
             input_rx,
+            saved_credential,
         });
     }
 
@@ -210,10 +219,30 @@ impl Shared {
             shared,
             options,
             input_rx,
+            saved_credential,
         } = input;
         let shared_ref = Arc::clone(self);
+        let paths = self
+            .catalog_paths
+            .clone()
+            .unwrap_or_else(|| self.paths.clone());
         thread::spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let password = match saved_credential {
+                    Some(profile) => match credentials::load(&paths, &profile) {
+                        Ok(password) => password,
+                        Err(error) => {
+                            mark_failed(MarkFailedInput {
+                                shared: &shared_ref,
+                                runtime: &runtime,
+                                session_id: &session_id,
+                                message: format!("Cannot read the saved VNC password: {error}"),
+                            });
+                            return;
+                        }
+                    },
+                    None => password,
+                };
                 run_vnc_thread(RunVncThreadInput {
                     shared: Arc::clone(&shared_ref),
                     runtime: Arc::clone(&runtime),

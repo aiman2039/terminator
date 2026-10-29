@@ -266,6 +266,8 @@ impl Request {
             | Self::WorktreeAdd { .. }
             | Self::WorktreeRemove { .. } => 40,
             Self::VncFrame { .. } | Self::CloseIdleSessions { .. } => 30,
+            // Writing the OS keychain can wait on a macOS permission prompt.
+            Self::VncProfileSave { .. } | Self::VncForgetCredential { .. } => 120,
             _ => 3,
         })
     }
