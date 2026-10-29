@@ -222,6 +222,9 @@ pub struct Settings {
     /// Inline type and parameter-name hints from the language server.
     pub inlay_hints: bool,
     pub keybindings: std::collections::BTreeMap<String, String>,
+    /// Disconnect a VNC session no viewer has watched for this many
+    /// minutes; 0 keeps detached sessions connected.
+    pub vnc_detached_timeout_minutes: u32,
 }
 mod error;
 mod hooks;

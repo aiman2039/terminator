@@ -462,3 +462,16 @@ fn labels_are_trimmed_without_repeats() {
         vec!["lab".to_owned(), "Team".to_owned()]
     );
 }
+
+#[test]
+fn dropped_files_upload_into_an_absolute_folder_only() {
+    use super::transfer::remote_for_drop;
+    let file = std::path::Path::new("/Users/me/report.pdf");
+    assert_eq!(
+        remote_for_drop("/home/me/Desktop/", file),
+        Ok("/home/me/Desktop/report.pdf".to_owned())
+    );
+    assert_eq!(remote_for_drop("/", file), Ok("/report.pdf".to_owned()));
+    assert!(remote_for_drop("", file).is_err());
+    assert!(remote_for_drop("~/Desktop", file).is_err());
+}

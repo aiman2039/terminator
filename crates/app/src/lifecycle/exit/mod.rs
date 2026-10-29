@@ -153,9 +153,12 @@ impl App {
             self.pending_app_quit = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             self.continue_app_quit(ctx);
-        } else {
+        } else if self.vnc_quit_allowed() {
             self.pending_app_quit = false;
             self.begin_exit();
+        } else {
+            self.pending_app_quit = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
     }
     pub(crate) fn continue_app_quit(&mut self, ctx: &egui::Context) {
@@ -173,10 +176,15 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             return;
         }
+        if self.vnc_quit_prompt || !self.vnc_quit_allowed() {
+            return;
+        }
         self.pending_app_quit = false;
         self.begin_exit();
     }
     pub(crate) fn cancel_app_quit(&mut self) {
+        self.vnc_quit_confirmed = false;
+        self.vnc_quit_prompt = false;
         if !self.pending_app_quit {
             return;
         }
@@ -191,6 +199,7 @@ impl App {
         self.services.handle().reopen_admission();
     }
     pub(crate) fn cancel_exit(&mut self, error: String) {
+        self.vnc_quit_confirmed = false;
         self.exit = Exit::Idle;
         self.services.pause_reads(false);
         self.services.handle().reopen_admission();

@@ -53,6 +53,14 @@ impl App {
             })
         };
         self.paint_reconnecting(ui, sid, screen_area);
+        if features && !view_only {
+            transfer::drop_upload(transfer::DropInput {
+                app: self,
+                ui,
+                sid,
+                area: screen_area,
+            });
+        }
         if outcome.activated {
             self.active_session = None;
             self.non_terminal_selected = true;

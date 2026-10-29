@@ -375,3 +375,48 @@ fn connecting_a_host_with_a_live_session_reattaches_it() {
         }
     }
 }
+
+#[test]
+fn quitting_with_live_vnc_sessions_asks_and_can_disconnect_them() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.vnc_sessions = vec![
+        vnc_session("live", VncSessionStatus::Connected),
+        vnc_session("gone", VncSessionStatus::Disconnected),
+    ];
+    assert!(!app.vnc_quit_allowed(), "live sessions ask first");
+    assert!(app.vnc_quit_prompt);
+
+    app.answer_vnc_quit(&ctx, crate::vnc_ui::QuitChoice::Cancel);
+    assert!(!app.vnc_quit_prompt && !app.vnc_quit_confirmed);
+    assert!(requests.try_recv().is_err(), "cancel sends nothing");
+
+    assert!(!app.vnc_quit_allowed());
+    app.answer_vnc_quit(&ctx, crate::vnc_ui::QuitChoice::Disconnect);
+    match requests.try_recv() {
+        Ok(Job::Control(request, _)) => assert!(
+            matches!(*request, Request::VncDisconnect { session } if session == "live"),
+            "only the live session is disconnected"
+        ),
+        _ => panic!("expected one VNC disconnect"),
+    }
+    assert!(app.vnc_quit_allowed(), "answered once per quit");
+}
+
+#[test]
+fn leaving_vnc_fullscreen_restores_shortcut_capture() {
+    let (mut app, ctx, _dir) = fixture();
+    let view = app.vnc_views.entry("s1".into()).or_default();
+    view.capture_before_fullscreen = Some(false);
+    view.capture_shortcuts = true;
+    app.vnc_fullscreen = Some(vnc_tab("t1", "s1", "dev"));
+    app.exit_vnc_fullscreen(&ctx);
+    let view = &app.vnc_views["s1"];
+    assert!(app.vnc_fullscreen.is_none());
+    assert!(
+        !view.capture_shortcuts,
+        "capture goes back to its old value"
+    );
+    assert!(view.capture_before_fullscreen.is_none());
+}

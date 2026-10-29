@@ -174,7 +174,7 @@ impl App {
                     texture.set_partial(
                         [usize::from(region.x), usize::from(region.y)],
                         image,
-                        screen_filter(entry.fit),
+                        entry.scale.filter(),
                     );
                     applied = true;
                 }
@@ -182,7 +182,7 @@ impl App {
                 entry.texture = Some(ctx.load_texture(
                     format!("vnc:{}", decoded.session),
                     image,
-                    screen_filter(entry.fit),
+                    entry.scale.filter(),
                 ));
                 applied = true;
             }
@@ -223,18 +223,8 @@ fn apply_patches(
         texture.set_partial(
             [usize::from(region.x), usize::from(region.y)],
             image,
-            screen_filter(entry.fit),
+            entry.scale.filter(),
         );
     }
     true
-}
-
-/// Remote screen sampling: smooth when scaled to fit, exact pixels at
-/// 100% so text stays sharp.
-pub(super) fn screen_filter(fit: bool) -> egui::TextureOptions {
-    if fit {
-        egui::TextureOptions::LINEAR
-    } else {
-        egui::TextureOptions::NEAREST
-    }
 }

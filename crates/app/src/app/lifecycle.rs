@@ -282,6 +282,8 @@ impl App {
             native_close_after_save: None,
             native_close_after_save_issuer: None,
             pending_app_quit: false,
+            vnc_quit_prompt: false,
+            vnc_quit_confirmed: false,
             pending_native_close: Vec::new(),
             pending_native_splits: Vec::new(),
             pending_goto: Vec::new(),

@@ -9,6 +9,8 @@ pub(crate) struct VncPickTransferInput<'a> {
     pub(in crate::gui_services) session: String,
     pub(in crate::gui_services) direction: terminator_core::vnc::TransferDirection,
     pub(in crate::gui_services) remote: String,
+    /// Already chosen (dropped) file; `None` asks with a file picker.
+    pub(in crate::gui_services) local: Option<std::path::PathBuf>,
     pub(in crate::gui_services) cancel: CancellationToken,
     pub(in crate::gui_services) updates: &'a mut Vec<Update>,
 }
@@ -31,6 +33,7 @@ impl Services {
             session,
             direction,
             remote,
+            local,
             cancel,
             updates,
         } = input;
@@ -39,6 +42,9 @@ impl Services {
         let picked = self
             .fs()
             .run(&cancel, move || {
+                if local.is_some() {
+                    return anyhow::Ok(local);
+                }
                 let dialog = rfd::FileDialog::new().set_title(if upload {
                     "Upload via SFTP"
                 } else {

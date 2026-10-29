@@ -13,6 +13,10 @@ mod keyboard;
 mod live;
 mod page;
 mod profiles;
+mod quit;
+#[cfg(test)]
+pub(crate) use quit::QuitChoice;
+mod scale;
 mod settings;
 mod shm;
 mod sidebar;
@@ -139,6 +143,17 @@ impl App {
                     .focus_id
                     .is_some_and(|id| ctx.memory(|m| m.has_focus(id)))
         })
+    }
+    /// Leave VNC fullscreen and give each view back the shortcut capture
+    /// it had before fullscreen turned it on.
+    pub(crate) fn exit_vnc_fullscreen(&mut self, ctx: &egui::Context) {
+        self.vnc_fullscreen = None;
+        for view in self.vnc_views.values_mut() {
+            if let Some(previous) = view.capture_before_fullscreen.take() {
+                view.capture_shortcuts = previous;
+            }
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
     }
 }
 
