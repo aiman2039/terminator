@@ -102,6 +102,28 @@ pub struct VncOptions {
     /// empty so older daemons see unchanged options.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub ssh_start_command: String,
+    /// What the Mac Command key sends. Viewer-only; the daemon ignores it.
+    #[serde(skip_serializing_if = "CommandKey::is_default")]
+    pub command_key: CommandKey,
+}
+
+/// The remote key that the local Mac Command key presses. Elsewhere the
+/// local Control key already sends Control.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandKey {
+    /// Cmd+A, Cmd+Z, Cmd+S act as Ctrl chords, as Linux and Windows expect.
+    #[default]
+    Control,
+    /// The Super (Windows) key.
+    Super,
+}
+
+impl CommandKey {
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::Control
+    }
 }
 impl VncOptions {
     pub fn validate(&self) -> Result<(), VncOptionsError> {

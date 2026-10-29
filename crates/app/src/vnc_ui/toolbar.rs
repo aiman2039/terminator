@@ -187,6 +187,9 @@ impl VncToolbar<'_> {
                 &mut view.capture_shortcuts,
                 "Capture app shortcuts (F8 to release)",
             );
+            ui.label("Command key sends");
+            settings::command_key(ui, &mut view.draft_options.command_key);
+            ui.separator();
             for (name, key, modifier) in [
                 ("Alt+Tab", 0xFF09, 0xFFE9),
                 ("Command+Tab", 0xFF09, 0xFFEB),
