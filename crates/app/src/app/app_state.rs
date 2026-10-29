@@ -108,6 +108,8 @@ pub struct App {
     pub(crate) browser_host: browser_host::BrowserHost,
     pub(crate) visible_browsers: Vec<browser_host::VisibleBrowser>,
     pub(crate) browser_urls: HashMap<String, String>,
+    /// Browser tab icons by icon URL; never evicted (one entry per site).
+    pub(crate) favicons: HashMap<String, crate::browser::favicon::Favicon>,
     pub(crate) browser_submit: Option<(String, BrowserTarget)>,
     pub(crate) remote_ui: crate::remote_ui::RemoteUi,
     pub(crate) vnc_fullscreen: Option<Tab>,

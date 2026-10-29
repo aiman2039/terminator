@@ -269,7 +269,11 @@ impl BrowserHost {
             hosted.view.set_bounds(bounds).map_err(wry_error)?;
             hosted.view.set_visible(true).map_err(wry_error)?;
             hosted.used = Instant::now();
-            if self.nav.take_stale(&pane.key) || hosted.history_at.elapsed() >= HISTORY_POLL {
+            let loaded = self.nav.take_stale(&pane.key);
+            if loaded {
+                nav::refresh_favicon(&hosted.view, &self.nav, &pane.key);
+            }
+            if loaded || hosted.history_at.elapsed() >= HISTORY_POLL {
                 hosted.history_at = Instant::now();
                 nav::refresh_history(&hosted.view, &self.nav, &pane.key);
             }

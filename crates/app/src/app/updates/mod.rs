@@ -226,6 +226,7 @@ impl App {
                 self.apply_line_previews(generation, lines);
             }
             Update::Search(id, result) => self.handle_search(id, result),
+            Update::Favicon(url, bytes) => self.apply_favicon(url, bytes),
         }
     }
 

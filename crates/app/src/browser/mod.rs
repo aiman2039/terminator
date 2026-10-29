@@ -1,4 +1,5 @@
 //! GUI-owned browser tab identity. The native view is mounted later.
+pub(crate) mod favicon;
 pub(crate) mod host;
 pub(crate) mod nav;
 use anyhow::{Context, Result};

@@ -190,6 +190,14 @@ impl Services {
             }
             Job::PasteClipboard(session) => self.paste_clipboard(session, cancel, updates).await,
             Job::Browser(url) => self.open_browser(url, cancel).await,
+            Job::Favicon(url) => {
+                let bytes = tokio::select! {
+                    () = cancel.cancelled() => return Ok(()),
+                    bytes = crate::browser::favicon::download(&url) => bytes,
+                };
+                updates.push(Update::Favicon(url, bytes));
+                Ok(())
+            }
             Job::External(path) => self.open_external(path, cancel).await,
             Job::TestExternal(path, program, args) => {
                 self.test_external(TestExternalInput {

@@ -12,6 +12,8 @@ pub(crate) struct NavState {
     pub forward: bool,
     /// A load started or finished since the last history query.
     pub stale: bool,
+    /// http(s) icon URL the loaded page declares, or its `/favicon.ico`.
+    pub favicon: Option<String>,
 }
 
 /// Shared with webview callbacks, which run outside the egui frame. A change
@@ -88,6 +90,30 @@ pub(crate) fn refresh_history(view: &WebView, states: &NavStates, key: &str) {
     });
 }
 
+/// The page's declared icon, else `/favicon.ico` on http(s) origins.
+const FAVICON_JS: &str = "(() => { \
+    const link = document.querySelector('link[rel~=\"icon\"]'); \
+    if (link && link.href) return link.href; \
+    return /^https?:$/.test(location.protocol) ? location.origin + '/favicon.ico' : ''; \
+})()";
+
+/// Reads the page icon URL after a load. Only plain http(s) URLs are kept;
+/// the GUI downloads the bytes itself, outside the page.
+pub(crate) fn refresh_favicon(view: &WebView, states: &NavStates, key: &str) {
+    let states = states.clone();
+    let key = key.to_owned();
+    let _ = view.evaluate_script_with_callback(FAVICON_JS, move |result| {
+        let favicon = favicon_url(&result);
+        states.update(&key, |state| state.favicon = favicon);
+    });
+}
+
+/// Decodes the script's JSON string result into an allowed icon URL.
+fn favicon_url(result: &str) -> Option<String> {
+    let url = serde_json::from_str::<String>(result).ok()?;
+    crate::browser::parse_url(&url).ok()
+}
+
 pub(crate) fn stop(view: &WebView) {
     let _ = view.evaluate_script("window.stop()");
 }
@@ -105,7 +131,19 @@ pub(crate) fn split_host(url: &str) -> Option<(&str, &str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_host;
+    use super::{favicon_url, split_host};
+
+    #[test]
+    fn favicon_accepts_only_web_urls() {
+        assert_eq!(
+            favicon_url(r#""https://example.com/favicon.ico""#).as_deref(),
+            Some("https://example.com/favicon.ico")
+        );
+        assert_eq!(favicon_url(r#""""#), None);
+        assert_eq!(favicon_url(r#""data:image/png;base64,AAAA""#), None);
+        assert_eq!(favicon_url(r#""file:///etc/passwd""#), None);
+        assert_eq!(favicon_url("not json"), None);
+    }
 
     #[test]
     fn address_bar_emphasizes_only_the_host() {
