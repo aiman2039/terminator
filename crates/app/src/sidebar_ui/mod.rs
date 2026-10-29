@@ -5,6 +5,7 @@ mod agents;
 mod attention;
 mod explorer;
 pub(crate) use explorer::SessionRowInTabInput;
+mod explorer_file_menu;
 mod explorer_projects;
 mod explorer_prompts;
 mod explorer_rows;

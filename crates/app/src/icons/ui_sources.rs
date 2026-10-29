@@ -52,6 +52,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
     ("Save", egui::include_image!("../../assets/icons/save.svg")),
     ("Copy", egui::include_image!("../../assets/icons/copy.svg")),
     (
+        "Scissors",
+        egui::include_image!("../../assets/icons/scissors.svg"),
+    ),
+    (
         "ClipboardPaste",
         egui::include_image!("../../assets/icons/clipboard-paste.svg"),
     ),
@@ -225,6 +229,26 @@ pub(super) static UI_SOURCES: SourceTable = &[
     (
         "FolderOpen",
         egui::include_image!("../../assets/icons/folder-open.svg"),
+    ),
+    (
+        "FolderGit",
+        egui::include_image!("../../assets/icons/folder-git-2.svg"),
+    ),
+    (
+        "FolderCode",
+        egui::include_image!("../../assets/icons/folder-code.svg"),
+    ),
+    (
+        "FolderCheck",
+        egui::include_image!("../../assets/icons/folder-check.svg"),
+    ),
+    (
+        "FolderX",
+        egui::include_image!("../../assets/icons/folder-x.svg"),
+    ),
+    (
+        "Bookmark",
+        egui::include_image!("../../assets/icons/bookmark.svg"),
     ),
     (
         "FileCog",

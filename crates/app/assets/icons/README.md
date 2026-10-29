@@ -86,5 +86,11 @@ their owners: OpenAI, Anthropic, SST, xAI, Meta, Anysphere, Mario Zechner/pi.dev
 
 Tooltips and the Agents sidebar always pair a glyph with the agent name.
 
+`scissors.svg` (Explorer Cut), `bookmark.svg` (Explorer bookmarks), and
+`folder-git-2.svg`, `folder-code.svg`,
+`folder-check.svg`, and `folder-x.svg` (Explorer folder roles) come from
+Lucide 0.460.0 (`lucide-static`) with the same license and white-stroke
+adaptation.
+
 `lock.svg` and `ellipsis-vertical.svg` are Lucide 0.468.0 icons with the same
 license and white-stroke adaptation, for the browser address bar and menu.
