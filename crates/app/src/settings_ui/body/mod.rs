@@ -83,6 +83,35 @@ impl App {
             });
         }
         ui.weak("Limits apply to saved output; records and resume commands remain.");
+        self.vnc_detach_setting(ui);
+    }
+
+    /// How long a VNC session with no open tab stays connected.
+    fn vnc_detach_setting(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible("Detached VNC sessions", "vnc timeout minutes disconnect") {
+            return;
+        }
+        let supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == terminator_core::vnc::DETACH_TIMEOUT_CAPABILITY);
+        ui.add_enabled_ui(supported, |ui| {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Detached VNC sessions",
+                description: "Disconnect after this many minutes without a viewer. 0 keeps them connected.",
+                add_control: |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings_draft.vnc_detached_timeout_minutes)
+                            .range(0..=1440)
+                            .suffix(" min"),
+                    );
+                },
+            });
+        })
+        .response
+        .on_disabled_hover_text("Requires an updated daemon; older ones disconnect after 30 minutes.");
     }
 
     fn shortcut_settings(&mut self, ui: &mut egui::Ui) {

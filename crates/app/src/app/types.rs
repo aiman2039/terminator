@@ -320,6 +320,8 @@ pub(crate) enum Job {
         session: String,
         direction: terminator_core::vnc::TransferDirection,
         remote: String,
+        /// A file dropped on the screen; `None` opens a file picker.
+        local: Option<std::path::PathBuf>,
     },
     VncTransferPoll {
         session: String,

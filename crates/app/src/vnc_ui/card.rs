@@ -58,6 +58,18 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
             color,
         );
     }
+    if profile.view_only {
+        appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
+            ui,
+            rect: egui::Rect::from_min_size(
+                egui::pos2(thumb.right() - 22.0, thumb.top() + 4.0),
+                egui::vec2(18.0, 18.0),
+            ),
+            icon: "Eye",
+            size: 14.0,
+            tint: visuals.weak_text_color(),
+        });
+    }
     let text_left = rect.left() + 10.0;
     let width = rect.width() - 20.0;
     let name = painter.layout(

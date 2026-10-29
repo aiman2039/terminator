@@ -157,6 +157,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         vnc::ERRORS_CAPABILITY.into(),
         vnc::START_COMMAND_CAPABILITY.into(),
         vnc::SHM_CAPABILITY.into(),
+        vnc::DETACH_TIMEOUT_CAPABILITY.into(),
     ];
     if catalog {
         state.daemon_build = Some(generations::build_identity(

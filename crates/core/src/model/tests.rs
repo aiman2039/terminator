@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn detached_vnc_timeout_defaults_to_30_minutes_and_is_bounded() {
+    let mut s = Settings::default();
+    assert_eq!(s.vnc_detached_timeout_minutes, 30);
+    s.vnc_detached_timeout_minutes = 0;
+    assert!(s.validate().is_ok(), "0 keeps detached sessions");
+    s.vnc_detached_timeout_minutes = 1441;
+    assert!(s.validate().is_err());
+    let old: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(
+        old.vnc_detached_timeout_minutes, 30,
+        "older saved settings get the default"
+    );
+}
+
+#[test]
 fn new_settings_defaults_include_editor_close_timeout() {
     let s = Settings::default();
     assert_eq!(s.editor_close_timeout_secs, 1);

@@ -15,6 +15,9 @@ pub const DEFAULT_PORT: u16 = 5900;
 /// Shared-memory frames, long-polled frame requests, and cursor images sent
 /// only when they change. See [`VncShmRequest`] and [`VncShmFrame`].
 pub const SHM_CAPABILITY: &str = "vnc-shm-v1";
+/// The daemon reads `Settings::vnc_detached_timeout_minutes`; older ones
+/// always disconnect after 30 minutes without a viewer.
+pub const DETACH_TIMEOUT_CAPABILITY: &str = "vnc-detach-timeout-v1";
 /// Longest a shared-memory frame request waits for a new revision.
 pub const MAX_FRAME_WAIT_MS: u32 = 500;
 /// Most changed rectangles one shared-memory frame lists.

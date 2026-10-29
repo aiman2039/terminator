@@ -32,7 +32,13 @@ pub(crate) struct VncViewState {
     pub(crate) cursor_serial: u64,
     /// The shared-memory frame file was unusable: stay on compressed frames.
     pub(crate) shm_failed: bool,
-    pub(crate) fit: bool,
+    pub(crate) scale: super::scale::VncScale,
+    /// Shortcut capture before fullscreen turned it on; restored on exit.
+    pub(crate) capture_before_fullscreen: Option<bool>,
+    /// The toolbar's Ctrl+Alt+Del waits for confirmation.
+    pub(crate) confirm_ctrl_alt_del: bool,
+    /// Remote folder for files dropped on the screen (absolute path).
+    pub(crate) upload_dir: String,
     pub(crate) last_pointer: Option<(u16, u16, u8)>,
     /// Ask the next frame request for the whole screen: set when the
     /// texture cannot take an incremental update (missing, wrong size, or
@@ -102,7 +108,10 @@ impl Default for VncViewState {
             last_poll: None,
             cursor_serial: 0,
             shm_failed: false,
-            fit: true,
+            scale: super::scale::VncScale::Fit,
+            capture_before_fullscreen: None,
+            confirm_ctrl_alt_del: false,
+            upload_dir: String::new(),
             last_pointer: None,
             force_full: false,
             focused: false,

@@ -48,6 +48,7 @@ impl Default for Settings {
             native_vim: true,
             inlay_hints: true,
             keybindings: Settings::default_keybindings(),
+            vnc_detached_timeout_minutes: 30,
         }
     }
 }
@@ -123,6 +124,11 @@ impl Settings {
         if !(1..=30).contains(&self.editor_close_timeout_secs) {
             return Err(SettingsError::EditorCloseTimeout {
                 seconds: self.editor_close_timeout_secs,
+            });
+        }
+        if self.vnc_detached_timeout_minutes > 1440 {
+            return Err(SettingsError::VncDetachedTimeout {
+                minutes: self.vnc_detached_timeout_minutes,
             });
         }
         Ok(())

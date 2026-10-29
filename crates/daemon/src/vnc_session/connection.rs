@@ -208,7 +208,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                 }
             },
             _=tick.tick()=>{
-                if detached_too_long(runtime,connected_at){
+                if detach_due(shared,runtime,connected_at){
                     // Nobody has looked at it for a long time: free the
                     // connection like an explicit Disconnect would.
                     let _=shared.vnc_disconnect(sid);
@@ -229,17 +229,28 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     result
 }
 
-/// A session no viewer has polled for this long is disconnected.
-const DETACHED_IDLE: Duration = Duration::from_mins(30);
-
-/// True when no viewer has asked for a frame for [`DETACHED_IDLE`] since
-/// this connection started.
-fn detached_too_long(runtime: &Arc<Mutex<VncRuntime>>, connected_at: Instant) -> bool {
+/// How long since a viewer last asked for a frame, counting from this
+/// connection's start at most.
+fn unwatched_for(runtime: &Arc<Mutex<VncRuntime>>, connected_at: Instant) -> Duration {
     let since_connect = connected_at.elapsed();
     let since_poll = relock(runtime)
         .last_poll
         .map_or(since_connect, |polled| polled.elapsed());
-    since_connect.min(since_poll) >= DETACHED_IDLE
+    since_connect.min(since_poll)
+}
+
+/// True when no viewer has watched for longer than the Settings timeout.
+/// Settings are read only once nobody has watched for a minute.
+fn detach_due(shared: &Shared, runtime: &Arc<Mutex<VncRuntime>>, connected_at: Instant) -> bool {
+    let unwatched = unwatched_for(runtime, connected_at);
+    unwatched >= Duration::from_mins(1)
+        && detach_limit(relock(&shared.state).settings.vnc_detached_timeout_minutes)
+            .is_some_and(|limit| unwatched >= limit)
+}
+
+/// The Settings value as a time limit; 0 keeps detached sessions.
+fn detach_limit(minutes: u32) -> Option<Duration> {
+    (minutes > 0).then(|| Duration::from_secs(u64::from(minutes).saturating_mul(60)))
 }
 
 /// How often the loop checks whether a new update request is due.
@@ -325,16 +336,26 @@ mod tests {
     fn only_a_session_without_a_viewer_for_long_is_detached_too_long() {
         let (tx, _rx) = mpsc::channel(1);
         let runtime = Arc::new(Mutex::new(VncRuntime::new(false, tx)));
-        let long_ago = Instant::now().checked_sub(DETACHED_IDLE).unwrap();
+        let limit = detach_limit(30).unwrap();
+        let long_ago = Instant::now().checked_sub(limit).unwrap();
         assert!(
-            !detached_too_long(&runtime, Instant::now()),
+            unwatched_for(&runtime, Instant::now()) < limit,
             "just connected"
         );
-        assert!(detached_too_long(&runtime, long_ago), "never watched since");
+        assert!(
+            unwatched_for(&runtime, long_ago) >= limit,
+            "never watched since"
+        );
         relock(&runtime).last_poll = Some(Instant::now());
         assert!(
-            !detached_too_long(&runtime, long_ago),
+            unwatched_for(&runtime, long_ago) < limit,
             "a viewer just looked"
         );
+    }
+
+    #[test]
+    fn a_zero_timeout_keeps_detached_sessions() {
+        assert_eq!(detach_limit(0), None);
+        assert_eq!(detach_limit(2), Some(Duration::from_mins(2)));
     }
 }

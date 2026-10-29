@@ -304,6 +304,10 @@ pub struct App {
     pub(crate) native_close_after_save: Option<PathBuf>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pub(crate) pending_app_quit: bool,
+    /// Quit is waiting on "VNC sessions stay connected"; and whether that
+    /// was answered for this quit.
+    pub(crate) vnc_quit_prompt: bool,
+    pub(crate) vnc_quit_confirmed: bool,
     /// Deferred native closes: path, force flag, and the issuing view.
     /// `:q!` takes every view; a plain close removes only its issuing
     /// view, preserving other copies of the same file.
