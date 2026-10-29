@@ -14,9 +14,10 @@ impl App {
     }
 
     /// Whether the quit may go on now. With live VNC sessions it first asks,
-    /// once per quit.
+    /// once per quit. An app restart (for example an update) does not ask:
+    /// the daemon keeps the sessions and the new GUI reattaches them.
     pub(crate) fn vnc_quit_allowed(&mut self) -> bool {
-        if self.vnc_quit_confirmed || self.live_vnc_sessions().is_empty() {
+        if self.vnc_quit_confirmed || self.restart_pending || self.live_vnc_sessions().is_empty() {
             return true;
         }
         self.vnc_quit_prompt = true;

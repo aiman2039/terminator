@@ -405,6 +405,15 @@ fn quitting_with_live_vnc_sessions_asks_and_can_disconnect_them() {
 }
 
 #[test]
+fn an_app_restart_does_not_ask_about_live_vnc_sessions() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.state.vnc_sessions = vec![vnc_session("live", VncSessionStatus::Connected)];
+    app.restart_pending = true;
+    assert!(app.vnc_quit_allowed(), "the restarted GUI reattaches them");
+    assert!(!app.vnc_quit_prompt);
+}
+
+#[test]
 fn leaving_vnc_fullscreen_restores_shortcut_capture() {
     let (mut app, ctx, _dir) = fixture();
     let view = app.vnc_views.entry("s1".into()).or_default();
