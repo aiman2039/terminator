@@ -21,7 +21,8 @@ impl App {
     /// Keyboard for a focused tree. Arrows, Home/End, and PageUp/PageDown
     /// move the selection (Shift extends), Left/Right collapse, expand, and
     /// walk the hierarchy, Enter or Cmd/Ctrl+Down opens, F2 renames, Delete
-    /// trashes, Cmd/Ctrl+C/X/V copy, cut, and paste files, Escape clears,
+    /// trashes, Cmd/Ctrl+C/X/V copy, cut, and paste files, Cmd/Ctrl+Z
+    /// undoes the last rename or move, Escape clears,
     /// and typed text searches the visible rows (Up/Down then step between
     /// matches).
     pub(in crate::sidebar_ui) fn explorer_keys(&mut self, input: ExplorerKeysInput<'_>) {
@@ -138,6 +139,9 @@ impl App {
                 self.explorer_copy_selection(ui, key == egui::Key::X);
             }
             egui::Key::V if modifiers.command && !modifiers.alt => self.explorer_paste(nav.root),
+            egui::Key::Z if modifiers.command && !modifiers.shift && !modifiers.alt => {
+                self.explorer_undo_last();
+            }
             egui::Key::Escape => {
                 if self.explorer_speed.is_empty() {
                     self.explorer_selection.clear();

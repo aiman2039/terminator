@@ -38,6 +38,11 @@ pub struct App {
     pub(crate) explorer_speed_at: std::time::Instant,
     /// Focus the Explorer search field on the next paint.
     pub(crate) explorer_focus_find: bool,
+    /// Explorer renames and moves, newest last, as `(from, to)` pairs per
+    /// action, for Cmd/Ctrl+Z.
+    pub(crate) explorer_undo: Vec<Vec<(std::path::PathBuf, std::path::PathBuf)>>,
+    /// Renames queued by an undo, so their success is not recorded again.
+    pub(crate) explorer_undoing: Vec<(std::path::PathBuf, std::path::PathBuf)>,
     /// Row the tree should scroll into view on its next paint.
     pub(crate) explorer_scroll_to: Option<PathBuf>,
     /// Last file auto-reveal followed, so it reveals once per focus change.

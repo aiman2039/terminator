@@ -1123,3 +1123,45 @@ fn view_options_sort_folders_among_files_and_by_type() {
     app.preferences.explorer_view.sort_by_type = true;
     assert_eq!(labels(&mut app), ["lib", "b.md", "file10.md", "c.rs"]);
 }
+
+#[test]
+fn undo_renames_a_moved_selection_back_once() {
+    let (mut app, ctx, dir) = keyboard_tree();
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    let root = dir.path().to_path_buf();
+    let (a, b) = (root.join("a.rs"), root.join("b.rs"));
+    let (a2, b2) = (root.join("src/a.rs"), root.join("src/b.rs"));
+    app.explorer_record_move(vec![(a.clone(), a2.clone()), (b.clone(), b2.clone())]);
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
+    click_row(ClickRowInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        y: 12.0,
+    });
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![key(egui::Key::Z, egui::Modifiers::COMMAND)],
+    });
+    let renames: Vec<_> = received
+        .try_iter()
+        .filter_map(|job| match job {
+            crate::Job::Workspace(_, workspace_ops::Op::Rename { from, to }) => Some((from, to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(renames, [(b2.clone(), b.clone()), (a2.clone(), a.clone())]);
+    // The undo's own renames finish without becoming a new undo step.
+    app.explorer_record_move(vec![(b2, b)]);
+    app.explorer_record_move(vec![(a2, a)]);
+    assert!(app.explorer_undo.is_empty());
+    assert!(app.explorer_undoing.is_empty());
+}
