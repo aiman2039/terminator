@@ -18,13 +18,14 @@ pub(super) fn encodings(options: &VncOptions) -> Vec<VncEncoding> {
             VncEncoding::Raw,
         ],
     };
+    // The cursor shape is always requested: the server then leaves the
+    // pointer out of the framebuffer and the viewer draws it locally at the
+    // local mouse position, so it never lags behind the frame stream.
     list.extend([
         VncEncoding::DesktopSizePseudo,
         VncEncoding::ExtendedDesktopSizePseudo,
+        VncEncoding::CursorPseudo,
     ]);
-    if options.show_remote_cursor {
-        list.push(VncEncoding::CursorPseudo);
-    }
     list
 }
 pub(super) fn refresh_ms(quality: Quality, recent_bytes: usize) -> u64 {

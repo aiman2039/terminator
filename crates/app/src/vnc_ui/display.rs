@@ -212,8 +212,11 @@ impl ScreenPane<'_> {
         response: &egui::Response,
         image_rect: egui::Rect,
     ) {
+        // The daemon always asks for the cursor shape, so the server leaves
+        // it out of the framebuffer and the local pointer moves it with no
+        // lag. Older daemons send a shape only when the host enabled it.
         let view = &*self.view;
-        if !(view.draft_options.show_remote_cursor && view.cursor_signature.is_some()) {
+        if view.cursor_signature.is_none() {
             return;
         }
         let Some(pos) = response.hover_pos().filter(|pos| image_rect.contains(*pos)) else {
