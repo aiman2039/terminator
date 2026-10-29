@@ -41,6 +41,25 @@ impl TryFrom<u8> for SecurityType {
     }
 }
 
+/// Names a raw security type for error messages.
+pub(super) fn security_type_name(value: u8) -> String {
+    let name = match value {
+        1 => "None",
+        2 => "VncAuth",
+        5 => "RA2",
+        6 => "RA2ne",
+        16 => "Tight",
+        17 => "Ultra",
+        18 => "TLS",
+        19 => "VeNCrypt",
+        20 => "SASL",
+        21 => "MD5",
+        22 => "xvp",
+        _ => return value.to_string(),
+    };
+    format!("{name} ({value})")
+}
+
 impl From<SecurityType> for u8 {
     fn from(e: SecurityType) -> Self {
         e as u8
@@ -48,7 +67,20 @@ impl From<SecurityType> for u8 {
 }
 
 impl SecurityType {
+    #[cfg(test)]
     pub(super) async fn read<S>(reader: &mut S, version: &VncVersion) -> Result<Vec<Self>, VncError>
+    where
+        S: AsyncRead + Unpin,
+    {
+        Ok(Self::read_offers(reader, version).await?.0)
+    }
+
+    /// Known offered types, plus every raw value the server sent so a
+    /// rejection can name what it offered.
+    pub(super) async fn read_offers<S>(
+        reader: &mut S,
+        version: &VncVersion,
+    ) -> Result<(Vec<Self>, Vec<u8>), VncError>
     where
         S: AsyncRead + Unpin,
     {
@@ -63,7 +95,7 @@ impl SecurityType {
                     let err_msg = crate::limits::string(reader, crate::limits::MAX_NAME).await?;
                     return Err(VncError::General(err_msg));
                 }
-                Ok(vec![security_type])
+                Ok((vec![security_type], vec![u8::from(security_type)]))
             }
             _ => {
                 // +--------------------------+-------------+--------------------------+
@@ -80,14 +112,17 @@ impl SecurityType {
                     return Err(VncError::General(err_msg));
                 }
                 let mut sec_types = vec![];
+                let mut raw = Vec::with_capacity(usize::from(num));
                 for _ in 0..num {
+                    let value = reader.read_u8().await?;
+                    raw.push(value);
                     // Ignore unfamiliar advertised mechanisms; only choose a known one.
-                    if let Ok(kind) = reader.read_u8().await?.try_into() {
+                    if let Ok(kind) = value.try_into() {
                         sec_types.push(kind);
                     }
                 }
                 tracing::trace!("Server supported security type: {:?}", sec_types);
-                Ok(sec_types)
+                Ok((sec_types, raw))
             }
         }
     }

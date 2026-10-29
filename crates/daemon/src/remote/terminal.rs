@@ -85,7 +85,9 @@ pub(crate) fn prepare(
         script.push_str(" -- ");
         script.push_str(&terminator_core::quote(file));
     } else {
-        script.push_str("exec \"${SHELL:-/bin/sh}\" -il");
+        // csh/tcsh accept `-l` only as the sole flag; a TTY makes them
+        // interactive anyway.
+        script.push_str("s=\"${SHELL:-/bin/sh}\"; case \"${s##*/}\" in csh|tcsh) exec \"$s\" -l;; esac; exec \"$s\" -il");
     }
     let ssh = terminator_core::find_executable("ssh").context("OpenSSH client is not installed")?;
     let mut command = CommandBuilder::new(ssh);
@@ -182,6 +184,13 @@ mod tests {
         }));
         assert_eq!(meta.cwd, p.root);
         assert!(meta.editor_socket.is_none());
+        let script = cmd
+            .get_argv()
+            .last()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(script.contains("csh|tcsh) exec \"$s\" -l;;"), "{script}");
         assert!(
             prepare(PrepareInput {
                 project: &p,

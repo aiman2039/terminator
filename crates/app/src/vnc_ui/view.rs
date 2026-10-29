@@ -328,7 +328,12 @@ impl App {
             .get(state_key)
             .and_then(|v| v.error.as_deref())
         {
-            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(error).color(appearance::color(&self.theme.status_failed)),
+                )
+                .wrap(),
+            );
         }
     }
 }

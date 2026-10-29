@@ -1,5 +1,5 @@
 use super::{
-    auth::{AuthHelper, AuthResult, SecurityType},
+    auth::{security_type_name, AuthHelper, AuthResult, SecurityType},
     secure_transport::{Secured, SecurityPolicy},
 };
 use crate::{VncError, VncVersion};
@@ -17,7 +17,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     F: Future<Output = Result<String, VncError>>,
 {
-    let types = SecurityType::read(stream, &version).await?;
+    let (types, offered) = SecurityType::read_offers(stream, &version).await?;
     match policy {
         SecurityPolicy::Tls {
             server_name,
@@ -98,9 +98,12 @@ where
                     return Err(auth_error(stream, version).await?);
                 }
             } else {
-                return Err(VncError::General(
-                    "Server offers no permitted authentication mechanism".into(),
-                ));
+                let offered: Vec<_> = offered.into_iter().map(security_type_name).collect();
+                return Err(VncError::General(format!(
+                    "Server offers no permitted authentication mechanism (offered: {}; supported: VncAuth{})",
+                    offered.join(", "),
+                    if *allow_no_auth { ", None" } else { "" }
+                )));
             }
         }
     }

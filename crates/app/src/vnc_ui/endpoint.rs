@@ -19,30 +19,39 @@ pub(super) fn port_for_display(display: &str) -> String {
         .unwrap_or_default()
 }
 
+/// `stacked` puts each label above its field (sidebar editor); otherwise
+/// labels sit inline like the rest of the connect form.
 pub(super) fn port_display_fields(
     ui: &mut egui::Ui,
     port: &mut String,
     display: &mut String,
+    stacked: bool,
 ) -> bool {
-    let port_response = ui
-        .vertical(|ui| {
-            ui.set_width(68.0);
-            ui.label("Port");
-            ui.add(appearance::singleline(port).desired_width(68.0))
-                .on_hover_text("TCP port: 1–65535")
-        })
-        .inner;
+    let field = |ui: &mut egui::Ui, label: &str, value: &mut String, hover: &str| {
+        if stacked {
+            ui.vertical(|ui| {
+                ui.set_width(68.0);
+                ui.label(label);
+                ui.add(appearance::singleline(value).desired_width(68.0))
+                    .on_hover_text(hover)
+            })
+            .inner
+        } else {
+            ui.label(format!("{label}:"));
+            ui.add(appearance::singleline(value).desired_width(56.0))
+                .on_hover_text(hover)
+        }
+    };
+    let port_response = field(ui, "Port", port, "TCP port: 1–65535");
     if port_response.changed() {
         *display = display_for_port(port);
     }
-    let display_response = ui
-        .vertical(|ui| {
-            ui.set_width(68.0);
-            ui.label("Display");
-            ui.add(appearance::singleline(display).desired_width(68.0))
-                .on_hover_text("Port = 5900 + display. Valid display: 0–59635")
-        })
-        .inner;
+    let display_response = field(
+        ui,
+        "Display",
+        display,
+        "Port = 5900 + display. Valid display: 0–59635",
+    );
     if display_response.changed() {
         *port = port_for_display(display);
     }

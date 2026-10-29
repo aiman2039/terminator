@@ -26,23 +26,23 @@ impl App {
         state_key: &str,
         features: bool,
     ) -> Option<PendingVncConnect> {
-        let error_color = appearance::color(&self.theme.status_failed);
+        // The pane header already shows the error. The form scrolls because
+        // the expanded connection options can exceed the pane height.
         let view = self.vnc_views.entry(state_key.to_owned()).or_default();
-        if let Some(error) = &view.error {
-            ui.colored_label(error_color, error);
-            ui.add_space(4.0);
-        }
-        ui.vertical(|ui| {
-            ui.strong("Connect to VNC Server");
-            ui.add_space(4.0);
-            let request = ui
-                .horizontal_wrapped(|ui| VncConnectForm::endpoint_row(ui, view))
-                .inner;
-            ui.horizontal_wrapped(|ui| VncConnectForm::label_row(ui, view));
-            settings::options(ui, &mut view.draft_options, features);
-            request
-        })
-        .inner
+        egui::ScrollArea::vertical()
+            .id_salt("vnc-connect-form")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.strong("Connect to VNC Server");
+                ui.add_space(4.0);
+                let request = ui
+                    .horizontal_wrapped(|ui| VncConnectForm::endpoint_row(ui, view))
+                    .inner;
+                ui.horizontal_wrapped(|ui| VncConnectForm::label_row(ui, view));
+                settings::options(ui, &mut view.draft_options, features);
+                request
+            })
+            .inner
     }
 
     pub(super) fn start_vnc_connect(&mut self, input: StartVncConnect<'_>) {
@@ -139,7 +139,7 @@ impl VncConnectForm {
                 .desired_width(200.0),
         );
         let endpoint_lost_focus =
-            port_display_fields(ui, &mut view.draft_port, &mut view.draft_display);
+            port_display_fields(ui, &mut view.draft_port, &mut view.draft_display, false);
         ui.label("Username:");
         ui.add(
             appearance::singleline(&mut view.draft_username)
