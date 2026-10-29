@@ -224,7 +224,7 @@ impl<B: Buffer> SourceView<'_, B> {
             hints: row.cells.hints,
             spans: &spans,
             x: canvas.origin.x + self.geometry.gutter,
-            y: row.y,
+            y: row.y + self.geometry.text_top,
             geometry: self.geometry,
             plain: canvas.ui.visuals().text_color(),
         }
@@ -371,7 +371,7 @@ impl<B: Buffer> SourceView<'_, B> {
         // Keep the covered cell legible on the block cursor.
         if let Some(cell) = cell {
             canvas.painter.text(
-                at,
+                Pos2::new(at.x, at.y + geometry.text_top),
                 egui::Align2::LEFT_TOP,
                 cell.to_string(),
                 geometry.font.clone(),

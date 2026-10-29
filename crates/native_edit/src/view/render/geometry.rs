@@ -15,6 +15,8 @@ pub(super) struct Geometry {
     /// Width of one monospace cell.
     pub advance: f32,
     pub row_height: f32,
+    /// Gap above the glyphs inside a row taller than the font.
+    pub text_top: f32,
     /// Blame column: as wide as the widest annotation (capped), between
     /// the change band and the line numbers; 0 without annotations.
     pub annotation_w: f32,
@@ -55,12 +57,19 @@ impl Geometry {
             options.font_size,
             egui::FontFamily::Name(BOLD_FAMILY.into()),
         );
-        let (advance, row_height) = ui.fonts_mut(|fonts| {
+        let (advance, font_row) = ui.fonts_mut(|fonts| {
             (
                 fonts.glyph_width(&font, 'm').max(1.0),
                 fonts.row_height(&font).max(1.0),
             )
         });
+        // Spacing 1.0 keeps the font's exact row height (code views).
+        let row_height = if options.line_spacing > 1.0 {
+            (font_row * options.line_spacing).round().max(font_row)
+        } else {
+            font_row
+        };
+        let text_top = ((row_height - font_row) * 0.5).floor().max(0.0);
         let annotation_w = Self::annotation_width(options, advance);
         let gutter = if options.show_line_numbers {
             let digits = doc.line_count().max(1).to_string().len() as f32;
@@ -85,6 +94,7 @@ impl Geometry {
             bold_font,
             advance,
             row_height,
+            text_top,
             annotation_w,
             gutter,
             wrap_columns,
