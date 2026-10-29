@@ -386,13 +386,9 @@ mod tests {
     }
     #[test]
     fn a_shared_control_socket_stays_up_while_another_project_uses_it() {
-        let paths = terminator_core::Paths {
-            data: "/unused".into(),
-            runtime: "/tmp/terminator-fixture".into(),
-        };
-        let resolve = |ssh: &SshOptions| paths.ssh_control(ssh);
+        let resolve = |ssh: &SshOptions| Some(PathBuf::from(format!("ssh-{}", ssh.host)));
         let a = project("a", "alpha");
-        let control = paths.ssh_control(&a.ssh).unwrap();
+        let control = resolve(&a.ssh).unwrap();
         let mut state = terminator_core::State {
             remote_projects: vec![project("b", "beta")],
             ..terminator_core::State::default()

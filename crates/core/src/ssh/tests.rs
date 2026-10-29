@@ -289,6 +289,7 @@ fn ssh_arguments_reuse_the_given_control_socket() {
     assert!(!args.contains(&OsString::from("-oControlMaster=no")));
 }
 #[test]
+#[cfg(unix)]
 fn control_sockets_fit_unix_limits_and_separate_endpoints() {
     let paths = crate::Paths {
         data: "/unused".into(),
@@ -313,6 +314,13 @@ fn control_sockets_fit_unix_limits_and_separate_endpoints() {
         runtime: PathBuf::from(format!("/{}", "r".repeat(80))),
     };
     assert_eq!(deep.ssh_control(&long), None);
+}
+#[test]
+#[cfg(windows)]
+fn windows_connections_do_not_use_control_sockets() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::Paths::at(dir.path().to_path_buf());
+    assert_eq!(paths.ssh_control(&SshOptions::default()), None);
 }
 #[test]
 fn control_check_and_exit_target_only_the_socket() {

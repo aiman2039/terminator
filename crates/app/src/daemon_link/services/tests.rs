@@ -38,20 +38,13 @@ async fn batched_ignore_check_marks_entries_across_directories() {
         in_git: true,
     })
     .await;
-    let ignored: Vec<String> = listings
+    let ignored: Vec<PathBuf> = listings
         .iter()
         .flat_map(|(_, entries)| entries.as_ref().unwrap())
         .filter(|entry| entry.ignored && !entry.path.ends_with(".git"))
-        .map(|entry| {
-            entry
-                .path
-                .strip_prefix(&root)
-                .unwrap()
-                .display()
-                .to_string()
-        })
+        .map(|entry| entry.path.strip_prefix(&root).unwrap().to_path_buf())
         .collect();
-    assert_eq!(ignored, ["build", "a.log", "src/b.log"]);
+    assert_eq!(ignored, ["build", "a.log", "src/b.log"].map(PathBuf::from));
 }
 
 #[test]

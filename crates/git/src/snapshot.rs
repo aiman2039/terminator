@@ -46,8 +46,12 @@ pub fn relative_path(root: &Path, path: &Path) -> Result<PathBuf> {
         .and_then(|parent| parent.canonicalize().ok())
         .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
         .unwrap_or(absolute);
+    // Windows canonicalization adds a verbatim prefix. Resolve the root too
+    // so Git's ordinary drive paths compare with canonical parent paths.
+    let canonical_root = root.canonicalize()?;
     let relative = absolute
-        .strip_prefix(root)
+        .strip_prefix(&canonical_root)
+        .or_else(|_| absolute.strip_prefix(root))
         .or_else(|_| path.strip_prefix(root))
         .map_err(|source| Error::OutsideRepository {
             context: "Diff file is outside the repository",
@@ -326,6 +330,21 @@ mod tests {
         .unwrap();
         assert_eq!(left, b"staged\n");
         assert_eq!(right, b"working\n");
+    }
+
+    #[test]
+    fn native_and_canonical_roots_resolve_existing_and_deleted_files() {
+        let dir = repo();
+        let root = dir.path();
+        std::fs::write(root.join("present.rs"), "old\n").unwrap();
+        let canonical = root.canonicalize().unwrap();
+        for root in [root, canonical.as_path()] {
+            for name in ["present.rs", "deleted.rs"] {
+                for path in [dir.path().join(name), canonical.join(name)] {
+                    assert_eq!(relative_path(root, &path).unwrap(), PathBuf::from(name));
+                }
+            }
+        }
     }
 
     #[test]

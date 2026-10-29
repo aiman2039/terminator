@@ -1,5 +1,27 @@
 # Validation evidence — 2026-09-08
 
+## Windows release checks — 2026-10-29
+
+Actions run `40924198229`, job `123625314257` (`checks / Checks
+(windows-2025)`), failed five of 1,557 tests at commit `0613e3a2940a`.
+The ignore-list test expected forward slashes from native Windows display
+paths; it now compares `PathBuf` values. Two Git history tests failed because
+canonical file parents had a Windows verbatim prefix while the Git root did
+not. Diff path resolution now canonicalizes the root before comparison, with
+a regression for native and canonical roots and existing and deleted files.
+
+The two SSH failures assumed Unix control sockets on Windows, where OpenSSH
+multiplexing is disabled. The socket length test is now Unix-only; a Windows
+test checks that no control socket is returned. The daemon's shared-control
+reference test uses an injected resolver on every platform.
+
+Validation: 34 focused macOS tests passed, including Git history, snapshot
+path boundaries, ignore lists, SSH arguments, and shared-control references.
+Strict Windows-target Clippy passed for all workspace targets and features
+using the repository's Zig toolchain wrapper. Formatting and diff whitespace
+checks passed. No push or hosted rerun was made; Windows runtime behavior
+still requires a fresh Actions run.
+
 ## Linux release coverage linker — 2026-10-29
 
 `run-ImqlqK/linux/run.log` failed before tests ran: GNU ld was killed with
