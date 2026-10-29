@@ -288,7 +288,8 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
 
 /// True when a focused native editor owns this chord as an IDE caret
 /// motion or line edit (Cmd+Shift+Left selects to line start there, it
-/// does not split the pane). The editor wins, as in `IntelliJ`.
+/// does not split the pane), or project navigation. The editor wins,
+/// as in `IntelliJ`.
 pub fn editor_owns(value: &str) -> bool {
     parse(value).is_some_and(|chord| {
         terminator_native_edit::view::ide_edit_key(terminator_native_edit::view::IdeEditKeyInput {
@@ -299,6 +300,12 @@ pub fn editor_owns(value: &str) -> bool {
         })
         .is_some()
             || terminator_native_edit::view::ide_shortcut(chord.key, chord.modifiers).is_some()
+            || terminator_native_edit::view::ide_navigation_shortcut(
+                chord.key,
+                chord.modifiers,
+                false,
+            )
+            .is_some()
     })
 }
 

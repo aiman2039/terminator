@@ -1,5 +1,47 @@
 # Validation evidence — 2026-09-08
 
+## Linux release coverage linker — 2026-10-29
+
+`run-ImqlqK/linux/run.log` failed before tests ran: GNU ld was killed with
+signal 9 while linking the instrumented GUI binary test harness. The local
+Docker VM reports 18 CPUs and about 8 GB of memory. Parallel large links can
+exceed that memory limit. Linux release coverage now passes `--build-jobs 1` to
+serialize compilation and linking. Test execution keeps its existing parallelism
+and the 50 percent line coverage requirement.
+
+The first coverage rerun linked successfully and exposed a shortcut routing
+failure. Linux maps stored `command+F` to Ctrl+Shift+F, the editor's Find in
+Files chord. The app now recognizes editor navigation chords before consuming
+global shortcuts. The existing chord regression checks Find in Files too.
+
+Validation: the same cached Linux ARM64 release image completed coverage with
+1,534 tests passed, six skipped, and 59.03 percent line coverage (50 required).
+Source was mounted read-only, with writable Cargo and test-report volumes.
+The release command regression and all 11 macOS shortcut tests passed.
+Strict Clippy passed for all targets and features of `terminator` and `xtask`;
+formatting and diff whitespace checks passed. The full release, native GUI
+fixtures, and packaging were not rerun. Coverage output is retained locally at
+`.artifacts/verification/linux-coverage-fix/run.log`.
+
+## Release Rust diagnostics fixture — 2026-10-29
+
+The host log for `run-RZShxQ` reports 1,604 passing tests and one timeout:
+`lsp_manager::tests::live_rust_analyzer_diagnostics`. The release uses
+`cargo run` with a shared `CARGO_TARGET_DIR`. Test language servers inherited
+that directory, so their `cargo check` could wait for the release parent's
+build lock. Other Rust server tests can answer from analysis without that check.
+
+The direct server path, used only by tests, now removes `CARGO_TARGET_DIR`.
+Each temporary project uses its own build directory. The GUI service path
+keeps its environment. The diagnostic timeout now includes the server note.
+
+Validation: an isolated Cargo check with the shared directory locked reported
+`Blocking waiting for file lock on artifact directory`. With that lock still
+held, all 29 LSP manager tests passed in 2.47 seconds, including real Rust
+diagnostics, hover, completion, formatting, and other Rust server requests.
+The TypeScript test skipped its live checks because TypeScript was unavailable.
+Formatting and diff whitespace checks passed. The full release was not rerun.
+
 ## OSV block-buffer finding and release gate — 2026-10-27
 
 Actions run `40454143596` failed only OSV-Scanner, on

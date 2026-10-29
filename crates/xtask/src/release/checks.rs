@@ -110,12 +110,16 @@ impl<R: Runner> Checks<'_, R> {
     fn unit_tests(&self, platform: Platform) -> Result<()> {
         if matches!(platform, Platform::Linux) {
             // Run unit tests and coverage in one pass on Linux via cargo-llvm-cov + nextest.
+            // Instrumented GUI test links use substantial memory. Serialize builds
+            // so Docker hosts with many CPUs do not run these links together.
             self.run(&mut cmd(
                 self.root,
                 "cargo",
                 &[
                     "llvm-cov",
                     "nextest",
+                    "--build-jobs",
+                    "1",
                     "--workspace",
                     "--exclude",
                     "xtask",

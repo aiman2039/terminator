@@ -34,6 +34,9 @@ fn parses_default_chords() {
     assert!(editor_owns("command+shift+Left"));
     // Find belongs to the focused editor, not the terminal search.
     assert!(editor_owns("command+F"));
+    // Find in Files also belongs to the editor. On Linux, stored
+    // `command+F` already maps to Ctrl+Shift+F.
+    assert!(editor_owns("command+shift+F"));
     assert!(!editor_owns("command+T"));
 }
 

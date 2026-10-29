@@ -634,8 +634,11 @@ fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
             .any(|args| args.first().is_some_and(|arg| arg == "xvfb-run"))
     );
     assert!(commands.iter().any(|args| {
-        args.windows(2)
-            .any(|pair| pair == ["--fail-under-lines", "50"])
+        args.get(1..3) == Some(&["llvm-cov".to_owned(), "nextest".to_owned()])
+            && args.windows(2).any(|pair| pair == ["--build-jobs", "1"])
+            && args
+                .windows(2)
+                .any(|pair| pair == ["--fail-under-lines", "50"])
     }));
 }
 

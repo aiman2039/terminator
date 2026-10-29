@@ -660,7 +660,11 @@ async fn live_rust_analyzer_diagnostics() {
     // Handshake + analysis need seconds; poll until diagnostics land.
     let start = Instant::now();
     while manager.problems_for(&file).is_empty() {
-        assert!(start.elapsed() < Duration::from_secs(90), "no diagnostics");
+        assert!(
+            start.elapsed() < Duration::from_secs(90),
+            "no diagnostics; note={:?}",
+            manager.server_note(&file)
+        );
         manager.poll();
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

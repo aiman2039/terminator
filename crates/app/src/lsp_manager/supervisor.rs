@@ -415,6 +415,10 @@ fn spawn_server_direct(
     let mut child = tokio::process::Command::new(binary)
         .args(L::server_args(language_of(key.language)))
         .current_dir(&key.root)
+        // This path is only for tests. A release launched with `cargo run`
+        // holds the shared target's build lock while tests run. Keep the
+        // server's cargo check in its fixture instead of waiting on that lock.
+        .env_remove("CARGO_TARGET_DIR")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
