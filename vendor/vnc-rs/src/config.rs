@@ -64,14 +64,22 @@ pub enum VncVersion {
 
 impl From<[u8; 12]> for VncVersion {
     fn from(version: [u8; 12]) -> Self {
-        match &version {
-            b"RFB 003.003\n" => VncVersion::RFB33,
-            b"RFB 003.007\n" => VncVersion::RFB37,
-            b"RFB 003.008\n" => VncVersion::RFB38,
-            // https://www.rfc-editor.org/rfc/rfc6143#section-7.1.1
-            //  Other version numbers are reported by some servers and clients,
-            //  but should be interpreted as 3.3 since they do not implement the
-            //  different handshake in 3.7 or 3.8.
+        // Like TigerVNC and libvncclient, any version above 3.8 (RealVNC
+        // `RFB 005.000`, Apple `RFB 003.889`) negotiates 3.8. Other or
+        // malformed versions are 3.3 per RFC 6143 section 7.1.1.
+        let number = |range: std::ops::Range<usize>| {
+            std::str::from_utf8(&version[range])
+                .ok()
+                .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse::<u16>().ok())
+        };
+        if &version[..4] != b"RFB " || version[7] != b'.' || version[11] != b'\n' {
+            return VncVersion::RFB33;
+        }
+        match (number(4..7), number(8..11)) {
+            (Some(3), Some(7)) => VncVersion::RFB37,
+            (Some(3), Some(minor)) if minor >= 8 => VncVersion::RFB38,
+            (Some(major), Some(_)) if major > 3 => VncVersion::RFB38,
             _ => VncVersion::RFB33,
         }
     }
@@ -307,7 +315,24 @@ impl PixelFormat {
 
 #[cfg(test)]
 mod tests {
-    use super::PixelFormat;
+    use super::{PixelFormat, VncVersion};
+
+    #[test]
+    fn versions_above_3_8_negotiate_3_8() {
+        for (banner, expected) in [
+            (b"RFB 003.003\n", VncVersion::RFB33),
+            (b"RFB 003.005\n", VncVersion::RFB33),
+            (b"RFB 003.007\n", VncVersion::RFB37),
+            (b"RFB 003.008\n", VncVersion::RFB38),
+            (b"RFB 003.889\n", VncVersion::RFB38),
+            (b"RFB 004.001\n", VncVersion::RFB38),
+            (b"RFB 005.000\n", VncVersion::RFB38),
+            (b"RFB 00x.008\n", VncVersion::RFB33),
+            (b"XYZ 005.000\n", VncVersion::RFB33),
+        ] {
+            assert_eq!(VncVersion::from(*banner), expected, "{banner:?}");
+        }
+    }
 
     #[test]
     fn x11vnc_nonzero_wire_flags_are_normalized() {

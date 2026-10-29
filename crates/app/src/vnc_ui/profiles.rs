@@ -32,6 +32,7 @@ impl App {
                     ui,
                     &mut self.vnc_sidebar.port,
                     &mut self.vnc_sidebar.display,
+                    true,
                 );
             });
             ui.label("Username (optional)");
