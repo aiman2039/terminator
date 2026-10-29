@@ -30,3 +30,8 @@ dead method warning.
 Both render paths retain extra source blank lines between parsed blocks as
 additional hard-break events. The Markdown block tree and source offsets
 remain unchanged, including code blocks and list nesting.
+
+Headings use the `Heading` text style family at every level, with sizes
+stepped between `Body` and `Heading` (the backend only colors levels 2-6
+strong, at sizes close to H1). H1 and H2 paint a GitHub-style divider in
+the gap below the heading text; the layout does not change.

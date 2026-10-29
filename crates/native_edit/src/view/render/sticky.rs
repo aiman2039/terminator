@@ -59,7 +59,10 @@ impl<B: Buffer> SourceView<'_, B> {
             .rect_filled(band, 0.0, visuals.extreme_bg_color);
         if self.options.show_line_numbers {
             canvas.painter.text(
-                Pos2::new(origin.x + geometry.gutter - geometry.advance, y),
+                Pos2::new(
+                    origin.x + geometry.gutter - geometry.advance,
+                    y + geometry.text_top,
+                ),
                 egui::Align2::RIGHT_TOP,
                 format!("{}", first.saturating_add(1)),
                 geometry.font.clone(),
@@ -73,7 +76,7 @@ impl<B: Buffer> SourceView<'_, B> {
             hints: &[],
             spans: canvas.highlight.line(first),
             x: origin.x + geometry.gutter,
-            y,
+            y: y + geometry.text_top,
             geometry,
             plain: visuals.text_color(),
         }

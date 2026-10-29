@@ -93,6 +93,8 @@ pub struct CommonMarkViewerInternal {
     is_blockquote: bool,
     checkbox_events: Vec<CheckboxClickEvent>,
     deferred_scroll_to_heading: Option<String>,
+    /// Painted area of the current heading's text, for the H1/H2 divider.
+    heading_rect: Option<egui::Rect>,
 }
 
 pub(crate) struct CheckboxClickEvent {
@@ -117,8 +119,23 @@ impl CommonMarkViewerInternal {
             is_blockquote: false,
             checkbox_events: Vec::new(),
             deferred_scroll_to_heading: None,
+            heading_rect: None,
         }
     }
+}
+
+/// Heading text in the `Heading` text style family (a bold face when the
+/// app sets one) at clearly stepped sizes between `Body` and `Heading`.
+/// The backend only colors levels 2-6 strong, at sizes close to H1.
+fn heading_text(ui: &Ui, level: u8, text: egui::RichText) -> egui::RichText {
+    let styles = &ui.style().text_styles;
+    let Some(heading) = styles.get(&TextStyle::Heading) else {
+        return text;
+    };
+    let body = styles.get(&TextStyle::Body).map_or(14.0, |font| font.size);
+    let step = [1.0, 0.55, 0.3, 0.12, 0.0, 0.0][usize::from(level.min(5))];
+    text.family(heading.family.clone())
+        .size(body + (heading.size - body) * step)
 }
 
 fn parser_options_extras(
@@ -658,7 +675,12 @@ impl CommonMarkViewerInternal {
     }
 
     fn event_text(&mut self, text: CowStr, ui: &mut Ui) {
-        let rich_text = self.text_style.to_richtext(ui, &text);
+        let mut rich_text = self.text_style.to_richtext(ui, &text);
+        if let Some(level) = self.text_style.heading
+            && !self.text_style.code
+        {
+            rich_text = heading_text(ui, level, rich_text);
+        }
         if let Some(image) = &mut self.image {
             image.alt_text.push(rich_text);
         } else if let Some(block) = &mut self.code_block {
@@ -666,7 +688,10 @@ impl CommonMarkViewerInternal {
         } else if let Some(link) = &mut self.link {
             link.text.push(rich_text);
         } else {
-            ui.label(rich_text);
+            let rect = ui.label(rich_text).rect;
+            if self.text_style.heading.is_some() {
+                self.heading_rect = Some(self.heading_rect.map_or(rect, |r| r.union(rect)));
+            }
         }
     }
 
@@ -699,6 +724,7 @@ impl CommonMarkViewerInternal {
                 // Headings should always insert a newline even if it is at the start.
                 // Whether this is okay in all scenarios is a different question.
                 newline(ui);
+                self.heading_rect = None;
                 self.text_style.heading = Some(match level {
                     HeadingLevel::H1 => 0,
                     HeadingLevel::H2 => 1,
@@ -825,6 +851,15 @@ impl CommonMarkViewerInternal {
             }
             pulldown_cmark::TagEnd::Heading { .. } => {
                 self.line.try_insert_end(ui);
+                // GitHub-style divider under H1 and H2, painted in the
+                // paragraph gap so the layout does not move.
+                if self.text_style.heading.is_some_and(|level| level <= 1)
+                    && let Some(rect) = self.heading_rect.take()
+                {
+                    let y = rect.bottom() + ui.spacing().item_spacing.y * 0.5;
+                    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+                    ui.painter().hline(ui.max_rect().x_range(), y, stroke);
+                }
                 self.text_style.heading = None;
             }
             pulldown_cmark::TagEnd::BlockQuote(_) => {}
