@@ -204,6 +204,19 @@ original editor and its unsaved-close lifecycle remain daemon-owned.
 macOS builds use Cocoa/native dialogs and a locally signed `.app` bundle. Linux builds use native windowing with X11/Wayland and portal file dialogs. The daemon's OS-notification callback worker is separate from terminal handling. macOS pumps its native notification run loop on the daemon thread; Linux uses the desktop notification service. Desktop banners may include a platform sound name when `notification_sound` is on (`notification-sound-v1`). In-app attention stays silent. No Electron, Chromium, CEF, or Servo is included. GUI-only OS webview tabs use WKWebView / WebKitGTK via wry and die with the GUI.
 
 
+## VNC ownership
+
+The daemon owns VNC connections, the decoded framebuffer, saved-host
+credentials (OS keychain) and saved-host thumbnails; the GUI owns view state,
+scaling, fullscreen, shortcut capture and pickers. Closing a VNC tab detaches
+the session; only an explicit Disconnect, the detached timeout or quitting
+with "Disconnect all" ends it. With `vnc-shm-v1` the GUI reads frames from a
+per-session memory-mapped file in the private runtime directory and accepts
+only paths inside it; older daemons keep compressed frames over IPC. Records
+of retired or unreachable generations are not merged into snapshots, since a
+VNC connection cannot outlive its daemon. Keychain reads run on the session
+thread, never inside a request. See `docs/VNC.md`.
+
 ## Preview, metadata, and automation boundaries
 
 Snapshot clients opt into `snapshot-chunks-v1` using `snapshot_chunks: true` on

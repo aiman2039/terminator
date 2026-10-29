@@ -4,8 +4,11 @@ The daemon owns VNC connections. The GUI owns display state, fullscreen,
 monitor selection, local shortcut handling, and file pickers. Closing a VNC
 tab detaches its session, like a terminal: the daemon keeps it connected and
 the VNC sidebar marks it Detached; clicking it reattaches. Disconnect is an
-explicit action. A session no viewer has watched for 30 minutes is
-disconnected. Connecting a host that already has a live session reattaches
+explicit action. A session no viewer has watched for Settings → History →
+Detached VNC sessions (default 30 minutes, 0 = never, `vnc-detach-timeout-v1`)
+is disconnected; older daemons use a fixed 30 minutes. Quitting with live
+VNC sessions asks once: Quit, Disconnect all and quit, or Cancel. An app
+restart (update or repair) does not ask. Connecting a host that already has a live session reattaches
 it instead of opening a second connection. VNC records of retired or
 unreachable daemons are not shown; they cannot be live.
 
@@ -117,8 +120,14 @@ clipboard transfer. Use SFTP for files.
 
 ## Display, recovery and transfers
 
-Fit and 100% modes remain available. Fullscreen shows the VNC pane without
-workspace chrome; F11 exits. The server must advertise and confirm extended
+The scale menu offers Fit, Fit width, 100% and 200%, and the Resize remote to
+pane toggle (enabled when the host allows remote resize). Only Fit sends the
+mouse wheel to the remote; the other modes scroll. Fullscreen shows the VNC
+pane without workspace chrome; F11 enters it from a focused remote screen and
+exits it. Fullscreen turns on shortcut capture and restores the previous
+choice on exit; the toolbar shows "Capturing shortcuts · F8 to release".
+Ctrl+Alt+Del from the toolbar asks for confirmation in the pane. View-only
+hosts show an eye glyph on their card. The server must advertise and confirm extended
 desktop support before remote resize is sent. Resize requests are debounced;
 server rejection does not change the reported desktop geometry. Multiple
 advertised monitors can be shown together or selected separately. Desktop
@@ -146,6 +155,9 @@ Manual disconnect cancels pending retries. Queued input is not replayed after
 a connection fails.
 
 SFTP transfers require a writable SSH session and an explicit file selection.
+Files dropped on the screen of a writable SSH session upload to the Upload
+folder set in the Files panel (an absolute path; `~` cannot be expanded on
+the client). One file uploads per drop.
 They are limited to 1 GiB and five minutes, with at most two active transfers
 per session. Existing destinations are not overwritten. Upload publication
 uses the server's hard-link and fsync extensions; servers without them are
