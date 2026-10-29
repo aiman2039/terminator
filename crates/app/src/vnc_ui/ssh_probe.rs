@@ -24,9 +24,17 @@ pub(crate) struct SshHostConfig {
 }
 
 impl SshHostConfig {
-    /// One-line description for the notice under the form.
+    /// One-line description for the notice under the VNC form.
     pub(crate) fn summary(&self) -> String {
+        format!("{} Using an SSH tunnel.", self.found())
+    }
+
+    /// "Found host in ~/.ssh/config (hostname, user, port, key)."
+    pub(crate) fn found(&self) -> String {
         let mut parts = Vec::new();
+        if !self.hostname.eq_ignore_ascii_case(&self.host) {
+            parts.push(format!("→ {}", self.hostname));
+        }
         if let Some(user) = &self.user {
             parts.push(format!("user {user}"));
         }
@@ -38,10 +46,10 @@ impl SshHostConfig {
             parts.push(format!("key {name}"));
         }
         if parts.is_empty() {
-            format!("Found {} in ~/.ssh/config. Using an SSH tunnel.", self.host)
+            format!("Found {} in ~/.ssh/config.", self.host)
         } else {
             format!(
-                "Found {} in ~/.ssh/config ({}). Using an SSH tunnel.",
+                "Found {} in ~/.ssh/config ({}).",
                 self.host,
                 parts.join(", ")
             )

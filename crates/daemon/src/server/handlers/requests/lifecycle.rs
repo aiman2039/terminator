@@ -27,6 +27,7 @@ impl Shared {
 
     pub(super) fn on_settings(&self, settings: Settings) -> Result<Outcome> {
         settings.validate()?;
+        terminator_core::ssh::set_tuning(settings.ssh_tuning());
         let mut s = relock(&self.state);
         s.settings = settings;
         s.revision = s.revision.saturating_add(1);

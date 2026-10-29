@@ -11,6 +11,8 @@ pub use forward::{
 pub const CAPABILITY: &str = "ssh-projects-v1";
 /// `RemoveRemoteProject`, `SetRemoteProjectGroup` and [`HOME_ROOT`] probes.
 pub const HOSTS_CAPABILITY: &str = "ssh-hosts-v1";
+/// `UpdateRemoteProject` and [`RemoteProject::last_connected`].
+pub const EDIT_CAPABILITY: &str = "ssh-edit-v1";
 /// [`Operation::Upload`], [`Operation::Download`] and
 /// [`Operation::TransferStatus`].
 pub const TRANSFER_CAPABILITY: &str = "ssh-transfer-v1";
@@ -59,6 +61,13 @@ pub struct RemoteProject {
     /// Local port forwards (`ssh-forwarding-v1`). Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub forwards: Vec<Forward>,
+    /// Unix seconds when an SSH terminal last opened (`ssh-edit-v1`); 0 is
+    /// never. Set by the daemon only.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub last_connected: u64,
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 /// Trims a group name; blank means ungrouped.
 pub fn normalize_group(group: Option<&str>) -> Result<Option<String>, RemoteError> {
@@ -118,6 +127,11 @@ impl RemoteProject {
         } else {
             format!("{}/{}", self.root.trim_end_matches('/'), relative)
         })
+    }
+    /// Whether `other` connects the same way: host, user, port, keys and
+    /// root. Name, group, forwards and times do not count.
+    pub fn same_connection(&self, other: &Self) -> bool {
+        self.ssh == other.ssh && self.root == other.root
     }
     pub fn label(&self) -> String {
         format!("ssh://{}{}", self.ssh.authority(), self.root)
@@ -295,6 +309,7 @@ mod tests {
             layout: serde_json::Value::Null,
             group: None,
             forwards: Vec::new(),
+            last_connected: 0,
         };
         assert_ne!(p.identity_path(), std::path::PathBuf::from(&p.root));
         assert_eq!(

@@ -1,6 +1,9 @@
 //! Remote project controls and data. Local refresh/watch services are never used.
+mod fields;
 mod host_key;
+mod properties;
 mod sidebar;
+pub(crate) use fields::{blank_project, config_host_summary};
 
 use crate::{App, Job, appearance};
 use eframe::egui;
@@ -80,9 +83,17 @@ pub(crate) struct HostKeyPrompt {
 pub(crate) struct RemoteUi {
     pub active: Option<RemoteProject>,
     pub open: bool,
+    /// The host in SSH Properties. A non-empty id edits that saved project.
     pub draft: Option<RemoteProject>,
     pub error: Option<String>,
+    /// The classified SSH failure behind `error`, for its fix button.
+    pub failure: Option<SshFailure>,
     pub busy: bool,
+    /// Open a terminal once the host is added or saved.
+    pub connect_after: bool,
+    /// `ssh -G` for the typed host, so the page shows what the config sets.
+    pub probe: crate::vnc_ui::ssh_probe::SshProbe,
+    pub resolved: Option<crate::vnc_ui::ssh_probe::SshHostConfig>,
     pub views: HashMap<String, View>,
     pub host_key: Option<HostKeyPrompt>,
     /// Projects whose host-key prompt was dismissed; polling must not
@@ -95,6 +106,8 @@ pub(crate) struct RemoteUi {
     /// Allocates config-load generations for the dialog and Hosts sidebar.
     pub config_seq: u64,
     pub hosts: crate::hosts_ui::HostsState,
+    /// The import page, while open.
+    pub import: Option<crate::hosts_ui::import::HostImport>,
 }
 #[derive(Default)]
 pub(crate) struct View {
@@ -120,77 +133,24 @@ impl RemoteUi {
         self.config_seq = self.config_seq.wrapping_add(1).max(1);
         self.config_seq
     }
-    pub(crate) fn open_new(&mut self) -> u64 {
+    /// Opens SSH Properties on `draft`; returns the config-load generation.
+    pub(crate) fn open_draft(&mut self, draft: RemoteProject) -> u64 {
         self.config_generation = self.next_config_generation();
         self.config_hosts = None;
         self.open = true;
         self.active = None;
         self.error = None;
+        self.failure = None;
         self.busy = false;
-        self.draft = Some(RemoteProject {
-            id: String::new(),
-            name: String::new(),
-            root: String::from("/home"),
-            ssh: terminator_core::ssh::SshOptions::default(),
-            layout: serde_json::Value::Null,
-            group: None,
-            forwards: Vec::new(),
-        });
+        self.connect_after = draft.id.is_empty();
+        self.resolved = None;
+        self.draft = Some(draft);
         self.config_generation
     }
-}
-fn config_host_summary(host: &ConfigHost) -> String {
-    let mut text = String::new();
-    if !host.user.is_empty() {
-        text.push_str(&host.user);
-        text.push('@');
-    }
-    text.push_str(&host.hostname);
-    if let Some(port) = host.port {
-        text.push_str(&format!(":{port}"));
-    }
-    if let Some(jump) = &host.proxyjump {
-        text.push_str(&format!(" via {jump}"));
-    }
-    text
-}
-/// "From SSH config" picker. Choosing an alias leaves user and port blank so
-/// OpenSSH applies the configured `User`, `Port`, `ProxyJump` and keys.
-fn config_host_picker(ui: &mut egui::Ui, hosts: Option<&[ConfigHost]>, draft: &mut RemoteProject) {
-    let selected = hosts.and_then(|h| h.iter().find(|h| h.alias == draft.ssh.host));
-    let text = match (hosts, selected) {
-        (None, _) => "Loading…".to_owned(),
-        (Some([]), _) => "No hosts in ~/.ssh/config".to_owned(),
-        (Some(_), Some(host)) => host.alias.clone(),
-        (Some(_), None) => "Choose a host…".to_owned(),
-    };
-    let mut chosen = None;
-    ui.horizontal(|ui| {
-        ui.label("From SSH config");
-        ui.add_enabled_ui(hosts.is_some_and(|h| !h.is_empty()), |ui| {
-            egui::ComboBox::from_id_salt("ssh-config-host")
-                .selected_text(text)
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for host in hosts.unwrap_or_default() {
-                        let label = format!("{}  ·  {}", host.alias, config_host_summary(host));
-                        if ui
-                            .selectable_label(host.alias == draft.ssh.host, label)
-                            .clicked()
-                        {
-                            chosen = Some(host.alias.clone());
-                        }
-                    }
-                });
-        });
-    });
-    if let Some(alias) = chosen {
-        if draft.name.trim().is_empty() || draft.name == draft.ssh.host {
-            draft.name.clone_from(&alias);
-        }
-        draft.ssh.host = alias;
-        draft.ssh.username.clear();
-        draft.ssh.port = None;
+    pub(crate) fn close(&mut self) {
+        self.open = false;
+        self.active = None;
+        self.busy = false;
     }
 }
 pub(crate) fn location_label(session: &terminator_core::Session) -> String {
@@ -262,60 +222,6 @@ impl App {
                 },
                 RemoteProject::label,
             )
-    }
-    pub(crate) fn remote_project_dialog(&mut self, ctx: &egui::Context) {
-        if !self.remote_ui.open {
-            return;
-        }
-        let supported = self.remote_supported();
-        let mut submit = false;
-        let mut probe = false;
-        let mut cancel = false;
-        egui::Window::new("SSH project").id(egui::Id::unique("ssh-project-dialog")).default_width(440.0).resizable(true).show(ctx,|ui|{
-            ui.weak("Each terminal connects to this host. Files and Git stay remote and reuse a signed-in terminal's connection. Passwords and 2FA are entered in the SSH terminal. Text editing uses Neovim on the SSH host.");
-            if !supported{ui.colored_label(ui.visuals().warn_fg_color,"Restart the session service to enable SSH projects.");}
-            if let Some(error)=&self.remote_ui.error{ui.colored_label(ui.visuals().error_fg_color,error);}
-            let hosts=self.remote_ui.config_hosts.as_deref();
-            let Some(draft)=&mut self.remote_ui.draft else{return;};
-            config_host_picker(ui,hosts,draft);
-            let config=hosts.and_then(|h|h.iter().find(|h|h.alias==draft.ssh.host)).cloned();
-            let user_hint=config.as_ref().filter(|h|!h.user.is_empty()).map_or_else(||"From SSH config or local user".to_owned(),|h|h.user.clone());
-            for (label,value,hint) in [("Name",&mut draft.name,""),("SSH host or config alias",&mut draft.ssh.host,""),("SSH user (optional)",&mut draft.ssh.username,user_hint.as_str()),("Remote project path",&mut draft.root,"")]{
-                ui.label(label);ui.add(appearance::singleline(value).hint_text(hint).desired_width(f32::INFINITY));
-            }
-            let port_hint=config.as_ref().and_then(|h|h.port).map_or_else(||"config".to_owned(),|p|p.to_string());
-            ui.horizontal(|ui|{ui.label("SSH port (blank uses SSH config)");appearance::optional_port(ui,&mut draft.ssh.port,&port_hint);});
-            if let Some(host)=&config{ui.weak(format!("SSH config: {}",config_host_summary(host)));}
-            for (label,value) in [("Identity file (optional)",&mut draft.ssh.identity_file),("Known hosts file (optional)",&mut draft.ssh.known_hosts_file)]{
-                ui.label(label);let mut text=value.as_ref().map_or_else(String::new,|p|p.to_string_lossy().into_owned());
-                if ui.add(appearance::singleline(&mut text).desired_width(f32::INFINITY)).changed(){*value=(!text.trim().is_empty()).then(||PathBuf::from(text.trim()));}
-            }
-            ui.weak("Unknown host keys are shown for confirmation before they are trusted; changed keys are refused. The project is not mounted or copied onto this computer.");
-            ui.add_enabled_ui(supported&&!self.remote_ui.busy,|ui|{ui.horizontal(|ui|{probe=ui.button("Test connection").clicked();submit=ui.button("Add SSH project").clicked();});});
-            cancel=ui.button("Cancel").clicked();
-        });
-        if cancel {
-            self.remote_ui.open = false;
-            self.remote_ui.active = None;
-            self.selection_generation = self.selection_generation.wrapping_add(1);
-            return;
-        }
-        if (probe || submit)
-            && let Some(project) = self.remote_ui.draft.clone()
-        {
-            match project.validate() {
-                Ok(()) => {
-                    self.remote_ui.busy = true;
-                    self.remote_ui.active = Some(project.clone());
-                    let _ = self.jobs.send(Job::RemoteAdd {
-                        project,
-                        probe,
-                        generation: self.selection_generation,
-                    });
-                }
-                Err(error) => self.remote_ui.error = Some(error.to_string()),
-            }
-        }
     }
     pub(crate) fn open_remote_file(&mut self, input: OpenRemoteFileInput<'_>) {
         let OpenRemoteFileInput {
