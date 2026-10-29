@@ -54,6 +54,7 @@ impl App {
         if draft.is_empty() {
             draft.clone_from(&href);
         }
+        self.request_favicon(&key);
         let nav = self.browser_host.nav(&key);
         let bar = Self::browser_toolbar(ToolbarInput {
             ui,

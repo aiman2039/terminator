@@ -143,6 +143,7 @@ impl App {
             browser_host: browser_host::BrowserHost::new(),
             visible_browsers: Vec::new(),
             browser_urls: HashMap::new(),
+            favicons: HashMap::new(),
             browser_submit: None,
             remote_ui: crate::remote_ui::RemoteUi::default(),
             vnc_fullscreen: None,

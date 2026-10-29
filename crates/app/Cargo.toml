@@ -63,6 +63,7 @@ globset = "0.4.20"
 ignore = { version = "0.4.33", default-features = false }
 flate2 = "1"
 base64.workspace = true
+linkify = "0.11"
 
 [features]
 default = ["wgpu"]

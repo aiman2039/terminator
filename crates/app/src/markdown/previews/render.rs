@@ -194,6 +194,12 @@ impl PreviewBody<'_> {
             .text_styles
             .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
         ui.spacing_mut().item_spacing.y = 10.0;
+        // Body text between the theme's text and strong colors: easier to
+        // read than the default gray, still below headings.
+        let visuals = ui.visuals_mut();
+        let strong = visuals.strong_text_color();
+        let text = &mut visuals.widgets.noninteractive.fg_stroke.color;
+        *text = text.lerp_to_gamma(strong, 0.6);
     }
 
     fn content(&mut self, ui: &mut egui::Ui) {

@@ -98,6 +98,8 @@ pub fn can_retire_daemon(state: &State) -> bool {
             .iter()
             .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
         && (!state.generations.is_empty() || !state.sessions.iter().any(|s| s.lifecycle.live()))
+        // Live VNC connections die with their daemon.
+        && !state.vnc_sessions.iter().any(|s| s.status.live())
 }
 
 pub fn can_restart_service(state: &State) -> bool {
@@ -313,6 +315,30 @@ mod tests {
             assert!(!can_retire_daemon(&state));
             assert!(!can_restart_service(&state));
         }
+    }
+
+    #[test]
+    fn a_daemon_with_a_live_vnc_session_is_not_retired() {
+        let mut state = State {
+            attachment_helper_available: Some(true),
+            daemon_version: Some("0.0.1".into()),
+            capabilities: vec![
+                STABLE_HELPER_CAPABILITY.into(),
+                generations::CAPABILITY.into(),
+                SHUTDOWN_IF_IDLE_CAPABILITY.into(),
+            ],
+            ..State::default()
+        };
+        assert!(can_retire_daemon(&state));
+        state.vnc_sessions.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "v", "project_id": "", "label": "", "host": "h", "port": 5900,
+                "width": 0, "height": 0, "view_only": false, "status": "connected",
+                "created": 0, "generation": "g"
+            }))
+            .expect("minimal VNC session"),
+        );
+        assert!(!can_retire_daemon(&state));
     }
 
     #[test]

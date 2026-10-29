@@ -8,6 +8,9 @@ pub type MenuItemRenderer = fn(&mut egui::Ui, &str, &str, &str) -> egui::Respons
 
 pub struct SourceOptions {
     pub font_size: f32,
+    /// Row height as a multiple of the font's row height; text stays
+    /// vertically centered in the taller row.
+    pub line_spacing: f32,
     pub show_line_numbers: bool,
     pub show_status: bool,
     /// Gutter marks, sorted by row; binary-searched per painted row, so
@@ -63,6 +66,7 @@ impl Default for SourceOptions {
     fn default() -> Self {
         Self {
             font_size: 13.0,
+            line_spacing: 1.0,
             show_line_numbers: true,
             show_status: true,
             autofocus: true,

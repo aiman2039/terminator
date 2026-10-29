@@ -156,6 +156,15 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/git-compare-arrows.svg"),
     ),
     ("List", egui::include_image!("../../assets/icons/list.svg")),
+    ("Bold", egui::include_image!("../../assets/icons/bold.svg")),
+    (
+        "Italic",
+        egui::include_image!("../../assets/icons/italic.svg"),
+    ),
+    (
+        "Heading",
+        egui::include_image!("../../assets/icons/heading.svg"),
+    ),
     (
         "LayoutDashboard",
         egui::include_image!("../../assets/icons/layout-dashboard.svg"),
