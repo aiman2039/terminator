@@ -273,10 +273,11 @@ fn focused_vnc_clipboard_commands_send_remote_shortcuts() {
             down: true
         }
     )));
+    // The held Command key (sent as Control by default) is released last.
     assert!(matches!(
         paste.last(),
         Some(VncInputEvent::Key {
-            keycode: 0xFFEB,
+            keycode: 0xFFE3,
             down: false
         })
     ));
