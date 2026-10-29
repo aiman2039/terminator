@@ -217,6 +217,8 @@ pub(crate) struct ExplorerFileRowInput<'a> {
     pub label: &'a str,
     pub status: char,
     pub ignored: bool,
+    /// A language server reports an error in this file.
+    pub errors: bool,
     pub theme: &'a AppearanceConfig,
     pub open_shortcut: &'a str,
     pub split_shortcut: &'a str,
@@ -231,6 +233,7 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
         label,
         status,
         ignored,
+        errors,
         theme,
         open_shortcut,
         split_shortcut,
@@ -239,7 +242,9 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
         git_branches,
     } = input;
     let mut outcome = ExplorerRowOutcome::default();
-    let color = if ignored {
+    let color = if errors {
+        appearance::color(&theme.status_failed)
+    } else if ignored {
         appearance::color(&theme.git_ignored)
     } else {
         git_color(theme, status)

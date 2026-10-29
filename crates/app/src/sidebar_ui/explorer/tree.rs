@@ -302,6 +302,9 @@ impl App {
         let mut rect = ui.available_rect_before_wrap();
         // Explorer indent is a UI coordinate; depth can exceed the f32 mantissa.
         let indent = row.depth as f32 * ui.spacing().indent;
+        if row.entry.is_some() {
+            paint_indent_guides(ui, rect, row.depth);
+        }
         rect.min.x += indent;
         ui.push_id(&row.path, |ui| {
             ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -420,4 +423,23 @@ struct TreePaint<'a, 'b> {
     scroll_to: Option<PathBuf>,
     reveal: Option<PathBuf>,
     drop_dir: &'a mut Option<PathBuf>,
+}
+
+/// One faint vertical line per ancestor level, under the folder icons.
+fn paint_indent_guides(ui: &egui::Ui, row: egui::Rect, depth: usize) {
+    let step = ui.spacing().indent;
+    let stroke = egui::Stroke::new(
+        1.0,
+        ui.visuals()
+            .widgets
+            .noninteractive
+            .bg_stroke
+            .color
+            .gamma_multiply(0.6),
+    );
+    let y = egui::Rangef::new(row.top(), row.top() + ROW_HEIGHT);
+    for level in 0..depth {
+        let x = (row.left() + level as f32 * step + step * 0.5).round() + 0.5;
+        ui.painter().vline(x, y, stroke);
+    }
 }

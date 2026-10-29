@@ -84,6 +84,26 @@ pub fn file_icon(path: &std::path::Path) -> &'static str {
         .unwrap_or("File")
 }
 
+/// Folder icon by role (`IntelliJ` source/test/excluded roots, guessed from
+/// common names): code, tests, Git metadata, build output or ignored, or a
+/// plain open/closed folder.
+pub fn folder_icon(path: &std::path::Path, open: bool, ignored: bool) -> &'static str {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    match name.as_str() {
+        _ if ignored => "FolderX",
+        "target" | "node_modules" | "dist" | "build" | "out" | ".venv" | "__pycache__" => "FolderX",
+        ".git" | ".github" | ".gitlab" => "FolderGit",
+        "src" | "lib" | "source" | "crates" | "packages" => "FolderCode",
+        "test" | "tests" | "spec" | "__tests__" | "e2e" => "FolderCheck",
+        _ if open => "FolderOpen",
+        _ => "Folder",
+    }
+}
+
 pub fn source(name: &str) -> egui::ImageSource<'static> {
     if let Some(language) = name.strip_prefix("lang:") {
         return langs::source(language);
@@ -107,6 +127,28 @@ mod tests {
         assert_eq!(icon("notes.zzz"), "File");
         assert_eq!(icon(".hidden"), "File");
         assert!(matches!(source("Play"), egui::ImageSource::Bytes { .. }));
+    }
+
+    #[test]
+    fn folder_icon_shows_the_folder_role() {
+        let icon =
+            |name: &str, open, ignored| folder_icon(std::path::Path::new(name), open, ignored);
+        assert_eq!(icon("repo/src", false, false), "FolderCode");
+        assert_eq!(icon("repo/Tests", true, false), "FolderCheck");
+        assert_eq!(icon("repo/.github", false, false), "FolderGit");
+        assert_eq!(icon("repo/target", false, false), "FolderX");
+        assert_eq!(icon("repo/src", false, true), "FolderX");
+        assert_eq!(icon("repo/docs", true, false), "FolderOpen");
+        assert_eq!(icon("repo/docs", false, false), "Folder");
+        for name in [
+            "FolderCode",
+            "FolderCheck",
+            "FolderGit",
+            "FolderX",
+            "Scissors",
+        ] {
+            assert!(IconTables::source(ui_sources::UI_SOURCES, name).is_some());
+        }
     }
 
     #[test]

@@ -217,6 +217,22 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/folder-open.svg"),
     ),
     (
+        "FolderGit",
+        egui::include_image!("../../assets/icons/folder-git-2.svg"),
+    ),
+    (
+        "FolderCode",
+        egui::include_image!("../../assets/icons/folder-code.svg"),
+    ),
+    (
+        "FolderCheck",
+        egui::include_image!("../../assets/icons/folder-check.svg"),
+    ),
+    (
+        "FolderX",
+        egui::include_image!("../../assets/icons/folder-x.svg"),
+    ),
+    (
         "FileCog",
         egui::include_image!("../../assets/icons/file-cog.svg"),
     ),

@@ -32,7 +32,9 @@ impl App {
         let modifiers = ui.input(|input| input.modifiers);
         let expanded = self.explorer_row_expanded(row);
         let status = self.explorer_status(&entry.path);
-        let color = if entry.ignored {
+        let color = if self.lsp.has_errors_under(&entry.path) {
+            appearance::color(&self.theme.status_failed)
+        } else if entry.ignored {
             appearance::color(&self.theme.git_ignored)
         } else {
             git_color(&self.theme, status)
@@ -40,7 +42,7 @@ impl App {
         let folder = appearance::file_row(appearance::FileRowInput {
             ui,
             label,
-            icon: if expanded { "FolderOpen" } else { "Folder" },
+            icon: crate::icons::folder_icon(&entry.path, expanded, entry.ignored),
             selected: self.explorer_selected(&entry.path, None),
             height: 22.0,
             trailing: &status.to_string(),
@@ -203,6 +205,7 @@ impl App {
                 label: row.label.as_str(),
                 status,
                 ignored: entry.ignored,
+                errors: self.lsp.has_errors_under(&entry.path),
                 theme: &self.theme,
                 open_shortcut: &context.open_shortcut,
                 split_shortcut: &context.split_shortcut,
