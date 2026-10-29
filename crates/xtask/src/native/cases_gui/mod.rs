@@ -83,7 +83,7 @@ pub(crate) fn browser(o: &Options) -> Result<()> {
         h: &h,
         opts: o,
         name: "browser-close",
-        actions: json!([{"at_ms":1100,"target":"workspace-close:next.html"}]),
+        actions: json!([{"at_ms":1100,"target":"workspace-close:Navigation complete"}]),
         after: 3000,
     })?;
     ensure!(

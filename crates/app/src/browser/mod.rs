@@ -1,5 +1,6 @@
 //! GUI-owned browser tab identity. The native view is mounted later.
 pub(crate) mod host;
+pub(crate) mod nav;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -129,6 +130,34 @@ pub(crate) fn rewrite_html_tabs(value: &mut serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// Points the webview at the isolated named store for this data directory.
+pub(crate) fn apply_store<'a>(
+    builder: wry::WebViewBuilder<'a>,
+    data_dir: &Path,
+) -> Result<wry::WebViewBuilder<'a>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use wry::WebViewBuilderExtDarwin;
+        if objc2_foundation::NSProcessInfo::processInfo()
+            .operatingSystemVersion()
+            .majorVersion
+            >= 14
+        {
+            let identifier = profile_identifier(data_dir).map_err(|e| e.to_string())?;
+            Ok(builder.with_data_store_identifier(identifier))
+        } else {
+            // Named persistent stores are unavailable before macOS 14. Never fall
+            // back to the shared default store; older systems use private browsing.
+            Ok(builder.with_incognito(true))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = data_dir;
+        Ok(builder)
     }
 }
 

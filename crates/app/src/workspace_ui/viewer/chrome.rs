@@ -97,7 +97,7 @@ impl Viewer<'_> {
         };
         match tab {
             Tab::Image { path } => file_name(path).into(),
-            Tab::Browser { target, .. } => target.title().into(),
+            Tab::Browser { id, target } => self.app.browser_title(id, target).into(),
             Tab::Player => "Player".into(),
             Tab::Terminal(sid) => self.terminal_tab_title(sid),
             Tab::Diff { path, staged, .. } => format!(

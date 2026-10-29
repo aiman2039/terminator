@@ -80,6 +80,11 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/split.svg"),
     ),
     ("X", egui::include_image!("../../assets/icons/x.svg")),
+    ("Lock", egui::include_image!("../../assets/icons/lock.svg")),
+    (
+        "EllipsisVertical",
+        egui::include_image!("../../assets/icons/ellipsis-vertical.svg"),
+    ),
     (
         "Trash",
         egui::include_image!("../../assets/icons/trash-2.svg"),
