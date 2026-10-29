@@ -59,6 +59,10 @@ Keep every toolbar icon on one row and one size. Use the shared `appearance` hel
 - Ordinary editors load the user's Neovim configuration. Git reviews use bundled CodeDiff with an isolated profile and read-only snapshots: HEAD to index for staged changes, index to disk for working changes. Reopening refreshes a review; review actions must not mutate Git state.
 - Exception: native Git diff controls may stage, unstage, or discard selected hunks on explicit user action. Discard requires confirmation. Neovim reviews remain read-only.
 - Gate new daemon requests on advertised capabilities. Git reviews default to the native GUI viewer. Neovim CodeDiff is Settings → Diff viewer, and still requires `nvim-review-v1`. Missing that capability falls back to native. A newly built GUI or package does not replace a running daemon; preserve compatibility with live older daemons.
+- VNC: the daemon owns connections, framebuffers, keychain passwords and saved-host thumbnails. Closing a VNC tab detaches the session (like a terminal); only Disconnect, the detached timeout (Settings, default 30 min) or "Disconnect all and quit" ends it. Connecting a host with a live session reattaches it. Never show VNC records of retired or unreachable generations.
+- The VNC tool opens the VNC page in the main pane (same pattern as Settings/Player): address book, host Properties, import. The VNC sidebar only lists sessions and hosts; do not add editing forms there.
+- Never read or write the OS keychain inside an IPC request with a short deadline; load saved passwords on the session thread. Never send an empty VNC password.
+- The VNC start command is user-entered and runs over SSH only before connecting; never generate or install server-side scripts.
 
 ## Testing Guidelines
 
