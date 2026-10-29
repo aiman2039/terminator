@@ -87,6 +87,8 @@ impl App {
             explorer_speed: String::new(),
             explorer_speed_at: std::time::Instant::now(),
             explorer_focus_find: false,
+            explorer_undo: Vec::new(),
+            explorer_undoing: Vec::new(),
             explorer_scroll_to: None,
             explorer_followed: None,
             pending_delete_more: Vec::new(),

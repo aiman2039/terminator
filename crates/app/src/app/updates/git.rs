@@ -233,6 +233,10 @@ impl App {
                 if matches!(op, workspace_ops::Op::Commit { .. }) {
                     self.restore_failed_commit(&error);
                 }
+                if let workspace_ops::Op::Rename { from, to } = &op {
+                    self.explorer_undoing
+                        .retain(|pair| pair != &(from.clone(), to.clone()));
+                }
                 self.report_status_error(error);
             }
         }
@@ -241,19 +245,18 @@ impl App {
     fn workspace_op_succeeded(&mut self, op: &workspace_ops::Op, text: String) {
         // Open tabs and buffers follow a renamed or moved
         // file instead of editing a path that is gone.
-        match op {
-            workspace_ops::Op::Rename { from, to } => {
-                self.remap_moved_path(from, to);
-            }
-            workspace_ops::Op::Move { from, to_dir } => {
-                for source in from {
-                    if let Some(name) = source.file_name() {
-                        self.remap_moved_path(source, &to_dir.join(name));
-                    }
-                }
-            }
-            _ => {}
+        let moved: Vec<(PathBuf, PathBuf)> = match op {
+            workspace_ops::Op::Rename { from, to } => vec![(from.clone(), to.clone())],
+            workspace_ops::Op::Move { from, to_dir } => from
+                .iter()
+                .filter_map(|source| Some((source.clone(), to_dir.join(source.file_name()?))))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (from, to) in &moved {
+            self.remap_moved_path(from, to);
         }
+        self.explorer_record_move(moved);
         if matches!(op, workspace_ops::Op::Commit { .. }) {
             self.git.commit_inflight = None;
         }

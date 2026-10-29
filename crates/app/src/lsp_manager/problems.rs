@@ -30,6 +30,18 @@ impl LspManager {
         marks
     }
 
+    /// Whether `path` (a file, or any file under a folder) has an error,
+    /// for the Explorer's red names.
+    #[must_use]
+    pub fn has_errors_under(&self, path: &Path) -> bool {
+        self.diagnostics.iter().any(|(file, items)| {
+            file.starts_with(path)
+                && items
+                    .iter()
+                    .any(|item| item.severity == Some(L::Severity::Error))
+        })
+    }
+
     /// All diagnostics for one path, for the problems panel.
     pub fn problems_for(&self, path: &Path) -> Vec<L::Diagnostic> {
         self.diagnostics.get(path).cloned().unwrap_or_default()

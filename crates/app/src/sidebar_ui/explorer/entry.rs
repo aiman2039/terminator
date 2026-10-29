@@ -1,6 +1,6 @@
 //! One Explorer folder or file row with its actions.
 use super::*;
-use crate::sidebar_ui::explorer_rows::ExplorerLocal;
+use crate::sidebar_ui::explorer_rows::{ExplorerLocal, FileRowMarks};
 
 impl App {
     pub(super) fn explorer_entry(&mut self, input: ExplorerEntryInput<'_, '_>) {
@@ -32,7 +32,9 @@ impl App {
         let modifiers = ui.input(|input| input.modifiers);
         let expanded = self.explorer_row_expanded(row);
         let status = self.explorer_status(&entry.path);
-        let color = if entry.ignored {
+        let color = if self.lsp.has_errors_under(&entry.path) {
+            appearance::color(&self.theme.status_failed)
+        } else if entry.ignored {
             appearance::color(&self.theme.git_ignored)
         } else {
             git_color(&self.theme, status)
@@ -40,7 +42,7 @@ impl App {
         let folder = appearance::file_row(appearance::FileRowInput {
             ui,
             label,
-            icon: if expanded { "FolderOpen" } else { "Folder" },
+            icon: crate::icons::folder_icon(&entry.path, expanded, entry.ignored),
             selected: self.explorer_selected(&entry.path, None),
             height: 22.0,
             trailing: &status.to_string(),
@@ -107,6 +109,9 @@ impl App {
                 name: String::new(),
             });
         }
+        if menu_click(ui, "Open in terminal", "Terminal") {
+            self.create_workspace_tab_in(None, Some(folder_path.to_owned()));
+        }
         ui.separator();
         self.explorer_folder_menu_clipboard(ui, folder_path);
         ui.separator();
@@ -115,6 +120,28 @@ impl App {
         }
         if menu_click(ui, "Reveal in file manager", "FolderOpen") {
             self.queue_workspace(workspace_ops::Op::Reveal(folder_path.to_owned()));
+        }
+        let bookmarked = self
+            .preferences
+            .explorer_bookmarks
+            .iter()
+            .any(|p| p == folder_path);
+        let label = if bookmarked {
+            "Remove bookmark"
+        } else {
+            "Add bookmark"
+        };
+        if menu_click(ui, label, "Bookmark") {
+            self.explorer_toggle_bookmark(folder_path);
+        }
+        let excluded = self.explorer_excluded(folder_path);
+        let label = if excluded {
+            "Show in Explorer"
+        } else {
+            "Hide from Explorer"
+        };
+        if menu_click(ui, label, "EyeOff") {
+            self.explorer_toggle_excluded(folder_path);
         }
         ui.separator();
         if menu_click(ui, "Rename", "Pencil") {
@@ -183,6 +210,14 @@ fn menu_click(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
 }
 
 impl App {
+    fn explorer_excluded(&self, path: &Path) -> bool {
+        self.preferences
+            .explorer_view
+            .excluded
+            .iter()
+            .any(|known| known == path)
+    }
+
     fn explorer_file_entry(&mut self, input: ExplorerEntryInput<'_, '_>) {
         let ExplorerEntryInput {
             ui,
@@ -200,6 +235,7 @@ impl App {
                 label: row.label.as_str(),
                 status,
                 ignored: entry.ignored,
+                errors: self.lsp.has_errors_under(&entry.path),
                 theme: &self.theme,
                 open_shortcut: &context.open_shortcut,
                 split_shortcut: &context.split_shortcut,
@@ -213,6 +249,11 @@ impl App {
                     .as_ref()
                     .and_then(|context| context.root.as_ref())
                     .map(|_| self.git.branches.as_slice()),
+                marks: FileRowMarks {
+                    excluded: self.explorer_excluded(&entry.path),
+                    bookmarked: self.preferences.explorer_bookmarks.contains(&entry.path),
+                    nested: row.nests.then(|| self.explorer_row_expanded(row)),
+                },
             },
         );
         if let Some(response) = &outcome.response {

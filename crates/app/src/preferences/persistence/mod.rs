@@ -81,6 +81,25 @@ pub enum ExplorerSearchMode {
     Contents,
 }
 
+/// Explorer tree view options (`IntelliJ` Project view "Tree Appearance").
+/// The defaults keep the original order: folders first, natural name sort.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExplorerView {
+    /// Sort folders among files instead of above them.
+    pub folders_mixed: bool,
+    /// Sort by extension, then by name.
+    pub sort_by_type: bool,
+    /// Show every file at its own level instead of nesting lock and
+    /// generated files under their source (`Cargo.lock` under `Cargo.toml`).
+    pub nesting_off: bool,
+    /// Show only files with Git changes and the folders that hold them.
+    pub changed_only: bool,
+    /// Folders and files hidden like ignored files (`IntelliJ` "Mark
+    /// Directory as Excluded", but for this view only).
+    pub excluded: Vec<PathBuf>,
+}
+
 /// Agents sidebar views. Needs attention preserves the existing inbox;
 /// All live is the verified-agent overview; Unread follows read state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +216,12 @@ pub struct UiPreferences {
     /// single-child chains into one `a/b/c` row (the default).
     #[serde(default)]
     pub explorer_flat_folders: bool,
+    #[serde(default)]
+    pub explorer_view: ExplorerView,
+    /// Explorer bookmarks (`IntelliJ` Bookmarks): files and folders to
+    /// jump to from the Explorer "…" menu.
+    #[serde(default)]
+    pub explorer_bookmarks: Vec<PathBuf>,
     /// Explorer search mode and Options kebab (`Aa`, whole word, regex) plus
     /// the Contents include/exclude globs.
     #[serde(default)]
@@ -291,6 +316,8 @@ impl Default for UiPreferences {
             show_ignored: false,
             explorer_autoreveal: false,
             explorer_flat_folders: false,
+            explorer_view: ExplorerView::default(),
+            explorer_bookmarks: Vec::new(),
             explorer_search_mode: ExplorerSearchMode::Names,
             explorer_include: String::new(),
             explorer_exclude: String::new(),

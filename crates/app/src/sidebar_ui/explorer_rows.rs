@@ -1,12 +1,8 @@
+use super::explorer_file_menu::FileRowMenu;
 use super::git_panel::git_color;
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
-use crate::{
-    appearance,
-    file_actions::{self, FileAction},
-    icons,
-    preferences::ExplorerSearchMode,
-};
+use crate::{appearance, file_actions::FileAction, icons, preferences::ExplorerSearchMode};
 use eframe::egui::{self, Color32, RichText};
 use std::path::Path;
 use terminator_core::appearance::AppearanceConfig;
@@ -185,6 +181,20 @@ pub enum ExplorerLocal {
     Rename,
     Duplicate,
     Delete,
+    /// Show or hide the files nested under this file.
+    ToggleNested,
+    /// Hide this path from the Explorer, or show it again.
+    ToggleExcluded,
+    ToggleBookmark,
+}
+
+/// Per-row state the file context menu labels depend on.
+#[derive(Clone, Copy, Default)]
+pub struct FileRowMarks {
+    pub excluded: bool,
+    pub bookmarked: bool,
+    /// `Some(open)` for a file with nested files.
+    pub nested: Option<bool>,
 }
 
 #[derive(Default)]
@@ -217,12 +227,15 @@ pub(crate) struct ExplorerFileRowInput<'a> {
     pub label: &'a str,
     pub status: char,
     pub ignored: bool,
+    /// A language server reports an error in this file.
+    pub errors: bool,
     pub theme: &'a AppearanceConfig,
     pub open_shortcut: &'a str,
     pub split_shortcut: &'a str,
     pub selected: bool,
     pub perforce: bool,
     pub git_branches: Option<&'a [String]>,
+    pub marks: FileRowMarks,
 }
 
 pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> ExplorerRowOutcome {
@@ -231,15 +244,19 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
         label,
         status,
         ignored,
+        errors,
         theme,
         open_shortcut,
         split_shortcut,
         selected,
         perforce,
         git_branches,
+        marks,
     } = input;
     let mut outcome = ExplorerRowOutcome::default();
-    let color = if ignored {
+    let color = if errors {
+        appearance::color(&theme.status_failed)
+    } else if ignored {
         appearance::color(&theme.git_ignored)
     } else {
         git_color(theme, status)
@@ -280,143 +297,11 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
         split_shortcut,
         perforce,
         git_branches,
+        marks,
     };
     appearance::context_menu(&r, |ui| menu.show(ui, &mut outcome));
     outcome.response = Some(r);
     outcome
-}
-
-/// The file row's context menu.
-struct FileRowMenu<'a> {
-    path: &'a Path,
-    open_shortcut: &'a str,
-    split_shortcut: &'a str,
-    perforce: bool,
-    git_branches: Option<&'a [String]>,
-}
-
-impl FileRowMenu<'_> {
-    fn show(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
-        if let Some(action) = file_actions::menu_with(file_actions::MenuWithInput {
-            ui,
-            spec: file_actions::FileMenu {
-                file: true,
-                browser: file_actions::browser_document(self.path),
-                git: None,
-                neovim: false,
-            },
-            open: self.open_shortcut,
-            split: self.split_shortcut,
-        }) {
-            outcome.menu = Some(action);
-        }
-        if self.perforce {
-            ui.separator();
-            self.perforce_items(ui, outcome);
-        }
-        if let Some(branches) = self.git_branches {
-            ui.separator();
-            Self::git_items(ui, branches, outcome);
-        }
-        ui.separator();
-        Self::local_items(ui, outcome);
-    }
-
-    fn perforce_items(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Perforce: Open for edit",
-            icon: "Pencil",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            outcome.perforce = Some(crate::perforce::Op::Edit(self.path.into()));
-            ui.close();
-        }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Perforce: Reconcile file",
-            icon: "RefreshCw",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            outcome.perforce = Some(crate::perforce::Op::Reconcile(self.path.into()));
-            ui.close();
-        }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Perforce: Diff",
-            icon: "FileDiff",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            outcome.menu = Some(FileAction::NativeWorkingDiff);
-            ui.close();
-        }
-    }
-
-    fn git_items(ui: &mut egui::Ui, branches: &[String], outcome: &mut ExplorerRowOutcome) {
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Show history",
-            icon: "History",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            outcome.local = Some(ExplorerLocal::History);
-            ui.close();
-        }
-        ui.menu_button("Compare with branch", |ui| {
-            if branches.is_empty() {
-                ui.weak("Loading branches…");
-            }
-            for branch in branches {
-                if ui.button(branch).clicked() {
-                    outcome.local = Some(ExplorerLocal::CompareWith(branch.clone()));
-                    ui.close();
-                }
-            }
-        });
-    }
-
-    /// Reveal, copy, rename, duplicate, and delete.
-    fn local_items(ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
-        let mut item = |ui: &mut egui::Ui, label: &str, icon: &str, local: ExplorerLocal| {
-            if appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label,
-                icon,
-                shortcut: "",
-            })
-            .clicked()
-            {
-                outcome.local = Some(local);
-                ui.close();
-            }
-        };
-        item(
-            ui,
-            "Reveal in file manager",
-            "FolderOpen",
-            ExplorerLocal::Reveal,
-        );
-        item(
-            ui,
-            "Copy relative path",
-            "Copy",
-            ExplorerLocal::CopyRelative,
-        );
-        item(ui, "Copy file name", "Copy", ExplorerLocal::CopyName);
-        ui.separator();
-        item(ui, "Rename", "Pencil", ExplorerLocal::Rename);
-        item(ui, "Duplicate", "Copy", ExplorerLocal::Duplicate);
-        ui.separator();
-        item(ui, "Delete", "X", ExplorerLocal::Delete);
-    }
 }
 
 pub(super) fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {
