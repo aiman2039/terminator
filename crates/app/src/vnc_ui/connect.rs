@@ -77,8 +77,8 @@ impl App {
             port,
             label,
         } = tab;
-        if request.options != terminator_core::vnc::VncOptions::default() && !features {
-            self.error = Some("Restart the session service to use advanced VNC options".into());
+        if let Some(error) = self.vnc_options_unsupported(&request.options, features) {
+            self.error = Some(error.into());
             return;
         }
         host.clone_from(&request.host);

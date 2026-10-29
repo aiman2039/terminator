@@ -109,6 +109,7 @@ impl Shared {
             view_only: spec.view_only,
             status: VncSessionStatus::Connecting,
             error: None,
+            error_kind: None,
             created: now_ts,
             generation: state.generation.clone(),
         };
@@ -236,6 +237,7 @@ impl Shared {
                                 runtime: &runtime,
                                 session_id: &session_id,
                                 message: format!("Cannot read the saved VNC password: {error}"),
+                                kind: terminator_core::vnc::VncErrorKind::PasswordRequired,
                             });
                             return;
                         }
@@ -263,6 +265,7 @@ impl Shared {
                     runtime: &runtime,
                     session_id: &session_id,
                     message: "VNC session stopped after an internal error".into(),
+                    kind: terminator_core::vnc::VncErrorKind::Other,
                 });
             }
         });

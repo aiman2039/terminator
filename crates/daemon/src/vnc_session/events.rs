@@ -177,6 +177,7 @@ pub(super) fn apply_vnc_event(input: ApplyVncEventInput<'_>) -> bool {
                 runtime,
                 session_id,
                 message: err,
+                kind: terminator_core::vnc::VncErrorKind::Protocol,
             });
             false
         }

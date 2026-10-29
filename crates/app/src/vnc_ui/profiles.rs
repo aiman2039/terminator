@@ -131,6 +131,7 @@ impl App {
             && options.ssh.host.is_empty()
         {
             options.transport = terminator_core::vnc::Transport::Ssh;
+            settings::enable_ssh_defaults(options);
             editor.ssh_notice = Some(found.summary());
         }
     }
@@ -193,11 +194,11 @@ impl App {
                     "Restart the session service before editing profiles that contain legacy saved passwords"
                 );
             }
-            ensure!(
-                self.vnc_features_supported()
-                    || profile.options == terminator_core::vnc::VncOptions::default(),
-                "Restart the session service to use advanced VNC options"
-            );
+            if let Some(error) =
+                self.vnc_options_unsupported(&profile.options, self.vnc_features_supported())
+            {
+                anyhow::bail!(error);
+            }
             ensure!(
                 self.vnc_features_supported() || !self.vnc_sidebar.save_password,
                 "Restart the session service to save passwords securely"

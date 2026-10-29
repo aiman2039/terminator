@@ -154,6 +154,8 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::remote::TRANSFER_CAPABILITY.into(),
         vnc::FEATURES_CAPABILITY.into(),
         vnc::LABELS_CAPABILITY.into(),
+        vnc::ERRORS_CAPABILITY.into(),
+        vnc::START_COMMAND_CAPABILITY.into(),
         vnc::SHM_CAPABILITY.into(),
     ];
     if catalog {

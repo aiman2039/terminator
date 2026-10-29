@@ -39,10 +39,10 @@ impl App {
             .as_ref()
             .map(|sid| Tab::Terminal(sid.clone()));
         let after = self.editor_target(&project, origin.as_ref(), split);
-        if profile.options != terminator_core::vnc::VncOptions::default()
-            && !self.vnc_features_supported()
+        if let Some(error) =
+            self.vnc_options_unsupported(&profile.options, self.vnc_features_supported())
         {
-            self.error = Some("Restart the session service to use advanced VNC options".into());
+            self.error = Some(error.into());
             return;
         }
         if profile.password.is_empty() && !profile.credential_saved {

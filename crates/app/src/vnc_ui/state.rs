@@ -65,6 +65,9 @@ pub(crate) struct VncViewState {
     /// Quick-connect text in the address book: `host:display` or `host::port`.
     pub(crate) address: String,
     pub(crate) speed: super::speed::ViewSpeed,
+    /// Session whose "password required" failure already opened the
+    /// password prompt, so going back to all hosts is not undone.
+    pub(crate) prompted_for: Option<String>,
 }
 
 impl Default for VncViewState {
@@ -118,6 +121,7 @@ impl Default for VncViewState {
             save_profile: true,
             address: String::new(),
             speed: super::speed::ViewSpeed::default(),
+            prompted_for: None,
         }
     }
 }
