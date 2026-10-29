@@ -110,20 +110,38 @@ impl App {
                     "Click to show."
                 }
             ));
+        #[cfg(feature = "test-support")]
+        crate::diagnostics::record(
+            ui.ctx(),
+            &format!("vnc-session:{}", session.label),
+            label.rect,
+        );
         if label.clicked() {
             self.focus_or_open_vnc_session(session);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if appearance::sidebar_action(ui, "CircleStop", "Disconnect").clicked() {
+            let disconnect = appearance::sidebar_action(ui, "CircleStop", "Disconnect");
+            #[cfg(feature = "test-support")]
+            crate::diagnostics::record(
+                ui.ctx(),
+                &format!("vnc-disconnect:{}", session.label),
+                disconnect.rect,
+            );
+            if disconnect.clicked() {
                 self.send(Request::VncDisconnect {
                     session: session.id.clone(),
                 });
             }
             if detached {
-                form::hint(
-                    ui,
-                    "Detached",
-                    "Connected with no open tab. Click the name to reattach.",
+                let weak = ui.visuals().weak_text_color();
+                let _hint = ui
+                    .label(RichText::new("Detached").size(11.0).color(weak))
+                    .on_hover_text("Connected with no open tab. Click the name to reattach.");
+                #[cfg(feature = "test-support")]
+                crate::diagnostics::record(
+                    ui.ctx(),
+                    &format!("vnc-detached:{}", session.label),
+                    _hint.rect,
                 );
             }
         });

@@ -19,6 +19,7 @@ mod responsiveness;
 mod reviews;
 mod ssh_hostkey;
 mod updates;
+mod vnc;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod windows;
 pub(super) use super::harness::{
