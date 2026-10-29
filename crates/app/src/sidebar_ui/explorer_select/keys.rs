@@ -164,7 +164,7 @@ impl App {
         let Some(row) = nav.current() else {
             return;
         };
-        if is_dir(row) && self.explorer_row_expanded(row) {
+        if is_dir(row) && !row.filtered_open && self.explorer_row_expanded(row) {
             self.set_explorer_row_expanded(row, false);
         } else if let Some(parent) = row.chain.first().unwrap_or(&row.path).parent()
             && nav.visible.iter().any(|row| row.path == parent)
@@ -204,7 +204,7 @@ impl App {
     }
 
     /// Copy (or cut) the selected paths, also as text.
-    fn explorer_copy_selection(&mut self, ui: &egui::Ui, cut: bool) {
+    pub(in crate::sidebar_ui) fn explorer_copy_selection(&mut self, ui: &egui::Ui, cut: bool) {
         if self.explorer_selection.is_empty() {
             return;
         }

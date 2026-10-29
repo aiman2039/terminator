@@ -36,6 +36,8 @@ pub struct App {
     /// Type-to-search text in the focused tree and when it was last typed.
     pub(crate) explorer_speed: String,
     pub(crate) explorer_speed_at: std::time::Instant,
+    /// Focus the Explorer search field on the next paint.
+    pub(crate) explorer_focus_find: bool,
     /// Row the tree should scroll into view on its next paint.
     pub(crate) explorer_scroll_to: Option<PathBuf>,
     /// Last file auto-reveal followed, so it reveals once per focus change.

@@ -86,6 +86,7 @@ impl App {
             explorer_clipboard: None,
             explorer_speed: String::new(),
             explorer_speed_at: std::time::Instant::now(),
+            explorer_focus_find: false,
             explorer_scroll_to: None,
             explorer_followed: None,
             pending_delete_more: Vec::new(),

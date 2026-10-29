@@ -72,6 +72,20 @@ fn build_set(patterns: &[&str]) -> Option<GlobSet> {
     if any { builder.build().ok() } else { None }
 }
 
+/// Include pattern that keeps one folder below the search root (empty for
+/// the root itself). Spaces and commas split patterns, so they match as `?`.
+pub(crate) fn folder_include_pattern(root: &Path, folder: &Path) -> String {
+    let Ok(relative) = folder.strip_prefix(root) else {
+        return String::new();
+    };
+    if relative.as_os_str().is_empty() {
+        return String::new();
+    }
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    let escaped = globset::escape(&relative).replace([' ', ',', '\n'], "?");
+    format!("{escaped}/**")
+}
+
 fn build_regex(query: &Query) -> Result<Regex, String> {
     let text = query.text.trim();
     if text.is_empty() {

@@ -89,6 +89,9 @@ pub(crate) struct ExplorerRow {
     /// Compact folder row (`a/b/c`): every folder in the chain, top
     /// first; `path` and `entry` are the deepest. Empty for plain rows.
     pub chain: Vec<PathBuf>,
+    /// A folder the name filter keeps open because something inside
+    /// it matches.
+    pub filtered_open: bool,
 }
 impl Cache {
     pub fn clear_files(&mut self) {

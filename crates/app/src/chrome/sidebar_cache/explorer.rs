@@ -11,6 +11,8 @@ use terminator_git::Entry;
 const MAX_DEPTH: usize = 20;
 /// Longest compact folder chain (`a/b/c`).
 const MAX_CHAIN: usize = 20;
+/// Most folders a name filter lists and watches, collapsed ones included.
+const MAX_FILTER_DIRS: usize = 500;
 
 impl App {
     pub(crate) fn explorer_rows(&mut self, root: &Path) -> Arc<Vec<ExplorerRow>> {
@@ -33,6 +35,7 @@ impl App {
             query: query.as_deref(),
             rows: Vec::new(),
             dirs: Vec::new(),
+            filter_budget: MAX_FILTER_DIRS,
         };
         walk.walk(root, 0);
         let ExplorerWalk { rows, dirs, .. } = walk;
@@ -98,6 +101,8 @@ struct ExplorerWalk<'a> {
     query: Option<&'a str>,
     rows: Vec<ExplorerRow>,
     dirs: Vec<PathBuf>,
+    /// Folders a filtered walk may still enter.
+    filter_budget: usize,
 }
 
 fn entry_name(entry: &Entry) -> String {
@@ -110,35 +115,84 @@ fn entry_name(entry: &Entry) -> String {
 }
 
 impl<'a> ExplorerWalk<'a> {
-    fn walk(&mut self, path: &Path, depth: usize) {
+    /// Rows for the listing of `path`. Returns whether any row matched
+    /// the filter (always true without a filter).
+    fn walk(&mut self, path: &Path, depth: usize) -> bool {
         if depth > MAX_DEPTH {
-            return;
+            return false;
+        }
+        if self.query.is_some() {
+            if self.filter_budget == 0 {
+                return false;
+            }
+            self.filter_budget = self.filter_budget.saturating_sub(1);
         }
         self.dirs.push(path.to_owned());
         let app = self.filter.app;
-        if app.directory_errors.contains_key(path) || !app.dirs.contains_key(path) {
+        // A filtered tree lists folders in the background: hide their
+        // "Loading…" rows and show matches as they arrive.
+        if self.query.is_none()
+            && (app.directory_errors.contains_key(path) || !app.dirs.contains_key(path))
+        {
             self.rows.push(ExplorerRow {
                 entry: None,
                 path: path.to_owned(),
                 label: String::new(),
                 depth,
                 chain: Vec::new(),
+                filtered_open: false,
             });
         }
         let Some(entries) = app.dirs.get(path) else {
-            return;
+            return self.query.is_none();
         };
         let filter = self.filter;
+        let mut matched = self.query.is_none();
         for entry in entries.iter().filter(|entry| filter.shown(entry)) {
-            self.visit(entry, depth);
+            matched |= self.visit(entry, depth);
         }
+        matched
     }
 
-    fn visit(&mut self, entry: &'a Entry, depth: usize) {
+    /// With a filter, a file stays when its name matches and a folder
+    /// stays when its name or something inside it matches. A matching
+    /// folder shows its contents unfiltered, as usual.
+    fn visit(&mut self, entry: &'a Entry, depth: usize) -> bool {
         let label = entry_name(entry);
-        if !crate::sidebar_ui::explorer_query_keeps_file(&label, entry.directory, self.query) {
-            return;
+        let Some(query) = self.query else {
+            self.visit_unfiltered(entry, label, depth);
+            return true;
+        };
+        let name_matches = crate::sidebar_ui::explorer_query_keeps_file(&label, false, Some(query));
+        if !entry.directory {
+            if name_matches {
+                self.visit_unfiltered(entry, label, depth);
+            }
+            return name_matches;
         }
+        if name_matches {
+            self.query = None;
+            self.visit_unfiltered(entry, label, depth);
+            self.query = Some(query);
+            return true;
+        }
+        let start = self.rows.len();
+        self.rows.push(ExplorerRow {
+            entry: Some(entry.clone()),
+            path: entry.path.clone(),
+            label,
+            depth,
+            chain: Vec::new(),
+            filtered_open: true,
+        });
+        if self.walk(&entry.path, depth.saturating_add(1)) {
+            return true;
+        }
+        self.rows.truncate(start);
+        false
+    }
+
+    fn visit_unfiltered(&mut self, entry: &'a Entry, label: String, depth: usize) {
         let chain = self.compact_chain(entry);
         let Some(&deepest) = chain.last() else {
             return;
@@ -166,6 +220,7 @@ impl<'a> ExplorerWalk<'a> {
             } else {
                 Vec::new()
             },
+            filtered_open: false,
         });
         if expanded {
             // Keep the chain's own listings fresh: they decide

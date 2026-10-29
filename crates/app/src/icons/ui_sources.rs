@@ -52,6 +52,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
     ("Save", egui::include_image!("../../assets/icons/save.svg")),
     ("Copy", egui::include_image!("../../assets/icons/copy.svg")),
     (
+        "Scissors",
+        egui::include_image!("../../assets/icons/scissors.svg"),
+    ),
+    (
         "ClipboardPaste",
         egui::include_image!("../../assets/icons/clipboard-paste.svg"),
     ),

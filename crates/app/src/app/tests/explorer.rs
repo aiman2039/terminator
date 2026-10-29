@@ -140,7 +140,7 @@ fn explorer_prepared_rows_reuse_listings_and_refresh_expansion_and_content() {
     app.preferences.show_ignored = true;
     assert_eq!(app.explorer_rows(&root).len(), 3);
     app.explorer_query = "missing".into();
-    assert_eq!(app.explorer_rows(&root).len(), 1); // folders remain navigable
+    assert!(app.explorer_rows(&root).is_empty()); // no folder without a match
     app.explorer_query.clear();
     app.dirs.get_mut(&folder).unwrap()[0].path = folder.join("changed.rs");
     app.sidebar_cache.get_mut().clear_files();
@@ -980,4 +980,68 @@ fn single_child_folder_chains_show_as_one_compact_row() {
     // "Compact folders" off: one row per folder again.
     app.preferences.explorer_flat_folders = true;
     assert_eq!(labels(&mut app)[0], ("java".to_owned(), 0));
+}
+
+#[test]
+fn name_filter_keeps_only_folders_on_the_path_to_a_match() {
+    let (mut app, _ctx, dir) = fixture();
+    let root = dir.path().to_path_buf();
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    app.dirs.insert(
+        root.clone(),
+        vec![
+            entry("src", true),
+            entry("docs", true),
+            entry("main.rs", false),
+        ],
+    );
+    app.dirs
+        .insert(root.join("src"), vec![entry("src/deep", true)]);
+    app.dirs.insert(
+        root.join("src/deep"),
+        vec![entry("src/deep/needle.rs", false)],
+    );
+    app.dirs
+        .insert(root.join("docs"), vec![entry("docs/guide.md", false)]);
+    app.explorer_query = "needle".into();
+    // Collapsed folders are searched too; "docs" and "main.rs" have no match.
+    let rows = app.explorer_rows(&root);
+    let labels: Vec<_> = rows
+        .iter()
+        .map(|row| (row.label.as_str(), row.depth))
+        .collect();
+    assert_eq!(labels, [("src", 0), ("deep", 1), ("needle.rs", 2)]);
+    assert!(app.explorer_row_expanded(&rows[0]));
+    assert!(app.expanded_dirs.is_empty());
+    // A folder whose name matches shows its own contents unfiltered.
+    app.explorer_query = "doc".into();
+    let rows = app.explorer_rows(&root);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "docs");
+    assert!(!app.explorer_row_expanded(&rows[0]));
+    // Unloaded folders are listed in the background without "Loading…" rows.
+    app.dirs.remove(&root.join("src/deep"));
+    app.explorer_query = "needle".into();
+    assert!(app.explorer_rows(&root).is_empty());
+    assert!(app.visible_dirs.contains(&root.join("src/deep")));
+}
+
+#[test]
+fn find_in_folder_scopes_the_search_to_that_folder() {
+    use crate::search::folder_include_pattern;
+    let root = Path::new("/repo");
+    assert_eq!(folder_include_pattern(root, root), "");
+    assert_eq!(folder_include_pattern(root, Path::new("/other")), "");
+    assert_eq!(
+        folder_include_pattern(root, Path::new("/repo/src/ui")),
+        "src/ui/**"
+    );
+    assert_eq!(
+        folder_include_pattern(root, Path::new("/repo/my dir,[x]")),
+        "my?dir?[[]x[]]/**"
+    );
 }

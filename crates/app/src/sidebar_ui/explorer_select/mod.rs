@@ -160,7 +160,8 @@ impl App {
 
     /// A folder row is open when any folder of its compact chain is.
     pub(crate) fn explorer_row_expanded(&self, row: &ExplorerRow) -> bool {
-        self.expanded_dirs.contains(&row.path)
+        row.filtered_open
+            || self.expanded_dirs.contains(&row.path)
             || row
                 .chain
                 .iter()

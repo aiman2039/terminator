@@ -1,5 +1,6 @@
 //! One Explorer folder or file row with its actions.
 use super::*;
+use crate::sidebar_ui::explorer_rows::ExplorerLocal;
 
 impl App {
     pub(super) fn explorer_entry(&mut self, input: ExplorerEntryInput<'_, '_>) {
@@ -78,7 +79,11 @@ impl App {
         }
         self.explorer_select_on_secondary(&folder, &entry.path);
         let folder_path = entry.path.clone();
-        appearance::context_menu(&folder, |ui| self.explorer_folder_menu(ui, &folder_path));
+        // A compact row (`a/b/c`) collapses from its top folder.
+        let top = row.chain.first().unwrap_or(&entry.path).clone();
+        appearance::context_menu(&folder, |ui| {
+            self.explorer_folder_menu(ui, &folder_path, &top);
+        });
     }
 
     /// A right click on an unselected row selects just that row.
@@ -89,124 +94,95 @@ impl App {
         }
     }
 
-    fn explorer_folder_menu(&mut self, ui: &mut egui::Ui, folder_path: &Path) {
-        self.explorer_folder_menu_create(ui, folder_path);
-        ui.separator();
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Rename",
-            icon: "Pencil",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            self.explorer_rename(folder_path);
-            ui.close();
-        }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Duplicate",
-            icon: "Copy",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            self.queue_workspace(workspace_ops::Op::Duplicate(folder_path.to_owned()));
-            ui.close();
-        }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Delete",
-            icon: "X",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            self.explorer_confirm_delete();
-            ui.close();
-        }
-        ui.separator();
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Collapse all",
-            icon: "ChevronDown",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            self.expanded_dirs.clear();
-            ui.close();
-        }
-    }
-
-    /// New file/folder, Reveal, Copy path, and Paste.
-    fn explorer_folder_menu_create(&mut self, ui: &mut egui::Ui, folder_path: &Path) {
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "New file",
-            icon: "File",
-            shortcut: "",
-        })
-        .clicked()
-        {
+    fn explorer_folder_menu(&mut self, ui: &mut egui::Ui, folder_path: &Path, top: &Path) {
+        if menu_click(ui, "New file", "File") {
             self.open_name_prompt(workspace_ops::NamePrompt::File {
                 dir: folder_path.to_owned(),
                 name: String::new(),
             });
-            ui.close();
         }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "New folder",
-            icon: "Folder",
-            shortcut: "",
-        })
-        .clicked()
-        {
+        if menu_click(ui, "New folder", "Folder") {
             self.open_name_prompt(workspace_ops::NamePrompt::Folder {
                 dir: folder_path.to_owned(),
                 name: String::new(),
             });
-            ui.close();
         }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Reveal in file manager",
-            icon: "FolderOpen",
-            shortcut: "",
-        })
-        .clicked()
-        {
+        ui.separator();
+        self.explorer_folder_menu_clipboard(ui, folder_path);
+        ui.separator();
+        if menu_click(ui, "Find in folder", "Search") {
+            self.explorer_find_in_folder(folder_path);
+        }
+        if menu_click(ui, "Reveal in file manager", "FolderOpen") {
             self.queue_workspace(workspace_ops::Op::Reveal(folder_path.to_owned()));
-            ui.close();
         }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Copy path",
-            icon: "Copy",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            ui.ctx().copy_text(folder_path.display().to_string());
-            ui.close();
+        ui.separator();
+        if menu_click(ui, "Rename", "Pencil") {
+            self.explorer_rename(folder_path);
         }
-        if self.explorer_clipboard.is_some()
-            && appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: "Paste",
-                icon: "ClipboardPaste",
-                shortcut: "",
-            })
-            .clicked()
-        {
-            self.explorer_selection = vec![folder_path.to_owned()];
-            let root = folder_path.to_owned();
-            self.explorer_paste(&root);
-            ui.close();
+        if menu_click(ui, "Duplicate", "Copy") {
+            self.queue_workspace(workspace_ops::Op::Duplicate(folder_path.to_owned()));
+        }
+        if menu_click(ui, "Delete", "X") {
+            self.explorer_confirm_delete();
+        }
+        ui.separator();
+        if menu_click(ui, "Collapse all", "ChevronDown") {
+            self.expanded_dirs.retain(|dir| !dir.starts_with(top));
         }
     }
 
+    /// Cut, Copy, Paste, and the copy-path variants, as for files.
+    fn explorer_folder_menu_clipboard(&mut self, ui: &mut egui::Ui, folder_path: &Path) {
+        if menu_click(ui, "Cut", "Scissors") {
+            self.explorer_copy_selection(ui, true);
+        }
+        if menu_click(ui, "Copy", "Copy") {
+            self.explorer_copy_selection(ui, false);
+        }
+        if self.explorer_clipboard.is_some() && menu_click(ui, "Paste", "ClipboardPaste") {
+            self.explorer_selection = vec![folder_path.to_owned()];
+            self.explorer_paste(folder_path);
+        }
+        if menu_click(ui, "Copy path", "Copy") {
+            ui.ctx().copy_text(folder_path.display().to_string());
+        }
+        if menu_click(ui, "Copy relative path", "Copy") {
+            self.explorer_local(folder_path, ExplorerLocal::CopyRelative, ui);
+        }
+        if menu_click(ui, "Copy file name", "Copy") {
+            self.explorer_local(folder_path, ExplorerLocal::CopyName, ui);
+        }
+    }
+
+    /// Contents search limited to `folder` (JetBrains Find in Path with a
+    /// directory scope).
+    fn explorer_find_in_folder(&mut self, folder: &Path) {
+        let Some(cwd) = self.cwd() else {
+            return;
+        };
+        self.preferences.explorer_search_mode = ExplorerSearchMode::Contents;
+        self.preferences.explorer_include = crate::search::folder_include_pattern(&cwd, folder);
+        self.explorer_focus_find = true;
+    }
+}
+
+/// One menu entry; closes the menu when picked.
+fn menu_click(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
+    let clicked = appearance::menu_item(appearance::MenuItemInput {
+        ui,
+        label,
+        icon,
+        shortcut: "",
+    })
+    .clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
+impl App {
     fn explorer_file_entry(&mut self, input: ExplorerEntryInput<'_, '_>) {
         let ExplorerEntryInput {
             ui,

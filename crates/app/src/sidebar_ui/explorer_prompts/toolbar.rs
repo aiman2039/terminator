@@ -259,7 +259,7 @@ impl App {
                 )
             })
             .inner;
-        if focus_find {
+        if focus_find || std::mem::take(&mut self.explorer_focus_find) {
             find.request_focus();
         }
         #[cfg(feature = "test-support")]
