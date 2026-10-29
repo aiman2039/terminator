@@ -231,6 +231,7 @@ impl VncInner {
                     }
                     ClientMsg::ClientCutText(text)
                 }
+                X11Event::SetEncodings(encodings) => ClientMsg::SetEncodings(encodings),
             };
             Ok(msg)
         }

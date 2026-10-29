@@ -5,6 +5,7 @@ mod input;
 mod quality;
 mod reconnect;
 pub(crate) mod shm;
+mod stats;
 mod transfer;
 mod transport;
 
@@ -67,6 +68,7 @@ pub(crate) struct VncRuntime {
     shm_files: u32,
     /// Bumped whenever the cursor image changes.
     pub(crate) cursor_serial: u64,
+    pub(crate) stats: stats::UpdateStats,
     /// An incremental update request is out and its update has not ended.
     update_pending: bool,
 }
@@ -97,6 +99,7 @@ impl VncRuntime {
             shm_revision: 0,
             shm_files: 0,
             cursor_serial: 0,
+            stats: stats::UpdateStats::default(),
             update_pending: false,
         }
     }

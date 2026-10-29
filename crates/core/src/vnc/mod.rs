@@ -284,6 +284,18 @@ pub struct VncShmFrame {
     pub sequence: u64,
     #[serde(default)]
     pub regions: Vec<VncRegion>,
+    /// Server-side speed, for the viewer's speed indicator.
+    #[serde(default)]
+    pub stats: VncStats,
+}
+
+/// How fast the VNC server answers the daemon's update requests.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncStats {
+    /// Complete framebuffer updates received in the last second.
+    pub updates_per_second: u16,
+    /// Smoothed time from an update request to the end of its answer.
+    pub update_ms: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

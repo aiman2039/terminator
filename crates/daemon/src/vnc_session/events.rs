@@ -141,17 +141,26 @@ pub(super) fn apply_vnc_event(input: ApplyVncEventInput<'_>) -> bool {
             None => true,
         },
         VncEvent::RawImage(rect, bytes) => {
-            relock(runtime).blit_rgba(rect, &bytes);
+            let mut rt = relock(runtime);
+            rt.stats.update_started();
+            rt.blit_rgba(rect, &bytes);
             true
         }
         VncEvent::Copy(dst, src) => {
-            relock(runtime).copy_rect(dst, src);
+            let mut rt = relock(runtime);
+            rt.stats.update_started();
+            rt.copy_rect(dst, src);
             true
         }
-        VncEvent::JpegImage(rect, bytes) => apply_jpeg(runtime, rect, bytes),
+        VncEvent::JpegImage(rect, bytes) => {
+            relock(runtime).stats.update_started();
+            apply_jpeg(runtime, rect, bytes)
+        }
         VncEvent::SetCursor(rect, pixels) => apply_cursor(runtime, rect, pixels),
         VncEvent::UpdateEnd => {
-            relock(runtime).update_pending = false;
+            let mut rt = relock(runtime);
+            rt.update_pending = false;
+            rt.stats.update_ended();
             true
         }
         VncEvent::Text(text) => {

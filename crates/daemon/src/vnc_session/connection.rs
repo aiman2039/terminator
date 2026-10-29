@@ -52,7 +52,7 @@ async fn connect_client(
         .set_auth_method(async move { Ok(secret.to_string()) })
         .allow_shared(spec.shared)
         .set_pixel_format(PixelFormat::rgba());
-    for encoding in quality::encodings(&spec.options) {
+    for encoding in quality::encodings(spec.options.quality, false) {
         connector = connector.add_encoding(encoding);
     }
     let state = connector
@@ -130,6 +130,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     let mut last_request = Instant::now()
         .checked_sub(Duration::from_secs(1))
         .unwrap_or_else(Instant::now);
+    let mut adaptive = quality::Adaptive::default();
     let result = 'connection: loop {
         tokio::select! {
             event=client.recv_event()=>match event {
@@ -143,7 +144,12 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                 Err(e)=>break Err(Failure::Network(e.to_string())),
             },
             item=input_rx.recv()=>{
-                let Some(event)=item else{break Err(Failure::Cancelled)};
+                let Some(first)=item else{break Err(Failure::Cancelled)};
+                // Take everything already queued so stale pointer moves can be
+                // dropped instead of replayed one by one behind the cursor.
+                let mut batch=vec![first];
+                while let Ok(event)=input_rx.try_recv(){batch.push(event);}
+                for event in input::coalesce_pointer_moves(batch) {
                 match event {
                     VncInputEvent::Resize{width,height}=>{
                         if resize.as_ref().is_some_and(|task|!task.is_finished()){continue;}
@@ -158,13 +164,17 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                     event=>{
                         let printable_release=matches!(&event,VncInputEvent::Key{keycode,down:false} if *keycode<=255||*keycode>=0x0100_0000);
                         if let Some(event)=input::to_x11_event(event)
-                            && let Err(e)=client.input(event).await{break Err(Failure::Network(e.to_string()));}
+                            && let Err(e)=client.input(event).await{break 'connection Err(Failure::Network(e.to_string()));}
                         if printable_release{tokio::time::sleep(Duration::from_millis(10)).await;}
                     },
+                }
                 }
             },
             _=tick.tick()=>{
                 if let Err(e)=request_refresh(&client,runtime,spec.options.quality,&mut last_request).await{break Err(e);}
+                let update_ms=relock(runtime).stats.snapshot().update_ms;
+                if let Some(encodings)=adaptive.check(spec.options.quality,update_ms)
+                    && let Err(e)=client.input(X11Event::SetEncodings(encodings)).await{break Err(Failure::Network(e.to_string()));}
             }
         }
     };

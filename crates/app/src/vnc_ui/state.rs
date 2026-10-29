@@ -64,6 +64,7 @@ pub(crate) struct VncViewState {
     pub(crate) save_profile: bool,
     /// Quick-connect text in the address book: `host:display` or `host::port`.
     pub(crate) address: String,
+    pub(crate) speed: super::speed::ViewSpeed,
 }
 
 impl Default for VncViewState {
@@ -116,6 +117,7 @@ impl Default for VncViewState {
             draft_view_only: false,
             save_profile: true,
             address: String::new(),
+            speed: super::speed::ViewSpeed::default(),
         }
     }
 }

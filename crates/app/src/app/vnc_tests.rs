@@ -273,6 +273,7 @@ fn repeated_vnc_frames_do_not_overwrite_a_new_local_clipboard() {
                     cursor_serial: 0,
                     shm_failed: false,
                     clipboard: Some(text.into()),
+                    stats: None,
                 },
             );
         });

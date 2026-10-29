@@ -18,6 +18,8 @@ pub(crate) struct VncDecodedFrame {
     pub(crate) cursor: Option<(terminator_core::vnc::VncCursor, Option<ColorImage>)>,
     pub(crate) monitors: Vec<terminator_core::vnc::VncMonitor>,
     pub(crate) resize_supported: bool,
+    /// Server speed from a shared-memory frame.
+    pub(crate) stats: Option<terminator_core::vnc::VncStats>,
 }
 
 /// Decode a frame off the GUI thread. `runtime` is the daemon runtime
@@ -62,6 +64,7 @@ pub(crate) fn decode_frame(frame: VncFrame, runtime: &std::path::Path) -> Result
         })
         .transpose()?;
     Ok(VncDecodedFrame {
+        stats: frame.shm.as_ref().map(|shm| shm.stats),
         cursor,
         monitors: frame.monitors,
         resize_supported: frame.resize_supported,
@@ -123,6 +126,9 @@ impl App {
         entry.shm_failed |= decoded.shm_failed;
         entry.monitors = decoded.monitors;
         entry.resize_supported = decoded.resize_supported;
+        if decoded.stats.is_some() {
+            entry.speed.server = decoded.stats;
+        }
         if let Some((cursor, image)) = decoded.cursor
             && (entry.cursor_signature.as_ref() != Some(&cursor.rgba)
                 || entry.cursor_hotspot != [cursor.x, cursor.y]
@@ -168,7 +174,7 @@ impl App {
                     texture.set_partial(
                         [usize::from(region.x), usize::from(region.y)],
                         image,
-                        egui::TextureOptions::LINEAR,
+                        screen_filter(entry.fit),
                     );
                     applied = true;
                 }
@@ -176,12 +182,14 @@ impl App {
                 entry.texture = Some(ctx.load_texture(
                     format!("vnc:{}", decoded.session),
                     image,
-                    egui::TextureOptions::LINEAR,
+                    screen_filter(entry.fit),
                 ));
                 applied = true;
             }
         }
-        if !applied {
+        if applied {
+            entry.speed.frame_shown();
+        } else {
             entry.force_full = true;
         }
         if let Some(clipboard) = decoded.clipboard
@@ -215,8 +223,18 @@ fn apply_patches(
         texture.set_partial(
             [usize::from(region.x), usize::from(region.y)],
             image,
-            egui::TextureOptions::LINEAR,
+            screen_filter(entry.fit),
         );
     }
     true
+}
+
+/// Remote screen sampling: smooth when scaled to fit, exact pixels at
+/// 100% so text stays sharp.
+pub(super) fn screen_filter(fit: bool) -> egui::TextureOptions {
+    if fit {
+        egui::TextureOptions::LINEAR
+    } else {
+        egui::TextureOptions::NEAREST
+    }
 }

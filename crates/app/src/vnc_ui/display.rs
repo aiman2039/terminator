@@ -193,7 +193,11 @@ impl ScreenPane<'_> {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         ui.painter()
             .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-        let image_rect = egui::Rect::from_center_size(rect.center(), display_size);
+        // Pixel-aligned so 100% maps one remote pixel to one screen pixel.
+        let image_rect = egui::emath::GuiRounding::round_to_pixels(
+            egui::Rect::from_center_size(rect.center(), display_size),
+            ui.pixels_per_point(),
+        );
         egui::Image::new(texture)
             .uv(self.geometry.uv)
             .paint_at(ui, image_rect);

@@ -29,6 +29,7 @@ impl VncToolbar<'_> {
             self.keys_menu(ui);
             self.monitor_menu(ui);
             self.scale_toggle(ui);
+            self.speed_chip(ui);
         });
         self.actions
     }
@@ -238,20 +239,42 @@ impl VncToolbar<'_> {
         });
     }
 
+    /// Speed indicator while connected; hover for the details.
+    fn speed_chip(&self, ui: &mut egui::Ui) {
+        if !self
+            .session
+            .is_some_and(|s| s.status == VncSessionStatus::Connected)
+        {
+            return;
+        }
+        ui.separator();
+        ui.label(
+            RichText::new(self.view.speed.label())
+                .size(11.0)
+                .color(ui.visuals().weak_text_color()),
+        )
+        .on_hover_text(self.view.speed.detail());
+    }
+
     fn scale_toggle(&mut self, ui: &mut egui::Ui) {
+        let fit = self.view.fit;
         if ui
-            .selectable_label(self.view.fit, "Fit")
+            .selectable_label(fit, "Fit")
             .on_hover_text("Scale remote screen to pane")
             .clicked()
         {
             self.view.fit = true;
         }
         if ui
-            .selectable_label(!self.view.fit, "100%")
+            .selectable_label(!fit, "100%")
             .on_hover_text("Actual pixel size")
             .clicked()
         {
             self.view.fit = false;
+        }
+        // The texture filter follows the mode; reload it with the new one.
+        if self.view.fit != fit {
+            self.view.force_full = true;
         }
     }
 }

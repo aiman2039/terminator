@@ -78,6 +78,7 @@ impl VncRuntime {
             path: writer.path().to_owned(),
             sequence,
             regions,
+            stats: self.stats.snapshot(),
         });
         self.shm_revision = self.revision;
         Ok(frame)

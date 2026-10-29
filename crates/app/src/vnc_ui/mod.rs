@@ -13,6 +13,7 @@ mod profiles;
 mod settings;
 mod shm;
 mod sidebar;
+mod speed;
 mod ssh_probe;
 mod state;
 mod tabs;

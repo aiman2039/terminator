@@ -155,4 +155,7 @@ pub enum X11Event {
     /// Only Latin-1 character set is allowed
     ///
     CopyText(String),
+    /// Replace the encodings the server may use, for example to switch to
+    /// JPEG on a slow link. Takes effect from the next update.
+    SetEncodings(Vec<crate::VncEncoding>),
 }

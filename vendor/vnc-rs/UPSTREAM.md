@@ -9,3 +9,5 @@ quality/compression encoding presets, and server versions above 3.8 (RealVNC
 `RFB 005.000`) negotiating 3.8 instead of 3.3. Plain transport is explicit and never
 a fallback from a failed TLS or SSH connection. `VncEvent::UpdateEnd` marks the end
 of each FramebufferUpdate message so the client can pipeline the next request.
+`X11Event::SetEncodings` resends SetEncodings during a session, so a viewer can
+switch between lossless and JPEG encodings as the link speed changes.
