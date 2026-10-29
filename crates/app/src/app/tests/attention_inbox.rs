@@ -88,6 +88,17 @@ fn bell_opens_agents_over_an_open_left_tool() {
 }
 
 #[test]
+fn opening_the_inbox_replaces_projects_on_the_right() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.preferences.right_projects = true;
+    app.preferences.visible = false;
+    app.open_agents_inbox();
+    assert!(!app.preferences.right_projects);
+    assert!(app.preferences.visible);
+    assert_eq!(app.preferences.tool, SidebarTool::Agents);
+}
+
+#[test]
 fn bell_shows_a_hidden_left_sidebar() {
     let (mut app, _ctx, _dir) = fixture();
     app.preferences.left_visible = false;
