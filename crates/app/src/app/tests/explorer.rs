@@ -1090,3 +1090,36 @@ fn find_in_folder_scopes_the_search_to_that_folder() {
         "my?dir?[[]x[]]/**"
     );
 }
+
+#[test]
+fn view_options_sort_folders_among_files_and_by_type() {
+    let (mut app, _ctx, dir) = fixture();
+    let root = dir.path().to_path_buf();
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    // Listings arrive folders first, natural name order.
+    app.dirs.insert(
+        root.clone(),
+        vec![
+            entry("lib", true),
+            entry("b.md", false),
+            entry("c.rs", false),
+            entry("file10.md", false),
+        ],
+    );
+    let labels = |app: &mut App| {
+        app.explorer_rows(&root)
+            .iter()
+            .map(|row| row.label.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(labels(&mut app), ["lib", "b.md", "c.rs", "file10.md"]);
+    app.preferences.explorer_view.folders_mixed = true;
+    assert_eq!(labels(&mut app), ["b.md", "c.rs", "file10.md", "lib"]);
+    app.preferences.explorer_view.folders_mixed = false;
+    app.preferences.explorer_view.sort_by_type = true;
+    assert_eq!(labels(&mut app), ["lib", "b.md", "file10.md", "c.rs"]);
+}

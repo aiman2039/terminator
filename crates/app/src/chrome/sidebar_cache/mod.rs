@@ -76,6 +76,7 @@ pub(crate) struct ExplorerCache {
     pub expanded: HashSet<PathBuf>,
     pub ignored: bool,
     pub flat: bool,
+    pub view: crate::preferences::ExplorerView,
     pub query: String,
     pub reveal_file: Option<PathBuf>,
     pub rows: Arc<Vec<ExplorerRow>>,

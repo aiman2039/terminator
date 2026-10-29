@@ -139,6 +139,18 @@ impl App {
             self.preferences.explorer_flat_folders = !compact;
             ui.close();
         }
+        let view = &mut self.preferences.explorer_view;
+        let mut folders_first = !view.folders_mixed;
+        if ui.checkbox(&mut folders_first, "Folders first").clicked() {
+            view.folders_mixed = !folders_first;
+            ui.close();
+        }
+        if ui
+            .checkbox(&mut view.sort_by_type, "Sort by type")
+            .clicked()
+        {
+            ui.close();
+        }
     }
 
     fn explorer_toolbar_buttons(&self, ui: &mut egui::Ui) -> ToolbarButtons {

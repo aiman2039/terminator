@@ -1,6 +1,7 @@
 //! Explorer tree rows: a depth-first walk over loaded directory listings.
 use super::{ExplorerCache, ExplorerRow};
 use crate::App;
+use crate::preferences::ExplorerView;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -48,6 +49,7 @@ impl App {
             expanded: self.expanded_dirs.clone(),
             ignored: self.preferences.show_ignored,
             flat: self.preferences.explorer_flat_folders,
+            view: self.preferences.explorer_view.clone(),
             query: self.explorer_query.clone(),
             reveal_file,
             rows: Arc::clone(&rows),
@@ -69,6 +71,7 @@ impl App {
             && model.expanded == self.expanded_dirs
             && model.ignored == self.preferences.show_ignored
             && model.flat == self.preferences.explorer_flat_folders
+            && model.view == self.preferences.explorer_view
             && model.query == self.explorer_query
             && model.reveal_file.as_deref() == reveal_file;
         if !fresh {
@@ -103,6 +106,27 @@ struct ExplorerWalk<'a> {
     dirs: Vec<PathBuf>,
     /// Folders a filtered walk may still enter.
     filter_budget: usize,
+}
+
+/// Listing order for non-default view options. Listings arrive folders
+/// first with natural name order; this re-sorts them.
+fn view_order(view: &ExplorerView, a: &Entry, b: &Entry) -> std::cmp::Ordering {
+    let folders = if view.folders_mixed {
+        std::cmp::Ordering::Equal
+    } else {
+        b.directory.cmp(&a.directory)
+    };
+    let extension = |entry: &Entry| {
+        (!entry.directory && view.sort_by_type)
+            .then(|| entry.path.extension())
+            .flatten()
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    };
+    folders
+        .then_with(|| terminator_git::natural_cmp(&extension(a), &extension(b)))
+        .then_with(|| terminator_git::natural_cmp(&entry_name(a), &entry_name(b)))
+        .then_with(|| a.path.cmp(&b.path))
 }
 
 fn entry_name(entry: &Entry) -> String {
@@ -147,8 +171,14 @@ impl<'a> ExplorerWalk<'a> {
             return self.query.is_none();
         };
         let filter = self.filter;
+        let mut shown: Vec<&'a Entry> =
+            entries.iter().filter(|entry| filter.shown(entry)).collect();
+        let view = &app.preferences.explorer_view;
+        if *view != ExplorerView::default() {
+            shown.sort_by(|a, b| view_order(view, a, b));
+        }
         let mut matched = self.query.is_none();
-        for entry in entries.iter().filter(|entry| filter.shown(entry)) {
+        for entry in shown {
             matched |= self.visit(entry, depth);
         }
         matched

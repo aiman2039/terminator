@@ -81,6 +81,17 @@ pub enum ExplorerSearchMode {
     Contents,
 }
 
+/// Explorer tree view options (`IntelliJ` Project view "Tree Appearance").
+/// The defaults keep the original order: folders first, natural name sort.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExplorerView {
+    /// Sort folders among files instead of above them.
+    pub folders_mixed: bool,
+    /// Sort by extension, then by name.
+    pub sort_by_type: bool,
+}
+
 /// Agents sidebar views. Needs attention preserves the existing inbox;
 /// All live is the verified-agent overview; Unread follows read state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +208,8 @@ pub struct UiPreferences {
     /// single-child chains into one `a/b/c` row (the default).
     #[serde(default)]
     pub explorer_flat_folders: bool,
+    #[serde(default)]
+    pub explorer_view: ExplorerView,
     /// Explorer search mode and Options kebab (`Aa`, whole word, regex) plus
     /// the Contents include/exclude globs.
     #[serde(default)]
@@ -291,6 +304,7 @@ impl Default for UiPreferences {
             show_ignored: false,
             explorer_autoreveal: false,
             explorer_flat_folders: false,
+            explorer_view: ExplorerView::default(),
             explorer_search_mode: ExplorerSearchMode::Names,
             explorer_include: String::new(),
             explorer_exclude: String::new(),
