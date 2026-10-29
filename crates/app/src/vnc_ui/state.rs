@@ -28,6 +28,10 @@ pub(crate) struct VncViewState {
     pub(crate) remote_clipboard: Option<String>,
     pub(crate) fetching: bool,
     pub(crate) last_poll: Option<Instant>,
+    /// Newest cursor image received (`vnc-shm-v1` sends it only on change).
+    pub(crate) cursor_serial: u64,
+    /// The shared-memory frame file was unusable: stay on compressed frames.
+    pub(crate) shm_failed: bool,
     pub(crate) fit: bool,
     pub(crate) last_pointer: Option<(u16, u16, u8)>,
     /// Ask the next frame request for the whole screen: set when the
@@ -85,6 +89,8 @@ impl Default for VncViewState {
             fetching: false,
             remote_clipboard: None,
             last_poll: None,
+            cursor_serial: 0,
+            shm_failed: false,
             fit: true,
             last_pointer: None,
             force_full: false,

@@ -62,6 +62,10 @@ pub enum Request {
         /// the reply's `region` decides whether the pixels are partial.
         #[serde(default)]
         regions: bool,
+        /// Shared-memory frame and long poll; only sent to daemons that
+        /// advertise `vnc-shm-v1`. Older daemons ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shm: Option<vnc::VncShmRequest>,
     },
     PruneHistory {
         budget: u64,

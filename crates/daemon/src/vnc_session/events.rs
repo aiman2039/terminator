@@ -105,6 +105,7 @@ fn apply_cursor(runtime: &Arc<Mutex<VncRuntime>>, rect: vnc::Rect, pixels: Vec<u
             height: rect.height,
             rgba: B64.encode(pixels),
         });
+        rt.cursor_serial = rt.cursor_serial.saturating_add(1);
         rt.revision = rt.revision.saturating_add(1);
     }
     true
@@ -149,6 +150,10 @@ pub(super) fn apply_vnc_event(input: ApplyVncEventInput<'_>) -> bool {
         }
         VncEvent::JpegImage(rect, bytes) => apply_jpeg(runtime, rect, bytes),
         VncEvent::SetCursor(rect, pixels) => apply_cursor(runtime, rect, pixels),
+        VncEvent::UpdateEnd => {
+            relock(runtime).update_pending = false;
+            true
+        }
         VncEvent::Text(text) => {
             let mut rt = relock(runtime);
             if rt.options.clipboard.receive() && text.len() <= terminator_core::vnc::MAX_CLIPBOARD {

@@ -8,6 +8,13 @@ pub const CAPABILITY: &str = "vnc-v1";
 /// carries `regions: true` with only the changed rectangle.
 pub const REGIONS_CAPABILITY: &str = "vnc-regions-v1";
 pub const DEFAULT_PORT: u16 = 5900;
+/// Shared-memory frames, long-polled frame requests, and cursor images sent
+/// only when they change. See [`VncShmRequest`] and [`VncShmFrame`].
+pub const SHM_CAPABILITY: &str = "vnc-shm-v1";
+/// Longest a shared-memory frame request waits for a new revision.
+pub const MAX_FRAME_WAIT_MS: u32 = 500;
+/// Most changed rectangles one shared-memory frame lists.
+pub const MAX_SHM_REGIONS: usize = 32;
 
 /// Why a saved VNC profile is invalid.
 #[derive(Debug, thiserror::Error)]
@@ -246,6 +253,37 @@ pub struct VncFrame {
     pub monitors: Vec<VncMonitor>,
     #[serde(default)]
     pub resize_supported: bool,
+    /// Pixels are in a shared-memory file instead of `zlib_rgba`. Only sent
+    /// to a request that carried [`VncShmRequest`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shm: Option<VncShmFrame>,
+    /// Counter of cursor image changes. With [`VncShmRequest`], `cursor` is
+    /// sent only when this is newer than the request's `cursor_serial`.
+    #[serde(default)]
+    pub cursor_serial: u64,
+}
+
+/// Shared-memory options of a frame request (`vnc-shm-v1` daemons only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncShmRequest {
+    /// Wait up to this long (capped at [`MAX_FRAME_WAIT_MS`]) for a revision
+    /// newer than `since` before answering `Unchanged`.
+    #[serde(default)]
+    pub wait_ms: u32,
+    /// The newest cursor the viewer has; older or equal cursors are omitted.
+    #[serde(default)]
+    pub cursor_serial: u64,
+}
+
+/// Where a shared-memory frame's pixels are: the file holds the whole
+/// framebuffer after the daemon copied `regions` (the whole frame when
+/// empty) under seqlock `sequence`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncShmFrame {
+    pub path: std::path::PathBuf,
+    pub sequence: u64,
+    #[serde(default)]
+    pub regions: Vec<VncRegion>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -410,5 +448,6 @@ mod tests {
         let encoded = serde_json::to_string(&with_region).expect("frame encodes");
         let decoded: VncFrame = serde_json::from_str(&encoded).expect("frame decodes");
         assert_eq!(decoded.region, with_region.region);
+        assert!(!encoded.contains("shm"), "legacy frames stay unchanged");
     }
 }

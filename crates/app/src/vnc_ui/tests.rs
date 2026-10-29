@@ -89,6 +89,8 @@ fn frame(region: Option<VncRegion>, pixels: &[u8]) -> VncFrame {
         zlib_rgba: compressed(pixels),
         region,
         clipboard: None,
+        shm: None,
+        cursor_serial: 0,
     }
 }
 
@@ -101,7 +103,8 @@ fn a_partial_frame_decodes_to_region_pixels_only() {
         height: 2,
     };
     let pixels = [0u8, 255, 0, 255, 0, 0, 255, 255];
-    let decoded = decode_frame(frame(Some(region), &pixels)).expect("region frame decodes");
+    let decoded = decode_frame(frame(Some(region), &pixels), std::path::Path::new("/"))
+        .expect("region frame decodes");
     assert_eq!(decoded.region, Some(region));
     assert_eq!(decoded.width, 2, "the record keeps the remote size");
     assert_eq!(decoded.height, 2);
@@ -120,7 +123,8 @@ fn a_partial_frame_decodes_to_region_pixels_only() {
 #[test]
 fn a_frame_without_a_region_decodes_at_the_remote_size() {
     let pixels = [1u8, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255];
-    let decoded = decode_frame(frame(None, &pixels)).expect("full frame decodes");
+    let decoded =
+        decode_frame(frame(None, &pixels), std::path::Path::new("/")).expect("full frame decodes");
     assert_eq!(decoded.region, None);
     let image = decoded.image.expect("full pixels decode");
     assert_eq!(image.size, [2, 2]);

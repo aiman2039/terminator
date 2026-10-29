@@ -27,15 +27,18 @@ pub(super) fn encodings(options: &VncOptions) -> Vec<VncEncoding> {
     }
     list
 }
+/// Shortest time between two update requests. Requests are pipelined, so
+/// this caps the frame rate (about 60 per second) rather than adding delay.
+/// `recent_bytes` is the last legacy encode; shared-memory frames leave it 0.
 pub(super) fn refresh_ms(quality: Quality, recent_bytes: usize) -> u64 {
     match quality {
         Quality::LowBandwidth => 100,
-        Quality::Sharp => 33,
+        Quality::Sharp => 16,
         Quality::Auto => {
             if recent_bytes > 2 * 1024 * 1024 {
                 66
             } else {
-                33
+                16
             }
         }
     }

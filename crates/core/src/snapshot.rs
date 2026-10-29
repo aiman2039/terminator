@@ -145,6 +145,8 @@ mod tests {
             cursor: None,
             monitors: Vec::new(),
             resize_supported: false,
+            shm: None,
+            cursor_serial: 0,
         };
         let response = Response::VncFrame(Box::new(frame.clone()));
         let mut wire = Vec::new();

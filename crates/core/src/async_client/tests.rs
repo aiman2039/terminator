@@ -36,6 +36,8 @@ async fn large_vnc_frame_uses_opt_in_chunks_over_async_transport() {
         cursor: None,
         monitors: Vec::new(),
         resize_supported: false,
+        shm: None,
+        cursor_serial: 0,
     };
     let frame = expected.clone();
     let server = tokio::spawn(async move {
@@ -57,6 +59,7 @@ async fn large_vnc_frame_uses_opt_in_chunks_over_async_transport() {
             session: "fixture".into(),
             since: 0,
             regions: true,
+            shm: None,
         })
         .await
         .unwrap()

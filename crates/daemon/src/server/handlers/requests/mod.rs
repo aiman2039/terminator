@@ -90,7 +90,13 @@ impl Shared {
                 session,
                 since,
                 regions,
-            } => self.on_vnc_frame(&session, since, regions),
+                shm,
+            } => self.on_vnc_frame(crate::vnc_session::VncFrameRequest {
+                session: &session,
+                since,
+                regions,
+                shm,
+            }),
             Request::PruneHistory { budget } => self.on_prune_history(budget),
             Request::Archived {
                 generation,
