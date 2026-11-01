@@ -110,6 +110,12 @@ pub enum Request {
         id: String,
     },
     Snapshot,
+    /// The one live session whose shell PID is in `pids`: `Text(id)`, or `Ok`
+    /// when none or several match. Sent only by hooks; older daemons reject
+    /// it and the hook falls back to `Snapshot` (`session-for-pids-v1`).
+    SessionForPids {
+        pids: Vec<u32>,
+    },
     CreateReview {
         project: String,
         cwd: PathBuf,
@@ -304,6 +310,7 @@ impl Request {
             Self::TerminalNotify { .. } => "TerminalNotify",
             Self::DismissTerminalNotice { .. } => "DismissTerminalNotice",
             Self::Snapshot => "Snapshot",
+            Self::SessionForPids { .. } => "SessionForPids",
             Self::CreateReview { .. } => "CreateReview",
             Self::AddProject { .. } => "AddProject",
             Self::AddRemoteProject { .. } => "AddRemoteProject",

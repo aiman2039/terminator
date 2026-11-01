@@ -72,8 +72,9 @@ pub struct NativeDoc {
     pub(super) inlay: terminator_native_edit::inlay::InlayCache,
     pub(super) holder: Option<String>,
     pub(super) focused_view: Option<String>,
-    /// The file uses CRLF line endings: the buffer holds `\n` only (so
-    /// carets never land on a `\r`) and saves convert back.
+    /// Every line break in the file is CRLF: the buffer holds `\n` only
+    /// (so carets never land on a `\r`) and saves convert back. Files with
+    /// mixed endings keep their bytes unchanged.
     pub(super) crlf: bool,
     /// `(revision, dirty)` for the last revision checked against
     /// `saved_hash`, so the full-text hash runs once per edit.
@@ -321,7 +322,7 @@ impl NativeDoc {
                 Ok(loaded) => {
                     self.loaded_mtime = loaded.mtime;
                     self.reset_mtime();
-                    self.crlf = loaded.text.contains("\r\n");
+                    self.crlf = NativeFileIo::all_crlf(&loaded.text);
                     let text = if self.crlf {
                         loaded.text.replace("\r\n", "\n")
                     } else {
@@ -344,24 +345,40 @@ impl NativeDoc {
                 }
             }
         }
-        if let Some(rx) = self.save_rx.as_mut()
-            && let Ok(result) = rx.try_recv()
-        {
-            self.saving = false;
-            match result {
-                Ok(mtime) => {
-                    // The written text was the snapshot taken at save start:
-                    // edits typed while the write ran keep the buffer dirty.
-                    self.saved_revision = self.save_revision;
-                    self.saved_hash = self.save_hash;
-                    self.loaded_mtime = mtime;
-                    self.reset_mtime();
-                    self.save_error = None;
-                    self.force_save = false;
-                }
-                Err(error) => {
-                    self.save_error = Some(format!("{error:#}"));
-                }
+        if let Some(received) = self.save_rx.as_mut().map(|rx| rx.try_recv()) {
+            self.settle_save(received);
+        }
+    }
+
+    /// Settle the in-flight save. A worker that stopped without an answer
+    /// (cancelled or timed out) ends the save with an error, so Save and
+    /// Save-and-close never wait forever.
+    fn settle_save(
+        &mut self,
+        received: Result<SaveResult, tokio::sync::mpsc::error::TryRecvError>,
+    ) {
+        let result = match received {
+            Ok(result) => result,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                Err(anyhow::anyhow!("The save stopped before it finished"))
+            }
+        };
+        self.save_rx = None;
+        self.saving = false;
+        match result {
+            Ok(mtime) => {
+                // The written text was the snapshot taken at save start:
+                // edits typed while the write ran keep the buffer dirty.
+                self.saved_revision = self.save_revision;
+                self.saved_hash = self.save_hash;
+                self.loaded_mtime = mtime;
+                self.reset_mtime();
+                self.save_error = None;
+                self.force_save = false;
+            }
+            Err(error) => {
+                self.save_error = Some(format!("{error:#}"));
             }
         }
     }
@@ -389,10 +406,11 @@ impl NativeDoc {
         let expected = self.loaded_mtime;
         let force = self.force_save;
         let service = services.clone();
+        // A write is a mutation: no read deadline cancels it half-way.
         let context = OperationContext::new(
             "native-save",
             path.to_string_lossy().into(),
-            Policy::ReplaceableRead,
+            Policy::OrderedMutation,
         );
         if services
             .handle()
@@ -423,12 +441,7 @@ impl NativeDoc {
     }
 }
 
-pub(super) type GutterCache = (
-    u64,
-    usize,
-    std::sync::Arc<Vec<gutter::GutterHunk>>,
-    std::sync::Arc<Vec<terminator_native_edit::view::ChangeMark>>,
-);
+pub(super) type GutterCache = gutter::GutterState;
 
 #[cfg(test)]
 impl NativeDoc {

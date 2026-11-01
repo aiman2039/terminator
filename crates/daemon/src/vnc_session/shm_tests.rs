@@ -124,7 +124,7 @@ fn a_frame_request_waits_for_a_new_revision_then_answers() {
     let bump = thread::spawn(move || {
         thread::sleep(Duration::from_millis(30));
         let mut rt = relock(&writer);
-        rt.revision = rt.revision.saturating_add(1);
+        rt.bump();
     });
     let started = Instant::now();
     let guard = shm::wait_for_revision(&rt, since, 400);

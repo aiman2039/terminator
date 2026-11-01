@@ -125,8 +125,9 @@ impl App {
             self.queue_workspace(workspace_ops::Op::Stage(path));
         }
         if outcome.stage_all {
-            for path in self.changed_paths(|change| !change.conflict()) {
-                self.queue_workspace(workspace_ops::Op::Stage(path));
+            let paths = self.changed_paths(|change| !change.conflict());
+            if !paths.is_empty() {
+                self.queue_workspace(workspace_ops::Op::StageAll(paths));
             }
         }
         if outcome.toggle_list {

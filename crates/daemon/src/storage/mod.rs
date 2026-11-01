@@ -25,6 +25,9 @@ impl Store {
         }
         match Self::read(paths) {
             Ok(opened) => Ok(opened),
+            // Disk full, read-only or busy is not damage: never quarantine a
+            // good store for it.
+            Err(error) if !Self::corrupt(&error) => Err(error),
             Err(error) => {
                 // A damaged store must never prevent startup: quarantine the
                 // files for forensics and start from defaults. If the
@@ -54,6 +57,17 @@ impl Store {
                 Ok((store, state))
             }
         }
+    }
+    /// Only damaged content (SQLite corrupt/not-a-database, bad JSON) counts.
+    fn corrupt(error: &anyhow::Error) -> bool {
+        use rusqlite::{Error::SqliteFailure, ErrorCode};
+        error.chain().any(|e| {
+            e.is::<serde_json::Error>()
+                || e.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
+                    matches!(e, SqliteFailure(f, _)
+                        if matches!(f.code, ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase))
+                })
+        })
     }
     fn read(paths: &Paths) -> Result<(Self, State)> {
         let conn = Connection::open(paths.data.join("state.sqlite3"))?;

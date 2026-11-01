@@ -140,3 +140,78 @@ fn ssh_page_draws_saved_hosts_and_the_new_host_form() {
         "{texts:?}"
     );
 }
+
+fn forwarding_host(app: &mut App) -> terminator_core::remote::RemoteProject {
+    // No worker answers status polls; their sends are dropped.
+    let (jobs, _) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    app.connected = true;
+    app.state.capabilities = vec![
+        terminator_core::remote::CAPABILITY.into(),
+        terminator_core::remote::HOSTS_CAPABILITY.into(),
+        terminator_core::remote::EDIT_CAPABILITY.into(),
+        terminator_core::remote::FORWARDING_CAPABILITY.into(),
+    ];
+    let mut saved = crate::remote_ui::blank_project();
+    saved.id = "r1".into();
+    saved.name = "Build box".into();
+    saved.ssh.host = "build.example.com".into();
+    saved.root = "/srv/build".into();
+    saved.forwards = vec![terminator_core::remote::Forward {
+        local_port: 8080,
+        remote_host: "localhost".into(),
+        remote_port: 80,
+        auto_start: false,
+    }];
+    app.state.remote_projects.push(saved.clone());
+    app.remote_ui.hosts.forward_draft = Some(crate::forwards_ui::ForwardDraft {
+        project: "r1".into(),
+        ..Default::default()
+    });
+    saved
+}
+
+#[test]
+fn ssh_properties_edits_port_forwards_of_a_saved_host() {
+    let (mut app, ctx, _dir) = fixture();
+    let saved = forwarding_host(&mut app);
+    app.open_ssh_properties(saved.clone());
+    // The forward form is part of the Properties page (below the fold, so
+    // only its text fields paint here).
+    let page = paint_ssh_page(&mut app, &ctx);
+    assert!(
+        page.iter()
+            .any(|t| t == "localhost (as seen from the SSH host)"),
+        "{page:?}"
+    );
+    // The section itself lists the forward and the add form.
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.forwards_section(ui, &saved);
+    });
+    output.textures_delta.clear();
+    let texts = crate::app::tests::support::painted_strings(&output.shapes);
+    assert!(texts.iter().any(|t| t == "Local port"), "{texts:?}");
+    assert!(texts.contains(&saved.forwards[0].label()), "{texts:?}");
+}
+
+#[test]
+fn hosts_sidebar_lists_forwards_without_edit_forms() {
+    let (mut app, ctx, _dir) = fixture();
+    let saved = forwarding_host(&mut app);
+    app.remote_ui.hosts.forwards_open.insert("r1".into());
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 900.0),
+            )),
+            ..Default::default()
+        },
+        |ui| app.hosts_sidebar(ui),
+    );
+    output.textures_delta.clear();
+    let texts = painted_strings(&output.shapes);
+    assert!(texts.contains(&saved.forwards[0].label()), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Local port"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Save"), "{texts:?}");
+}

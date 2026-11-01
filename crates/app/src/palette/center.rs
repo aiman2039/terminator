@@ -7,6 +7,10 @@ impl App {
         self.lsp.poll();
         self.lsp.request_open_document_symbols();
         ui.set_min_size(ui.available_size());
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.close_palette();
+            return;
+        }
         let project_name = self
             .selected_project()
             .map(|project| project.name.clone())
@@ -91,6 +95,7 @@ impl App {
             self.palette.filters |= bit;
         }
         self.palette.index = 0;
+        self.palette.focus_pending = true;
     }
 
     fn palette_search_field(&mut self, ui: &mut egui::Ui, project_name: &str) {
@@ -119,10 +124,11 @@ impl App {
             self.palette.query_changed_at = Instant::now();
             self.lsp.clear_workspace_symbols();
         }
-        // A pressed pointer is choosing a filter. Focus returns on release
-        // so that click is not taken by the field.
-        if !ui.input(|input| input.pointer.primary_down()) {
+        // Focus once on open or after a chip. A pressed pointer is choosing a
+        // filter; focus returns on release so that click is not taken.
+        if self.palette.focus_pending && !ui.input(|input| input.pointer.primary_down()) {
             search.request_focus();
+            self.palette.focus_pending = false;
         }
     }
 
@@ -245,8 +251,9 @@ impl App {
         chosen
     }
 
-    fn close_palette(&mut self) {
+    pub(crate) fn close_palette(&mut self) {
         self.palette.open = false;
+        self.palette.focus_pending = false;
         self.palette.query.clear();
         self.palette.index = 0;
         self.palette.filters = 0;
@@ -308,6 +315,7 @@ impl App {
             }
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
+            PaletteItem::CheckForUpdates => self.check_for_updates(),
             PaletteItem::ToggleIdeSidebarHeight => self.toggle_ide_sidebar_height(),
             PaletteItem::SaveLayout => self.save_layout_dialog(),
             PaletteItem::ApplyLayout(name) => {

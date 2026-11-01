@@ -144,6 +144,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
+        SESSION_FOR_PIDS_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),
         AGENT_PRESENCE_CAPABILITY.into(),
         VNC_CAPABILITY.into(),

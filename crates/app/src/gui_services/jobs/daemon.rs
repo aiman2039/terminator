@@ -197,9 +197,11 @@ impl Services {
                     updates.push(Update::State(state));
                 }
                 match after {
-                    After::Create(split) => updates.push(Update::Created(session, split, None)),
-                    After::CreateAt(anchors, split) => {
-                        updates.push(Update::Created(session, split, Some(anchors)));
+                    After::Create(split) => {
+                        updates.push(Update::Created(session, split, None, None));
+                    }
+                    After::CreateAt(origin, anchors, split) => {
+                        updates.push(Update::Created(session, split, Some(anchors), origin));
                     }
                     After::Workspace(id, anchors) => {
                         updates.push(Update::WorkspaceCreated(session, id, anchors));

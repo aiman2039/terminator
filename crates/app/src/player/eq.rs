@@ -1,5 +1,7 @@
+use super::controller::Controller;
 #[cfg(all(test, unix))]
 use super::engine;
+use super::engine::EqSettings;
 #[cfg(all(test, unix))]
 use anyhow::Result;
 use std::time::Duration;
@@ -27,6 +29,21 @@ pub(super) fn eq_treble() -> EqPreset {
     EqPreset {
         preamp: 0.5,
         bands: [0.42, 0.45, 0.48, 0.5, 0.52, 0.58, 0.66, 0.74, 0.8, 0.84],
+    }
+}
+
+impl Controller {
+    /// Push equalizer edits to the audio engine; no-op when unchanged.
+    pub(super) fn sync_eq(&mut self) {
+        let settings = EqSettings {
+            on: self.eq_on,
+            preamp: self.eq_preamp,
+            bands: self.eq_bands,
+        };
+        if self.eq_sent != Some(settings) {
+            self.engine.equalizer(settings);
+            self.eq_sent = Some(settings);
+        }
     }
 }
 

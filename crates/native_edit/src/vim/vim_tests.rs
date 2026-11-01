@@ -523,6 +523,13 @@ mod tests {
     }
 
     #[test]
+    fn paste_converts_carriage_returns_to_newlines() {
+        let (mut eng, mut doc) = engine("x");
+        eng.paste_text(&mut doc, "a\r\nb\rc");
+        assert_eq!(doc.text().as_str(), "a\nb\ncx");
+    }
+
+    #[test]
     fn slash_search_jumps_and_n_cycles_with_wrap() {
         let (mut eng, mut doc) = engine("foo\nbar foo\n");
         keys(&mut eng, &mut doc, "/foo");

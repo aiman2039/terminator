@@ -56,17 +56,31 @@ pub fn frame(body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Largest accepted message body. A bigger `Content-Length` marks the
+/// stream broken instead of buffering toward it.
+pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+/// Largest accepted header block (through its `\r\n\r\n`).
+pub const MAX_HEADER_BYTES: usize = 8 * 1024;
+
 /// Incremental `Content-Length` framing decoder: feed arbitrary stdout
 /// chunks, drain complete bodies. Unknown headers are skipped; a header
 /// block without `Content-Length` is discarded through its terminator.
+/// A header block above [`MAX_HEADER_BYTES`], a body claim above
+/// [`MAX_BODY_BYTES`], or an unparsable length poisons the decoder: it
+/// frees its buffer, yields nothing more, and [`overflowed`](Self::overflowed)
+/// turns true so the host can stop the server.
 #[derive(Default, Debug)]
 pub struct FrameDecoder {
     buf: Vec<u8>,
+    overflowed: bool,
 }
 
 impl FrameDecoder {
     /// Feed bytes; returns every complete message body now available.
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+        if self.overflowed {
+            return Vec::new();
+        }
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
         loop {
@@ -76,9 +90,20 @@ impl FrameDecoder {
                 // scanning; every drain makes progress, so this ends.
                 Frame::Drained => continue,
                 Frame::Incomplete => break,
+                Frame::Overflow => {
+                    self.overflowed = true;
+                    self.buf = Vec::new();
+                    break;
+                }
             }
         }
         out
+    }
+
+    /// True once the stream broke a size limit; the server is unusable.
+    #[must_use]
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
     }
 }
 
@@ -86,6 +111,7 @@ pub(super) enum Frame {
     Body(Vec<u8>),
     Drained,
     Incomplete,
+    Overflow,
 }
 
 /// Split one complete frame off the front of `buf`, if present. A
@@ -93,7 +119,12 @@ pub(super) enum Frame {
 /// resyncs on the next frame instead of stalling.
 pub(super) fn take_frame(buf: &mut Vec<u8>) -> Frame {
     let Some(end) = find_header_end(buf) else {
-        return Frame::Incomplete;
+        // No terminator within the header cap: the stream never ends it.
+        return if buf.len() > MAX_HEADER_BYTES {
+            Frame::Overflow
+        } else {
+            Frame::Incomplete
+        };
     };
     // Only scan the header block; the body may contain anything.
     let header = buf.get(..end).unwrap_or_default().to_vec();
@@ -104,7 +135,10 @@ pub(super) fn take_frame(buf: &mut Vec<u8>) -> Frame {
             .or_else(|| line.strip_prefix(b"content-length:"))
         {
             let text = std::str::from_utf8(value).unwrap_or("").trim();
-            length = text.parse::<usize>().ok();
+            match text.parse::<usize>() {
+                Ok(parsed) if parsed <= MAX_BODY_BYTES => length = Some(parsed),
+                _ => return Frame::Overflow,
+            }
         }
     }
     let Some(length) = length else {
@@ -124,8 +158,13 @@ pub(super) fn take_frame(buf: &mut Vec<u8>) -> Frame {
 }
 
 /// Byte offset just past the `\r\n\r\n` terminating the header block.
+/// Scans only the first [`MAX_HEADER_BYTES`]: a longer header is an
+/// overflow, and rescanning a large pending body every chunk is waste.
 pub(super) fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
+    let scan = buf
+        .get(..MAX_HEADER_BYTES.min(buf.len()))
+        .unwrap_or_default();
+    scan.windows(4)
         .position(|w| w == b"\r\n\r\n")
         .map(|at| at.saturating_add(4))
 }

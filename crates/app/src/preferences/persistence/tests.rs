@@ -302,3 +302,15 @@ fn setup_waits_for_inventory_and_counts_hidden_projects() {
     preferences.setup_completed = true;
     assert!(!preferences.needs_setup(true, 0));
 }
+
+#[test]
+fn language_server_trust_answers_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut prefs = UiPreferences::load(dir.path()).unwrap();
+    assert!(prefs.lsp_trust.is_empty());
+    prefs.lsp_trust.insert(dir.path().join("trusted"), true);
+    prefs.lsp_trust.insert(dir.path().join("refused"), false);
+    prefs.save(dir.path()).unwrap();
+    let loaded = UiPreferences::load(dir.path()).unwrap();
+    assert_eq!(loaded.lsp_trust, prefs.lsp_trust);
+}

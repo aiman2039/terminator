@@ -1,6 +1,7 @@
 //! One saved host in the Hosts sidebar: status dot, name, a subtitle with
 //! address, path and last connection, and actions. Rarely used actions sit
 //! in the row menu; the forwards toggle shows on hover or while in use.
+//! The sidebar only lists: group and forward edits open SSH Properties.
 use crate::{App, appearance};
 use eframe::egui::{self, RichText};
 use terminator_core::{Request, remote::RemoteProject};
@@ -38,7 +39,6 @@ impl App {
             }
         });
         self.host_remove_confirm(ui, project);
-        self.host_group_editor(ui, project);
     }
 
     fn host_status_and_name(&mut self, ui: &mut egui::Ui, project: &RemoteProject) {
@@ -120,17 +120,22 @@ impl App {
             ui.close();
         }
         if ui
-            .add_enabled(managed, egui::Button::new("Set group…"))
+            .add_enabled(editable, egui::Button::new("Set group…"))
+            .on_hover_text("Edit the group in Properties")
+            .on_disabled_hover_text("Restart the session service to edit SSH hosts.")
             .clicked()
         {
-            self.remote_ui.hosts.editing_group = Some((
-                project.id.clone(),
-                project.group.clone().unwrap_or_default(),
-            ));
+            self.open_ssh_properties(project.clone());
             ui.close();
         }
-        if self.forwarding_supported() && ui.button("Port forwards").clicked() {
-            self.toggle_host_forwards(&project.id);
+        if self.forwarding_supported()
+            && ui
+                .add_enabled(editable, egui::Button::new("Port forwards…"))
+                .on_hover_text("Add or edit forwards in Properties")
+                .on_disabled_hover_text("Restart the session service to edit SSH hosts.")
+                .clicked()
+        {
+            self.open_ssh_properties(project.clone());
             ui.close();
         }
         ui.separator();
@@ -145,7 +150,7 @@ impl App {
 
     fn host_forwards_summary(&mut self, ui: &mut egui::Ui, project: &RemoteProject) {
         if self.remote_ui.hosts.forwards_open.contains(&project.id) {
-            self.forwards_section(ui, project);
+            self.forwards_summary(ui, project);
             return;
         }
         let active = self
@@ -181,53 +186,5 @@ impl App {
                 self.remote_ui.hosts.confirm_remove = None;
             }
         });
-    }
-
-    fn host_group_editor(&mut self, ui: &mut egui::Ui, project: &RemoteProject) {
-        let mut save = None;
-        let mut cancel = false;
-        let groups = self.group_names();
-        if let Some((id, text)) = &mut self.remote_ui.hosts.editing_group
-            && *id == project.id
-        {
-            ui.horizontal(|ui| {
-                let response = ui.add(
-                    appearance::singleline(text)
-                        .hint_text("Group (blank for none)")
-                        .desired_width((ui.available_width() - 150.0).max(60.0)),
-                );
-                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                ui.add_enabled_ui(!groups.is_empty(), |ui| {
-                    appearance::icon_menu_button(ui, "ChevronDown", |ui| {
-                        for name in &groups {
-                            if ui.button(name).clicked() {
-                                save = Some(name.clone());
-                                ui.close();
-                            }
-                        }
-                    });
-                });
-                if ui.button("Save").clicked() || enter {
-                    save = Some(text.clone());
-                }
-                if ui.button("Cancel").clicked() {
-                    cancel = true;
-                }
-            });
-        }
-        if let Some(text) = save {
-            match terminator_core::remote::normalize_group(Some(&text)) {
-                Ok(group) => {
-                    self.remote_ui.hosts.editing_group = None;
-                    self.send(Request::SetRemoteProjectGroup {
-                        project: project.id.clone(),
-                        group,
-                    });
-                }
-                Err(error) => self.remote_ui.hosts.error = Some(error.to_string()),
-            }
-        } else if cancel {
-            self.remote_ui.hosts.editing_group = None;
-        }
     }
 }

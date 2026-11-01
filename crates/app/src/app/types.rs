@@ -190,7 +190,9 @@ pub(crate) struct SpawnDiff {
 pub(crate) enum After {
     None,
     Create(Option<String>),
-    CreateAt(Vec<Tab>, Option<String>),
+    /// Split creation: originating top-level tab ID, leaf anchors and split.
+    /// The tab ID keeps the result in its tab when the anchors are gone.
+    CreateAt(Option<String>, Vec<Tab>, Option<String>),
     Workspace(String, Vec<Tab>),
     Strip,
     StripAt(Vec<Tab>, Option<String>),
@@ -437,7 +439,8 @@ pub(crate) enum Update {
         target: BrowseTarget,
     },
     State(Box<State>),
-    Created(Session, Option<String>, Option<Vec<Tab>>),
+    /// Session, split, leaf anchors and originating top-level tab ID.
+    Created(Session, Option<String>, Option<Vec<Tab>>, Option<String>),
     WorkspaceCreated(Session, String, Vec<Tab>),
     StripCreated(Session, Option<String>, Vec<Tab>),
     FloatCreated(Session, egui::ViewportId, Option<String>, Vec<Tab>),

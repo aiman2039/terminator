@@ -26,11 +26,12 @@ pub(super) fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
     if stations.is_empty() {
         ui.weak("No stations match.");
     }
-    let play = station_list(
+    let action = station_list(
         ui,
         StationListInput {
             stations: &stations,
             playing_url: playing_url.as_deref(),
+            custom: &app.preferences.radio_stations,
             width,
             height,
         },
@@ -38,13 +39,20 @@ pub(super) fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
     ui.add_space(6.0);
     custom_station_row(app, ui, project);
     ui.weak(format!("{} stations", stations.len()));
-    if let Some(station) = play {
-        app.play_radio(project, station);
+    match action {
+        Some(StationAction::Play(station)) => app.play_radio(project, station),
+        Some(StationAction::Remove(url)) => app.remove_custom_station(&url),
+        None => {}
     }
 }
 
+enum StationAction {
+    Play(radio::Station),
+    Remove(String),
+}
+
 fn category_combo(app: &mut App, ui: &mut Ui, width: f32) {
-    let categories = radio::categories_ready();
+    let categories = app.radio_categories();
     let mut category = app.player.radio_category.clone();
     let category_label = if category.is_empty() {
         "All categories".to_string()
@@ -58,7 +66,7 @@ fn category_combo(app: &mut App, ui: &mut Ui, width: f32) {
         .show_ui(ui, |ui| {
             ui.set_max_width(width);
             ui.selectable_value(&mut category, String::new(), "All categories");
-            for name in categories {
+            for name in &categories {
                 ui.selectable_value(&mut category, name.clone(), name.as_str());
             }
         });
@@ -68,19 +76,21 @@ fn category_combo(app: &mut App, ui: &mut Ui, width: f32) {
 struct StationListInput<'a> {
     stations: &'a [radio::Station],
     playing_url: Option<&'a str>,
+    custom: &'a [crate::preferences::RadioStation],
     width: f32,
     height: f32,
 }
 
-/// The scrolling station list; returns the clicked station.
-fn station_list(ui: &mut Ui, input: StationListInput<'_>) -> Option<radio::Station> {
+/// The scrolling station list; returns the clicked or removed station.
+fn station_list(ui: &mut Ui, input: StationListInput<'_>) -> Option<StationAction> {
     let StationListInput {
         stations,
         playing_url,
+        custom,
         width,
         height,
     } = input;
-    let mut play = None;
+    let mut action = None;
     egui::ScrollArea::vertical()
         .id_salt("player-radio")
         .max_height(height)
@@ -93,16 +103,25 @@ fn station_list(ui: &mut Ui, input: StationListInput<'_>) -> Option<radio::Stati
                     continue;
                 };
                 let lit = playing_url == Some(station.url.as_str());
-                if station_row(ui, station, lit) {
-                    play = Some(station.clone());
+                let response = station_row(ui, station, lit);
+                if response.clicked() {
+                    action = Some(StationAction::Play(station.clone()));
+                }
+                if custom.iter().any(|item| item.url == station.url) {
+                    response.context_menu(|ui| {
+                        if ui.button("Remove station").clicked() {
+                            action = Some(StationAction::Remove(station.url.clone()));
+                            ui.close();
+                        }
+                    });
                 }
             }
         });
-    play
+    action
 }
 
-/// One painted station row; returns whether it was clicked.
-fn station_row(ui: &mut Ui, station: &radio::Station, lit: bool) -> bool {
+/// One painted station row.
+fn station_row(ui: &mut Ui, station: &radio::Station, lit: bool) -> egui::Response {
     let (row, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), STATION_ROW_H), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -133,7 +152,7 @@ fn station_row(ui: &mut Ui, station: &radio::Station, lit: bool) -> bool {
         egui::FontId::proportional(13.0),
         color,
     );
-    response.clicked()
+    response
 }
 
 fn custom_station_row(app: &mut App, ui: &mut Ui, project: &str) {

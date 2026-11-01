@@ -35,7 +35,7 @@ impl LspManager {
         let key = doc.server.clone();
         match self.servers.get(&key) {
             Some(server) => server.ready,
-            None => self.spawn_allowed(key.language),
+            None => self.spawn_allowed(key.language) && self.root_trusted(&key.root),
         }
     }
 

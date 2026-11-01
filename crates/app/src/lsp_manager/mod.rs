@@ -42,6 +42,7 @@ mod symbols;
 pub(crate) use docs::SubmitTextInput;
 mod responses;
 mod supervisor;
+mod trust;
 
 /// Full-text sync at most this often after the last edit: diagnostics
 /// lag typing by ~1s instead of hammering the server per keystroke.
@@ -49,6 +50,8 @@ const SYNC_DEBOUNCE: Duration = Duration::from_secs(1);
 /// Cooldown between spawn attempts for one server (crash loops degrade
 /// to retries, then to unavailable).
 const SPAWN_COOLDOWN: Duration = Duration::from_secs(10);
+/// Pump events routed per [`LspManager::poll`]; the rest wait a frame.
+const POLL_BUDGET: usize = 64;
 /// Consecutive crashes before a server counts as unavailable.
 const MAX_CRASHES: u32 = 3;
 /// Delay before re-asking for an empty outline: an indexing server
@@ -236,10 +239,23 @@ pub struct RenameResults {
     pub edits: Result<Vec<L::RenameFileEdit>, String>,
 }
 
+/// Reader-task output, already parsed so the GUI thread only routes.
 enum PumpEvent {
-    Body { key: ServerKey, body: Vec<u8> },
-    Down { key: ServerKey },
-    SpawnFailed { key: ServerKey, note: String },
+    Message {
+        key: ServerKey,
+        message: L::LspMessage,
+    },
+    Diagnostics {
+        path: PathBuf,
+        items: Vec<L::Diagnostic>,
+    },
+    Down {
+        key: ServerKey,
+    },
+    SpawnFailed {
+        key: ServerKey,
+        note: String,
+    },
 }
 
 pub struct LspManager {
@@ -290,6 +306,12 @@ pub struct LspManager {
     /// Settings → Terminal & Editor server executables by language id.
     /// Empty values fall back to the default candidates on `PATH`.
     overrides: std::collections::BTreeMap<String, String>,
+    /// Saved trust answers per project root (see `trust.rs`).
+    trust: HashMap<PathBuf, bool>,
+    /// Roots waiting for a trust answer, oldest first.
+    trust_asks: Vec<PathBuf>,
+    /// Test-only bypass of the trust gate (always false in the app).
+    trust_all: bool,
 }
 
 impl LspManager {
@@ -328,6 +350,9 @@ impl LspManager {
             pump_rx,
             services: None,
             overrides: std::collections::BTreeMap::new(),
+            trust: HashMap::new(),
+            trust_asks: Vec::new(),
+            trust_all: false,
         }
     }
 
@@ -383,16 +408,18 @@ impl LspManager {
         self.services = Some(services);
     }
 
-    /// Drain pump events: route diagnostics, answers, and server deaths.
-    /// Call once per frame before any per-doc sync.
-    pub fn poll(&mut self) {
-        while let Ok(event) = self.pump_rx.try_recv() {
-            match event {
-                PumpEvent::Body { key, body } => self.on_body(&key, &body),
-                PumpEvent::Down { key } => self.on_server_down(&key),
-                PumpEvent::SpawnFailed { key, note } => self.on_spawn_failed(&key, &note),
-            }
+    /// Route up to [`POLL_BUDGET`] pump events: diagnostics, answers, and
+    /// server deaths. Call once per frame before any per-doc sync. Bodies
+    /// arrive parsed from the reader task; the cap keeps a burst from
+    /// stalling one frame. True when events remain for a later frame.
+    pub fn poll(&mut self) -> bool {
+        for _ in 0..POLL_BUDGET {
+            let Ok(event) = self.pump_rx.try_recv() else {
+                return false;
+            };
+            self.on_event(event);
         }
+        !self.pump_rx.is_empty()
     }
 }
 
@@ -439,3 +466,5 @@ fn project_root(path: &Path, language: Language) -> PathBuf {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trust_tests;

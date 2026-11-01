@@ -3,7 +3,11 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use portable_pty::PtySize;
 use std::{
     io::Read,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -20,6 +24,24 @@ pub(crate) fn drain_wake(stream: &mut transport::Stream) {
         if read == 0 {
             break;
         }
+    }
+}
+
+/// Live attach streams. They last as long as a pane, so the accept loop does
+/// not count them against its request-handler limit.
+pub(crate) static ATTACHED: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts one attach stream for as long as it is served.
+struct AttachedGuard;
+impl AttachedGuard {
+    fn new() -> Self {
+        ATTACHED.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+impl Drop for AttachedGuard {
+    fn drop(&mut self) {
+        ATTACHED.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -151,6 +173,7 @@ fn serve_attach(
         rows,
         cols,
     } = input;
+    let _attached = AttachedGuard::new();
     let _disconnect = Disconnect(stream.try_clone()?);
     let (rt, rx, snapshot) = match attach_setup(AttachSetupInput {
         shared,

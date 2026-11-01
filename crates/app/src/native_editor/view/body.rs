@@ -30,6 +30,7 @@ struct SourceMarks {
 }
 
 struct GutterMarksInput<'a> {
+    ctx: &'a egui::Context,
     cache: &'a mut Option<GutterCache>,
     crlf: bool,
     buffer: &'a Doc,
@@ -171,6 +172,7 @@ impl ViewPass<'_> {
         let revision_before = buffer.revision();
         // Gutter changes against HEAD, once per edit (or new base).
         let (gutter_hunks, change_marks) = Self::gutter_marks(GutterMarksInput {
+            ctx: ui.ctx(),
             cache: &mut doc.gutter,
             crlf: doc.crlf,
             buffer,
@@ -242,6 +244,7 @@ impl ViewPass<'_> {
         input: GutterMarksInput<'_>,
     ) -> (Arc<Vec<gutter::GutterHunk>>, Arc<Vec<ChangeMark>>) {
         let GutterMarksInput {
+            ctx,
             cache,
             crlf,
             buffer,
@@ -250,21 +253,17 @@ impl ViewPass<'_> {
         let Some(base) = base else {
             return (Arc::default(), Arc::default());
         };
-        let key = (buffer.revision(), Arc::as_ptr(base).cast::<u8>() as usize);
-        if let Some((revision, ptr, hunks, marks)) = cache.as_ref()
-            && (*revision, *ptr) == key
-        {
-            return (Arc::clone(hunks), Arc::clone(marks));
-        }
-        let base_text = if crlf {
-            base.replace("\r\n", "\n")
-        } else {
-            base.to_string()
-        };
-        let hunks = Arc::new(gutter::hunks(&base_text, &buffer.text()));
-        let marks = Arc::new(hunks.iter().map(|hunk| hunk.mark).collect::<Vec<_>>());
-        *cache = Some((key.0, key.1, Arc::clone(&hunks), Arc::clone(&marks)));
-        (hunks, marks)
+        // The diff runs on a worker keyed by revision and base; this
+        // frame only snapshots the text when a new diff starts.
+        cache
+            .get_or_insert_default()
+            .current(&gutter::GutterRequest {
+                ctx,
+                revision: buffer.revision(),
+                base,
+                crlf,
+                text: &|| buffer.text(),
+            })
     }
 
     /// The find bar and its matches. Split views of one file share the

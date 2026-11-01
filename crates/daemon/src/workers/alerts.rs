@@ -1,37 +1,29 @@
 use std::{
     sync::{Weak, mpsc},
     thread,
-    time::{Duration, Instant},
 };
 use terminator_core::State;
 
 use crate::notifications;
 use crate::server::{Shared, relock};
 
-/// Turns queued notification ids into desktop alerts, at most one every 2 s.
-pub(crate) struct AlertWorker {
-    last: Instant,
-}
+/// Turns queued notification ids into desktop alerts. No throttle here: a
+/// newer alert replaces the pending one immediately, and
+/// `notifications::send` coalesces bursts.
+pub(crate) struct AlertWorker;
 
 impl AlertWorker {
     pub(crate) fn spawn(weak: Weak<Shared>, alerts: mpsc::Receiver<String>) {
         thread::spawn(move || {
-            let mut worker = Self {
-                last: Instant::now()
-                    .checked_sub(Duration::from_secs(10))
-                    .unwrap_or_else(Instant::now),
-            };
             while let Ok(nid) = alerts.recv() {
                 let Some(s) = weak.upgrade() else { break };
-                worker.deliver(&s, nid);
+                Self::deliver(&s, nid);
             }
         });
     }
 
-    fn deliver(&mut self, s: &Shared, nid: String) {
-        if std::env::var_os("TERMINATOR_NO_NOTIFICATIONS").is_some()
-            || self.last.elapsed() < Duration::from_secs(2)
-        {
+    fn deliver(s: &Shared, nid: String) {
+        if std::env::var_os("TERMINATOR_NO_NOTIFICATIONS").is_some() {
             return;
         }
         let state = relock(&s.state);
@@ -46,7 +38,6 @@ impl AlertWorker {
             notice: nid,
             sound,
         });
-        self.last = Instant::now();
     }
 
     fn summary(state: &State, nid: &str) -> Option<String> {

@@ -165,6 +165,7 @@ impl App {
             // workspace-strip `+` (a new top-level tab) arrives through
             // `create_workspace_tab`, not here.
             After::CreateAt(
+                Some(dock.active.clone()),
                 dock.leaf(path)
                     .map(|leaf| leaf.tabs.clone())
                     .unwrap_or_default(),

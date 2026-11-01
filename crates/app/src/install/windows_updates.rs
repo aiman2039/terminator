@@ -1,10 +1,11 @@
-//! Windows release polling: a notify-only replacement for Sparkle.
+//! Windows and Linux release polling: a notify-only replacement for Sparkle.
 //!
-//! There is no signed auto-installer on Windows yet. Once a minute (and on
-//! demand from Settings → Updates) the GUI asks the GitHub Releases API for
-//! the latest tag; a newer tag surfaces a download link for the published
-//! `terminator-*-x86_64-pc-windows-msvc.zip`. Nothing downloads or installs
-//! automatically, and development/isolated launches never touch the feed.
+//! There is no signed auto-installer outside macOS yet. Once a minute (and on
+//! demand from Settings → Updates, the header menu or the palette) the GUI
+//! asks the GitHub Releases API for the latest tag; a newer tag surfaces a
+//! download link for this platform's published archive. Nothing downloads or
+//! installs automatically, and development/isolated launches never touch the
+//! feed.
 
 use crate::*;
 use std::{
@@ -16,6 +17,15 @@ use std::{
 pub const FEED_REPO: &str = "aiman2039/terminator";
 /// Windows package suffix, matching `cargo xtask package` output.
 pub const WINDOWS_ASSET_SUFFIX: &str = "-x86_64-pc-windows-msvc.zip";
+
+/// Release asset suffix for this build's platform.
+fn platform_asset_suffix() -> String {
+    if cfg!(windows) {
+        WINDOWS_ASSET_SUFFIX.into()
+    } else {
+        format!("-{}-unknown-linux-gnu.tar.gz", std::env::consts::ARCH)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Release {
@@ -72,12 +82,12 @@ fn is_prerelease_build() -> bool {
     env!("CARGO_PKG_VERSION").contains('-')
 }
 
-/// Prefer the Windows zip asset; fall back to the release page itself.
+/// Prefer the asset with `suffix`; fall back to the release page itself.
 #[must_use]
-pub fn download_url(html_url: &str, assets: &[(String, String)]) -> String {
+pub fn download_url(html_url: &str, assets: &[(String, String)], suffix: &str) -> String {
     assets
         .iter()
-        .find(|(name, _)| name.ends_with(WINDOWS_ASSET_SUFFIX))
+        .find(|(name, _)| name.ends_with(suffix))
         .map(|(_, url)| url.clone())
         .unwrap_or_else(|| html_url.into())
 }
@@ -141,7 +151,7 @@ impl WindowsUpdateCheck {
         match result {
             Ok((tag, html_url, assets)) => {
                 if newer_than(&tag) {
-                    let url = download_url(&html_url, &assets);
+                    let url = download_url(&html_url, &assets, &platform_asset_suffix());
                     // One offer per version per launch, like Sparkle.
                     let first = self.offered.insert(tag.clone());
                     // A repeat sighting must still restore the download offer:
@@ -205,6 +215,11 @@ impl WindowsUpdateCheck {
         self.manual = true;
     }
 
+    #[cfg(test)]
+    pub fn manual_check_pending(&self) -> bool {
+        self.manual
+    }
+
     pub fn settings(&mut self, ui: &mut egui::Ui, enabled: &mut bool) {
         ui.heading("Updates");
         if !feed_eligible() {
@@ -219,10 +234,17 @@ impl WindowsUpdateCheck {
                 }
                 Status::Available { version, url } => {
                     ui.label(format!("Terminator {version} is available."));
-                    ui.hyperlink_to("Download the Windows release", url);
-                    ui.label(
-                        "Unzip over your install and restart. Sessions stay in the background.",
-                    );
+                    if cfg!(windows) {
+                        ui.hyperlink_to("Download the Windows release", url);
+                        ui.label(
+                            "Unzip over your install and restart. Sessions stay in the background.",
+                        );
+                    } else {
+                        ui.hyperlink_to("Download the Linux release", url);
+                        ui.label(
+                            "Extract over your install and restart. Sessions stay in the background.",
+                        );
+                    }
                 }
                 Status::Failed(error) => {
                     ui.label(format!("The update check failed: {error}"));
@@ -343,11 +365,19 @@ mod tests {
             ),
         ];
         assert_eq!(
-            download_url("https://example.com/release", &assets),
+            download_url("https://example.com/release", &assets, WINDOWS_ASSET_SUFFIX),
             "https://example.com/win.zip"
         );
         assert_eq!(
-            download_url("https://example.com/release", &[]),
+            download_url(
+                "https://example.com/release",
+                &assets,
+                "-x86_64-unknown-linux-gnu.tar.gz"
+            ),
+            "https://example.com/linux.tgz"
+        );
+        assert_eq!(
+            download_url("https://example.com/release", &[], WINDOWS_ASSET_SUFFIX),
             "https://example.com/release"
         );
     }
@@ -388,7 +418,7 @@ mod tests {
     fn newer_release_is_offered_once() {
         let mut check = WindowsUpdateCheck::new();
         let assets = vec![(
-            "terminator-v9999.0.0-x86_64-pc-windows-msvc.zip".into(),
+            format!("terminator-v9999.0.0{}", platform_asset_suffix()),
             "https://example.com/win.zip".into(),
         )];
         assert!(check.finish(Ok((

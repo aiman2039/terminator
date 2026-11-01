@@ -14,10 +14,9 @@ pub(super) struct PlayerIconButtonInput<'a> {
 impl App {
     pub(crate) fn poll_player(&mut self) {
         let project = self.player.project.clone().unwrap_or_default();
-        let playlist = self.playlist();
         if let Some(index) = self.player.poll(PollInput {
             project: &project,
-            playlist: &playlist,
+            playlist: self.preferences.selected_tracks(),
             shuffle: self.preferences.player_shuffle,
             repeat: self.preferences.player_repeat,
         }) {

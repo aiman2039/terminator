@@ -762,7 +762,7 @@ fn explorer_keyboard_walks_selects_and_acts_on_the_tree() {
     press(&mut app, key(egui::Key::F2, none));
     assert!(matches!(
         &app.name_prompt,
-        Some(workspace_ops::NamePrompt::Rename { from, .. }) if *from == root.join("b.rs")
+        Some(workspace_ops::NamePrompt::Rename { from, dir: false, .. }) if *from == root.join("b.rs")
     ));
 }
 
@@ -908,6 +908,7 @@ fn rename_and_new_items_edit_inline_in_the_tree() {
     app.open_name_prompt(workspace_ops::NamePrompt::Rename {
         from: root.join("a.rs"),
         name: "a.rs".into(),
+        dir: false,
     });
     draw_tree(DrawTreeInput {
         app: &mut app,

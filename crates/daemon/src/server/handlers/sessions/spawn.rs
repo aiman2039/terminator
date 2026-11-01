@@ -68,14 +68,16 @@ impl Shared {
         } else {
             None
         };
+        // Take both PTY ends before spawning: a failure here (e.g. fd
+        // exhaustion) must not leave a child with no runtime or exit watcher.
+        let reader = pair.master.try_clone_reader()?;
+        let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
         let child = pair
             .slave
             .spawn_command(command)
             .context("Could not start shell/editor")?;
         drop(pair.slave);
         let pid = child.process_id();
-        let reader = pair.master.try_clone_reader()?;
-        let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
         let parser = vt100::Parser::new_with_callbacks(
             24,
             80,

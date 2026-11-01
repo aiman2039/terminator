@@ -302,16 +302,14 @@ impl App {
 
     pub(crate) fn sync_browsers(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         // Floating windows and dialogs (middle layer) and menus, context
-        // menus, and combo boxes (foreground layer) would otherwise be drawn
-        // over by the native view.
+        // menus, and combo boxes (foreground layer), and tooltips would
+        // otherwise be drawn over by the native view.
         let covers: Vec<egui::Rect> = ctx.memory(|memory| {
             memory
                 .areas()
                 .visible_layer_ids()
                 .into_iter()
-                .filter(|layer| {
-                    matches!(layer.order, egui::Order::Middle | egui::Order::Foreground)
-                })
+                .filter(|layer| crate::browser::covers_webview(layer.order))
                 .filter_map(|layer| memory.area_rect(layer.id))
                 .collect()
         });
@@ -371,16 +369,9 @@ impl App {
     }
 
     pub(crate) fn place_gui_tab(&mut self, project: String, tab: Tab, after: After) {
-        if let After::CreateAt(anchors, direction) = after {
+        if let After::CreateAt(origin, anchors, direction) = after {
             let previous = self.layouts.get(&project).map(|d| d.active.clone());
-            if let Some(dock) = self.layouts.get_mut(&project) {
-                if let Some(anchor) = anchors.iter().find(|t| dock.contains(t)) {
-                    dock.activate_containing(anchor);
-                }
-                if let Some(path) = anchors.iter().find_map(|t| dock.find_tab(t)) {
-                    dock.set_focused_node_and_surface(path.node_path());
-                }
-            }
+            self.focus_created_target(&project, origin.as_deref(), &anchors);
             let same = previous.as_ref() == self.layouts.get(&project).map(|d| &d.active);
             self.insert(&project, tab, direction.as_deref());
             if !same
@@ -475,6 +466,9 @@ impl App {
         self.close_scrollback_search();
         self.worktree_open = false;
         self.shortcut_capture = None;
+        if self.palette.open {
+            self.close_palette();
+        }
     }
 
     /// Drop the scrollback-search pane. `search_session` only names the query;

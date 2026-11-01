@@ -2,7 +2,7 @@
 //! size, and text checks shared by the native viewer and `CodeDiff` reviews.
 use crate::{Error, Result};
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     io::Read,
     path::{Component, Path, PathBuf},
 };
@@ -149,6 +149,42 @@ pub fn find_record(raw: &[u8], path: &Path) -> Result<Option<(String, String)>> 
     Ok(None)
 }
 
+/// A pathspec that matches only `path`, never as a glob.
+fn literal(path: &Path) -> OsString {
+    let mut spec = OsString::from(":(literal)");
+    spec.push(path);
+    spec
+}
+
+/// The diff record for `path`. The diff is first limited to `path`, so one
+/// file does not need a full-repository scan. Only an addition can be a
+/// rename target; then the full rename scan runs. When that scan fails
+/// (output too large, timeout), the addition record is kept.
+fn path_record(
+    root: &Path,
+    path: &Path,
+    staged: bool,
+    options: &CommandOptions,
+) -> Result<Option<(String, String)>> {
+    let spec = literal(path);
+    let mut args: Vec<&OsStr> = raw_args(staged);
+    args.extend([OsStr::new("--"), spec.as_os_str()]);
+    let scoped = find_record(
+        &git::run_blocking(root, &args, fork_options(options))?,
+        path,
+    )?;
+    let Some((before, after)) = scoped else {
+        return Ok(None);
+    };
+    if !before.bytes().all(|b| b == b'0') {
+        return Ok(Some((before, after)));
+    }
+    match git::run_blocking(root, &raw_args(staged), fork_options(options)) {
+        Ok(raw) => Ok(find_record(&raw, path)?.or(Some((before, after)))),
+        Err(_) => Ok(Some((before, after))),
+    }
+}
+
 fn raw_args(staged: bool) -> Vec<&'static OsStr> {
     let mut args: Vec<&'static OsStr> = vec![
         OsStr::new("diff"),
@@ -229,8 +265,7 @@ pub fn snapshots(input: SnapshotsInput<'_>) -> Result<(Vec<u8>, Vec<u8>)> {
     if !(!path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_)))) {
         return Err(Error::PathEscapes { path: path.into() });
     }
-    let raw = git::run_blocking(root, &raw_args(staged), fork_options(options))?;
-    match find_record(&raw, path)? {
+    match path_record(root, path, staged, options)? {
         Some((before, after)) => {
             let left = blob(root, &before, options)?;
             let right = if staged {
@@ -248,7 +283,7 @@ pub fn snapshots(input: SnapshotsInput<'_>) -> Result<(Vec<u8>, Vec<u8>)> {
                     OsStr::new("ls-files"),
                     OsStr::new("-z"),
                     OsStr::new("--"),
-                    path.as_os_str(),
+                    literal(path).as_os_str(),
                 ],
                 fork_options(options),
             )?;
@@ -264,172 +299,4 @@ pub fn snapshots(input: SnapshotsInput<'_>) -> Result<(Vec<u8>, Vec<u8>)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    fn options() -> CommandOptions {
-        CommandOptions {
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
-        }
-    }
-
-    fn git_cmd(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn repo() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        git_cmd(dir.path(), &["init", "-q"]);
-        git_cmd(
-            dir.path(),
-            &["config", "user.email", "fixture@example.invalid"],
-        );
-        git_cmd(dir.path(), &["config", "user.name", "Fixture"]);
-        dir
-    }
-
-    #[test]
-    fn partially_staged_snapshots_show_the_correct_side() {
-        let dir = repo();
-        let root = dir.path();
-        let name = Path::new("space file.txt");
-        std::fs::write(root.join(name), "base\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "fixture"]);
-        std::fs::write(root.join(name), "staged\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        std::fs::write(root.join(name), "working\n").unwrap();
-        let options = options();
-        let (left, right) = snapshots(SnapshotsInput {
-            root,
-            path: name,
-            staged: true,
-            options: &options,
-        })
-        .unwrap();
-        assert_eq!(left, b"base\n");
-        assert_eq!(right, b"staged\n");
-        let (left, right) = snapshots(SnapshotsInput {
-            root,
-            path: name,
-            staged: false,
-            options: &options,
-        })
-        .unwrap();
-        assert_eq!(left, b"staged\n");
-        assert_eq!(right, b"working\n");
-    }
-
-    #[test]
-    fn native_and_canonical_roots_resolve_existing_and_deleted_files() {
-        let dir = repo();
-        let root = dir.path();
-        std::fs::write(root.join("present.rs"), "old\n").unwrap();
-        let canonical = root.canonicalize().unwrap();
-        for root in [root, canonical.as_path()] {
-            for name in ["present.rs", "deleted.rs"] {
-                for path in [dir.path().join(name), canonical.join(name)] {
-                    assert_eq!(relative_path(root, &path).unwrap(), PathBuf::from(name));
-                }
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn symlink_reviews_reject_the_link_instead_of_reviewing_its_target() {
-        let dir = repo();
-        let root = dir.path();
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(root.join("target.rs"), "old\n").unwrap();
-        std::fs::write(outside.path().join("target.rs"), "outside\n").unwrap();
-        std::os::unix::fs::symlink("target.rs", root.join("inside.rs")).unwrap();
-        std::os::unix::fs::symlink(outside.path().join("target.rs"), root.join("outside.rs"))
-            .unwrap();
-        std::os::unix::fs::symlink("missing.rs", root.join("dangling.rs")).unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "base"]);
-        for name in ["inside.rs", "outside.rs", "dangling.rs"] {
-            for path in [PathBuf::from(name), root.join(name)] {
-                let error = relative_path(root, &path).unwrap_err();
-                assert!(
-                    error.to_string().contains("symlinks"),
-                    "{path:?}: {error:#}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn directory_aliases_and_deleted_files_keep_their_git_identity() {
-        let dir = repo();
-        let root = dir.path();
-        std::fs::write(root.join("file.rs"), "old\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "base"]);
-        let alias_dir = tempfile::tempdir().unwrap();
-        let alias = alias_dir.path().join("repo");
-        std::os::unix::fs::symlink(root, &alias).unwrap();
-        std::fs::remove_file(root.join("file.rs")).unwrap();
-        let relative = relative_path(&alias, &alias.join("file.rs")).unwrap();
-        assert_eq!(relative, PathBuf::from("file.rs"));
-        let options = options();
-        let (left, right) = snapshots(SnapshotsInput {
-            root,
-            path: &relative,
-            staged: false,
-            options: &options,
-        })
-        .unwrap();
-        assert_eq!(left, b"old\n");
-        assert!(right.is_empty());
-    }
-
-    #[test]
-    fn untracked_and_binary_and_outside_paths_are_explicit() {
-        let dir = repo();
-        let root = dir.path();
-        let options = options();
-        std::fs::write(root.join("new.rs"), "fn new() {}\n").unwrap();
-        let (left, right) = snapshots(SnapshotsInput {
-            root,
-            path: Path::new("new.rs"),
-            staged: false,
-            options: &options,
-        })
-        .unwrap();
-        assert!(left.is_empty());
-        assert!(check_text(&left) && check_text(&right));
-        std::fs::write(root.join("new.rs"), b"binary\0").unwrap();
-        let (_, right) = snapshots(SnapshotsInput {
-            root,
-            path: Path::new("new.rs"),
-            staged: false,
-            options: &options,
-        })
-        .unwrap();
-        assert!(!check_text(&right));
-        assert!(
-            snapshots(SnapshotsInput {
-                root,
-                path: Path::new("../outside.rs"),
-                staged: false,
-                options: &options
-            })
-            .is_err()
-        );
-    }
-}
+mod tests;

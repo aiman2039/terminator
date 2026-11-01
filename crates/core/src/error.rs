@@ -58,6 +58,8 @@ pub enum PathsError {
     NoHomeDirectory,
     #[error("Refusing symlink data directory")]
     SymlinkDataDirectory { path: PathBuf },
+    #[error("Refusing directory {} owned by another user", path.display())]
+    ForeignOwner { path: PathBuf },
     #[error("Runtime path too long for Unix socket; use a shorter data directory")]
     SocketPathTooLong { socket: PathBuf },
     #[error("Cannot read session service authentication file {}", path.display())]

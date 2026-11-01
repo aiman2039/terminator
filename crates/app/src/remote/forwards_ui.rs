@@ -1,5 +1,6 @@
-//! Port forward controls shared by the Hosts sidebar and an SSH project's
-//! Info view. Every OpenSSH call runs in the daemon through `Job::Forwards`.
+//! Port forwards: the editable section on SSH Properties and a read-only
+//! summary for sidebars. Every OpenSSH call runs in the daemon through
+//! `Job::Forwards`.
 use crate::{App, Job, appearance};
 use eframe::egui;
 use std::time::Instant;
@@ -192,6 +193,44 @@ impl App {
         }
         self.apply_forward_clicks(project, clicks);
         self.forward_form(ui, project);
+    }
+
+    /// Read-only forward list for sidebars; edits open SSH Properties.
+    pub(crate) fn forwards_summary(&mut self, ui: &mut egui::Ui, project: &RemoteProject) {
+        if !self.forwarding_supported() {
+            ui.weak("Restart the session service to enable port forwarding.");
+            return;
+        }
+        self.poll_forwards(ui.ctx());
+        let editable = self.edit_supported();
+        let edit = ui
+            .horizontal(|ui| {
+                ui.weak("Port forwards · 127.0.0.1 only");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_enabled_ui(editable, |ui| {
+                        appearance::sidebar_action(ui, "Pencil", "Edit port forwards in Properties")
+                    })
+                    .inner
+                    .clicked()
+                })
+                .inner
+            })
+            .inner;
+        self.forward_error_row(ui, &project.id);
+        if project.forwards.is_empty() {
+            ui.weak("No forwards.");
+        }
+        for forward in &project.forwards {
+            let active = self
+                .remote_ui
+                .hosts
+                .forwards
+                .is_active(&project.id, forward.local_port);
+            ui.horizontal(|ui| self.forward_label(ui, forward, active));
+        }
+        if edit {
+            self.open_ssh_properties(project.clone());
+        }
     }
 
     fn forwards_header(&mut self, ui: &mut egui::Ui, project: &RemoteProject) {

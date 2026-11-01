@@ -29,7 +29,7 @@ impl App {
 
             form::section(ui, "Saved hosts");
             if profiles.is_empty() {
-                form::hint(ui, "No saved hosts. Click + to add one.", "");
+                form::hint(ui, empty_hosts_hint(&self.vnc_sidebar.filter), "");
             }
             for profile in &profiles {
                 self.vnc_profile_card(ui, profile);
@@ -225,5 +225,14 @@ impl App {
                 self.connect_vnc_profile(profile, None);
             }
         });
+    }
+}
+
+/// Empty-state text for the saved-host list; a filter can hide every host.
+pub(super) fn empty_hosts_hint(filter: &str) -> &'static str {
+    if filter.trim().is_empty() {
+        "No saved hosts. Click + to add one."
+    } else {
+        "No hosts match the filter."
     }
 }

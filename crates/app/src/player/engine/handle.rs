@@ -1,6 +1,7 @@
 use super::super::tap;
 use super::decode::RunInput;
 use super::decode::run;
+use super::equalizer::{EqSettings, EqShared};
 use std::{
     cell::RefCell,
     path::PathBuf,
@@ -75,6 +76,7 @@ pub(super) struct Controls {
     pub(super) volume: AtomicU32,
     pub(super) decoders: AtomicUsize,
     pub(super) connections: AtomicUsize,
+    pub(super) eq: EqShared,
 }
 pub(crate) struct Handle {
     pub(super) desired: watch::Sender<Desired>,
@@ -156,6 +158,7 @@ impl Handle {
                     volume: AtomicU32::new(1.0_f32.to_bits()),
                     decoders: AtomicUsize::new(0),
                     connections: AtomicUsize::new(0),
+                    eq: EqShared::default(),
                 }),
                 events: RefCell::new(events),
                 spectrum,
@@ -246,6 +249,9 @@ impl Handle {
         self.controls
             .volume
             .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Release);
+    }
+    pub fn equalizer(&self, settings: EqSettings) {
+        self.controls.eq.store(settings);
     }
     pub fn spectrum_bars(&self) -> Option<[f32; tap::BARS]> {
         if self.events.borrow().borrow().generation

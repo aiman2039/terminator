@@ -52,6 +52,98 @@ pub(crate) fn hunks(base: &str, text: &str) -> Vec<GutterHunk> {
         .collect()
 }
 
+/// Diff identity: buffer revision plus the `HEAD` text's address.
+type GutterKey = (u64, usize);
+
+/// One finished diff: its key, the hunks, and their marks.
+type GutterDone = (GutterKey, Arc<Vec<GutterHunk>>, Arc<Vec<ChangeMark>>);
+
+/// Change marks for one buffer. The line diff (up to 500 ms on a large
+/// file) runs on a worker thread keyed by [`GutterKey`]; the GUI thread
+/// only snapshots the text once per revision and never waits. At most
+/// one diff runs per buffer; edits made meanwhile are diffed when it
+/// lands, newest revision only.
+#[derive(Default)]
+pub(crate) struct GutterState {
+    done: Option<GutterDone>,
+    running: Option<(GutterKey, std::sync::mpsc::Receiver<Vec<GutterHunk>>)>,
+}
+
+pub(crate) struct GutterRequest<'a> {
+    pub ctx: &'a egui::Context,
+    pub revision: u64,
+    pub base: &'a Arc<str>,
+    pub crlf: bool,
+    pub text: &'a dyn Fn() -> String,
+}
+
+impl GutterState {
+    /// Hunks and marks for this revision. While a diff for it is still
+    /// running, the last marks stay painted but no hunks are returned:
+    /// a stale hunk must never drive Rollback onto shifted lines.
+    pub(crate) fn current(
+        &mut self,
+        request: &GutterRequest<'_>,
+    ) -> (Arc<Vec<GutterHunk>>, Arc<Vec<ChangeMark>>) {
+        let key = (
+            request.revision,
+            Arc::as_ptr(request.base).cast::<u8>() as usize,
+        );
+        self.adopt_finished();
+        if let Some((done_key, hunks, marks)) = self.done.as_ref()
+            && *done_key == key
+        {
+            return (Arc::clone(hunks), Arc::clone(marks));
+        }
+        if self.running.is_none() {
+            self.start(key, request);
+        }
+        let stale = self
+            .done
+            .as_ref()
+            .map(|(_, _, marks)| Arc::clone(marks))
+            .unwrap_or_default();
+        (Arc::default(), stale)
+    }
+
+    fn adopt_finished(&mut self) {
+        let Some((key, rx)) = self.running.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(hunks) => {
+                let marks = Arc::new(hunks.iter().map(|hunk| hunk.mark).collect::<Vec<_>>());
+                self.done = Some((*key, Arc::new(hunks), marks));
+                self.running = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.running = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    fn start(&mut self, key: GutterKey, request: &GutterRequest<'_>) {
+        let text = (request.text)();
+        let base = Arc::clone(request.base);
+        let crlf = request.crlf;
+        let ctx = request.ctx.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("gutter-diff".into())
+            .spawn(move || {
+                let base_text = if crlf {
+                    base.replace("\r\n", "\n")
+                } else {
+                    base.to_string()
+                };
+                let _ = tx.send(hunks(&base_text, &text));
+                ctx.request_repaint();
+            });
+        if spawned.is_ok() {
+            self.running = Some((key, rx));
+        }
+    }
+}
+
 /// Put the base lines back in place of a changed block (one undo step).
 pub(crate) fn rollback(buffer: &mut Doc, engine: &mut VimEngine, hunk: &GutterHunk) {
     let lines = buffer.line_count();
@@ -214,6 +306,42 @@ mod tests {
         assert_eq!(removed[0].old, ["b\n"]);
         let added = hunks("a\n", "a\nb\n");
         assert_eq!(added[0].mark.kind, ChangeKind::Added);
+    }
+
+    #[test]
+    fn gutter_diff_runs_off_thread_and_never_returns_stale_hunks() {
+        let ctx = egui::Context::default();
+        let base: Arc<str> = Arc::from("a\nb\n");
+        let mut state = GutterState::default();
+        let first_text = || "a\nB\n".to_owned();
+        let first = GutterRequest {
+            ctx: &ctx,
+            revision: 1,
+            base: &base,
+            crlf: false,
+            text: &first_text,
+        };
+        let (hunks, _) = state.current(&first);
+        assert!(hunks.is_empty(), "the diff is not ready on the first frame");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut ready = Arc::default();
+        while std::time::Instant::now() < deadline {
+            ready = state.current(&first).0;
+            if !ready.is_empty() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(ready.len(), 1);
+        // A new revision keeps the old marks painted but hides hunks.
+        let second_text = || "a\nb\n".to_owned();
+        let (hunks, marks) = state.current(&GutterRequest {
+            revision: 2,
+            text: &second_text,
+            ..first
+        });
+        assert!(hunks.is_empty());
+        assert_eq!(marks.len(), 1);
     }
 
     #[test]

@@ -123,6 +123,8 @@ async fn directory_with_ignored_async(
     let mut entries = entries?;
     let result = async {
         if in_git {
+            // Through the real folder: Git rejects paths beyond a symlink.
+            let real = terminator_git::ignore::real_paths(&path, &entries);
             let output = terminator_git::run(
                 service.processes(),
                 service.fs(),
@@ -133,7 +135,9 @@ async fn directory_with_ignored_async(
                         .map(std::ffi::OsString::from)
                         .collect(),
                     options: CommandOptions {
-                        input: Some(terminator_git::ignore::stdin_batch(&entries)),
+                        input: Some(terminator_git::ignore::paths_batch(
+                            real.iter().map(PathBuf::as_path),
+                        )),
                         stdout_limit: 4 * 1024 * 1024,
                         accepted_exit_codes: Some(vec![0, 1]),
                         ..Default::default()
@@ -141,8 +145,8 @@ async fn directory_with_ignored_async(
                 },
             )
             .await?;
-            for entry in &mut entries {
-                entry.ignored |= terminator_git::ignore::is_ignored(&output, &entry.path);
+            for (entry, real) in entries.iter_mut().zip(&real) {
+                entry.ignored |= terminator_git::ignore::is_ignored(&output, real);
             }
         }
         Ok::<_, anyhow::Error>(entries)

@@ -411,3 +411,25 @@ fn unsaved_close_cancel_aborts_remaining_workspace_tabs() {
     );
     assert!(app.close_workspace_queue.is_empty());
 }
+
+#[test]
+fn editor_close_keeps_tab_with_a_session_split_in_during_the_check() {
+    let (mut app, _, _dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("editor", SessionKind::Editor));
+    app.state
+        .sessions
+        .push(session_fixture("new-shell", SessionKind::Shell));
+    app.insert("a", Tab::Terminal("editor".into()), None);
+    let tab = app.layouts["a"].active.clone();
+    app.insert("a", Tab::Terminal("new-shell".into()), Some("right"));
+    app.editors_closed(
+        editor_close::Target::Workspace("a".into(), tab.clone()),
+        vec!["editor".into()],
+        Ok(()),
+    );
+    assert!(app.layouts["a"].tabs.iter().any(|t| t.id == tab));
+    assert!(app.layouts["a"].contains(&Tab::Terminal("new-shell".into())));
+    assert_eq!(app.close_workspace, Some(("a".into(), tab)));
+}

@@ -18,6 +18,7 @@ pub mod metadata;
 mod model;
 pub mod recovery;
 pub mod remote;
+mod runtime_dir;
 pub mod signals;
 pub mod snapshot;
 pub mod ssh;
@@ -35,9 +36,9 @@ pub use model::{
     AGENT_PRESENCE_CAPABILITY, Agent, AgentState, DIFF_CLOSE_SETTINGS_CAPABILITY, Dismissal,
     EditorMode, HookEvent, Lifecycle, METADATA_SETTINGS_CAPABILITY, NOTIFICATION_SOUND_CAPABILITY,
     NTFY_CAPABILITY, Notification, Project, Resume, ReviewMode, SCREEN_CAPABILITY,
-    SHUTDOWN_IF_IDLE_CAPABILITY, STABLE_HELPER_CAPABILITY, Session, SessionKind, Settings,
-    SettingsError, State, StateError, TERMINAL_NOTICES_CAPABILITY, TerminalNotice, VNC_CAPABILITY,
-    VNC_REGIONS_CAPABILITY, WORKTREES_CAPABILITY,
+    SESSION_FOR_PIDS_CAPABILITY, SHUTDOWN_IF_IDLE_CAPABILITY, STABLE_HELPER_CAPABILITY, Session,
+    SessionKind, Settings, SettingsError, State, StateError, TERMINAL_NOTICES_CAPABILITY,
+    TerminalNotice, VNC_CAPABILITY, VNC_REGIONS_CAPABILITY, WORKTREES_CAPABILITY,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -273,16 +274,8 @@ impl Paths {
             .ok_or(PathsError::NoDataDirectory)?;
         // Unix sockets have short path limits, particularly on macOS.
         let home = directories::BaseDirs::new().ok_or(PathsError::NoHomeDirectory)?;
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        home.home_dir().hash(&mut h);
         let data: PathBuf = dirs.data_local_dir().into();
-        #[cfg(unix)]
-        let runtime = PathBuf::from(format!("/tmp/terminator-{:x}", h.finish()));
-        // Windows uses a TCP-loopback port file, so the runtime dir only
-        // needs to be private, not short.
-        #[cfg(not(unix))]
-        let runtime = std::env::temp_dir().join(format!("terminator-{:x}", h.finish()));
+        let runtime = runtime_dir::default_runtime(home.home_dir());
         Ok(Self { data, runtime })
     }
     #[must_use]
@@ -298,6 +291,10 @@ impl Paths {
                 return Err(PathsError::SymlinkDataDirectory { path: path.clone() });
             }
             fs::create_dir_all(path)?;
+            // A shared /tmp directory may have been created by another user.
+            if !runtime_dir::owned(&fs::symlink_metadata(path)?) {
+                return Err(PathsError::ForeignOwner { path: path.clone() });
+            }
             #[cfg(unix)]
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }

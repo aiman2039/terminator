@@ -65,6 +65,10 @@ impl LspManager {
         if self.unavailable.contains_key(key.language) {
             return None;
         }
+        // Never run project code (build scripts, proc macros) unasked.
+        if !self.root_trusted(&key.root) {
+            return None;
+        }
         // Crash loops back off, then give up with a reason.
         if self.failures.get(key.language).copied().unwrap_or(0) >= MAX_CRASHES {
             self.unavailable.insert(
@@ -321,14 +325,21 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
     let writer = tokio::spawn(ServerPipes::write_stdin(stdin, incoming));
     let reader_pump = pump.clone();
     let reader_key = key.clone();
-    let reader = tokio::spawn(async move {
+    let mut reader = tokio::spawn(async move {
         ServerPipes::read_stdout(stdout, &reader_pump, &reader_key).await;
     });
     // The child outlives the pumps on crash: wait for the process
-    // itself, then tear the pumps down.
+    // itself, then tear the pumps down. A reader that stops (stdout
+    // closed, or a frame over the size limits) leaves the server
+    // unusable: kill it and report it down.
     let exited = tokio::select! {
         result = child.wait() => {
             let _ = result;
+            true
+        }
+        _ = &mut reader => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
             true
         }
         () = cancel.cancelled() => {
@@ -381,25 +392,24 @@ impl ServerPipes {
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             };
-            if !Self::forward(decoder.feed(chunk.get(..n).unwrap_or(&[])), pump, key) {
+            let bodies = decoder.feed(chunk.get(..n).unwrap_or(&[]));
+            if !Self::forward(bodies, pump, key) || decoder.overflowed() {
                 break;
             }
         }
     }
 
-    /// False once the manager's receiver is gone.
+    /// Parse each body here, off the GUI thread, and forward what the
+    /// manager routes. False once the manager's receiver is gone.
     fn forward(
         bodies: impl IntoIterator<Item = Vec<u8>>,
         pump: &tokio::sync::mpsc::UnboundedSender<PumpEvent>,
         key: &ServerKey,
     ) -> bool {
-        bodies.into_iter().all(|body| {
-            pump.send(PumpEvent::Body {
-                key: key.clone(),
-                body,
-            })
-            .is_ok()
-        })
+        bodies
+            .into_iter()
+            .filter_map(|body| responses::decode_body(key, &body))
+            .all(|event| pump.send(event).is_ok())
     }
 }
 
@@ -419,6 +429,7 @@ fn spawn_server_direct(
         // holds the shared target's build lock while tests run. Keep the
         // server's cargo check in its fixture instead of waiting on that lock.
         .env_remove("CARGO_TARGET_DIR")
+        .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

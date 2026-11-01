@@ -348,7 +348,7 @@ fn splits_follow_the_focused_dock() {
     assert_eq!(split.as_deref(), Some("right"));
     app.active_session = Some("main".into());
     app.run_shortcut(&ctx, Action::SplitRight);
-    let Job::Control(_, After::CreateAt(_, split)) = requests.try_recv().unwrap() else {
+    let Job::Control(_, After::CreateAt(_, _, split)) = requests.try_recv().unwrap() else {
         panic!("Main-focused splits stay in the main dock");
     };
     assert_eq!(split.as_deref(), Some("right"));

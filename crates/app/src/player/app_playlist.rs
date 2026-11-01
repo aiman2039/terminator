@@ -128,6 +128,10 @@ impl App {
 
     pub(super) fn player_delete_list(&mut self) {
         self.preferences.delete_selected_playlist();
+        self.player.file_index = playlist::follow_path(
+            self.preferences.selected_tracks(),
+            self.player.current_path.as_deref(),
+        );
         self.player.selected.clear();
         self.player.shuffle_bag.clear();
     }
@@ -140,6 +144,10 @@ impl App {
             .any(|list| list.name == name)
         {
             self.preferences.selected_playlist = name;
+            self.player.file_index = playlist::follow_path(
+                self.preferences.selected_tracks(),
+                self.player.current_path.as_deref(),
+            );
             self.player.selected.clear();
             self.player.shuffle_bag.clear();
         }
@@ -153,12 +161,19 @@ impl App {
                 } else {
                     self.player.radio_draft_name.trim().to_string()
                 };
-                self.preferences.radio_stations.push(RadioStation {
-                    name: name.clone(),
-                    url: url.clone(),
-                    category: "custom".into(),
-                    icon: String::new(),
-                });
+                if !self
+                    .preferences
+                    .radio_stations
+                    .iter()
+                    .any(|station| station.url == url)
+                {
+                    self.preferences.radio_stations.push(RadioStation {
+                        name: name.clone(),
+                        url: url.clone(),
+                        category: "custom".into(),
+                        icon: String::new(),
+                    });
+                }
                 self.player.station_draft.clear();
                 self.player.radio_draft_name.clear();
                 self.player.url_prompt = false;

@@ -50,8 +50,6 @@ pub(crate) struct HostsState {
     pub confirm_remove: Option<String>,
     /// Keyboard selection (a project id) while the filter field has focus.
     pub cursor: Option<String>,
-    /// Project id and the group name being typed.
-    pub editing_group: Option<(String, String)>,
     pub error: Option<String>,
     /// Daemon forward status (`ssh-forwarding-v1`).
     pub forwards: terminator_core::remote::ForwardStatus,

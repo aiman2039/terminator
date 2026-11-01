@@ -1,5 +1,9 @@
 use crate::*;
 
+/// Why a daemon-gated control is disabled.
+const OLDER_DAEMON_HINT: &str =
+    "Requires an updated session service. Restart the session service to enable it.";
+
 impl App {
     pub(super) fn notification_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Notifications");
@@ -135,37 +139,44 @@ impl App {
         if !self.field_visible("Play sound with desktop notifications", "sound alert") {
             return;
         }
-        ui.add_enabled_ui(
-            self.state
-                .capabilities
-                .iter()
-                .any(|c| c == NOTIFICATION_SOUND_CAPABILITY),
-            |ui| {
-                ui.checkbox(
-                    &mut self.settings_draft.notification_sound,
-                    "Play sound with desktop notifications",
-                );
-            },
-        );
+        let enabled = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == NOTIFICATION_SOUND_CAPABILITY);
+        ui.add_enabled(
+            enabled,
+            egui::Checkbox::new(
+                &mut self.settings_draft.notification_sound,
+                "Play sound with desktop notifications",
+            ),
+        )
+        .on_disabled_hover_text(OLDER_DAEMON_HINT);
     }
 
     fn terminal_notice_toggles(&mut self, ui: &mut egui::Ui) {
-        ui.add_enabled_ui(
-            self.state
-                .capabilities
-                .iter()
-                .any(|c| c == TERMINAL_NOTICES_CAPABILITY),
-            |ui| {
-                ui.checkbox(
-                    &mut self.settings_draft.terminal_notifications,
-                    "Show terminal OSC notifications",
-                );
-                ui.checkbox(
-                    &mut self.settings_draft.terminal_notifications_os,
-                    "Also send terminal notifications to the desktop",
-                );
-            },
-        );
+        let enabled = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == TERMINAL_NOTICES_CAPABILITY);
+        let draft = &mut self.settings_draft;
+        ui.add_enabled(
+            enabled,
+            egui::Checkbox::new(
+                &mut draft.terminal_notifications,
+                "Show terminal OSC notifications",
+            ),
+        )
+        .on_disabled_hover_text(OLDER_DAEMON_HINT);
+        ui.add_enabled(
+            enabled,
+            egui::Checkbox::new(
+                &mut draft.terminal_notifications_os,
+                "Also send terminal notifications to the desktop",
+            ),
+        )
+        .on_disabled_hover_text(OLDER_DAEMON_HINT);
     }
 
     fn send_ntfy_test(&mut self, channel: String, machine: String) -> Result<(), String> {

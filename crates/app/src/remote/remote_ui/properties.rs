@@ -107,11 +107,34 @@ impl App {
                     ui.add_space(6.0);
                     self.ssh_properties_form(ui, editing, &mut actions);
                 });
+                self.ssh_properties_forwards(ui);
             });
         if self.remote_ui.probe.busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         self.apply_page_actions(actions);
+    }
+
+    /// Port forwards of the saved host being edited; they save at once
+    /// and are not part of the draft.
+    fn ssh_properties_forwards(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.remote_ui.draft.as_ref().map(|d| d.id.clone()) else {
+            return;
+        };
+        let Some(saved) = self
+            .state
+            .remote_projects
+            .iter()
+            .find(|p| !id.is_empty() && p.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        ui.add_space(8.0);
+        form::card(ui, |ui| {
+            form::section(ui, "Port forwards");
+            self.forwards_section(ui, &saved);
+        });
     }
 
     fn ssh_properties_form(&mut self, ui: &mut egui::Ui, editing: bool, actions: &mut PageActions) {

@@ -100,7 +100,11 @@ impl ViewPass<'_> {
         }
         match actions::actions_ui(ui, popup) {
             actions::ActionPick::Pick(index) => {
-                self.requests.picked_action = popup.items.get(index).cloned();
+                self.requests.picked_action = popup
+                    .items
+                    .get(index)
+                    .cloned()
+                    .map(|item| (item, popup.revision));
                 self.popups.actions = None;
             }
             actions::ActionPick::Close => self.popups.actions = None,

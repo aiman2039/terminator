@@ -28,7 +28,7 @@ pub(crate) use git::merge;
 pub(crate) use git::worktree_ui;
 pub(crate) use install::daemon_upgrade;
 pub use install::installation;
-#[cfg(any(windows, test))]
+#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) use install::windows_updates;
 #[cfg(feature = "test-support")]
 pub(crate) use lifecycle::diagnostics;

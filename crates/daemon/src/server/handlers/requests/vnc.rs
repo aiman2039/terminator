@@ -7,24 +7,41 @@ use super::Outcome;
 use crate::vnc_session::credentials;
 
 impl Shared {
-    pub(super) fn on_vnc_profile_save(
-        &self,
-        mut profile: vnc::VncProfile,
-        forget_password: bool,
-    ) -> Result<Outcome> {
-        Self::normalize_vnc_profile(&mut profile)?;
-        let previous = self.vnc_profile(|p| p.id == profile.id);
-        Self::ensure_vnc_endpoint_kept(previous.as_ref(), &profile, forget_password)?;
-        self.store_vnc_credential(previous.as_ref(), &mut profile, forget_password)?;
+    /// OS keychain work for VNC profile requests. [`Shared::handle`] runs it
+    /// before the cross-generation coordination lock, so a locked keychain or
+    /// an access prompt never stalls coordinated requests in any generation.
+    /// It leaves `request` ready for a state-only dispatch.
+    pub(super) fn vnc_keychain_unlocked(&self, request: &mut Request) -> Result<()> {
+        match request {
+            Request::VncProfileSave {
+                profile,
+                forget_password,
+            } => {
+                Self::normalize_vnc_profile(profile)?;
+                let previous = self.vnc_profile(|p| p.id == profile.id);
+                Self::ensure_vnc_endpoint_kept(previous.as_ref(), profile, *forget_password)?;
+                self.store_vnc_credential(previous.as_ref(), profile, *forget_password)?;
+            }
+            Request::VncForgetCredential { id } => {
+                let profile = self
+                    .vnc_profile(|p| &p.id == id)
+                    .context("Unknown VNC profile")?;
+                credentials::forget(self.credential_paths(), &profile)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// State half of `VncProfileSave`; the keychain was already written by
+    /// [`Shared::vnc_keychain_unlocked`].
+    pub(super) fn on_vnc_profile_save(&self, profile: vnc::VncProfile) -> Result<Outcome> {
         self.upsert_vnc_profile(profile)?;
         Ok(Outcome::Changed)
     }
 
+    /// State half of `VncForgetCredential`; see [`Shared::vnc_keychain_unlocked`].
     pub(super) fn on_vnc_forget_credential(&self, id: &str) -> Result<Outcome> {
-        let profile = self
-            .vnc_profile(|p| p.id == id)
-            .context("Unknown VNC profile")?;
-        credentials::forget(self.credential_paths(), &profile)?;
         let mut state = relock(&self.state);
         if let Some(profile) = state.vnc_profiles.iter_mut().find(|p| p.id == id) {
             profile.password.clear();
@@ -51,7 +68,16 @@ impl Shared {
 
     pub(super) fn on_vnc_profile_remove(&self, id: &str) -> Result<Outcome> {
         if let Some(profile) = self.vnc_profile(|p| p.id == id && p.credential_saved) {
-            credentials::forget(self.credential_paths(), &profile)?;
+            // Never touch the keychain inside this short-deadline request or
+            // under the coordination lock: delete it on a worker thread.
+            let paths = self.credential_paths().clone();
+            std::thread::spawn(move || {
+                if let Err(error) = credentials::forget(&paths, &profile) {
+                    crate::console::Console::err(format_args!(
+                        "cannot remove saved VNC password of a removed host: {error:#}"
+                    ));
+                }
+            });
         }
         if let Some(path) = self.credential_paths().vnc_thumbnail(id) {
             let _ = std::fs::remove_file(path);

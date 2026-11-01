@@ -168,8 +168,8 @@ impl App {
             Update::WorkspaceCreated(session, id, anchors) => {
                 self.handle_workspace_created(session, id, anchors);
             }
-            Update::Created(session, split, target) => {
-                self.handle_created(session, split, target);
+            Update::Created(session, split, target, origin) => {
+                self.handle_created(session, split, (target, origin));
             }
             Update::StripCreated(session, split, anchors) => {
                 self.handle_strip_created(session, split, anchors);

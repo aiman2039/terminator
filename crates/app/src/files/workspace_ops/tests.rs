@@ -402,3 +402,60 @@ fn symlink_actions_affect_the_link_not_the_target() {
     perform(root, Op::Delete(root.join("broken.txt"))).unwrap();
     assert!(fs::symlink_metadata(root.join("broken.txt")).is_err());
 }
+
+#[test]
+fn discard_of_a_bracket_name_restores_only_that_file() {
+    let dir = repo();
+    let root = dir.path();
+    for name in ["[ab].txt", "b.txt"] {
+        fs::write(root.join(name), "base\n").unwrap();
+    }
+    git(root, &["add", "--", "b.txt", ":(literal)[ab].txt"]);
+    git(root, &["commit", "-qm", "names"]);
+    for name in ["[ab].txt", "a.txt", "b.txt"] {
+        fs::write(root.join(name), "dirty\n").unwrap();
+    }
+    perform(
+        root,
+        Op::Discard {
+            path: root.join("[ab].txt"),
+            untracked: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(root.join("[ab].txt")).unwrap(), "base\n");
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "dirty\n");
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "dirty\n");
+    perform(root, Op::Stage(root.join("[ab].txt"))).unwrap();
+    let staged = git_text(root, &["diff", "--cached", "--name-only"]).unwrap();
+    assert_eq!(staged, "");
+}
+
+#[test]
+fn stage_all_stages_every_path_in_one_operation() {
+    let dir = repo();
+    let root = dir.path();
+    let mut paths = vec![root.join("a.txt")];
+    fs::remove_file(root.join("a.txt")).unwrap();
+    for index in 0..300 {
+        let path = root.join(format!("new-{index}.txt"));
+        fs::write(&path, "x\n").unwrap();
+        paths.push(path);
+    }
+    fs::write(root.join("*"), "star\n").unwrap();
+    perform(root, Op::StageAll(paths)).unwrap();
+    let staged = git_text(root, &["diff", "--cached", "--name-only"]).unwrap();
+    assert_eq!(staged.lines().count(), 301);
+    assert!(staged.lines().any(|line| line == "a.txt"));
+    assert!(!staged.lines().any(|line| line == "*"));
+}
+
+#[cfg(unix)]
+#[test]
+fn create_file_never_truncates_through_an_existing_link() {
+    let dir = repo();
+    let root = dir.path();
+    std::os::unix::fs::symlink(root.join("a.txt"), root.join("link.txt")).unwrap();
+    assert!(perform(root, Op::CreateFile(root.join("link.txt"))).is_err());
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "base\n");
+}

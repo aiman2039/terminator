@@ -93,6 +93,31 @@ impl HookCommand {
         }
         // Some agents deliberately clear hook environments. Correlate only to an
         // actual live ancestor shell owned by this daemon, never by cwd or title.
+        let session = match Self::session_for_pids(paths, ancestors) {
+            Some(session) => session,
+            None => Self::session_from_snapshot(paths, ancestors)?,
+        };
+        *paths = generations::owner_for(
+            paths,
+            &Request::History {
+                session: session.clone(),
+            },
+        )?;
+        Ok((session, paths.token()?))
+    }
+    /// Small lookup (`session-for-pids-v1`). `None` sends the caller to the
+    /// full snapshot: older daemons reject the request, and sessions of other
+    /// live generations are not in the active daemon's answer.
+    fn session_for_pids(paths: &Paths, ancestors: &[u32]) -> Option<String> {
+        let request = Request::SessionForPids {
+            pids: ancestors.to_vec(),
+        };
+        match rpc(paths, request) {
+            Ok(Response::Text(session)) => Some(session),
+            _ => None,
+        }
+    }
+    fn session_from_snapshot(paths: &Paths, ancestors: &[u32]) -> Result<String> {
         let Response::State(state) = rpc(paths, Request::Snapshot)? else {
             bail!("No session inventory")
         };
@@ -109,13 +134,7 @@ impl HookCommand {
             .first()
             .copied()
             .context("Hook ancestry must identify exactly one owned session")?;
-        *paths = generations::owner_for(
-            paths,
-            &Request::History {
-                session: session.id.clone(),
-            },
-        )?;
-        Ok((session.id.clone(), paths.token()?))
+        Ok(session.id.clone())
     }
     fn request(input: HookRequest<'_>) -> Result<Option<Request>> {
         let HookRequest {
@@ -307,9 +326,7 @@ impl HookCommand {
         let Candidate {
             pid, start_time, ..
         } = *candidate;
-        let mut cmd = std::process::Command::new("ps");
-        cmd.args(["-p", &pid.to_string(), "-o", "lstart="]);
-        let out = bounded_output(cmd, Duration::from_millis(500)).ok()?;
+        let out = bounded_output(Self::lstart_command(pid), Duration::from_millis(500)).ok()?;
         let selected_pid = Pid::from_u32(pid);
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[selected_pid]),
@@ -325,6 +342,13 @@ impl HookCommand {
         }
         let identity = Self::legacy_identity(pid, &out.stdout)?;
         Some((identity, agents::ProcessIdentity { pid, start_time }))
+    }
+    /// `ps lstart` in the C locale: other locales print a different field count.
+    fn lstart_command(pid: u32) -> std::process::Command {
+        let mut cmd = std::process::Command::new("ps");
+        cmd.args(["-p", &pid.to_string(), "-o", "lstart="])
+            .env("LC_ALL", "C");
+        cmd
     }
     fn legacy_identity(pid: u32, text: &[u8]) -> Option<String> {
         let text = std::str::from_utf8(text).ok()?;
@@ -344,5 +368,13 @@ mod identity_tests {
         );
         assert!(HookCommand::legacy_identity(42, b"").is_none());
         assert!(HookCommand::legacy_identity(42, b"42").is_none());
+    }
+    #[test]
+    fn process_start_query_uses_c_locale() {
+        let cmd = HookCommand::lstart_command(42);
+        assert!(
+            cmd.get_envs()
+                .any(|(k, v)| k == "LC_ALL" && v == Some("C".as_ref()))
+        );
     }
 }

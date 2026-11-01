@@ -165,6 +165,17 @@ fn unreadable_store_is_quarantined_and_starts_with_defaults() {
     assert!(reloaded.degraded.is_none());
 }
 #[test]
+fn unopenable_store_fails_without_quarantine() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = Paths::at(tmp.path().into());
+    p.init().unwrap();
+    // An I/O failure (here: the path is a directory) is not corruption.
+    fs::create_dir(p.data.join("state.sqlite3")).unwrap();
+    assert!(Store::open(&p).is_err());
+    assert!(p.data.join("state.sqlite3").is_dir());
+    assert!(corrupt_names(&p.data).is_empty());
+}
+#[test]
 fn invalid_json_row_is_quarantined_not_loaded() {
     let tmp = tempfile::tempdir().unwrap();
     let p = Paths::at(tmp.path().into());

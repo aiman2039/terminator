@@ -15,6 +15,8 @@ pub(crate) struct NavState {
     pub stale: bool,
     /// http(s) icon URL the loaded page declares, or its `/favicon.ico`.
     pub favicon: Option<String>,
+    /// URL of a download the view refused; downloads are disabled.
+    pub blocked_download: Option<String>,
 }
 
 /// Shared with webview callbacks, which run outside the egui frame. A change

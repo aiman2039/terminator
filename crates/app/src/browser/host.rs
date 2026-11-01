@@ -1,7 +1,8 @@
 //! Native OS webview overlay. Lives on top of egui; must hide when covered.
 use crate::browser::{
-    self, BrowserTarget,
+    self, BrowserTarget, LocalScope,
     nav::{self, NavState, NavStates},
+    view::{self, Current, wry_error},
 };
 use anyhow::Result;
 use eframe::egui;
@@ -19,21 +20,14 @@ struct MountVisibleInput<'a> {
     data_dir: &'a Path,
 }
 
-struct CreateViewInput<'a> {
-    frame: &'a eframe::Frame,
-    pane: &'a VisibleBrowser,
-    bounds: Rect,
-    data_dir: &'a Path,
-}
-
 use wry::{
-    NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder,
+    Rect, WebContext, WebView,
     dpi::{LogicalPosition, LogicalSize},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
 };
 
 const MAX_VIEWS: usize = 4;
-/// How often a shown view re-reads back/forward availability.
+/// How often a shown view re-reads back/forward availability and its URL.
 const HISTORY_POLL: std::time::Duration = std::time::Duration::from_millis(400);
 
 pub(crate) struct VisibleBrowser {
@@ -47,7 +41,31 @@ struct Hosted {
     target: BrowserTarget,
     used: Instant,
     history_at: Instant,
-    allow_local: bool,
+    url_at: Instant,
+    scope: LocalScope,
+    current: Current,
+    /// Last bounds and visibility sent to the native view.
+    bounds: Option<egui::Rect>,
+    shown: bool,
+}
+
+impl Hosted {
+    /// Native calls only on change: the frame loop runs many times a second.
+    fn show(&mut self, shown: bool) -> Result<(), wry::Error> {
+        if self.shown != shown {
+            self.view.set_visible(shown)?;
+            self.shown = shown;
+        }
+        Ok(())
+    }
+
+    fn place(&mut self, rect: egui::Rect) -> Result<(), wry::Error> {
+        if self.bounds != Some(rect) {
+            self.view.set_bounds(bounds(rect))?;
+            self.bounds = Some(rect);
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct BrowserHost {
@@ -129,7 +147,7 @@ impl BrowserHost {
         }
     }
 
-    pub fn take_navigations(&self) -> Vec<(String, BrowserTarget)> {
+    pub fn take_navigations(&mut self) -> Vec<(String, BrowserTarget)> {
         let mut changes: HashMap<_, _> = self
             .navigations
             .lock()
@@ -140,11 +158,18 @@ impl BrowserHost {
             .collect();
         // Also capture same-document navigation (e.g. history.pushState), which
         // does not necessarily produce a page-load callback.
-        for (key, hosted) in &self.views {
+        for (key, hosted) in &mut self.views {
+            if hosted.url_at.elapsed() < HISTORY_POLL {
+                continue;
+            }
+            hosted.url_at = Instant::now();
             if let Ok(url) = hosted.view.url()
-                && let Some(target) = browser::navigation_target(&url, hosted.allow_local)
+                && let Some(target) = browser::committed_target(&url, &hosted.scope)
                 && target != hosted.target
             {
+                if let Ok(mut current) = hosted.current.lock() {
+                    *current = url;
+                }
                 changes.insert(key.clone(), target);
             }
         }
@@ -178,9 +203,13 @@ impl BrowserHost {
     }
 
     pub fn hide_all(&mut self) {
-        for hosted in self.views.values() {
-            let _ = hosted.view.set_visible(false);
+        for hosted in self.views.values_mut() {
+            let _ = hosted.show(false);
         }
+    }
+
+    pub fn dismiss_download(&self, key: &str) {
+        self.nav.update(key, |state| state.blocked_download = None);
     }
 
     pub fn shutdown(&mut self) {
@@ -239,8 +268,8 @@ impl BrowserHost {
         } = input;
         for pane in visible {
             if pane.rect.width() < 32.0 || pane.rect.height() < 32.0 || covered(pane.rect, covers) {
-                if let Some(hosted) = self.views.get(&pane.key) {
-                    let _ = hosted.view.set_visible(false);
+                if let Some(hosted) = self.views.get_mut(&pane.key) {
+                    let _ = hosted.show(false);
                 }
                 continue;
             }
@@ -260,14 +289,13 @@ impl BrowserHost {
         data_dir: &Path,
     ) -> Result<(), String> {
         let href = browser::href(&pane.target).map_err(|error| error.to_string())?;
-        let bounds = bounds(pane.rect);
         if let Some(hosted) = self.views.get_mut(&pane.key) {
             if hosted.target != pane.target {
                 hosted.view.load_url(&href).map_err(wry_error)?;
                 hosted.target = pane.target.clone();
             }
-            hosted.view.set_bounds(bounds).map_err(wry_error)?;
-            hosted.view.set_visible(true).map_err(wry_error)?;
+            hosted.place(pane.rect).map_err(wry_error)?;
+            hosted.show(true).map_err(wry_error)?;
             hosted.used = Instant::now();
             let loaded = self.nav.take_stale(&pane.key);
             if loaded {
@@ -279,11 +307,24 @@ impl BrowserHost {
             }
             return Ok(());
         }
-        let view = self.create_view(CreateViewInput {
+        let scope = LocalScope::of(&pane.target);
+        let current: Current = Arc::new(Mutex::new(href.clone()));
+        let profile = browser::ensure_profile(data_dir).map_err(|error| error.to_string())?;
+        let context = self
+            .context
+            .get_or_insert_with(|| WebContext::new(Some(profile)));
+        let view = view::build(view::BuildInput {
             frame,
-            pane,
-            bounds,
+            context,
+            key: &pane.key,
+            href: &href,
+            scope: &scope,
+            current: &current,
+            bounds: bounds(pane.rect),
             data_dir,
+            nav: &self.nav,
+            navigations: &self.navigations,
+            opens: &self.opens,
         })?;
         self.views.insert(
             pane.key.clone(),
@@ -292,86 +333,21 @@ impl BrowserHost {
                 target: pane.target.clone(),
                 used: Instant::now(),
                 history_at: Instant::now(),
-                allow_local: pane.target.file().is_some(),
+                url_at: Instant::now(),
+                scope,
+                current,
+                bounds: Some(pane.rect),
+                shown: true,
             },
         );
         Ok(())
     }
 
-    fn create_view(&mut self, input: CreateViewInput<'_>) -> Result<WebView, String> {
-        let CreateViewInput {
-            frame,
-            pane,
-            bounds,
-            data_dir,
-        } = input;
-        let href = browser::href(&pane.target).map_err(|e| e.to_string())?;
-        let allow_local = pane.target.file().is_some();
-        let profile = browser::ensure_profile(data_dir).map_err(|error| error.to_string())?;
-        if self.context.is_none() {
-            self.context = Some(WebContext::new(Some(profile)));
-        }
-        let context = self
-            .context
-            .as_mut()
-            .ok_or_else(|| "Webview profile was not created".to_string())?;
-        let builder = WebViewBuilder::new_with_web_context(context)
-            .with_url(&href)
-            .with_navigation_handler(move |url| {
-                browser::navigation_target(&url, allow_local).is_some()
-            })
-            .with_on_page_load_handler({
-                let events = std::sync::Arc::clone(&self.navigations);
-                let states = self.nav.clone();
-                let key = pane.key.clone();
-                move |event, url| {
-                    let loading = matches!(event, PageLoadEvent::Started);
-                    states.update(&key, |state| {
-                        state.loading = loading;
-                        state.stale = true;
-                    });
-                    if matches!(event, PageLoadEvent::Finished)
-                        && let Some(target) = browser::navigation_target(&url, allow_local)
-                        && let Ok(mut pending) = events.lock()
-                    {
-                        pending.push((key.clone(), target));
-                    }
-                }
-            })
-            .with_document_title_changed_handler({
-                let states = self.nav.clone();
-                let key = pane.key.clone();
-                move |title| {
-                    let title = title.trim().to_owned();
-                    states.update(&key, |state| {
-                        state.title = (!title.is_empty()).then_some(title);
-                    });
-                }
-            })
-            .with_bounds(bounds)
-            .with_visible(true)
-            .with_download_started_handler(|_, _| false)
-            .with_new_window_req_handler({
-                let opens = std::sync::Arc::clone(&self.opens);
-                let key = pane.key.clone();
-                move |url, _| {
-                    if browser::parse_url(&url).is_ok()
-                        && let Ok(mut pending) = opens.lock()
-                    {
-                        pending.push((key.clone(), url));
-                    }
-                    NewWindowResponse::Deny
-                }
-            });
-        let builder = browser::apply_store(builder, data_dir)?;
-        builder.build_as_child(frame).map_err(wry_error)
-    }
-
     fn hide_unlisted(&mut self, visible: &[VisibleBrowser]) {
         let listed: Vec<&str> = visible.iter().map(|pane| pane.key.as_str()).collect();
-        for (key, hosted) in &self.views {
+        for (key, hosted) in &mut self.views {
             if !listed.contains(&key.as_str()) {
-                let _ = hosted.view.set_visible(false);
+                let _ = hosted.show(false);
             }
         }
     }
@@ -454,10 +430,6 @@ fn bounds(rect: egui::Rect) -> Rect {
         position: LogicalPosition::new(f64::from(rect.min.x), f64::from(rect.min.y)).into(),
         size: LogicalSize::new(f64::from(rect.width()), f64::from(rect.height())).into(),
     }
-}
-
-fn wry_error(error: wry::Error) -> String {
-    format!("{error}. Use Open in browser.")
 }
 
 #[cfg(test)]

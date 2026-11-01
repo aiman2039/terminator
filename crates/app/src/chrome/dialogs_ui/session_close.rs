@@ -150,7 +150,7 @@ impl App {
         }
     }
 
-    fn live_workspace_sessions(&self, project: &str, tab_id: &str) -> Vec<String> {
+    pub(crate) fn live_workspace_sessions(&self, project: &str, tab_id: &str) -> Vec<String> {
         let sessions = self
             .layouts
             .get(project)

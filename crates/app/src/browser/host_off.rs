@@ -56,7 +56,7 @@ impl BrowserHost {
 
     pub fn committed(&mut self, _key: &str, _target: BrowserTarget) {}
 
-    pub fn take_navigations(&self) -> Vec<(String, BrowserTarget)> {
+    pub fn take_navigations(&mut self) -> Vec<(String, BrowserTarget)> {
         Vec::new()
     }
 
@@ -73,6 +73,8 @@ impl BrowserHost {
     }
 
     pub fn hide_all(&mut self) {}
+
+    pub fn dismiss_download(&self, _key: &str) {}
 
     pub fn shutdown(&mut self) {
         self.errors.clear();

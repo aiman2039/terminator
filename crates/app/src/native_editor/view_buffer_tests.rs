@@ -37,6 +37,53 @@ fn crlf_files_edit_as_lf_and_save_as_crlf() {
 }
 
 #[test]
+fn one_crlf_line_does_not_convert_the_whole_file() {
+    assert!(NativeFileIo::all_crlf("a\r\nb\r\n"));
+    assert!(!NativeFileIo::all_crlf("a\nb\r\nc\n"));
+    assert!(!NativeFileIo::all_crlf("a\r\nb\rc\r\n"));
+    assert!(!NativeFileIo::all_crlf("plain"));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.txt");
+    std::fs::write(&path, "a\nb\r\nc\n").unwrap();
+    let ctx = egui::Context::default();
+    let app = App::with_context(&ctx, Paths::at(dir.path().join("state")));
+    let mut native = NativeDoc::new(path.clone(), false);
+    native.ensure_loading(&app.services);
+    let start = std::time::Instant::now();
+    while native.doc.is_none() {
+        assert!(start.elapsed() < Duration::from_secs(10), "load");
+        native.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!native.crlf);
+    if let Some(buffer) = native.doc.as_mut() {
+        buffer.insert(0, "x");
+    }
+    native.start_save(&app.services);
+    while native.saving {
+        assert!(start.elapsed() < Duration::from_secs(10), "save");
+        native.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(native.save_error, None);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "xa\nb\r\nc\n");
+}
+
+#[test]
+fn a_save_that_stops_without_an_answer_ends_with_an_error() {
+    let mut native = NativeDoc::new(PathBuf::from("/tmp/save-dropped.txt"), true);
+    native.doc = Some(Doc::new("one"));
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<SaveResult>();
+    native.save_rx = Some(rx);
+    native.saving = true;
+    drop(tx);
+    native.poll();
+    assert!(!native.saving, "Save and Save-and-close are usable again");
+    assert!(native.save_error.is_some());
+    assert!(native.save_rx.is_none());
+}
+
+#[test]
 fn split_views_keep_their_own_caret_and_the_focused_one_rests_live() {
     let mut native = NativeDoc::new(PathBuf::from("/tmp/views.txt"), false);
     let mut buffer = Doc::new("zero\none\ntwo\n");

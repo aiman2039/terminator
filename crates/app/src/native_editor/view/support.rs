@@ -21,13 +21,15 @@ pub(super) struct NativeMarkdownPreviewInput<'a> {
 
 impl App {
     /// Per-frame load/poll for one native view, plus the language-server
-    /// pump and any pending goto cursor placement.
+    /// pump, the workspace-trust bar, and any pending goto cursor
+    /// placement. Repaints while language-server events remain queued.
     pub(super) fn native_view_load(
         &mut self,
+        ui: &mut egui::Ui,
         path: &Path,
-        vim: bool,
         services: &gui_services::Services,
     ) {
+        let vim = self.state.settings.native_vim;
         {
             let doc = self.native_doc(path, vim);
             doc.ensure_loading(services);
@@ -35,7 +37,10 @@ impl App {
         }
         // Language servers pump even while the file loads: slow serving
         // must never stall typing, and diagnostics arrive when they do.
-        self.lsp.poll();
+        if self.lsp.poll() {
+            ui.ctx().request_repaint();
+        }
+        self.native_trust_bar(ui, path);
         if let Some(line) = self.native_pending_line.remove(path) {
             let col = self.native_pending_col.remove(path).unwrap_or(0);
             let mut keep = false;
@@ -51,6 +56,45 @@ impl App {
                 self.native_pending_line.insert(path.to_owned(), line);
                 self.native_pending_col.insert(path.to_owned(), col);
             }
+        }
+    }
+
+    /// In-pane question before a language server may run project code
+    /// (`build.rs`, proc macros) for this buffer's root. Not a modal: the
+    /// editor stays usable, the server just stays off until answered.
+    /// The answer is saved in UI preferences.
+    fn native_trust_bar(&mut self, ui: &mut egui::Ui, path: &Path) {
+        let Some(root) = self.lsp.trust_request_for(path).map(Path::to_path_buf) else {
+            return;
+        };
+        let warn = appearance::color(&self.theme.status_failed);
+        let fill = appearance::color(&self.theme.surface).lerp_to_gamma(warn, 0.18);
+        let text = appearance::color(&self.theme.text);
+        let message = format!(
+            "Trust {} for language servers? They can run its build scripts and macros.",
+            root.display()
+        );
+        let choice = egui::Frame::new()
+            .fill(fill)
+            .inner_margin(egui::Margin::symmetric(10, 5))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(egui::Label::new(egui::RichText::new(message).color(text)).wrap());
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Trust project").clicked() {
+                        Some(true)
+                    } else if ui.button("Don't trust").clicked() {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                })
+                .inner
+            })
+            .inner;
+        if let Some(trusted) = choice {
+            self.lsp.set_trust(&root, trusted);
+            self.preferences.lsp_trust.insert(root, trusted);
         }
     }
 

@@ -63,7 +63,7 @@ pub struct App {
     pub(crate) exit: exit::Exit,
     pub(crate) exit_attempt: u64,
     pub(crate) updater: updater::Updater,
-    #[cfg(any(windows, test))]
+    #[cfg(any(not(target_os = "macos"), test))]
     pub(crate) windows_updates: windows_updates::WindowsUpdateCheck,
     /// Last waiting count painted on the macOS menu-bar icon.
     #[cfg(all(not(test), target_os = "macos"))]
@@ -96,7 +96,7 @@ pub struct App {
     /// Serialized signature of the last persistable layouts sent to the daemon.
     /// `save_layouts` compares against it so an unchanged workspace set does not
     /// clone workspaces, cross a thread, or wake the GUI every second.
-    pub(crate) layout_signature: Option<Vec<(String, String)>>,
+    pub(crate) layout_signature: Option<Vec<(String, u64)>>,
     pub(crate) layout_generation: u64,
     pub(crate) selected: Option<String>,
     pub(crate) active_session: Option<String>,
@@ -348,6 +348,8 @@ pub struct App {
     pub(crate) code_actions: Option<crate::native_editor::ActionsPopup>,
     /// Re-sent `codeAction/resolve` requests for the picked action.
     pub(crate) resolve_attempts: u8,
+    /// Buffer revision the resolved action must still match.
+    pub(crate) resolve_revision: u64,
     /// On-disk part of a code action touching files that are not open.
     pub(crate) action_apply:
         Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<PathBuf>, String>>>,

@@ -6,6 +6,8 @@ pub(crate) mod host;
 #[path = "host_off.rs"]
 pub(crate) mod host;
 pub(crate) mod nav;
+#[cfg(feature = "webview")]
+pub(crate) mod view;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -41,6 +43,26 @@ impl BrowserTarget {
     }
 }
 
+/// Address bar input: an http(s) URL, or a bare host such as `example.com`
+/// (https) or `localhost:3000` (http). Other text is an error to show.
+pub(crate) fn address_target(input: &str) -> Result<BrowserTarget, &'static str> {
+    let input = input.trim();
+    if let Ok(target) = BrowserTarget::from_http_url(input) {
+        return Ok(target);
+    }
+    let host = input.split(['/', '?', '#']).next().unwrap_or_default();
+    let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
+    let local = matches!(name, "localhost" | "127.0.0.1");
+    let host_like = !input.contains("://")
+        && !input.contains(char::is_whitespace)
+        && (local || (name.contains('.') && !name.starts_with('.') && !name.ends_with('.')));
+    let scheme = if local { "http" } else { "https" };
+    host_like
+        .then(|| BrowserTarget::from_http_url(&format!("{scheme}://{input}")).ok())
+        .flatten()
+        .ok_or("Enter a web address, such as example.com or https://example.com.")
+}
+
 pub(crate) fn supported_file(path: &Path) -> bool {
     path.extension()
         .and_then(|s| s.to_str())
@@ -50,6 +72,13 @@ pub(crate) fn supported_file(path: &Path) -> bool {
                 "html" | "htm" | "xhtml"
             )
         })
+}
+
+/// egui layers drawn above panes. The native view draws over egui, so a
+/// pane under one of these hides while it is open.
+pub(crate) fn covers_webview(order: eframe::egui::Order) -> bool {
+    use eframe::egui::Order;
+    matches!(order, Order::Middle | Order::Foreground | Order::Tooltip)
 }
 
 pub(crate) fn parse_url(value: &str) -> Result<String> {
@@ -75,14 +104,45 @@ pub(crate) fn href(target: &BrowserTarget) -> Result<String> {
     }
 }
 
-/// Apply the same policy to initial loads, links, redirects, and history navigation.
-pub(crate) fn navigation_target(value: &str, allow_local: bool) -> Option<BrowserTarget> {
-    let url = url::Url::parse(value).ok()?;
-    if url.scheme() == "file" && allow_local {
-        let path = url.to_file_path().ok()?;
-        return supported_file(&path).then_some(BrowserTarget::File(path));
+/// Local files a File tab's view may show: the opened file, and other HTML
+/// files under its directory when reached from a local page.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LocalScope {
+    file: Option<PathBuf>,
+}
+
+impl LocalScope {
+    pub fn of(target: &BrowserTarget) -> Self {
+        Self {
+            file: target.file().map(Path::to_path_buf),
+        }
     }
-    BrowserTarget::from_http_url(value).ok()
+}
+
+/// Apply the same policy to initial loads, links, redirects, and history
+/// navigation. `current` is the view's committed URL: a remote page may
+/// return only to the opened file, never reach other local files.
+pub(crate) fn navigation_target(
+    value: &str,
+    current: Option<&str>,
+    scope: &LocalScope,
+) -> Option<BrowserTarget> {
+    let url = url::Url::parse(value).ok()?;
+    if url.scheme() != "file" {
+        return BrowserTarget::from_http_url(value).ok();
+    }
+    let opened = scope.file.as_deref()?;
+    let path = url.to_file_path().ok()?;
+    let from_local = current
+        .and_then(|current| url::Url::parse(current).ok())
+        .is_some_and(|current| current.scheme() == "file");
+    let in_scope = from_local && opened.parent().is_some_and(|dir| path.starts_with(dir));
+    (supported_file(&path) && (path == opened || in_scope)).then_some(BrowserTarget::File(path))
+}
+
+/// Target of a URL the view already shows; it passed the navigation check.
+pub(crate) fn committed_target(value: &str, scope: &LocalScope) -> Option<BrowserTarget> {
+    navigation_target(value, Some(value), scope)
 }
 
 /// A random persistent identifier belongs to this data directory, not the app bundle.
@@ -169,11 +229,25 @@ pub(crate) fn apply_store<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserTarget, parse_url, profile_dir, rewrite_html_tabs, supported_file};
+    use super::{
+        BrowserTarget, LocalScope, parse_url, profile_dir, rewrite_html_tabs, supported_file,
+    };
     use std::path::Path;
+
+    fn file_url(path: &str) -> String {
+        url::Url::from_file_path(crate::test_path(path))
+            .unwrap()
+            .to_string()
+    }
+
+    fn file_scope(path: &str) -> LocalScope {
+        LocalScope::of(&BrowserTarget::File(crate::test_path(path)))
+    }
 
     #[test]
     fn navigation_checks_links_redirects_and_local_file_types() {
+        let scope = file_scope("/tmp/page.html");
+        let local = file_url("/tmp/page.html");
         for blocked in [
             "javascript:alert(1)",
             "data:text/html,hello",
@@ -182,14 +256,83 @@ mod tests {
             "https://user:password@example.com",
         ] {
             assert!(
-                super::navigation_target(blocked, true).is_none(),
+                super::navigation_target(blocked, Some(&local), &scope).is_none(),
                 "{blocked}"
             );
         }
-        let href = url::Url::from_file_path(crate::test_path("/tmp/page.html")).unwrap();
-        assert!(super::navigation_target(href.as_str(), false).is_none());
-        assert!(super::navigation_target(href.as_str(), true).is_some());
-        assert!(super::navigation_target("https://example.com/next", false).is_some());
+        let url_scope = LocalScope::default();
+        assert!(super::navigation_target(&local, None, &url_scope).is_none());
+        assert!(super::navigation_target(&local, None, &scope).is_some());
+        assert!(super::navigation_target("https://example.com/next", None, &url_scope).is_some());
+    }
+
+    #[test]
+    fn address_bar_completes_bare_hosts_and_rejects_other_text() {
+        let url = |input| match super::address_target(input) {
+            Ok(BrowserTarget::Url(url)) => Some(url),
+            _ => None,
+        };
+        assert_eq!(url("example.com").as_deref(), Some("https://example.com/"));
+        assert_eq!(
+            url(" docs.rs/serde?x=1 ").as_deref(),
+            Some("https://docs.rs/serde?x=1")
+        );
+        assert_eq!(
+            url("localhost:3000").as_deref(),
+            Some("http://localhost:3000/")
+        );
+        assert_eq!(
+            url("http://a.example/").as_deref(),
+            Some("http://a.example/")
+        );
+        for rejected in [
+            "rust docs",
+            "word",
+            "",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "user@example.com",
+        ] {
+            assert!(super::address_target(rejected).is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn tooltips_and_popups_hide_the_webview() {
+        use eframe::egui::Order;
+        assert!(super::covers_webview(Order::Tooltip));
+        assert!(super::covers_webview(Order::Foreground));
+        assert!(super::covers_webview(Order::Middle));
+        assert!(!super::covers_webview(Order::Background));
+    }
+
+    #[test]
+    fn remote_page_cannot_reach_other_local_files() {
+        let scope = file_scope("/tmp/site/index.html");
+        let remote = Some("https://example.com/");
+        let sibling = file_url("/tmp/site/other.html");
+        assert!(super::navigation_target(&sibling, remote, &scope).is_none());
+        let downloads = file_url("/tmp/downloads/a.html");
+        assert!(super::navigation_target(&downloads, remote, &scope).is_none());
+        let opened = file_url("/tmp/site/index.html");
+        assert!(
+            super::navigation_target(&opened, remote, &scope).is_some(),
+            "Back to the opened file stays allowed"
+        );
+    }
+
+    #[test]
+    fn local_page_reaches_only_files_under_the_opened_directory() {
+        let scope = file_scope("/tmp/site/index.html");
+        let local = file_url("/tmp/site/index.html");
+        let nested = file_url("/tmp/site/docs/a.html");
+        assert!(super::navigation_target(&nested, Some(&local), &scope).is_some());
+        let outside = file_url("/tmp/other/a.html");
+        assert!(super::navigation_target(&outside, Some(&local), &scope).is_none());
+        let escape = format!("{}/../../other/a.html", file_url("/tmp/site/docs"));
+        assert!(super::navigation_target(&escape, Some(&local), &scope).is_none());
+        assert!(super::committed_target(&nested, &scope).is_some());
+        assert!(super::committed_target(&outside, &scope).is_none());
     }
 
     #[test]

@@ -20,6 +20,8 @@ use terminator_core::{CommandOptions, git, os_name, run_command};
 pub enum Op {
     Perforce(crate::perforce::Op),
     Stage(PathBuf),
+    /// Stage many paths with one `git add` (Stage all).
+    StageAll(Vec<PathBuf>),
     Unstage(PathBuf),
     /// Revert a tracked worktree file, or delete an untracked file.
     Discard {
@@ -107,6 +109,7 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
             path: &path,
             verb: "Staged",
         }),
+        Op::StageAll(paths) => stage_paths(root, &paths),
         Op::Unstage(path) => git_path(GitPathInput {
             root,
             prefix: &["restore", "--staged", "--"],
@@ -148,9 +151,20 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
 
 #[derive(Clone, Debug)]
 pub enum NamePrompt {
-    File { dir: PathBuf, name: String },
-    Folder { dir: PathBuf, name: String },
-    Rename { from: PathBuf, name: String },
+    File {
+        dir: PathBuf,
+        name: String,
+    },
+    Folder {
+        dir: PathBuf,
+        name: String,
+    },
+    /// `dir` is read once when the prompt opens, never per frame.
+    Rename {
+        from: PathBuf,
+        name: String,
+        dir: bool,
+    },
 }
 
 pub fn relative_display(root: &Path, path: &Path) -> String {

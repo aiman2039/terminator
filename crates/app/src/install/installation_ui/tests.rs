@@ -85,3 +85,13 @@ fn installation_shows_only_active_live_or_actionable_service_owners() {
         "filtering must not remove saved owners"
     );
 }
+
+#[test]
+fn check_for_updates_opens_updates_settings_and_queues_a_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+    app.check_for_updates();
+    assert!(app.settings_open);
+    assert!(matches!(app.settings_section, SettingsSection::Updates));
+    assert!(app.windows_updates.manual_check_pending());
+}
