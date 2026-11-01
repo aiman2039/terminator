@@ -166,4 +166,6 @@ pub fn read_only(request: &Request) -> bool {
 }
 
 #[cfg(test)]
+mod fault_tests;
+#[cfg(test)]
 mod tests;

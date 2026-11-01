@@ -1,7 +1,7 @@
 use super::super::CaptureInput;
 use super::super::{
-    Context, Duration, Harness, Options, Path, PathBuf, Result, Value, ensure, fs, git, json,
-    plain, save_prefs, sessions, thread,
+    Context, Duration, Harness, Options, Path, PathBuf, Result, Value, capture_when, ensure, fs,
+    git, json, save_prefs, sessions, thread, waiting,
 };
 use super::init_repo;
 use std::{
@@ -130,31 +130,40 @@ pub fn legacy(o: &Options) -> Result<()> {
         "TERMINATOR_RUNTIME_DIR".into(),
         h.root.join("legacy").to_string_lossy().into_owned(),
     );
-    let logs = plain(CaptureInput {
-        h: &h,
-        opts: o,
-        name: "legacy-diff",
-        actions: json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Open changes"}]),
-        after: 3500,
-    })?;
+    // The native fallback view draws its menu once the diff is shown.
+    let logs = capture_when(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "legacy-diff",
+            actions: waiting(json!([
+                {"target":"git-file-review.rs","right_click":true},
+                {"target":"Open changes","wait":{"retry_previous_ms":1500}},
+                {"target":"legacy-diff-shown","check":true,"wait":{"present":["diff-menu"]}}
+            ])),
+            after: 15000,
+        },
+        |state| tab_count(state) == Some(2),
+    )?;
     ensure!(
         !logs.contains("Fixture error") && proxy.rejected.load(Ordering::Relaxed) == 0,
         "Sent unsupported request or failed legacy diff: {logs}"
     );
     let state = h.state()?;
     ensure!(
-        sessions(&state).len() == 1
-            && state
-                .get("projects")
-                .and_then(|projects| projects.get(0))
-                .and_then(|project| project.get("layout"))
-                .and_then(|layout| layout.get("tabs"))
-                .ok_or_else(|| anyhow::anyhow!("missing projects[0].layout.tabs"))?
-                .as_array()
-                .unwrap()
-                .len()
-                == 2,
+        sessions(&state).len() == 1 && tab_count(&state) == Some(2),
         "Legacy diff allocated editor or missing tab"
     );
     h.assert_pids(&[shell])
+}
+
+/// Top-level tabs in the first project's saved layout.
+fn tab_count(state: &Value) -> Option<usize> {
+    state
+        .get("projects")?
+        .get(0)?
+        .get("layout")?
+        .get("tabs")?
+        .as_array()
+        .map(Vec::len)
 }

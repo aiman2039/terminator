@@ -39,5 +39,6 @@ mod ssh_page;
 #[cfg(feature = "test-support")]
 mod status_info;
 mod tab_creation;
+mod tab_switcher;
 mod workspace_close;
 mod workspace_tabs;

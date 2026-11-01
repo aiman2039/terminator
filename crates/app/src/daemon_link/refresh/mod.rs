@@ -3,6 +3,8 @@
 mod harness;
 mod live;
 #[cfg(test)]
+mod recovery_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -110,7 +112,8 @@ struct DirectoriesToListInput<'a> {
 
 /// The visible directories a refresh lists again: every one when `full`,
 /// else those not listed yet and those a changed path is in (or under a
-/// changed path, for moved folders). `dirty` holds normalized paths.
+/// changed path, for moved folders and replaced symlinks). `dirty` holds
+/// normalized paths.
 fn directories_to_list(input: DirectoriesToListInput<'_>) -> Vec<PathBuf> {
     let DirectoriesToListInput {
         directories,
@@ -125,8 +128,12 @@ fn directories_to_list(input: DirectoriesToListInput<'_>) -> Vec<PathBuf> {
                 return true;
             }
             let canonical = normalize(path);
+            // A symlink seen dangling mid-retarget is recorded under its own
+            // path, not its old or new target.
             dirty.iter().any(|changed| {
-                changed.parent() == Some(canonical.as_path()) || canonical.starts_with(changed)
+                changed.parent() == Some(canonical.as_path())
+                    || canonical.starts_with(changed)
+                    || path.starts_with(changed)
             })
         })
         .cloned()

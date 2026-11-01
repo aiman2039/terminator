@@ -149,7 +149,7 @@ pub(super) fn validate(input: ValidateInput<'_, impl Runner>) -> Result<()> {
             ("host".into(), json!({"status":"pending"})),
             (
                 "linux".into(),
-                json!({"status":if options.skip_linux {"skipped explicitly"} else {"pending"}}),
+                json!({"status":if options.runs_linux() {"pending"} else {"skipped; CI runs Linux checks"}}),
             ),
             (
                 "windows".into(),
@@ -158,16 +158,11 @@ pub(super) fn validate(input: ValidateInput<'_, impl Runner>) -> Result<()> {
         ])),
     };
     stages.save()?;
-    let platform = if options.skip_linux {
-        None
-    } else {
-        Some(stages.linux_platform(options)?)
-    };
-    let linux_plan = if options.skip_linux {
-        None
-    } else {
-        let platform = platform.context("Missing Linux platform")?;
+    let linux_plan = if options.runs_linux() {
+        let platform = stages.linux_platform(options)?;
         Some((platform, stages.linux_image(options, platform)?))
+    } else {
+        None
     };
     let result = stages.run_platforms(linux_plan).and_then(|()| {
         if options.skip_windows {

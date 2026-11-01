@@ -373,6 +373,8 @@ impl vt100::Callbacks for Events {
 }
 
 #[cfg(test)]
+mod resize_tests;
+#[cfg(test)]
 #[path = "scrollback_tests.rs"]
 mod scrollback_tests;
 #[cfg(test)]

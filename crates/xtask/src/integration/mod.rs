@@ -3,6 +3,7 @@ mod counts;
 mod hooks;
 mod load;
 mod muse;
+mod resize;
 mod run;
 mod shims;
 pub use controls::controls;

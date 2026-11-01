@@ -116,6 +116,8 @@ const HIDDEN_ACTIONS: &[Action] = &[
     Action::GotoSymbol,
     Action::FileStructure,
     Action::RecentFiles,
+    Action::SwitcherNext,
+    Action::SwitcherBack,
 ];
 /// Shortcut actions listed only while a session is active.
 const SESSION_ACTIONS: &[Action] = &[

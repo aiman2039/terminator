@@ -39,6 +39,7 @@ pub fn run() -> Result<()> {
     let s = h.shell(&a)?;
     let f = Fixture { a, b, s };
     reconnect(&h, &f.s)?;
+    super::resize::resize_and_replay(&h, &f.s)?;
     idempotent_selection(&h, &f)?;
     invalid_projects(&h, &f.a)?;
     let mut stream = h.attach(&f.s)?;
@@ -65,7 +66,7 @@ pub fn run() -> Result<()> {
     conditional_snapshots(&mut h, &state)?;
     println!(
         "{}",
-        json!({"functional":"passed","reconnect_same_pid":true,"cwd_grouping":true,"hook_delivery":true,"dedup_and_dismissal":true,"restart_no_launch":true,"conditional_snapshot":true,"legacy_client":true})
+        json!({"functional":"passed","reconnect_same_pid":true,"resize_replay":true,"cwd_grouping":true,"hook_delivery":true,"dedup_and_dismissal":true,"restart_no_launch":true,"conditional_snapshot":true,"legacy_client":true})
     );
     Ok(())
 }

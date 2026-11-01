@@ -245,6 +245,7 @@ impl App {
             shortcut_capture: None,
             browse_target: None,
             palette: super::palette_state::PaletteState::new(),
+            switcher: None,
             structure: crate::sidebar_ui::StructureState::default(),
             worktree_draft: None,
             worktree_remove: None,

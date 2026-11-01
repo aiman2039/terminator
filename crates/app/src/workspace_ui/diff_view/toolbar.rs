@@ -75,7 +75,7 @@ impl App {
             })
             .inner;
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "diff-edit-save", save.rect);
+        diagnostics::record_response(ui.ctx(), "diff-edit-save", &save);
         pass.save_edits = save.clicked();
         let discard = ui
             .add_enabled_ui(!pass.review.busy, |ui| {
@@ -83,7 +83,7 @@ impl App {
             })
             .inner;
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "diff-edit-cancel", discard.rect);
+        diagnostics::record_response(ui.ctx(), "diff-edit-cancel", &discard);
         if discard.clicked() {
             pass.review.buffer = None;
         }
@@ -104,7 +104,7 @@ impl App {
             })
             .inner;
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "diff-previous", previous.rect);
+        diagnostics::record_response(ui.ctx(), "diff-previous", &previous);
         if previous.clicked() {
             pass.review.advance(false, count);
         }
@@ -124,7 +124,7 @@ impl App {
             )
             .inner;
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "diff-next", next.rect);
+        diagnostics::record_response(ui.ctx(), "diff-next", &next);
         if next.clicked() {
             pass.review.advance(true, count);
         }
@@ -209,7 +209,7 @@ impl App {
             })
             .inner;
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "diff-undo", undo_button.rect);
+        diagnostics::record_response(ui.ctx(), "diff-undo", &undo_button);
         pass.undo = undo_button.clicked();
         ui.weak(format!(
             "Change {} of {}",

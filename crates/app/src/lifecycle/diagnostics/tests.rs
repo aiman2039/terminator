@@ -162,3 +162,172 @@ fn desktop_typing_cannot_enter_an_isolated_fixture() {
     diagnostics.input(&egui::Context::default(), &mut input);
     assert!(input.events.is_empty());
 }
+
+fn waiting_script(actions: serde_json::Value) -> Diagnostics {
+    let mut diagnostics = click_save();
+    diagnostics.actions = serde_json::from_value(actions).unwrap();
+    // Past the startup grace, so only the wait conditions decide.
+    diagnostics.started = Instant::now()
+        .checked_sub(Duration::from_secs(4))
+        .unwrap_or_else(Instant::now);
+    diagnostics
+}
+
+#[test]
+fn hidden_popup_target_refires_the_previous_step_a_bounded_number_of_times() {
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"target":"Save and close","right_click":true,"wait":{}},
+        {"target":"Open changes","wait":{"retry_previous_ms":0}}
+    ]));
+    // The popup row never shows, so every right-click counts as lost.
+    let presses = (0..200)
+        .filter(|_| frame_with_button(&ctx, &mut diagnostics, 0.0))
+        .count();
+    assert_eq!(presses, 4, "first click plus three retries");
+    assert_eq!(diagnostics.actions_completed(), 1);
+}
+
+#[test]
+fn waiting_action_does_not_fire_during_startup_settle() {
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"target":"Save and close","wait":{}}
+    ]));
+    diagnostics.started = Instant::now();
+    for _ in 0..5 {
+        assert!(!frame_with_button(&ctx, &mut diagnostics, 0.0));
+    }
+    assert_eq!(diagnostics.actions_completed(), 0);
+}
+
+/// Renders "Save and close" at `offset`, then injects the next frame's input.
+fn frame_with_button(ctx: &egui::Context, diagnostics: &mut Diagnostics, offset: f32) -> bool {
+    render(ctx, |ui| {
+        ui.add_space(offset);
+        let response = ui.button("Save and close");
+        record(ui.ctx(), "Save and close", response.rect);
+    });
+    let mut input = egui::RawInput::default();
+    diagnostics.input(ctx, &mut input);
+    input
+        .events
+        .iter()
+        .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+}
+
+#[test]
+fn waiting_action_fires_when_target_holds_still_not_at_its_time() {
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"at_ms":600000,"target":"Save and close","wait":{}}
+    ]));
+    assert!(!frame_with_button(&ctx, &mut diagnostics, 0.0));
+    assert!(!frame_with_button(&ctx, &mut diagnostics, 0.0));
+    assert!(frame_with_button(&ctx, &mut diagnostics, 0.0));
+    assert_eq!(diagnostics.actions_completed(), 1);
+}
+
+#[test]
+fn moving_target_restarts_the_stability_wait() {
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"target":"Save and close","wait":{}}
+    ]));
+    for offset in [0.0, 10.0, 20.0, 30.0, 40.0] {
+        assert!(!frame_with_button(&ctx, &mut diagnostics, offset));
+    }
+    assert!(!frame_with_button(&ctx, &mut diagnostics, 40.0));
+    assert!(frame_with_button(&ctx, &mut diagnostics, 40.0));
+}
+
+#[test]
+fn waiting_action_needs_present_and_absent_targets() {
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"target":"Save and close","wait":{"present":["diff-undo"],"absent":["popup"],"stable_frames":1}}
+    ]));
+    assert!(!frame_with_button(&ctx, &mut diagnostics, 0.0));
+    let mut draw = |undo: bool, popup: bool| {
+        render(&ctx, |ui| {
+            let response = ui.button("Save and close");
+            record(ui.ctx(), "Save and close", response.rect);
+            if undo {
+                record(ui.ctx(), "diff-undo", response.rect);
+            }
+            if popup {
+                record(ui.ctx(), "popup", response.rect);
+            }
+        });
+        diagnostics.input(&ctx, &mut egui::RawInput::default());
+        diagnostics.actions_completed()
+    };
+    assert_eq!(draw(true, true), 0);
+    assert_eq!(draw(true, false), 1);
+}
+
+#[test]
+fn check_action_ends_the_case_once_its_file_state_is_reached() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("done");
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"target":"fixture-done","check":true,"capture":true,
+         "wait":{"file":{"path":marker,"contains":"ready"}}}
+    ]));
+    render(&ctx, |_| {});
+    diagnostics.input(&ctx, &mut egui::RawInput::default());
+    std::fs::write(&marker, "loading").unwrap();
+    render(&ctx, |_| {});
+    diagnostics.input(&ctx, &mut egui::RawInput::default());
+    assert_eq!(diagnostics.actions_completed(), 0);
+    assert!(!diagnostics.requested);
+    std::fs::write(&marker, "ready").unwrap();
+    render(&ctx, |_| {});
+    let mut input = egui::RawInput::default();
+    diagnostics.input(&ctx, &mut input);
+    assert_eq!(diagnostics.actions_completed(), 1);
+    assert!(diagnostics.requested, "The final check must end the case");
+    assert!(input.events.is_empty(), "A check action sends no input");
+}
+
+#[test]
+fn file_wait_matches_a_json_pointer_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefs = dir.path().join("ui-preferences.json");
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"target":"saved","check":true,
+         "wait":{"file":{"path":prefs,"pointer":"/tool","value":"history"}}}
+    ]));
+    for (text, completed) in [
+        ("not json", 0),
+        (r#"{"tool":"Git"}"#, 0),
+        (r#"{"tool":"history"}"#, 1),
+    ] {
+        std::fs::write(&prefs, text).unwrap();
+        render(&ctx, |_| {});
+        diagnostics.input(&ctx, &mut egui::RawInput::default());
+        assert_eq!(diagnostics.actions_completed(), completed, "{text}");
+    }
+}
+
+#[test]
+fn waiting_action_keeps_its_settle_time_after_the_previous_step() {
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"target":"saved","check":true,"wait":{"settle_ms":60000}}
+    ]));
+    let ctx = egui::Context::default();
+    diagnostics.last_action = Some((0, diagnostics.started.elapsed()));
+    render(&ctx, |_| {});
+    diagnostics.input(&ctx, &mut egui::RawInput::default());
+    assert_eq!(diagnostics.actions_completed(), 0);
+}
+
+#[test]
+fn misspelled_wait_condition_is_rejected() {
+    let parsed = serde_json::from_value::<Vec<FixtureAction>>(serde_json::json!([
+        {"target":"Save and close","wait":{"presnt":["diff-undo"]}}
+    ]));
+    assert!(parsed.is_err());
+}

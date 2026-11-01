@@ -26,7 +26,7 @@ impl TabFace {
 impl App {
     /// The tab a top-level group shows on the strip: its remembered
     /// primary while still in the layout, else its first pane.
-    pub(super) fn group_primary(group: &WorkspaceTab) -> Option<&Tab> {
+    pub(crate) fn group_primary(group: &WorkspaceTab) -> Option<&Tab> {
         group
             .primary
             .as_ref()

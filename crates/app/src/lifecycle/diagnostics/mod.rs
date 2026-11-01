@@ -3,6 +3,7 @@ mod frame;
 mod input;
 #[cfg(test)]
 mod tests;
+mod wait;
 
 use eframe::egui;
 use std::time::{Duration, Instant};
@@ -24,6 +25,7 @@ pub struct Diagnostics {
     release: Option<(egui::Pos2, egui::PointerButton)>,
     held: Option<egui::PointerButton>,
     pointer: Option<egui::Pos2>,
+    pending: wait::Pending,
     ticking: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Default for Diagnostics {
@@ -38,13 +40,22 @@ impl Default for Diagnostics {
             path: std::env::var_os("TERMINATOR_CAPTURE_PATH").map(Into::into),
             actions: std::env::var("TERMINATOR_TEST_ACTIONS")
                 .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
+                .and_then(|s| {
+                    serde_json::from_str(&s)
+                        .inspect_err(|e| {
+                            crate::console::Console::err(format_args!(
+                                "Fixture actions are invalid: {e}"
+                            ));
+                        })
+                        .ok()
+                })
                 .unwrap_or_default(),
             action_index: 0,
             last_action: None,
             release: None,
             held: None,
             pointer: None,
+            pending: wait::Pending::default(),
             ticking: std::sync::Arc::default(),
         }
     }
@@ -178,10 +189,20 @@ impl Diagnostics {
     }
 }
 
+/// One scripted step. Without `wait` it fires at `at_ms` (and keeps its
+/// interval after the previous step); with `wait` it fires as soon as its
+/// target holds still and the conditions pass, and `at_ms` is unused.
 #[derive(serde::Deserialize)]
 struct FixtureAction {
+    #[serde(default)]
     at_ms: u64,
     target: String,
+    #[serde(default)]
+    wait: Option<wait::Wait>,
+    /// Send no input and need no target: `target` only names the step in
+    /// the log. With `capture`, it ends the case once `wait` passes.
+    #[serde(default)]
+    check: bool,
     #[serde(default)]
     capture: bool,
     #[serde(default)]

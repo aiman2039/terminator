@@ -8,8 +8,11 @@ settings, including sccache. It includes staged, unstaged, deleted, and untracke
 files that Git does not ignore. Check the files before running it: a successful
 release commits all of them. Keep source files unchanged until checks finish.
 
-The Rust command requires host checks, Linux Docker execution, and a Windows
-runner unless a platform is explicitly skipped. The existing
+The Rust command requires host checks and a Windows runner unless Windows is
+explicitly skipped. Linux checks run in CI (the `linux-release-check` job in
+`.github/workflows/ci.yaml`, same image recipe); the local release does not
+run them and does not wait for CI. Add `--with-linux` to also run them locally
+in Docker. `--skip-linux` is accepted for old scripts and changes nothing. The existing
 `scripts/git-release.sh` wrapper keeps its default `--skip-windows` setting.
 Missing required runners stop the flow. To validate all configured platforms
 without committing or pushing:
@@ -22,7 +25,7 @@ cargo xtask release --check-only
 For an explicit partial run on this Mac:
 
 ```sh
-cargo xtask release --check-only --skip-linux --skip-windows
+cargo xtask release --check-only --skip-windows
 ```
 
 Remove `--check-only` to commit and release from `master`. The script checks
@@ -48,7 +51,7 @@ Native GUI checks require a desktop and any permissions required by the fixtures
 Live-provider tests, ignored tests, soak tests, signing, and notarization are
 outside this local gate.
 
-Linux uses an Ubuntu 24.04 image, the repository Rust version, Neovim v0.11.6,
+With `--with-linux`, Linux uses an Ubuntu 24.04 image, the repository Rust version, Neovim v0.11.6,
 Xvfb/Openbox, software rendering, and the same checks and package build.
 Coverage runs only in CI. The image links with mold and builds line-table debug
 info, so parallel links fit in Docker's memory. It uses the Docker server's native architecture:
@@ -78,7 +81,7 @@ Linux platform in `results.json`. Other CPU architectures and host-specific
 GPU/desktop behavior still need their own validation.
 
 During a registry outage, explicitly select an image that is already installed:
-`./scripts/git-release.sh --linux-image YOUR_NATIVE_LINUX_IMAGE`.
+`./scripts/git-release.sh --with-linux --linux-image YOUR_NATIVE_LINUX_IMAGE`.
 This overrides the Dockerfile configuration check; the release checks still
 run inside the selected image. Missing images or an architecture mismatch stop
 before host tests. The old x64 image cannot be used on Apple Silicon. Containers

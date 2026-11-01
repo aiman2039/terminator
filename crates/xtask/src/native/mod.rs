@@ -27,7 +27,9 @@ pub(super) use super::harness::{
     session_ids, sessions, wait_child,
 };
 pub(super) use anyhow::{Context, Result, ensure};
-pub(super) use dispatch::{CaptureInput, capture, plain, prefs, save_prefs, setup};
+pub(super) use dispatch::{
+    CaptureInput, capture, capture_when, plain, prefs, save_prefs, setup, waiting,
+};
 pub use dispatch::{Options, run};
 pub(super) use serde_json::{Value, json};
 pub(super) use std::{

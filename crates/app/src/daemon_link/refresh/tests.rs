@@ -353,10 +353,7 @@ fn rewatch_records_targets_in_shared_state_for_later_unwatch() {
     let Ok(watcher) = notify::recommended_watcher(|_: notify::Result<notify::Event>| {}) else {
         return;
     };
-    let state = std::sync::Mutex::new(live::WatchState {
-        watcher: Some(watcher),
-        watched: Vec::new(),
-    });
+    let state = std::sync::Mutex::new(live::WatchState::new(Some(watcher)));
     // A pass whose result is dropped (cancelled refresh) still updates state.
     let _ = live::rewatch(&state, vec![(first.clone(), RecursiveMode::Recursive)]);
     assert_eq!(
