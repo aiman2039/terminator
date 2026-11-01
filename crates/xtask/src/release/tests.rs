@@ -355,6 +355,7 @@ fn checks_reject_content_edits_to_already_dirty_and_untracked_files() {
             output: &fixture.root.join(".artifacts/check"),
             platform: checks::Platform::Windows,
             runner: &EditingRunner(&path),
+            only: &[],
         })
         .unwrap_err();
         assert!(
@@ -656,6 +657,8 @@ fn missing_lockfile_member_does_not_change_either_file() {
 struct FakeRunner {
     commands: Mutex<Vec<Vec<String>>>,
     fail: Option<&'static str>,
+    /// Step records a fake host release check writes into its stage directory.
+    host_steps: Option<&'static str>,
     architecture: Option<&'static str>,
     image_architecture: Option<&'static str>,
 }
@@ -692,6 +695,13 @@ impl Runner for FakeRunner {
     }
     fn logged(&self, command: &mut Command, path: &Path) -> Result<()> {
         fs::write(path, "fixture log\n")?;
+        if let Some(steps) = self.host_steps
+            && arguments(command)
+                .iter()
+                .any(|arg| arg == "scripts/release-check.sh")
+        {
+            fs::write(path.with_file_name("steps.json"), steps)?;
+        }
         self.run(command)
     }
 }
@@ -739,7 +749,8 @@ fn unit_failure_stops_before_runtime_and_packaging() {
             root: &fixture.root,
             output: &fixture.root.join(".artifacts/check"),
             platform: checks::Platform::Mac,
-            runner: &runner
+            runner: &runner,
+            only: &[],
         })
         .is_err()
     );
@@ -767,9 +778,23 @@ fn fixture_failure_still_runs_the_other_fixtures_and_reports_together() {
         output: &fixture.root.join(".artifacts/check"),
         platform: checks::Platform::Mac,
         runner: &runner,
+        only: &[],
     })
     .unwrap_err();
-    assert!(format!("{error:#}").contains("integration/idle-close"));
+    assert!(format!("{error:#}").contains("1 release check step(s) failed:\n- integration:"));
+    let steps: Vec<Value> = serde_json::from_slice(
+        &fs::read(fixture.root.join(".artifacts/check/steps.json")).unwrap(),
+    )
+    .unwrap();
+    let status = |name: &str| {
+        steps
+            .iter()
+            .find(|step| step["name"] == name)
+            .map(|step| step["status"].clone())
+    };
+    assert_eq!(status("integration"), Some(Value::from("failed")));
+    assert_eq!(status("idle-close"), Some(Value::from("passed")));
+    assert_eq!(status("package"), Some(Value::from("passed")));
     let commands = runner.commands.lock().unwrap();
     let ran = |name: &str| {
         commands
@@ -796,6 +821,7 @@ fn mac_checks_include_cross_check_runtime_gui_and_package() {
         output: &fixture.root.join(".artifacts/check"),
         platform: checks::Platform::Mac,
         runner: &runner,
+        only: &[],
     })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
@@ -817,7 +843,7 @@ fn mac_checks_include_cross_check_runtime_gui_and_package() {
 }
 
 #[test]
-fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
+fn linux_checks_use_xvfb_and_leave_coverage_to_ci() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
     checks::run_with(checks::RunWithInput {
@@ -825,6 +851,7 @@ fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
         output: &fixture.root.join(".artifacts/check"),
         platform: checks::Platform::Linux,
         runner: &runner,
+        only: &[],
     })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
@@ -833,18 +860,78 @@ fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
             .iter()
             .any(|args| args.first().is_some_and(|arg| arg == "xvfb-run"))
     );
-    assert!(commands.iter().any(|args| {
-        args.get(1..3) == Some(&["llvm-cov".to_owned(), "nextest".to_owned()])
-            && args.windows(2).any(|pair| pair == ["--build-jobs", "1"])
-            && args
-                .windows(2)
-                .any(|pair| pair == ["--fail-under-lines", "50"])
-    }));
-    // Parallel debug links of the GUI fixtures run out of Docker memory.
-    assert!(commands.iter().any(|args| {
-        args.iter().any(|arg| arg == "--examples")
-            && args.windows(2).any(|pair| pair == ["--jobs", "2"])
-    }));
+    // Linux runs the same unit tests as CI; the coverage job stays in CI.
+    assert!(
+        commands
+            .iter()
+            .any(|args| args == &["sh", "scripts/check.sh", "test"])
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|args| args.iter().any(|arg| arg == "llvm-cov" || arg == "--jobs"))
+    );
+}
+
+#[test]
+fn only_reruns_the_named_fixture_steps_after_the_build() {
+    let fixture = Fixture::new();
+    let runner = FakeRunner::default();
+    checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Mac,
+        runner: &runner,
+        only: &["gui".to_owned()],
+    })
+    .unwrap();
+    let commands = runner.commands.lock().unwrap();
+    let ran = |name: &str| {
+        commands
+            .iter()
+            .any(|args| args.iter().any(|arg| arg == name))
+    };
+    assert!(ran("--examples") && ran("gui"));
+    for skipped in ["clippy", "test", "integration", "idle-close", "package"] {
+        assert!(!ran(skipped), "{skipped} ran");
+    }
+    assert!(
+        checks::run_with(checks::RunWithInput {
+            root: &fixture.root,
+            output: &fixture.root.join(".artifacts/check"),
+            platform: checks::Platform::Mac,
+            runner: &runner,
+            only: &["clippy".to_owned()],
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn static_failures_are_all_reported_and_do_not_stop_tests() {
+    let fixture = Fixture::new();
+    let runner = FakeRunner {
+        fail: Some("fmt"),
+        ..FakeRunner::default()
+    };
+    let error = checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Mac,
+        runner: &runner,
+        only: &[],
+    })
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("- fmt:"));
+    let commands = runner.commands.lock().unwrap();
+    for later in ["audit", "deny", "clippy", "test", "gui"] {
+        assert!(
+            commands
+                .iter()
+                .any(|args| args.iter().any(|arg| arg == later)),
+            "{later} did not run"
+        );
+    }
 }
 
 #[test]
@@ -856,6 +943,7 @@ fn windows_checks_do_not_claim_unix_runtime_coverage() {
         output: &fixture.root.join(".artifacts/check"),
         platform: checks::Platform::Windows,
         runner: &runner,
+        only: &[],
     })
     .unwrap();
     let commands = runner.commands.lock().unwrap();
@@ -1081,7 +1169,7 @@ fn docker_plan_keeps_source_read_only_and_records_windows_skip() {
     assert!(
         build
             .iter()
-            .any(|arg| arg == "RUST_COMPONENTS=clippy llvm-tools-preview rust-analyzer rustfmt")
+            .any(|arg| arg == "RUST_COMPONENTS=clippy rust-analyzer rustfmt")
     );
     assert_eq!(
         build.last().unwrap(),
@@ -1120,14 +1208,14 @@ fn docker_plan_keeps_source_read_only_and_records_windows_skip() {
 }
 
 #[test]
-fn image_components_include_repo_requirements_and_coverage_without_duplicates() {
+fn image_components_include_repo_requirements_without_duplicates() {
     let toolchain =
         "[toolchain]\ncomponents = [\"rust-analyzer\", \"rustfmt\", \"rustfmt\", \"rust-src\"]"
             .parse()
             .unwrap();
     assert_eq!(
         rust_components(&toolchain).unwrap(),
-        "clippy llvm-tools-preview rust-analyzer rust-src rustfmt"
+        "clippy rust-analyzer rust-src rustfmt"
     );
 }
 
@@ -1297,50 +1385,71 @@ fn failed_linux_image_build_stops_before_linux_tests() {
 }
 
 #[test]
-fn host_failure_beside_linux_reruns_host_alone_once() {
-    let fixture = Fixture::new();
-    fs::write(
-        fixture.root.join("rust-toolchain.toml"),
-        "[toolchain]\nchannel = \"1.97.1\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(fixture.root.join("scripts")).unwrap();
-    fs::write(
-        fixture.root.join("scripts/release-linux.Dockerfile"),
-        "FROM ubuntu:24.04\n",
-    )
-    .unwrap();
-    let artifacts = fixture.root.join(".artifacts/releases/run-host-retry");
-    fs::create_dir_all(&artifacts).unwrap();
-    let runner = FakeRunner {
-        fail: Some("scripts/release-check.sh"),
-        ..FakeRunner::default()
-    };
-    let error = validate(ValidateInput {
-        source: &fixture.root,
-        artifacts: &artifacts,
-        options: &Options {
-            skip_windows: true,
-            rebuild_linux_image: true,
-            ..Options::default()
-        },
-        runner: &runner,
-    })
-    .unwrap_err();
-    assert!(error.to_string().contains("host-retry failed"));
-    let host_runs = runner
-        .commands
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|args| args.iter().any(|arg| arg == "scripts/release-check.sh"))
-        .count();
-    assert_eq!(host_runs, 2);
-    let results: Value =
-        serde_json::from_slice(&fs::read(artifacts.join("results.json")).unwrap()).unwrap();
-    assert_eq!(results["host"]["status"], "failed");
-    assert_eq!(results["host-retry"]["status"], "failed");
-    assert_eq!(results["linux"]["status"], "passed");
+fn host_fixture_failure_beside_linux_reruns_only_failed_fixture_steps() {
+    let fixture_failure = r#"[{"name":"clippy","status":"passed","seconds":1.0},
+        {"name":"gui","status":"failed","seconds":1.0,"error":"case timed out"},
+        {"name":"package","status":"failed","seconds":1.0}]"#;
+    let unit_failure = r#"[{"name":"test","status":"failed","seconds":1.0,"error":"assert"}]"#;
+    for (steps, retried) in [(fixture_failure, true), (unit_failure, false)] {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.root.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.97.1\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(fixture.root.join("scripts")).unwrap();
+        fs::write(
+            fixture.root.join("scripts/release-linux.Dockerfile"),
+            "FROM ubuntu:24.04\n",
+        )
+        .unwrap();
+        let artifacts = fixture.root.join(".artifacts/releases/run-host-retry");
+        fs::create_dir_all(&artifacts).unwrap();
+        let runner = FakeRunner {
+            fail: Some("scripts/release-check.sh"),
+            host_steps: Some(steps),
+            ..FakeRunner::default()
+        };
+        let error = validate(ValidateInput {
+            source: &fixture.root,
+            artifacts: &artifacts,
+            options: &Options {
+                skip_windows: true,
+                rebuild_linux_image: true,
+                ..Options::default()
+            },
+            runner: &runner,
+        })
+        .unwrap_err();
+        let host_runs: Vec<Vec<String>> = runner
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|args| args.iter().any(|arg| arg == "scripts/release-check.sh"))
+            .cloned()
+            .collect();
+        let results: Value =
+            serde_json::from_slice(&fs::read(artifacts.join("results.json")).unwrap()).unwrap();
+        assert_eq!(results["host"]["status"], "failed");
+        assert_eq!(
+            results["host"]["steps"].as_array().unwrap().len(),
+            3 - 2 * usize::from(!retried)
+        );
+        assert_eq!(results["linux"]["status"], "passed");
+        if retried {
+            assert!(error.to_string().contains("host-retry failed"));
+            assert_eq!(
+                host_runs.last().unwrap(),
+                &["bash", "scripts/release-check.sh", "--only", "gui,package"]
+            );
+            assert_eq!(results["host-retry"]["status"], "failed");
+        } else {
+            assert!(error.to_string().contains("host failed"));
+            assert_eq!(host_runs.len(), 1);
+            assert!(results.get("host-retry").is_none());
+        }
+    }
 }
 
 #[test]

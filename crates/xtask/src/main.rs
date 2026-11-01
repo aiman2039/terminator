@@ -45,6 +45,9 @@ enum Task {
     ReleaseCheck {
         #[arg(long, env = "RUNNER_TEMP")]
         output: PathBuf,
+        /// Rerun only these fixture steps (comma-separated), after the build.
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
     },
     /// Execute release checks on a Windows OpenSSH host.
     ReleaseWindows {
@@ -214,7 +217,7 @@ fn test_shell_sink() -> Result<()> {
 fn dispatch(task: Task) -> Result<()> {
     match task {
         Task::Release(options) => release::run(options),
-        Task::ReleaseCheck { output } => release::checks::run(&output),
+        Task::ReleaseCheck { output, only } => release::checks::run(&output, &only),
         Task::ReleaseWindows {
             source,
             artifacts,
