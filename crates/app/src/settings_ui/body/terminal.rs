@@ -172,12 +172,13 @@ impl App {
     }
 
     fn lsp_server_rows(&mut self, ui: &mut egui::Ui, browse: &mut Option<BrowseTarget>) {
-        for (language, label) in [
-            ("rust", "Rust language server"),
-            ("python", "Python language server"),
-            ("typescript", "TypeScript language server"),
-        ] {
-            if !self.field_visible(label, "lsp language server rust python typescript") {
+        for family in terminator_native_edit::lsp::SERVER_FAMILIES {
+            let (language, label) = (family.id, family.label);
+            let keywords = format!(
+                "lsp language server {language} {}",
+                family.candidates.join(" ")
+            );
+            if !self.field_visible(label, &keywords) {
                 continue;
             }
             if self.lsp_server_row(ui, language, label) {

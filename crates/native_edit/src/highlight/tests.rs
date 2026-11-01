@@ -299,3 +299,20 @@ fn a_small_buffer_still_highlights_in_the_same_call() {
     assert!(cache.is_current(Language::Rust, true, 1));
     assert!(!cache.line(0).is_empty());
 }
+
+#[test]
+fn stylesheet_and_html_extensions_keep_bundled_grammars() {
+    for (path, language) in [
+        ("index.html", Language::Html),
+        ("site.css", Language::Css),
+        ("site.scss", Language::Scss),
+        ("site.less", Language::Less),
+    ] {
+        assert_eq!(language_for_path(path), language);
+        let extension = language.extension().expect("extension");
+        assert!(
+            syntax_set().find_syntax_by_extension(extension).is_some(),
+            "{path} has no grammar"
+        );
+    }
+}

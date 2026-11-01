@@ -269,7 +269,9 @@ pub fn comment_token(language: Language) -> Option<&'static str> {
         | Language::Go
         | Language::C
         | Language::Cpp
-        | Language::Java => "//",
+        | Language::Java
+        | Language::Scss
+        | Language::Less => "//",
         Language::Python | Language::Shell | Language::Toml | Language::Yaml => "#",
         Language::Syntax(name) => match name {
             "Ruby" | "Perl" | "R" | "Makefile" | "Dockerfile" | "Elixir" | "Nix" | "CMake" => "#",
@@ -279,7 +281,9 @@ pub fn comment_token(language: Language) -> Option<&'static str> {
             "Lisp" | "Clojure" => ";",
             _ => return None,
         },
-        Language::Json | Language::Markdown | Language::Plain => return None,
+        Language::Json | Language::Markdown | Language::Html | Language::Css | Language::Plain => {
+            return None;
+        }
     })
 }
 

@@ -16,8 +16,6 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use url::Url;
 
-use crate::highlight::Language;
-
 mod completion;
 mod edits;
 mod hierarchy;
@@ -25,6 +23,7 @@ mod navigate;
 mod parsing;
 mod requests;
 mod server;
+mod servers;
 mod types;
 mod wire;
 
@@ -35,6 +34,7 @@ pub use navigate::*;
 pub use parsing::*;
 pub use requests::*;
 pub use server::*;
+pub use servers::*;
 pub use types::*;
 pub use wire::*;
 

@@ -369,7 +369,7 @@ impl LspManager {
             return;
         }
         let mut changed: Vec<&'static str> = Vec::new();
-        for language in ["rust", "python", "typescript"] {
+        for language in L::SERVER_FAMILIES.iter().map(|family| family.id) {
             let before = self.overrides.get(language);
             let after = normalized.get(language);
             if before != after {
@@ -429,6 +429,12 @@ fn language_of(id: &str) -> Language {
         "rust" => Language::Rust,
         "python" => Language::Python,
         "typescript" => Language::TypeScript,
+        "markdown" => Language::Markdown,
+        "html" => Language::Html,
+        "css" => Language::Css,
+        "json" => Language::Json,
+        "toml" => Language::Toml,
+        "yaml" => Language::Yaml,
         _ => Language::Plain,
     }
 }
@@ -445,6 +451,11 @@ fn project_root(path: &Path, language: Language) -> PathBuf {
         Language::TypeScript | Language::JavaScript => {
             &["tsconfig.json", "jsconfig.json", "package.json"]
         }
+        Language::Markdown => &[".marksman.toml"],
+        Language::Html | Language::Css | Language::Scss | Language::Less | Language::Json => {
+            &["package.json"]
+        }
+        Language::Toml => &[".taplo.toml", "taplo.toml"],
         _ => &[],
     };
     let mut fallback: Option<PathBuf> = None;

@@ -52,6 +52,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn settings_card_leaves_a_clickable_margin() {
+        let outer = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        let card = super::super::footer::settings_card_rect(outer);
+        assert!(outer.contains_rect(card));
+        assert!(card.width() <= 1100.0);
+        assert!(card.min.y > outer.min.y && card.max.y < outer.max.y);
+        assert_eq!(card.center(), outer.center());
+    }
+
+    #[test]
+    fn clicking_outside_the_settings_card_closes_clean_settings() {
+        let (mut app, ctx, _dir) = app();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 820.0));
+        let frame = |events: Vec<egui::Event>, app: &mut App| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.settings_center(ui),
+            );
+            output.textures_delta.clear();
+        };
+        frame(vec![], &mut app);
+        let pos = egui::pos2(4.0, 410.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(pos), button(true)], &mut app);
+        frame(vec![button(false)], &mut app);
+        assert!(!app.settings_open);
+    }
+
     fn app() -> (App, egui::Context, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();

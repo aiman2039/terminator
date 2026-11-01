@@ -1,4 +1,5 @@
 use super::*;
+use crate::highlight::Language;
 
 fn body_of(framed: &[u8]) -> Value {
     let mut decoder = FrameDecoder::default();
@@ -717,9 +718,47 @@ fn server_table_covers_rust_python_and_typescript() {
     assert_eq!(server_language(Language::Rust), Some("rust"));
     assert_eq!(server_language(Language::TypeScript), Some("typescript"));
     assert_eq!(server_language(Language::JavaScript), Some("typescript"));
-    assert_eq!(server_language(Language::Markdown), None);
+    assert_eq!(server_language(Language::Shell), None);
     assert_eq!(server_args(Language::TypeScript), &["--stdio"]);
     assert!(server_args(Language::Rust).is_empty());
+}
+
+#[test]
+fn server_table_covers_markup_and_config_languages() {
+    assert_eq!(server_candidates(Language::Markdown), &["marksman"]);
+    assert_eq!(server_args(Language::Markdown), &["server"]);
+    assert_eq!(
+        server_candidates(Language::Html),
+        &["vscode-html-language-server"]
+    );
+    for language in [Language::Css, Language::Scss, Language::Less] {
+        assert_eq!(server_language(language), Some("css"));
+        assert_eq!(server_candidates(language), &["vscode-css-language-server"]);
+    }
+    assert_eq!(
+        server_candidates(Language::Json),
+        &["vscode-json-language-server"]
+    );
+    assert_eq!(server_candidates(Language::Toml), &["taplo"]);
+    assert_eq!(server_args(Language::Toml), &["lsp", "stdio"]);
+    assert_eq!(server_candidates(Language::Yaml), &["yaml-language-server"]);
+    assert_eq!(server_args(Language::Yaml), &["--stdio"]);
+}
+
+#[test]
+fn markup_file_ids_follow_the_extension() {
+    let id = |name: &str| {
+        language_id_for_path(Path::new(name), crate::highlight::language_for_path(name))
+    };
+    assert_eq!(id("notes.md"), Some("markdown"));
+    assert_eq!(id("index.html"), Some("html"));
+    assert_eq!(id("site.css"), Some("css"));
+    assert_eq!(id("site.scss"), Some("scss"));
+    assert_eq!(id("site.less"), Some("less"));
+    assert_eq!(id("tsconfig.jsonc"), Some("jsonc"));
+    assert_eq!(id("package.json"), Some("json"));
+    assert_eq!(id("Cargo.toml"), Some("toml"));
+    assert_eq!(id("ci.yml"), Some("yaml"));
 }
 
 #[test]
@@ -737,7 +776,7 @@ fn typescript_file_ids_follow_the_extension() {
         Some("javascriptreact")
     );
     assert_eq!(
-        language_id_for_path(Path::new("notes.md"), Language::Markdown),
+        language_id_for_path(Path::new("run.sh"), Language::Shell),
         None
     );
 }

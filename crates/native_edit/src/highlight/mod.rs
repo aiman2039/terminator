@@ -27,6 +27,10 @@ pub enum Language {
     Toml,
     Yaml,
     Markdown,
+    Html,
+    Css,
+    Scss,
+    Less,
     /// Any other grammar bundled by two-face (its name has process lifetime).
     Syntax(&'static str),
     Plain,
@@ -51,6 +55,10 @@ pub fn language_for_path(path: &str) -> Language {
         "toml" => Language::Toml,
         "yaml" | "yml" => Language::Yaml,
         "md" | "markdown" => Language::Markdown,
+        "html" | "htm" | "xhtml" => Language::Html,
+        "css" => Language::Css,
+        "scss" => Language::Scss,
+        "less" => Language::Less,
         _ => {
             let syntax = syntax_for_path(path);
             if syntax.name == "Plain Text" {
@@ -78,6 +86,10 @@ impl Language {
             Language::Toml => Some("toml"),
             Language::Yaml => Some("yaml"),
             Language::Markdown => Some("md"),
+            Language::Html => Some("html"),
+            Language::Css => Some("css"),
+            Language::Scss => Some("scss"),
+            Language::Less => Some("less"),
             Language::Plain | Language::Syntax(_) => None,
         }
     }
