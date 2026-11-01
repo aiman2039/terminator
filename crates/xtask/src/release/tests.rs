@@ -756,6 +756,38 @@ fn unit_failure_stops_before_runtime_and_packaging() {
 }
 
 #[test]
+fn fixture_failure_still_runs_the_other_fixtures_and_reports_together() {
+    let fixture = Fixture::new();
+    let runner = FakeRunner {
+        fail: Some("integration"),
+        ..FakeRunner::default()
+    };
+    let error = checks::run_with(checks::RunWithInput {
+        root: &fixture.root,
+        output: &fixture.root.join(".artifacts/check"),
+        platform: checks::Platform::Mac,
+        runner: &runner,
+    })
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("integration/idle-close"));
+    let commands = runner.commands.lock().unwrap();
+    let ran = |name: &str| {
+        commands
+            .iter()
+            .any(|args| args.iter().any(|arg| arg == name))
+    };
+    assert!(ran("gui") && ran("package"));
+    // The failed check ran twice: in parallel, then alone.
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|args| args.iter().any(|arg| arg == "integration"))
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn mac_checks_include_cross_check_runtime_gui_and_package() {
     let fixture = Fixture::new();
     let runner = FakeRunner::default();
@@ -1262,6 +1294,53 @@ fn failed_linux_image_build_stops_before_linux_tests() {
         serde_json::from_slice(&fs::read(artifacts.join("results.json")).unwrap()).unwrap();
     assert_eq!(results["linux-image"]["status"], "failed");
     assert_eq!(results["linux"]["status"], "pending");
+}
+
+#[test]
+fn host_failure_beside_linux_reruns_host_alone_once() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97.1\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(fixture.root.join("scripts")).unwrap();
+    fs::write(
+        fixture.root.join("scripts/release-linux.Dockerfile"),
+        "FROM ubuntu:24.04\n",
+    )
+    .unwrap();
+    let artifacts = fixture.root.join(".artifacts/releases/run-host-retry");
+    fs::create_dir_all(&artifacts).unwrap();
+    let runner = FakeRunner {
+        fail: Some("scripts/release-check.sh"),
+        ..FakeRunner::default()
+    };
+    let error = validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &Options {
+            skip_windows: true,
+            rebuild_linux_image: true,
+            ..Options::default()
+        },
+        runner: &runner,
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("host-retry failed"));
+    let host_runs = runner
+        .commands
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|args| args.iter().any(|arg| arg == "scripts/release-check.sh"))
+        .count();
+    assert_eq!(host_runs, 2);
+    let results: Value =
+        serde_json::from_slice(&fs::read(artifacts.join("results.json")).unwrap()).unwrap();
+    assert_eq!(results["host"]["status"], "failed");
+    assert_eq!(results["host-retry"]["status"], "failed");
+    assert_eq!(results["linux"]["status"], "passed");
 }
 
 #[test]

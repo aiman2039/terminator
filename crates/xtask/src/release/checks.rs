@@ -3,6 +3,11 @@ use anyhow::{Result, ensure};
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path, process::Command};
 
+/// GUI fixtures click on a timeline and use software rendering. With the
+/// default 8 workers beside the Linux container, about a third of the
+/// cases miss their timing; 4 keeps most of the speed with fewer retries.
+const RELEASE_GUI_JOBS: &str = "4";
+
 #[derive(Clone, Copy)]
 pub(super) enum Platform {
     Mac,
@@ -192,8 +197,26 @@ impl<R: Runner + Sync> Checks<'_, R> {
             args.extend(["--jobs", "2"]);
         }
         self.run(&mut cmd(self.root, "cargo", &args))?;
-        self.integration_and_idle_close()?;
-        self.native_gui(platform)?;
+        // These checks are independent once the binaries exist. Run them all
+        // and report every failure together, so one release run shows all
+        // problems instead of one per run.
+        let failures: Vec<String> = [
+            ("integration/idle-close", self.integration_and_idle_close()),
+            ("native GUI", self.native_gui(platform)),
+            ("package", self.package()),
+        ]
+        .into_iter()
+        .filter_map(|(name, result)| result.err().map(|error| format!("{name}: {error:#}")))
+        .collect();
+        ensure!(
+            failures.is_empty(),
+            "{} fixture check(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+        Ok(())
+    }
+    fn package(&self) -> Result<()> {
         self.run(
             cmd(
                 self.root,
@@ -206,8 +229,7 @@ impl<R: Runner + Sync> Checks<'_, R> {
                 ],
             )
             .arg(self.output.join("package")),
-        )?;
-        Ok(())
+        )
     }
     fn integration_and_idle_close(&self) -> Result<()> {
         std::thread::scope(|scope| -> Result<()> {
@@ -231,8 +253,26 @@ impl<R: Runner + Sync> Checks<'_, R> {
             let idle_close_result = idle_close
                 .join()
                 .map_err(|_| anyhow::anyhow!("idle-close check panicked"))?;
-            integration_result?;
-            idle_close_result?;
+            // These real-PTY checks use short timed waits and share the host
+            // with each other and the Linux container. A failed check runs
+            // once more alone; it fails only when that run fails too.
+            let mut failures = Vec::new();
+            for (check, result) in [
+                ("integration", integration_result),
+                ("idle-close", idle_close_result),
+            ] {
+                if let Err(first) = result {
+                    println!("Retrying {check} alone after a failure: {first:#}");
+                    if let Err(error) = self.run(&mut cmd(
+                        self.root,
+                        "sh",
+                        &["scripts/run-built-xtask.sh", check],
+                    )) {
+                        failures.push(format!("{check}: {error:#}"));
+                    }
+                }
+            }
+            ensure!(failures.is_empty(), "{}", failures.join("\n"));
             Ok(())
         })?;
         Ok(())
@@ -253,12 +293,14 @@ impl<R: Runner + Sync> Checks<'_, R> {
                         "-euo",
                         "pipefail",
                         "-c",
-                        r#"
+                        &format!(
+                            r#"
 openbox > "$RUNNER_TEMP/window-manager.log" 2>&1 &
 manager_pid=$!
 trap 'kill "$manager_pid" 2>/dev/null || true' EXIT
-sh scripts/run-built-xtask.sh gui all --output "$RUNNER_TEMP/native"
-"#,
+sh scripts/run-built-xtask.sh gui all --jobs {RELEASE_GUI_JOBS} --output "$RUNNER_TEMP/native"
+"#
+                        ),
                     ],
                 ))?;
             }
@@ -267,7 +309,14 @@ sh scripts/run-built-xtask.sh gui all --output "$RUNNER_TEMP/native"
                     cmd(
                         self.root,
                         "sh",
-                        &["scripts/run-built-xtask.sh", "gui", "all", "--output"],
+                        &[
+                            "scripts/run-built-xtask.sh",
+                            "gui",
+                            "all",
+                            "--jobs",
+                            RELEASE_GUI_JOBS,
+                            "--output",
+                        ],
                     )
                     .arg(native),
                 )?;

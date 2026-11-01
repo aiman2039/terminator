@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use std::{
     fs::File,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, IsTerminal, Read, Write},
     path::Path,
     process::{Command, Stdio},
     sync::Mutex,
@@ -37,6 +37,11 @@ impl Runner for System {
 
     fn logged(&self, command: &mut Command, path: &Path) -> Result<()> {
         let log = Mutex::new(File::create(path)?);
+        // The pipes below hide the terminal, so cargo, rustc and nextest
+        // would turn colors off. Keep them when our own output is a terminal.
+        if std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+            command.env("CARGO_TERM_COLOR", "always");
+        }
         let mut process = crate::harness::Process(
             command
                 .stdout(Stdio::piped())
@@ -74,7 +79,8 @@ fn pump(reader: impl Read, log: &Mutex<File>) -> Result<()> {
         let mut log = log
             .lock()
             .map_err(|_| anyhow::anyhow!("Command log lock poisoned"))?;
-        log.write_all(&line)?;
+        // Colors are for the terminal only; the saved log stays plain text.
+        log.write_all(&anstream::adapter::strip_bytes(&line).into_vec())?;
         std::io::stdout().lock().write_all(&line)?;
     }
 }

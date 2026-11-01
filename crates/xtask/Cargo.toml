@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+anstream = "1"
 serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true
@@ -20,6 +21,7 @@ rayon = "1"
 fs2 = "0.4"
 semver = "1"
 sha2 = "0.11"
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 toml_edit = "0.25"
 uuid.workspace = true
 xshell = "0.2"

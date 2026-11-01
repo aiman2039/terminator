@@ -2,8 +2,64 @@
 use crate::harness::{Harness, id, session};
 use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
-use std::{fs, thread, time::Duration};
+use std::{
+    fs, thread,
+    time::{Duration, Instant},
+};
 
+/// Wait until the shell has run its first prompt hook (the daemon has its
+/// cwd) and that hook has exited. The hook is a child of the shell, so until
+/// it ends, idle close correctly refuses; on a busy host it can take seconds.
+fn wait_prompt(h: &Harness, shell: &Value) -> Result<()> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let end = Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .ok_or_else(|| anyhow!("prompt deadline overflow"))?;
+    let mut system = System::new();
+    loop {
+        let record = session(&h.state()?, id(shell)).clone();
+        if record.get("cwd_confirmed") == Some(&Value::Bool(true))
+            && let Some(pid) = record
+                .get("pid")
+                .and_then(Value::as_u64)
+                .and_then(|p| u32::try_from(p).ok())
+        {
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::nothing(),
+            );
+            if !system
+                .processes()
+                .values()
+                .any(|p| p.parent() == Some(Pid::from_u32(pid)))
+            {
+                return Ok(());
+            }
+        }
+        ensure!(
+            Instant::now() < end,
+            "Shell {} did not reach an idle prompt in 5 s: {record}",
+            id(shell)
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A command's prompt hook can still run when the close is sent. A refused
+/// close changes nothing, so try again until the shell closes or 5 s pass.
+fn close_when_idle(h: &Harness, target: &Value, generation: &str) -> Result<Value> {
+    let end = Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .ok_or_else(|| anyhow!("idle deadline overflow"))?;
+    loop {
+        let outcome = close(h, &[target], generation)?;
+        if closed(&outcome) || Instant::now() >= end {
+            return Ok(outcome);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
 fn close(h: &Harness, targets: &[&Value], generation: &str) -> Result<Value> {
     h.rpc(json!({"CloseIdleSessions":{"generation":generation,"sessions":targets.iter().map(|s| id(s)).collect::<Vec<_>>()}}))?
         .get("IdleSessionsClosed")
@@ -57,9 +113,9 @@ fn run_shell(name: &str) -> Result<()> {
     };
     let t = Idle::launch(name, &shell)?;
     let initial = t.h.shell(&t.project)?;
-    thread::sleep(Duration::from_millis(700));
-    let outcome = t.close(&[&initial])?;
     if name == "sh" {
+        thread::sleep(Duration::from_millis(700));
+        let outcome = t.close(&[&initial])?;
         ensure!(
             !closed(&outcome),
             "Unsupported shell was closed without readiness"
@@ -68,6 +124,7 @@ fn run_shell(name: &str) -> Result<()> {
         println!("PASS idle-close sh: unsupported shell retained");
         return Ok(());
     }
+    let outcome = close_when_idle(&t.h, &initial, &t.generation)?;
     if !closed(&outcome) {
         anyhow::bail!(
             "Initial {name} shell did not close: {outcome}; {}",
@@ -125,21 +182,21 @@ impl<'a> Idle<'a> {
     fn builtins(&self) -> Result<()> {
         let (h, name) = (&self.h, self.name);
         let completed = h.shell(&self.project)?;
-        thread::sleep(Duration::from_millis(300));
+        wait_prompt(h, &completed)?;
         let mut command = h.attach(&completed)?;
         h.write(&mut command, "true\r")?;
         thread::sleep(Duration::from_millis(400));
-        let outcome = self.close(&[&completed])?;
+        let outcome = close_when_idle(h, &completed, &self.generation)?;
         ensure!(
             closed(&outcome),
             "{name} shell after a completed builtin did not close: {outcome}"
         );
         let builtin = h.shell(&self.project)?;
-        thread::sleep(Duration::from_millis(400));
+        wait_prompt(h, &builtin)?;
         h.write(&mut h.attach(&builtin)?, "read value\r")?;
         thread::sleep(Duration::from_millis(300));
         ensure!(
-            closed(&self.close(&[&builtin])?),
+            closed(&close_when_idle(h, &builtin, &self.generation)?),
             "Builtin without children required confirmation"
         );
         Ok(())
@@ -150,7 +207,8 @@ impl<'a> Idle<'a> {
         let h = &self.h;
         let busy = h.shell(&self.project)?;
         let idle = h.shell(&self.project)?;
-        thread::sleep(Duration::from_millis(400));
+        wait_prompt(h, &busy)?;
+        wait_prompt(h, &idle)?;
         h.write(&mut h.attach(&busy)?, "sleep 30\r")?;
         thread::sleep(Duration::from_millis(300));
         let outcome = self.close(&[&idle, &busy])?;
@@ -173,7 +231,7 @@ impl<'a> Idle<'a> {
     fn background_jobs(&self) -> Result<()> {
         let h = &self.h;
         let background = h.shell(&self.project)?;
-        thread::sleep(Duration::from_millis(300));
+        wait_prompt(h, &background)?;
         let mut bg = h.attach(&background)?;
         h.write(&mut bg, "sleep 30 &\r")?;
         thread::sleep(Duration::from_millis(300));
@@ -205,7 +263,7 @@ impl<'a> Idle<'a> {
     fn foreground_job(&self) -> Result<()> {
         let h = &self.h;
         let foreground = h.shell(&self.project)?;
-        thread::sleep(Duration::from_millis(300));
+        wait_prompt(h, &foreground)?;
         h.write(&mut h.attach(&foreground)?, "sleep 30\r")?;
         thread::sleep(Duration::from_millis(300));
         ensure!(
@@ -224,7 +282,7 @@ impl<'a> Idle<'a> {
     fn submitted_foreground_job(&self) -> Result<()> {
         let h = &self.h;
         let submitted = h.shell(&self.project)?;
-        thread::sleep(Duration::from_millis(300));
+        wait_prompt(h, &submitted)?;
         let mut input = h.attach(&submitted)?;
         h.write(
             &mut input,
@@ -258,11 +316,11 @@ impl<'a> Idle<'a> {
     fn partial_input(&self) -> Result<()> {
         let h = &self.h;
         let partial = h.shell(&self.project)?;
-        thread::sleep(Duration::from_millis(300));
+        wait_prompt(h, &partial)?;
         h.write(&mut h.attach(&partial)?, "echo")?;
         thread::sleep(Duration::from_millis(100));
         ensure!(
-            closed(&self.close(&[&partial])?),
+            closed(&close_when_idle(h, &partial, &self.generation)?),
             "Partial input without children required confirmation"
         );
         Ok(())
@@ -313,15 +371,14 @@ fn zsh_prompt_framework() -> Result<()> {
         .unwrap()
         .to_owned();
     let initial = h.shell(&project)?;
-    thread::sleep(Duration::from_millis(1200));
-    let outcome = close(&h, &[&initial], &generation)?;
+    let outcome = close_when_idle(&h, &initial, &generation)?;
     ensure!(
         closed(&outcome),
         "Idle zsh with prompt framework required confirmation: {outcome}; {}",
         h.history(id(&initial))?
     );
     let busy = h.shell(&project)?;
-    thread::sleep(Duration::from_millis(800));
+    wait_prompt(&h, &busy)?;
     h.write(&mut h.attach(&busy)?, "sleep 30\r")?;
     thread::sleep(Duration::from_millis(300));
     let outcome = close(&h, &[&busy], &generation)?;

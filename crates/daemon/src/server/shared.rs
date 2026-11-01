@@ -32,6 +32,8 @@ pub(crate) struct Runtime {
     pub(crate) subscribers: Vec<SyncSender<Response>>,
     pub(crate) token: String,
     pub(crate) ended: bool,
+    /// The child was reaped; its PID may be reused, so never signal it.
+    pub(crate) exited: bool,
     pub(crate) closing: bool,
     pub(crate) inputs_in_flight: usize,
     pub(crate) shell_executable: Option<std::path::PathBuf>,

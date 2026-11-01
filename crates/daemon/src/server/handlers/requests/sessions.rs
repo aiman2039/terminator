@@ -10,6 +10,9 @@ use super::super::super::shared::{HistoryJob, Runtime, Shared, relock};
 use super::Outcome;
 use crate::{signals, storage};
 
+/// Delay before Stop repeats the hang-up to a session that is still live.
+const STOP_REPEAT: Duration = Duration::from_secs(1);
+
 impl Shared {
     pub(super) fn on_prune_history(&self, budget: u64) -> Result<Outcome> {
         let (tx, rx) = mpsc::channel();
@@ -99,6 +102,20 @@ impl Shared {
         ensure!(!relock(&rt).ended, "Session ended");
         if let Some(pid) = rec.pid {
             Self::hang_up_session(&rt, pid)?;
+            // A shell can catch the hang-up just before it `exec`s a command
+            // and lose it, which leaves the session stopping forever. Send
+            // it once more if the session is still live after a short wait.
+            let rt = Arc::clone(&rt);
+            std::thread::spawn(move || {
+                std::thread::sleep(STOP_REPEAT);
+                let live = {
+                    let rt = relock(&rt);
+                    !rt.ended && !rt.exited
+                };
+                if live {
+                    let _ = Self::hang_up_session(&rt, pid);
+                }
+            });
         }
         rec.lifecycle = Lifecycle::Stopping;
         s.revision = s.revision.saturating_add(1);

@@ -37,6 +37,7 @@ impl Shared {
             review_files,
         } = watch;
         let exit = child.wait();
+        relock(&runtime).exited = true;
         // Output still buffered in the PTY (often the error that made a
         // launch fail) must reach subscribers before `End`. Background
         // children may keep the PTY open, so the wait is bounded.

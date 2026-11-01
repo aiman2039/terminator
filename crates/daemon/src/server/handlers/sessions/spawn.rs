@@ -89,6 +89,7 @@ impl Shared {
             subscribers: vec![],
             token,
             ended: false,
+            exited: false,
             closing: false,
             inputs_in_flight: 0,
             shell_executable,

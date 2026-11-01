@@ -223,10 +223,32 @@ impl<R: Runner> Stages<'_, R> {
 }
 
 impl<R: Runner + Sync> Stages<'_, R> {
-    /// Run the host and Linux checks in parallel.
+    /// Run the host and Linux checks in parallel. The host's real-PTY and
+    /// GUI fixtures use short timed waits that the Linux container's build
+    /// can starve, so a host failure during a parallel run is rerun once
+    /// alone after Linux ends.
     fn run_platforms(&self, linux_plan: Option<(&'static str, String)>) -> Result<()> {
+        let parallel = linux_plan.is_some();
+        let (host, linux) = self.run_platforms_together(linux_plan)?;
+        let host = match host {
+            Err(first) if parallel => {
+                println!("Retrying host checks alone after a parallel failure: {first:#}");
+                self.run(
+                    "host-retry",
+                    &mut cmd(self.source, "bash", &["scripts/release-check.sh"]),
+                )
+            }
+            host => host,
+        };
+        host?;
+        linux
+    }
+    fn run_platforms_together(
+        &self,
+        linux_plan: Option<(&'static str, String)>,
+    ) -> Result<(Result<()>, Result<()>)> {
         let source = self.source;
-        std::thread::scope(|scope| -> Result<()> {
+        std::thread::scope(|scope| {
             let host_task = scope.spawn(move || {
                 self.run(
                     "host",
@@ -244,9 +266,7 @@ impl<R: Runner + Sync> Stages<'_, R> {
                     .map_err(|_| anyhow::anyhow!("Linux release check panicked"))?,
                 None => Ok(()),
             };
-            host_result?;
-            linux_result?;
-            Ok(())
+            Ok((host_result, linux_result))
         })
     }
     fn linux(&self, platform: &str, image: &str) -> Result<()> {
@@ -301,6 +321,9 @@ impl<R: Runner + Sync> Stages<'_, R> {
                     "CARGO_TARGET_DIR=/build",
                     "-e",
                     "RUNNER_TEMP=/artifacts",
+                    // Passes the color choice `logged` makes; unset stays unset.
+                    "-e",
+                    "CARGO_TERM_COLOR",
                     image,
                     "bash",
                     "-euo",
