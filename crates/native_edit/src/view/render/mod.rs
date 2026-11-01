@@ -113,24 +113,28 @@ struct SourceView<'a, B> {
 
 impl<B: Buffer> SourceView<'_, B> {
     /// Highlight derive, once per buffer revision: unchanged frames repaint
-    /// straight from the cache without rebuilding the text. The row layout
+    /// straight from the cache without rebuilding the text. Large buffers
+    /// highlight on a worker, so a keystroke does not wait for the parse. The row layout
     /// is cached on the same key, so an idle frame does no per-line work.
     fn derive_layout(&self, ui: &egui::Ui, highlight: &mut HighlightCache) {
         let doc = &*self.doc;
         let dark = ui.visuals().dark_mode;
         highlight.set_rainbow(self.options.rainbow_brackets);
-        if !highlight.is_current(self.language, dark, doc.revision()) {
+        if highlight.wants_text(self.language, dark, doc.revision()) {
             let mut text = String::new();
             for line in 0..doc.line_count() {
                 text.push_str(&doc.line_text(line));
                 text.push('\n');
             }
-            highlight.ensure(crate::highlight::EnsureInput {
-                language: self.language,
-                dark,
-                revision: doc.revision(),
-                text: &text,
-            });
+            highlight.ensure_async(
+                crate::highlight::EnsureInput {
+                    language: self.language,
+                    dark,
+                    revision: doc.revision(),
+                    text: &text,
+                },
+                ui.ctx(),
+            );
         }
         highlight.ensure_rows_spaced(doc, self.geometry.wrap_columns, &self.options.spacers);
     }

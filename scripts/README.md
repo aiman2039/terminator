@@ -55,7 +55,10 @@ info, so parallel links fit in Docker's memory. It uses the Docker server's nati
 `linux/arm64` on Apple Silicon, or `linux/amd64` on x64 hosts. Emulation changes
 the shell executable reported by the kernel and cannot pass the strict
 idle-close identity checks. ARM64 local tests do not replace CI's x64 tests.
-Docker must be running. Linux reads the current checkout through a read-only
+Docker must be running. Give the Docker VM at least 12 GB of memory (Docker
+Desktop > Settings > Resources; 16 GB is better). With the 7.7 GB default,
+parallel debug links of the GUI binaries can run out of memory (linker killed
+with signal 9), and the release must limit build jobs. Linux reads the current checkout through a read-only
 mount; it does not copy the source or use the host's build output. Images and Cargo build volumes are separate for each
 architecture; registry and Git source caches are shared. The image imports
 the installed toolchain from the official Rust image while keeping Ubuntu as

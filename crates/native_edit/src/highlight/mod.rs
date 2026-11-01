@@ -3,6 +3,7 @@
 //! The assets (syntax dump, theme dump) load once per process; per-buffer
 //! work is a full parse cached by [`HighlightCache`] on the buffer
 //! revision, so frames after an edit cost nothing. Buffers over
+//! [`SYNC_HIGHLIGHT_BYTES`] parse on a worker thread; buffers over
 //! [`MAX_HIGHLIGHT_BYTES`] paint plain (large-file degradation).
 use crate::doc::Buffer;
 use crate::rows::{RowCache, VisualRow};
@@ -110,6 +111,10 @@ pub(crate) fn span_style(font_style: syntect::highlighting::FontStyle) -> SpanSt
 
 /// Buffers over this size paint plain instead of highlighted.
 pub const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
+
+/// Buffers up to this size highlight on the calling thread; larger ones
+/// highlight on a worker so a keystroke never waits for a full parse.
+pub const SYNC_HIGHLIGHT_BYTES: usize = 32 * 1024;
 
 /// Process-wide syntax/theme assets, for sibling backends (tree-sitter
 /// resolves its colors from the same theme).
@@ -267,6 +272,30 @@ pub struct HighlightCache {
     lines: Vec<Vec<Span>>,
     rows: RowCache,
     folds: crate::fold::Folds,
+    /// The worker highlight in flight, if any (see [`HighlightCache::ensure_async`]).
+    running: Option<(HighlightKey, std::sync::mpsc::Receiver<Vec<Vec<Span>>>)>,
+}
+
+/// What one highlight result was computed for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct HighlightKey {
+    language: Language,
+    dark: bool,
+    revision: u64,
+    rainbow: bool,
+}
+
+/// Spans for `text`, with rainbow brackets when asked; empty when plain.
+fn compute_lines(language: Language, text: &str, dark: bool, rainbow: bool) -> Vec<Vec<Span>> {
+    match highlight_text(language, text, dark) {
+        Some(mut lines) => {
+            if rainbow {
+                rainbow::apply(&mut lines, text, dark);
+            }
+            lines
+        }
+        None => Vec::new(),
+    }
 }
 
 pub struct EnsureInput<'a> {
@@ -307,19 +336,84 @@ impl HighlightCache {
         if self.is_current(language, dark, revision) {
             return;
         }
-        self.language = Some(language);
-        self.dark = dark;
-        self.revision = revision;
-        self.ready = true;
-        self.lines = match highlight_text(language, text, dark) {
-            Some(mut lines) => {
-                if self.rainbow {
-                    rainbow::apply(&mut lines, text, dark);
-                }
-                lines
-            }
-            None => Vec::new(),
+        self.running = None;
+        self.lines = compute_lines(language, text, dark, self.rainbow);
+        self.adopt(HighlightKey {
+            language,
+            dark,
+            revision,
+            rainbow: self.rainbow,
+        });
+    }
+
+    fn adopt(&mut self, key: HighlightKey) {
+        self.language = Some(key.language);
+        self.dark = key.dark;
+        self.revision = key.revision;
+        self.ready = key.rainbow == self.rainbow;
+    }
+
+    /// Take a finished worker result. A result for an older revision is
+    /// still painted (closer than nothing) but does not mark the cache
+    /// current, so the next frame starts the newest revision.
+    fn poll(&mut self) {
+        let Some((key, rx)) = self.running.as_ref() else {
+            return;
         };
+        match rx.try_recv() {
+            Ok(lines) => {
+                let key = *key;
+                self.running = None;
+                self.lines = lines;
+                self.adopt(key);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.running = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    /// True when the caller must hand this revision's text to
+    /// [`HighlightCache::ensure_async`]: the cache is not current and no
+    /// worker is running. While one runs, the caller skips building the
+    /// text; edits made meanwhile highlight when it lands, newest only.
+    pub fn wants_text(&mut self, language: Language, dark: bool, revision: u64) -> bool {
+        self.poll();
+        !self.is_current(language, dark, revision) && self.running.is_none()
+    }
+
+    /// [`HighlightCache::ensure`], but text over [`SYNC_HIGHLIGHT_BYTES`]
+    /// is highlighted on a worker thread; `ctx` repaints when it lands.
+    /// Until then the last spans stay painted.
+    pub fn ensure_async(&mut self, input: EnsureInput<'_>, ctx: &egui::Context) {
+        if input.text.len() <= SYNC_HIGHLIGHT_BYTES || input.text.len() > MAX_HIGHLIGHT_BYTES {
+            self.ensure(input);
+            return;
+        }
+        self.poll();
+        if self.is_current(input.language, input.dark, input.revision) || self.running.is_some() {
+            return;
+        }
+        let key = HighlightKey {
+            language: input.language,
+            dark: input.dark,
+            revision: input.revision,
+            rainbow: self.rainbow,
+        };
+        let text = input.text.to_owned();
+        let ctx = ctx.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("highlight".into())
+            .spawn(move || {
+                let lines = compute_lines(key.language, &text, key.dark, key.rainbow);
+                let _ = tx.send(lines);
+                ctx.request_repaint();
+            });
+        if spawned.is_ok() {
+            self.running = Some((key, rx));
+        } else {
+            self.ensure(input);
+        }
     }
 
     /// Highlight spans for one row; empty when plain or out of range.

@@ -78,11 +78,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Formatting
         run: sh scripts/check.sh fmt
-      - name: Compiler checks
-        run: sh scripts/check.sh lint
-      # No separate build step: clippy compiles every target with
-      # --all-targets --all-features, and the test runner rebuilds
-      # what it needs, so a plain build only recompiles everything.
+      # No separate compiler-check or build step: clippy type-checks every
+      # target with --all-targets --all-features, and the test runner
+      # rebuilds what it needs, so either step only repeats work.
       - name: Clippy
         run: sh scripts/check.sh clippy
       - name: Size and structure limits (sarah.toml)

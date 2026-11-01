@@ -70,7 +70,10 @@ pub(crate) fn run(request: &SearchRequest, cancel: &AtomicBool) -> Result<Search
             continue;
         };
         let room = request.limit.saturating_sub(outcome.total);
-        let hits = file_hits(&text, &regex, room.saturating_add(1));
+        let Some(hits) = file_hits(&text, &regex, room.saturating_add(1), cancel) else {
+            outcome.cancelled = true;
+            return Ok(outcome);
+        };
         if hits.is_empty() {
             continue;
         }
@@ -88,6 +91,7 @@ pub(crate) fn run(request: &SearchRequest, cancel: &AtomicBool) -> Result<Search
             break;
         }
     }
+    outcome.cancelled = cancel.load(Ordering::Relaxed);
     Ok(outcome)
 }
 
@@ -103,10 +107,19 @@ fn read_text(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Up to `limit` matching lines of `text`.
-fn file_hits(text: &str, regex: &regex::Regex, limit: usize) -> Vec<LineHit> {
+/// Up to `limit` matching lines of `text`, or `None` when `cancel` is set
+/// during the scan.
+pub(super) fn file_hits(
+    text: &str,
+    regex: &regex::Regex,
+    limit: usize,
+    cancel: &AtomicBool,
+) -> Option<Vec<LineHit>> {
     let mut hits = Vec::new();
     for (index, line) in text.lines().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         if hits.len() >= limit {
             break;
         }
@@ -122,5 +135,5 @@ fn file_hits(text: &str, regex: &regex::Regex, limit: usize) -> Vec<LineHit> {
             preview: truncate(line),
         });
     }
-    hits
+    Some(hits)
 }
