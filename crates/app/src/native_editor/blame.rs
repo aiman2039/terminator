@@ -21,6 +21,8 @@ pub(crate) struct EditorBlame {
     /// Last buffer revision seen, and when it was first seen.
     seen: (u64, Instant),
     entries: Vec<BlameEntry>,
+    /// Commit page prefix on the remote host, when known.
+    commit_web: Option<String>,
     annotations: Arc<Vec<Annotation>>,
     /// Blank column of the same width, shown while lines have moved.
     blank: Arc<Vec<Annotation>>,
@@ -48,7 +50,16 @@ fn ymd(seconds: i64) -> String {
 
 /// Gutter annotations for blame entries: `date author` per line, commits
 /// alternating groups so neighboring commits read as separate blocks.
-pub(crate) fn annotations(entries: &[BlameEntry]) -> Vec<Annotation> {
+/// `web_host` names the remote host that Cmd/Ctrl+click opens.
+pub(crate) fn annotations(entries: &[BlameEntry], web_host: Option<&str>) -> Vec<Annotation> {
+    let web_hint = web_host.map_or(String::new(), |host| {
+        let key = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+        format!("\n{key}+click to open the commit on {host}")
+    });
     let mut group = 0u32;
     let mut previous: Option<&str> = None;
     entries
@@ -74,7 +85,7 @@ pub(crate) fn annotations(entries: &[BlameEntry]) -> Vec<Annotation> {
             Annotation {
                 text: format!("{date} {}", entry.author),
                 hover: format!(
-                    "{short} · {} · {date}\n{}\n\nClick to show this commit's change to the file",
+                    "{short} · {} · {date}\n{}\n\nClick to show this commit's change to the file{web_hint}",
                     entry.author, entry.summary
                 ),
                 group,
@@ -96,6 +107,7 @@ impl App {
                 pending: None,
                 seen: (0, Instant::now()),
                 entries: Vec::new(),
+                commit_web: None,
                 annotations: Arc::new(Vec::new()),
                 blank: Arc::new(Vec::new()),
             },
@@ -149,7 +161,7 @@ impl App {
         &mut self,
         path: &Path,
         revision: u64,
-        result: Result<Vec<BlameEntry>, String>,
+        result: Result<crate::git_log::BlameData, String>,
     ) {
         let Some(blame) = self.editor_blame.get_mut(path) else {
             return;
@@ -158,8 +170,9 @@ impl App {
             blame.pending = None;
         }
         match result {
-            Ok(entries) => {
-                let annotations = annotations(&entries);
+            Ok(data) => {
+                let host = data.commit_web.as_deref().map(crate::git_log::commit_host);
+                let annotations = annotations(&data.entries, host);
                 let width = annotations
                     .iter()
                     .map(|annotation| annotation.text.chars().count())
@@ -171,7 +184,8 @@ impl App {
                     group: 0,
                 }]);
                 blame.annotations = Arc::new(annotations);
-                blame.entries = entries;
+                blame.entries = data.entries;
+                blame.commit_web = data.commit_web;
                 blame.answered = Some(revision);
             }
             Err(error) => {
@@ -181,17 +195,27 @@ impl App {
         }
     }
 
-    /// Open the commit behind the clicked annotation: its diff of this file.
-    pub(crate) fn open_blame_commit(&mut self, path: &Path, line: usize) {
-        let Some(entry) = self
-            .editor_blame
-            .get(path)
-            .and_then(|blame| blame.entries.get(line))
-        else {
+    /// Open the commit behind the clicked annotation: its diff of this
+    /// file, or with `web` its page on the remote host in a Browser tab.
+    pub(crate) fn open_blame_commit(&mut self, path: &Path, line: usize, web: bool) {
+        let Some(blame) = self.editor_blame.get(path) else {
+            return;
+        };
+        let Some(entry) = blame.entries.get(line) else {
             return;
         };
         if entry.uncommitted() {
             self.info = Some("This line is not committed yet".into());
+            return;
+        }
+        if web
+            && let Some(base) = &blame.commit_web
+            && let Some(project) = self.selected.clone()
+        {
+            let url = format!("{base}{}", entry.hash);
+            if let Err(error) = self.open_browser_url(&project, &url, None) {
+                self.error = Some(format!("{error:#}"));
+            }
             return;
         }
         let Some(cwd) = path.parent().map(Path::to_path_buf) else {
@@ -228,12 +252,15 @@ mod tests {
         assert_eq!(ymd(0), "1970-01-01");
         assert_eq!(ymd(1_709_251_200), "2024-03-01");
         let zero = "0".repeat(40);
-        let built = annotations(&[
-            entry(&"a".repeat(40), 1_709_251_200),
-            entry(&"a".repeat(40), 1_709_251_200),
-            entry(&"b".repeat(40), 0),
-            entry(&zero, 0),
-        ]);
+        let built = annotations(
+            &[
+                entry(&"a".repeat(40), 1_709_251_200),
+                entry(&"a".repeat(40), 1_709_251_200),
+                entry(&"b".repeat(40), 0),
+                entry(&zero, 0),
+            ],
+            Some("github.com"),
+        );
         assert_eq!(built[0].text, "2024-03-01 Ada");
         assert!(built[0].hover.starts_with("aaaaaaaa · Ada"));
         assert_eq!(
@@ -242,6 +269,7 @@ mod tests {
         );
         assert_eq!(built[3].text, "Not committed");
         assert!(built[3].hover.is_empty());
+        assert!(built[0].hover.contains("open the commit on github.com"));
     }
 
     #[test]
@@ -285,9 +313,7 @@ mod tests {
         // A second frame does not ask again for the same revision.
         app.request_editor_blame(&ctx, &path);
         assert!(received.try_iter().next().is_none());
-        let entries = crate::git_log::blame_with_contents(root, &path, Some(&text))
-            .unwrap()
-            .entries;
+        let entries = crate::git_log::blame_with_contents(root, &path, Some(&text)).unwrap();
         app.apply_editor_blame(&path, revision, Ok(entries));
         let shown = app.editor_blame_annotations(&path, revision).unwrap();
         assert!(shown[0].text.ends_with(" Ada"), "{:?}", shown[0]);

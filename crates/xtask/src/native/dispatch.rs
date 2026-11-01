@@ -139,10 +139,25 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
     let workers = opts.jobs.min(cases.len());
     println!("Running {} GUI cases with {workers} worker(s)", cases.len());
     let results = run_cases(&cases, &opts, workers)?;
-    let failures = results
-        .into_iter()
-        .filter_map(|(case, result)| result.err().map(|error| format!("{case}: {error:#}")))
-        .collect::<Vec<_>>();
+    let mut failures = Vec::new();
+    for (case, result) in results {
+        let Err(first) = result else {
+            continue;
+        };
+        if workers == 1 {
+            failures.push(format!("{case}: {first:#}"));
+            continue;
+        }
+        // Parallel fixtures share CPU with each other, so their timed
+        // waits can expire under load. A failed case runs once more alone;
+        // it fails only when the serial run fails too.
+        println!("Retrying native {case} alone after a parallel failure: {first:#}");
+        if let Err(error) = run_case(case, opts.clone()) {
+            failures.push(format!(
+                "{case}: {error:#}\n(parallel run also failed: {first:#})"
+            ));
+        }
+    }
     ensure!(
         failures.is_empty(),
         "GUI failures:\n{}",

@@ -13,6 +13,8 @@ pub struct EditorPrefs {
     pub editor_font_size: f32,
     pub editor_line_spacing: f32,
     pub editor_caret_blink: bool,
+    /// Color brackets by nesting depth.
+    pub editor_rainbow_brackets: bool,
 }
 
 impl Default for EditorPrefs {
@@ -21,6 +23,7 @@ impl Default for EditorPrefs {
             editor_font_size: 13.0,
             editor_line_spacing: 1.2,
             editor_caret_blink: true,
+            editor_rainbow_brackets: true,
         }
     }
 }
@@ -46,6 +49,7 @@ impl EditorPrefs {
                 defaults.editor_line_spacing,
             ),
             editor_caret_blink: self.editor_caret_blink,
+            editor_rainbow_brackets: self.editor_rainbow_brackets,
         }
     }
 }
@@ -80,10 +84,12 @@ mod tests {
             editor_font_size: 99.0,
             editor_line_spacing: f32::NAN,
             editor_caret_blink: false,
+            editor_rainbow_brackets: false,
         }
         .sanitized();
         assert_eq!(prefs.editor_font_size, 32.0);
         assert_eq!(prefs.editor_line_spacing, 1.2);
         assert!(!prefs.editor_caret_blink);
+        assert!(!prefs.editor_rainbow_brackets);
     }
 }

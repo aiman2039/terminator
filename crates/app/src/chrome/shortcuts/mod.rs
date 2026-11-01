@@ -65,6 +65,10 @@ actions! {
     NextAttention => "next_attention", "Next agent needing attention";
     NewBrowser => "new_browser", "New browser tab";
     NewVnc => "new_vnc", "New VNC viewer";
+    DiffNextChange => "diff_next_change", "Diff: next change";
+    DiffPrevChange => "diff_prev_change", "Diff: previous change";
+    DiffNextFile => "diff_next_file", "Diff: next file";
+    DiffPrevFile => "diff_prev_file", "Diff: previous file";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

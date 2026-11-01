@@ -118,6 +118,7 @@ impl<B: Buffer> SourceView<'_, B> {
     fn derive_layout(&self, ui: &egui::Ui, highlight: &mut HighlightCache) {
         let doc = &*self.doc;
         let dark = ui.visuals().dark_mode;
+        highlight.set_rainbow(self.options.rainbow_brackets);
         if !highlight.is_current(self.language, dark, doc.revision()) {
             let mut text = String::new();
             for line in 0..doc.line_count() {

@@ -2,10 +2,11 @@
 
 ## Local release checks
 
-`cargo xtask release` validates an isolated source copy with the
-next version before it changes the checkout. It includes staged, unstaged,
-deleted, and untracked files that Git does not ignore. Check the files before
-running it: a successful release still commits all of them, as before.
+`cargo xtask release` validates the current checkout without a source copy.
+Host checks use the normal Cargo target directory and inherit compiler-cache
+settings, including sccache. It includes staged, unstaged, deleted, and untracked
+files that Git does not ignore. Check the files before running it: a successful
+release commits all of them. Keep source files unchanged until checks finish.
 
 The Rust command requires host checks, Linux Docker execution, and a Windows
 runner unless a platform is explicitly skipped. The existing
@@ -26,10 +27,14 @@ cargo xtask release --check-only --skip-linux --skip-windows
 
 Remove `--check-only` to commit and release from `master`. The script checks
 that local `master` contains remote `origin/master`, rejects existing version
-tags, and stops if source files change during validation. Failed validation
-does not change source files or the real staging area. On success, it checks
+tags, bumps the version in the checkout, and stops if source files change during
+validation. `--check-only` tests the current version without a bump. Failed
+validation restores the version files only if they still contain the script's
+changes; concurrent edits are preserved. The real staging area stays unchanged
+until publication. On success, it checks
 the staged and committed trees against the tested tree, pushes `master` and
-the version tag atomically without force, and dispatches Release from that tag.
+the version tag atomically without force, and dispatches Release on `master`
+with the exact tag as an input.
 The repository commit hook skips its duplicate checks only when its staged
 tree equals `TERMINATOR_RELEASE_VALIDATED_TREE`; other hooks still run.
 
@@ -49,7 +54,8 @@ Xvfb/Openbox, software rendering, the same checks and package build, and CI's
 `linux/arm64` on Apple Silicon, or `linux/amd64` on x64 hosts. Emulation changes
 the shell executable reported by the kernel and cannot pass the strict
 idle-close identity checks. ARM64 local tests do not replace CI's x64 tests.
-Docker must be running. Images and Cargo build volumes are separate for each
+Docker must be running. Linux reads the current checkout through a read-only
+mount; it does not copy the source or use the host's build output. Images and Cargo build volumes are separate for each
 architecture; registry and Git source caches are shared. The image imports
 the installed toolchain from the official Rust image while keeping Ubuntu as
 its runtime. Required components come from `rust-toolchain.toml`, with LLVM
@@ -78,7 +84,8 @@ The built-in Windows runner uses `ssh` and `scp` with existing SSH key access.
 Configure the Windows OpenSSH server and install Git Bash, Rust 1.97.1 with
 rustfmt/Clippy, Neovim, `cargo-audit`, `cargo-deny`, and `cargo-nextest` 0.9.140. The remote SSH user
 must be able to run these tools. `TERMINATOR_WINDOWS_BASH` can override
-`C:/Program Files/Git/bin/bash.exe`. The runner copies the exact source,
+`C:/Program Files/Git/bin/bash.exe`. The runner transfers a Git source archive
+without ignored files, build output, or local Git settings,
 runs shared checks, workspace tests, and packaging, and downloads an artifact
 archive even after a test failure. Remote source/log directories remain under
 `%USERPROFILE%/.terminator-release/`; Cargo output is reused there. Windows

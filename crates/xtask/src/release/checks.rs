@@ -1,5 +1,6 @@
 use super::command::{Runner, System, cmd, git};
 use anyhow::{Result, ensure};
+use sha2::{Digest, Sha256};
 use std::{fs, path::Path, process::Command};
 
 #[derive(Clone, Copy)]
@@ -46,6 +47,7 @@ pub(super) fn run_with(input: RunWithInput<'_, impl Runner>) -> Result<()> {
         platform,
         runner,
     } = input;
+    let source = source_state(root)?;
     fs::create_dir_all(output.join("state"))?;
     fs::create_dir_all(output.join("config"))?;
     let checks = Checks {
@@ -74,10 +76,36 @@ pub(super) fn run_with(input: RunWithInput<'_, impl Runner>) -> Result<()> {
         checks.fixtures(platform)?;
     }
     ensure!(
-        git(root, &["status", "--porcelain"])?.is_empty(),
+        source_state(root)? == source,
         "Validation changed source files."
     );
     Ok(())
+}
+
+/// Read-only comparison also works with a dirty checkout mounted in Docker.
+fn source_state(root: &Path) -> Result<Vec<u8>> {
+    let mut hash = Sha256::new();
+    hash.update(git(root, &["status", "--porcelain"])?);
+    hash.update(git(root, &["diff", "HEAD", "--binary"])?);
+    for name in git(root, &["ls-files", "--others", "--exclude-standard", "-z"])?
+        .split('\0')
+        .filter(|name| !name.is_empty())
+    {
+        hash.update(name.len().to_le_bytes());
+        hash.update(name);
+        let path = root.join(name);
+        let contents = if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            fs::read_link(&path)?
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else {
+            fs::read(&path)?
+        };
+        hash.update(contents.len().to_le_bytes());
+        hash.update(contents);
+    }
+    Ok(hash.finalize().to_vec())
 }
 
 impl<R: Runner> Checks<'_, R> {
@@ -148,19 +176,22 @@ impl<R: Runner + Sync> Checks<'_, R> {
     /// Build test-support binaries, then run integration, idle-close, native
     /// GUI and package checks.
     fn fixtures(&self, platform: Platform) -> Result<()> {
-        self.run(&mut cmd(
-            self.root,
-            "cargo",
-            &[
-                "build",
-                "--workspace",
-                "--bins",
-                "--examples",
-                "--features",
-                "terminator/test-support",
-                "--locked",
-            ],
-        ))?;
+        let mut args = vec![
+            "build",
+            "--workspace",
+            "--bins",
+            "--examples",
+            "--features",
+            "terminator/test-support",
+            "--locked",
+        ];
+        if matches!(platform, Platform::Linux) {
+            // The GUI binaries and examples each need gigabytes to link with
+            // debug info. With one job per CPU, parallel links exhaust the
+            // Docker VM's memory and the linker is killed (signal 9).
+            args.extend(["--jobs", "2"]);
+        }
+        self.run(&mut cmd(self.root, "cargo", &args))?;
         self.integration_and_idle_close()?;
         self.native_gui(platform)?;
         self.run(

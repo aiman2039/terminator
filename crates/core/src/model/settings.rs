@@ -90,6 +90,10 @@ impl Settings {
             ("next_attention".into(), "command+shift+J".into()),
             ("new_browser".into(), "command+alt+B".into()),
             ("new_vnc".into(), "command+alt+V".into()),
+            ("diff_next_change".into(), "F7".into()),
+            ("diff_prev_change".into(), "shift+F7".into()),
+            ("diff_next_file".into(), "alt+F7".into()),
+            ("diff_prev_file".into(), "alt+shift+F7".into()),
         ]
         .into()
     }

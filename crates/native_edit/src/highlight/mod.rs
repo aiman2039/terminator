@@ -263,6 +263,7 @@ pub struct HighlightCache {
     dark: bool,
     revision: u64,
     ready: bool,
+    rainbow: bool,
     lines: Vec<Vec<Span>>,
     rows: RowCache,
     folds: crate::fold::Folds,
@@ -286,6 +287,14 @@ impl HighlightCache {
             && self.revision == revision
     }
 
+    /// Color brackets by nesting depth. A change recomputes the spans.
+    pub fn set_rainbow(&mut self, rainbow: bool) {
+        if self.rainbow != rainbow {
+            self.rainbow = rainbow;
+            self.ready = false;
+        }
+    }
+
     /// Recompute when the key changed; over-cap and plain buffers cache
     /// as empty (every row paints plain).
     pub fn ensure(&mut self, input: EnsureInput<'_>) {
@@ -302,7 +311,15 @@ impl HighlightCache {
         self.dark = dark;
         self.revision = revision;
         self.ready = true;
-        self.lines = highlight_text(language, text, dark).unwrap_or_default();
+        self.lines = match highlight_text(language, text, dark) {
+            Some(mut lines) => {
+                if self.rainbow {
+                    rainbow::apply(&mut lines, text, dark);
+                }
+                lines
+            }
+            None => Vec::new(),
+        };
     }
 
     /// Highlight spans for one row; empty when plain or out of range.
@@ -367,6 +384,8 @@ impl HighlightCache {
 pub(crate) fn test_assets() -> &'static (SyntaxSet, ThemeSet) {
     assets()
 }
+
+mod rainbow;
 
 #[cfg(test)]
 mod tests;

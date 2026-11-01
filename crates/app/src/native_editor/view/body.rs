@@ -348,6 +348,7 @@ impl ViewPass<'_> {
                 style.prefs.editor_line_spacing
             },
             caret_blink: style.prefs.editor_caret_blink,
+            rainbow_brackets: style.prefs.editor_rainbow_brackets,
             palette: Some(style.palette),
             status_items: [if crlf { "CRLF" } else { "LF" }, "UTF-8", "4 spaces"]
                 .map(str::to_owned)
@@ -434,7 +435,8 @@ impl ViewPass<'_> {
         requests.caret_rect = outcome.as_ref().and_then(|outcome| outcome.caret_rect);
         if let Some(outcome) = outcome.as_ref() {
             requests.blame_toggle = outcome.toggle_blame;
-            requests.blame_click = outcome.annotation_clicked;
+            let web = ui.input(|input| input.modifiers.command);
+            requests.blame_click = outcome.annotation_clicked.map(|line| (line, web));
         }
         if let Some((index, at)) = outcome.as_ref().and_then(|outcome| outcome.change_clicked) {
             self.popups.gutter = Some(GutterPopup {

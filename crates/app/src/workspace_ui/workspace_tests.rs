@@ -173,6 +173,7 @@ mod tests {
             added: Color32::GREEN,
             deleted: Color32::RED,
             accent: Color32::BLUE,
+            moved: Color32::LIGHT_BLUE,
             text: Color32::WHITE,
         };
         let mut ratio = 0.5;

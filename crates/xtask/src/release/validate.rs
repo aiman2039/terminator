@@ -1,16 +1,10 @@
-use super::command::{Runner, cmd};
+use super::command::{Runner, cmd, git};
 use super::{
     LinuxImageTagInput, Options, linux_image_tag, linux_platform, rust_components, version,
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-    sync::Mutex,
-    time::Instant,
-};
+use std::{collections::BTreeMap, fs, path::Path, sync::Mutex, time::Instant};
 
 struct Stages<'a, R> {
     source: &'a Path,
@@ -101,18 +95,13 @@ pub(super) fn validate(input: ValidateInput<'_, impl Runner>) -> Result<()> {
     } else {
         Some(stages.linux_platform(options)?)
     };
-    let target = artifacts
-        .parent()
-        .and_then(Path::parent)
-        .context("Missing artifact parent")?
-        .join("release-target");
     let linux_plan = if options.skip_linux {
         None
     } else {
         let platform = platform.context("Missing Linux platform")?;
         Some((platform, stages.linux_image(options, platform)?))
     };
-    stages.run_platforms(&target, linux_plan)?;
+    stages.run_platforms(linux_plan)?;
     if !options.skip_windows {
         stages.windows(options)?;
     }
@@ -235,18 +224,13 @@ impl<R: Runner> Stages<'_, R> {
 
 impl<R: Runner + Sync> Stages<'_, R> {
     /// Run the host and Linux checks in parallel.
-    fn run_platforms(
-        &self,
-        target: &PathBuf,
-        linux_plan: Option<(&'static str, String)>,
-    ) -> Result<()> {
+    fn run_platforms(&self, linux_plan: Option<(&'static str, String)>) -> Result<()> {
         let source = self.source;
         std::thread::scope(|scope| -> Result<()> {
             let host_task = scope.spawn(move || {
                 self.run(
                     "host",
-                    cmd(source, "bash", &["scripts/release-check.sh"])
-                        .env("CARGO_TARGET_DIR", target),
+                    &mut cmd(source, "bash", &["scripts/release-check.sh"]),
                 )
             });
             let linux_task = linux_plan
@@ -274,6 +258,18 @@ impl<R: Runner + Sync> Stages<'_, R> {
             "type=volume,src=terminator-release-linux-target-{},dst=/build",
             platform.replace('/', "-")
         );
+        // nextest writes its store under `<workspace>/target/nextest` and has
+        // no override, so `/src/target` gets a writable volume over the
+        // read-only source (`target/` exists: the host built this xtask).
+        let nextest_volume = format!(
+            "type=volume,src=terminator-release-linux-nextest-{},dst=/src/target",
+            platform.replace('/', "-")
+        );
+        // Linked worktrees use a .git file with an absolute path outside /src.
+        let common = git(
+            source,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
         fs::create_dir(&output)?;
         self.run(
             "linux",
@@ -288,11 +284,15 @@ impl<R: Runner + Sync> Stages<'_, R> {
                     "--platform",
                     platform,
                     "--mount",
-                    &format!("type=bind,src={},dst=/snapshot,readonly", source.display()),
+                    &format!("type=bind,src={},dst=/src,readonly", source.display()),
+                    "--mount",
+                    &format!("type=bind,src={common},dst={common},readonly"),
                     "--mount",
                     &format!("type=bind,src={},dst=/artifacts", output.display()),
                     "--mount",
                     &target_volume,
+                    "--mount",
+                    &nextest_volume,
                     "--mount",
                     "type=volume,src=terminator-release-linux-registry,dst=/root/.cargo/registry",
                     "--mount",
@@ -306,7 +306,7 @@ impl<R: Runner + Sync> Stages<'_, R> {
                     "-euo",
                     "pipefail",
                     "-c",
-                    "cp -a --preserve=timestamps --no-preserve=ownership /snapshot/. /src/; bash scripts/release-check.sh",
+                    "git config --global --add safe.directory /src; bash scripts/release-check.sh",
                 ],
             ),
         )

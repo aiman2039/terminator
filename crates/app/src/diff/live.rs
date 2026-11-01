@@ -171,6 +171,7 @@ pub(crate) fn build_live(document: &DiffDocument, text: &str, path: &Path) -> Di
                 old_no: number,
                 new_no: number,
                 spans,
+                moved: false,
             };
             doc.split.push(SplitRow {
                 left: Some(side(line_spans(&highlighted, Some(index), line))),

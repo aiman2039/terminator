@@ -201,13 +201,29 @@ impl App {
         let Some(crate::GitView::Blame(result)) = self.git_views.get(&key) else {
             return;
         };
+        let mut open_url = None;
         match result {
             Ok(data) => {
                 appearance::sidebar_scroll("blame").show(ui, |ui| {
                     for entry in &data.entries {
                         ui.horizontal(|ui| {
                             let shown = entry.hash.len().min(7);
-                            ui.weak(entry.hash.get(..shown).unwrap_or(entry.hash.as_str()));
+                            let short = entry.hash.get(..shown).unwrap_or(entry.hash.as_str());
+                            match data.commit_web.as_deref() {
+                                Some(base) if !entry.uncommitted() => {
+                                    let host = crate::git_log::commit_host(base);
+                                    if ui
+                                        .link(egui::RichText::new(short).weak())
+                                        .on_hover_text(format!("Open the commit on {host}"))
+                                        .clicked()
+                                    {
+                                        open_url = Some(format!("{base}{}", entry.hash));
+                                    }
+                                }
+                                _ => {
+                                    ui.weak(short);
+                                }
+                            }
                             ui.weak(&entry.author);
                             ui.weak(&entry.date);
                             ui.weak("| ");
@@ -219,6 +235,12 @@ impl App {
             Err(e) => {
                 ui.colored_label(appearance::color(&self.theme.status_failed), e);
             }
+        }
+        if let Some(url) = open_url
+            && let Some(project) = self.selected.clone()
+            && let Err(error) = self.open_browser_url(&project, &url, None)
+        {
+            self.error = Some(format!("{error:#}"));
         }
     }
 }

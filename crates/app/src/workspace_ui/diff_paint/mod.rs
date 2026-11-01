@@ -14,6 +14,8 @@ pub(super) struct DiffColors {
     pub(super) added: Color32,
     pub(super) deleted: Color32,
     pub(super) accent: Color32,
+    /// Lines of a moved block; the theme's `accent`.
+    pub(super) moved: Color32,
     pub(super) text: Color32,
 }
 
@@ -24,7 +26,28 @@ impl DiffColors {
             added: appearance::color(&theme.git_added),
             deleted: appearance::color(&theme.git_deleted),
             accent: appearance::color(&theme.git_modified),
+            moved: appearance::color(&theme.accent),
             text: appearance::color(&theme.text),
+        }
+    }
+
+    /// The colors for `line`: a moved line paints its row, words and sign
+    /// in the moved color. "Do not highlight" (transparent) stays as is.
+    pub(super) fn for_line(self, line: &diff::DiffLine) -> Self {
+        if !line.moved {
+            return self;
+        }
+        let swap = |color: Color32| {
+            if color == Color32::TRANSPARENT {
+                color
+            } else {
+                self.moved
+            }
+        };
+        Self {
+            added: swap(self.added),
+            deleted: swap(self.deleted),
+            ..self
         }
     }
 

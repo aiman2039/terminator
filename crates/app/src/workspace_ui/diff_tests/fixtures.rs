@@ -27,6 +27,7 @@ pub(super) fn line(input: LineInput<'_>) -> diff::DiffLine {
         old_no,
         new_no,
         spans: vec![span(text)],
+        moved: false,
     }
 }
 
@@ -145,6 +146,7 @@ pub(super) fn scroll_doc(
                     added: Color32::GREEN,
                     deleted: Color32::RED,
                     accent: Color32::BLUE,
+                    moved: Color32::LIGHT_BLUE,
                     text: Color32::WHITE,
                 },
                 scroll_key: "scroll-regression",

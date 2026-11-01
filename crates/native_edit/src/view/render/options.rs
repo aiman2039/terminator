@@ -83,6 +83,8 @@ pub struct SourceOptions {
     pub range_fills: std::sync::Arc<Vec<RangeFill>>,
     /// Pin the headers of enclosing blocks at the top while scrolling.
     pub sticky_headers: bool,
+    /// Color brackets by nesting depth.
+    pub rainbow_brackets: bool,
 }
 
 impl Default for SourceOptions {
@@ -109,6 +111,7 @@ impl Default for SourceOptions {
             line_fills: std::sync::Arc::new(Vec::new()),
             range_fills: std::sync::Arc::new(Vec::new()),
             sticky_headers: true,
+            rainbow_brackets: false,
             diagnostics: Vec::new(),
             squiggles: Vec::new(),
             find_matches: std::sync::Arc::new(Vec::new()),

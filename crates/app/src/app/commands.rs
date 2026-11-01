@@ -30,8 +30,20 @@ impl App {
             Action::FileStructure => self.active_editor_path().is_some(),
             Action::MoveToMain => self.focused_strip_shell().is_some(),
             Action::MoveToStrip => self.preferences.ide_mode && self.focused_main_shell().is_some(),
+            Action::DiffNextChange
+            | Action::DiffPrevChange
+            | Action::DiffNextFile
+            | Action::DiffPrevFile => self.active_diff_tab(),
             _ => true,
         }
+    }
+
+    /// The selected project's active pane is a native working-tree diff.
+    fn active_diff_tab(&self) -> bool {
+        self.selected
+            .as_ref()
+            .and_then(|project| self.layouts.get(project)?.active_pane())
+            .is_some_and(|pane| matches!(pane, Tab::Diff { .. }))
     }
 
     /// Live or ended shell whose tab is in the strip and which currently has
@@ -123,6 +135,13 @@ impl App {
             Action::NextAttention => self.next_attention(),
             Action::NewBrowser => self.open_new_browser_tab(None),
             Action::NewVnc => self.open_new_vnc_tab(None),
+            Action::DiffNextChange
+            | Action::DiffPrevChange
+            | Action::DiffNextFile
+            | Action::DiffPrevFile => {
+                self.diff_nav = Some(action);
+                ctx.request_repaint();
+            }
         }
     }
 

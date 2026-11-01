@@ -2,8 +2,10 @@
 mod files;
 #[cfg(test)]
 mod tests;
+mod web;
 
 pub use files::*;
+pub use web::*;
 
 use std::path::Path;
 pub use terminator_core::CommandOptions;
@@ -82,6 +84,8 @@ pub struct CommitLog {
 pub struct BlameData {
     pub entries: Vec<BlameEntry>,
     pub error: Option<String>,
+    /// Commit page prefix on the `origin` host, when it is a known host.
+    pub commit_web: Option<String>,
 }
 
 /// Fetch the commit log from a git repository.

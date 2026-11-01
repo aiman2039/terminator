@@ -377,6 +377,9 @@ pub struct App {
     pub(crate) pending_unavailable_close: Vec<String>,
     pub(crate) pending_quit_all: Option<bool>,
     pub(crate) open_path: bool,
+    /// A diff navigation shortcut or palette command for the active diff
+    /// tab, applied when that tab paints next.
+    pub(crate) diff_nav: Option<Action>,
     pub(crate) pick_audio: bool,
     /// Open the picker for RealVNC `.vnc` files to import.
     pub(crate) pick_vnc_files: bool,

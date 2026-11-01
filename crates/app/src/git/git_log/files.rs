@@ -82,6 +82,7 @@ pub fn blame_with_contents(
     Ok(BlameData {
         entries,
         error: None,
+        commit_web: commit_web_base(&root),
     })
 }
 

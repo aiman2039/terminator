@@ -13,11 +13,11 @@ impl App {
         ui.spacing_mut().item_spacing.x = 4.0;
         self.diff_file_tree_toggle(ui, frame);
         self.diff_edit_buttons(ui, frame, pass);
-        Self::diff_change_buttons(ui, frame, pass);
+        self.diff_change_buttons(ui, frame, pass);
         ui.separator();
         Self::diff_source_buttons(ui, frame, pass);
         ui.separator();
-        Self::diff_file_buttons(ui, frame, pass);
+        self.diff_file_buttons(ui, frame, pass);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             self.diff_toolbar_trailing(ui, frame, pass);
         });
@@ -89,14 +89,17 @@ impl App {
         }
     }
 
-    fn diff_change_buttons(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+    fn diff_change_buttons(&self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
         let count = frame.count;
         let previous = ui
             .add_enabled_ui(count > 0 && pass.review.selected != Some(0), |ui| {
                 appearance::sidebar_action(
                     ui,
                     "ArrowUp",
-                    "Previous change (Shift+F7; continues into the previous file)",
+                    &self.nav_tip(
+                        "Previous change; continues into the previous file",
+                        Action::DiffPrevChange,
+                    ),
                 )
             })
             .inner;
@@ -112,7 +115,10 @@ impl App {
                     appearance::sidebar_action(
                         ui,
                         "ArrowDown",
-                        "Next change (F7; continues into the next file)",
+                        &self.nav_tip(
+                            "Next change; continues into the next file",
+                            Action::DiffNextChange,
+                        ),
                     )
                 },
             )
@@ -121,6 +127,16 @@ impl App {
         diagnostics::record(ui.ctx(), "diff-next", next.rect);
         if next.clicked() {
             pass.review.advance(true, count);
+        }
+    }
+
+    /// `text` with the action's current keybinding, if it has one.
+    fn nav_tip(&self, text: &str, action: Action) -> String {
+        let key = self.shortcut_label(action);
+        if key.is_empty() {
+            text.to_owned()
+        } else {
+            format!("{text} ({key})")
         }
     }
 
@@ -139,10 +155,14 @@ impl App {
             .clicked();
     }
 
-    fn diff_file_buttons(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+    fn diff_file_buttons(&self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
         let prev_file_btn = ui
             .add_enabled_ui(frame.prev_file.is_some(), |ui| {
-                appearance::sidebar_action(ui, "ArrowLeft", "Previous file")
+                appearance::sidebar_action(
+                    ui,
+                    "ArrowLeft",
+                    &self.nav_tip("Previous file", Action::DiffPrevFile),
+                )
             })
             .inner;
         #[cfg(feature = "test-support")]
@@ -155,7 +175,11 @@ impl App {
         }
         let next_file_btn = ui
             .add_enabled_ui(frame.next_file.is_some(), |ui| {
-                appearance::sidebar_action(ui, "ArrowRight", "Next file")
+                appearance::sidebar_action(
+                    ui,
+                    "ArrowRight",
+                    &self.nav_tip("Next file", Action::DiffNextFile),
+                )
             })
             .inner;
         #[cfg(feature = "test-support")]

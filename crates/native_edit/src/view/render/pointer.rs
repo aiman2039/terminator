@@ -3,8 +3,8 @@
 use super::canvas::Canvas;
 use super::{CHANGE_BAND, SourceView};
 use crate::doc::Buffer;
-use crate::vim::Effect;
 use crate::vim::ModalEngine;
+use crate::vim::{Cursor, Effect};
 use egui::Sense;
 
 impl<B: Buffer> SourceView<'_, B> {
@@ -151,11 +151,24 @@ impl<B: Buffer> SourceView<'_, B> {
 
     pub(super) fn handle_drag(&mut self, canvas: &Canvas<'_>) {
         let ui = canvas.ui;
+        // Modeless Alt+drag selects a column: one caret per line.
+        let column_key = self.geometry.mouse_drag_key.with("column");
         if canvas.response.drag_started() {
+            ui.ctx()
+                .data_mut(|data| data.remove_temp::<Cursor>(column_key));
             // The press point, not the position where egui decided this was
             // a drag: the anchor must be where the button went down.
             let anchor = ui.input(|input| input.pointer.press_origin());
-            if let Some((line, col)) = anchor.and_then(|pos| canvas.cursor_at(pos)) {
+            let alt = ui.input(|input| input.modifiers.alt && !input.modifiers.shift);
+            if !self.options.vim
+                && alt
+                && let Some((line, col)) = anchor.and_then(|pos| canvas.cursor_at(pos))
+            {
+                let at = Cursor { line, col };
+                self.engine.column_select(self.doc, at, at);
+                ui.ctx().data_mut(|data| data.insert_temp(column_key, at));
+                canvas.request_focus();
+            } else if let Some((line, col)) = anchor.and_then(|pos| canvas.cursor_at(pos)) {
                 self.engine.begin_mouse_selection(self.doc, line, col);
                 let mouse_drag_key = self.geometry.mouse_drag_key;
                 ui.ctx()
@@ -166,7 +179,13 @@ impl<B: Buffer> SourceView<'_, B> {
             && let Some(pos) = ui.input(|input| input.pointer.interact_pos())
             && let Some((line, col)) = canvas.cursor_at(pos)
         {
-            self.engine.extend_mouse_selection(self.doc, line, col);
+            match ui.ctx().data(|data| data.get_temp::<Cursor>(column_key)) {
+                Some(anchor) => {
+                    self.engine
+                        .column_select(self.doc, anchor, Cursor { line, col });
+                }
+                None => self.engine.extend_mouse_selection(self.doc, line, col),
+            }
         }
     }
 

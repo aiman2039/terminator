@@ -35,6 +35,15 @@ fn expression(h: &Harness, s: &Value, expression: &str) -> Result<String> {
 fn inspect(h: &Harness, s: &Value) -> Result<Value> {
     serde_json::from_str(&expression(h,s,"json_encode({'user_init':get(g:,'terminator_user_init',0),'messages':execute('messages'),'buffers':map(filter(getbufinfo(), 'v:val.loaded && !empty(v:val.name)'),{_,b -> {'name':b.name,'modifiable':getbufvar(b.bufnr,'&modifiable'),'readonly':getbufvar(b.bufnr,'&readonly'),'lines':getbufline(b.bufnr,1,'$')}})})")?).map_err(Into::into)
 }
+/// No startup messages, except Neovim 0.12's E1568: it waits only 100 ms
+/// for the terminal's background-color answer, and a busy host can miss
+/// that. It is a timing warning, not a review error.
+fn review_messages_clean(messages: &str) -> bool {
+    messages
+        .lines()
+        .all(|line| line.trim().is_empty() || line.starts_with("E1568:"))
+}
+
 fn verify(h: &Harness, s: &Value, expected: Expected) -> Result<()> {
     let Expected { left, right } = expected;
     h.wait(
@@ -49,7 +58,10 @@ fn verify(h: &Harness, s: &Value, expected: Expected) -> Result<()> {
     ensure!(
         data.get("user_init")
             .is_some_and(|value| *value == json!(0))
-            && data.get("messages").is_some_and(|messages| messages == ""),
+            && data
+                .get("messages")
+                .and_then(Value::as_str)
+                .is_some_and(review_messages_clean),
         "Isolated review loaded user config or reported error: {data}"
     );
     let buffers = data

@@ -218,14 +218,23 @@ impl Regions {
 #[derive(Default)]
 struct BracketScan {
     stack: Vec<(char, usize)>,
+    lexer: BracketLexer,
+}
+
+/// Finds bracket characters outside `"` strings, `//` comments and
+/// `/* */` comments. Block comments continue across lines.
+#[derive(Default)]
+pub(crate) struct BracketLexer {
     block_comment: bool,
 }
 
-impl BracketScan {
-    fn scan_line(&mut self, regions: &mut Regions, line: usize, text: &[char]) {
+impl BracketLexer {
+    /// Calls `found(column, bracket)` for each `{[()]}` in code on this line.
+    pub(crate) fn line(&mut self, text: &[char], mut found: impl FnMut(usize, char)) {
         let mut in_string = false;
         let mut index = 0usize;
         while let Some(&c) = text.get(index) {
+            let column = index;
             let next = text.get(index.saturating_add(1)).copied();
             index = index.saturating_add(1);
             if self.block_comment {
@@ -254,8 +263,18 @@ impl BracketScan {
                     in_string = true;
                     continue;
                 }
+                ('{' | '[' | '(' | '}' | ']' | ')', _) => found(column, c),
                 _ => {}
             }
+        }
+    }
+}
+
+impl BracketScan {
+    fn scan_line(&mut self, regions: &mut Regions, line: usize, text: &[char]) {
+        let mut brackets = Vec::new();
+        self.lexer.line(text, |_, c| brackets.push(c));
+        for c in brackets {
             self.bracket(regions, c, line);
         }
     }

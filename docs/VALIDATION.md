@@ -5738,3 +5738,30 @@ features, warnings denied) and the sarah limits passed. `cargo xtask gui all`
 passed every case except `scrolling-bounded` under five workers. That case then
 passed twice when run alone. Saved themes keep their explicit
 `pane_divider_width`; only the default IntelliJ preset changed from 8 to 1.
+
+## Release checks in the current checkout (2026-11-01)
+
+Removed the local release source export and the host `release-target` override.
+Host checks now use the current checkout, the normal Cargo target directory,
+and inherited compiler-cache settings. Release validation bumps the version in
+place and restores its own version edits on failure without overwriting
+concurrent edits. Check-only runs keep the current version and file timestamps.
+Source, branch, staged-tree, and committed-tree checks still stop publication
+when the tested source changes. Linux reads the checkout through a read-only
+mount, with separate Linux build output and access to linked-worktree Git
+metadata. Windows transfers only a Git source archive, excluding local Git
+settings and ignored output.
+
+`cargo test -p xtask --locked release::tests` passed all 47 release tests.
+`cargo clippy -p xtask --all-targets --locked -- -D warnings` passed.
+Formatting and whitespace checks passed. Regressions cover source identity,
+timestamp preservation, cache inheritance, failure rollback, concurrent edits,
+dirty/untracked content changes, linked-worktree mounts, and source-only Windows
+archives. Test repositories disable the user's global Git filesystem monitor
+to avoid unrelated IPC failures in temporary fixtures.
+
+A native ARM64 Docker smoke check read the checkout's Git status through the
+read-only mount; Cargo metadata resolved `/src` as the workspace and `/build`
+as its target directory. Full release checks, live Windows execution, GUI
+fixtures, and a before/after release timing comparison were not run. No real
+release was committed, tagged, pushed, or dispatched.

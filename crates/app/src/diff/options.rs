@@ -33,12 +33,26 @@ pub enum Highlight {
 /// Diff view options, persisted in UI preferences and applied to every
 /// native diff. Display always keeps the real text; staging always applies
 /// the real hunks.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiffOptions {
     pub whitespace: Whitespace,
     pub ignore_case: bool,
     pub highlight: Highlight,
+    /// Blocks deleted in one place and added in another get the moved
+    /// color (like `git diff --color-moved`).
+    pub moved: bool,
+}
+
+impl Default for DiffOptions {
+    fn default() -> Self {
+        Self {
+            whitespace: Whitespace::default(),
+            ignore_case: false,
+            highlight: Highlight::default(),
+            moved: true,
+        }
+    }
 }
 
 impl DiffOptions {

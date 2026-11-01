@@ -31,6 +31,7 @@ pub(crate) mod live;
 #[cfg(test)]
 mod live_tests;
 mod load;
+mod moved;
 mod options;
 pub(crate) mod review;
 #[cfg(test)]
@@ -114,6 +115,8 @@ pub struct DiffLine {
     pub old_no: Option<u32>,
     pub new_no: Option<u32>,
     pub spans: Vec<DiffSpan>,
+    /// Part of a block that moved to (or from) another place.
+    pub moved: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -35,7 +35,7 @@ impl App {
             ..DiffPass::default()
         };
         let frame = self.diff_frame(ui, source, &pass.review);
-        Self::diff_change_keys(ui, &frame, &mut pass);
+        self.diff_change_keys(&frame, &mut pass);
         ui.horizontal(|ui| self.diff_toolbar(ui, &frame, &mut pass));
         Self::diff_open_source_key(ui, &frame, &mut pass);
         Self::diff_notice_bar(ui, &frame, &mut pass);
@@ -159,26 +159,35 @@ impl App {
         ui.allocate_rect(full, egui::Sense::hover());
     }
 
-    /// F7 / Shift+F7 walk changes, and past the last (or first) change of
-    /// this file continue into the next (or previous) file.
-    fn diff_change_keys(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
-        if !frame.focused || ui.ctx().egui_wants_keyboard_input() {
+    /// Diff navigation shortcuts (F7 / Shift+F7 by default) walk changes,
+    /// and past the last (or first) change of this file continue into the
+    /// next (or previous) file. The file actions jump straight to it.
+    fn diff_change_keys(&mut self, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        if !frame.focused {
             return;
         }
+        let Some(action) = self.diff_nav.take() else {
+            return;
+        };
         let count = frame.count;
-        if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F7)) {
-            if count == 0 || pass.review.selected == count.checked_sub(1) {
-                pass.navigate.clone_from(&frame.next_file);
-            } else {
-                pass.review.advance(true, count);
+        match action {
+            Action::DiffNextChange => {
+                if count == 0 || pass.review.selected == count.checked_sub(1) {
+                    pass.navigate.clone_from(&frame.next_file);
+                } else {
+                    pass.review.advance(true, count);
+                }
             }
-        }
-        if ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::F7)) {
-            if count == 0 || pass.review.selected == Some(0) {
-                pass.navigate.clone_from(&frame.prev_file);
-            } else {
-                pass.review.advance(false, count);
+            Action::DiffPrevChange => {
+                if count == 0 || pass.review.selected == Some(0) {
+                    pass.navigate.clone_from(&frame.prev_file);
+                } else {
+                    pass.review.advance(false, count);
+                }
             }
+            Action::DiffNextFile => pass.navigate.clone_from(&frame.next_file),
+            Action::DiffPrevFile => pass.navigate.clone_from(&frame.prev_file),
+            _ => {}
         }
     }
 

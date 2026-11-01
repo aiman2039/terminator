@@ -1,5 +1,5 @@
-//! Settings → Editor: native editor font size, line spacing and caret
-//! blink. Saved with the appearance in `config.toml`.
+//! Settings → Editor: native editor font size, line spacing, caret
+//! blink and rainbow brackets. Saved with the appearance in `config.toml`.
 use crate::*;
 use terminator_core::editor_prefs::{FONT_SIZE, LINE_SPACING};
 
@@ -12,6 +12,7 @@ impl App {
             self.field_visible("Font size", "editor text points"),
             self.field_visible("Line spacing", "line height leading"),
             self.field_visible("Caret", "cursor blink"),
+            self.field_visible("Brackets", "rainbow bracket pair colorization nesting"),
         ];
         let prefs = &mut self.theme_draft.editor;
         if show[0] {
@@ -49,6 +50,16 @@ impl App {
                 description: "Blink the caret while the editor has focus.",
                 add_control: |ui| {
                     ui.checkbox(&mut prefs.editor_caret_blink, "Blink caret");
+                },
+            });
+        }
+        if show[3] {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Brackets",
+                description: "Color brackets by nesting depth.",
+                add_control: |ui| {
+                    ui.checkbox(&mut prefs.editor_rainbow_brackets, "Rainbow brackets");
                 },
             });
         }

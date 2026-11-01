@@ -318,6 +318,7 @@ impl App {
             pending_unavailable_close: Vec::new(),
             pending_quit_all: None,
             open_path: false,
+            diff_nav: None,
             pick_audio: false,
             pick_vnc_files: false,
             pick_audio_dir: false,

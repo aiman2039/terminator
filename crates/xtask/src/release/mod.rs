@@ -9,9 +9,8 @@ pub mod windows;
 
 use anyhow::{Context, Result, ensure};
 use clap::Args;
-use command::{Runner, System, cmd, git};
+use command::{Runner, System, cmd};
 use publish::{ExecuteInput, execute};
-use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::time::Instant;
@@ -179,14 +178,6 @@ fn source_tree(root: &Path, temporary: &Path) -> Result<String> {
     System.output(cmd(root, "git", &["write-tree"]).env("GIT_INDEX_FILE", &index))
 }
 
-/// Exported source tree, kept between runs. Cargo reuses compiler artifacts
-/// only while the source path and the file times stay unchanged, so a retry
-/// of the same index tree reuses this export instead of copying the tree
-/// again: a fresh copy has new file times and rebuilds every workspace and
-/// vendored crate. The path stays outside the repository, because a nested
-/// copy of the workspace leaves its excluded vendored crates without a root,
-/// and it is derived from the repository path so two checkouts never share
-/// one export.
 fn hex_bytes(bytes: impl AsRef<[u8]>) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let bytes = bytes.as_ref();
@@ -202,112 +193,6 @@ fn hex_bytes(bytes: impl AsRef<[u8]>) -> String {
         }
     }
     out
-}
-
-fn export_paths(root: &Path) -> (PathBuf, PathBuf) {
-    let digest = hex_bytes(Sha256::digest(root.as_os_str().as_encoded_bytes()));
-    let parent = std::env::temp_dir();
-    let export = parent.join(format!(
-        "terminator-release-source-{}",
-        digest.get(..16).unwrap_or(&digest)
-    ));
-    let marker = parent.join(format!(
-        "{}.json",
-        export.file_name().unwrap().to_string_lossy()
-    ));
-    (export, marker)
-}
-
-/// Marker of the last completed export: the index tree it came from, the
-/// tagged version it was bumped to, and its validated commit tree.
-fn reusable_export(source: &Path, marker: &Path, original: &str) -> Option<(String, String)> {
-    let marker: Value = serde_json::from_slice(&fs::read(marker).ok()?).ok()?;
-    if marker.get("original")?.as_str()? != original {
-        return None;
-    }
-    let validated = marker.get("validated")?.as_str()?.to_owned();
-    if !source.is_dir()
-        || marker.get("tag")?.as_str().is_none()
-        || git(source, &["rev-parse", "HEAD^{tree}"]).ok()? != validated
-        || !git(source, &["status", "--porcelain"]).ok()?.is_empty()
-    {
-        return None;
-    }
-    Some((marker.get("tag")?.as_str()?.to_owned(), validated))
-}
-
-/// Copy the current index tree into the export directory, bump its version,
-/// commit it as the validated tree, and record the marker a retry reads.
-struct ExportSourceInput<'a> {
-    root: &'a Path,
-    temporary: &'a Path,
-    source: &'a Path,
-    marker: &'a Path,
-    original: &'a str,
-}
-
-fn export_source(input: ExportSourceInput<'_>) -> Result<(String, String)> {
-    let ExportSourceInput {
-        root,
-        temporary,
-        source,
-        marker,
-        original,
-    } = input;
-    if source.exists() {
-        fs::remove_dir_all(source)?;
-    }
-    fs::create_dir_all(source)?;
-    let prefix = format!("--prefix={}/", source.display());
-    System.run(
-        cmd(root, "git", &["checkout-index", "--all", &prefix])
-            .env("GIT_INDEX_FILE", temporary.join("index")),
-    )?;
-    let tag = format!("v{}", version::bump(source)?);
-    let object_format = git(root, &["rev-parse", "--show-object-format"])?;
-    git(
-        source,
-        &[
-            "init",
-            "--quiet",
-            &format!("--object-format={object_format}"),
-        ],
-    )?;
-    // Disable background maintenance and auto-gc so the exported .git/objects
-    // directory is never mutated while Docker copies /snapshot in parallel.
-    for (key, value) in [("gc.auto", "0"), ("maintenance.auto", "false")] {
-        git(source, &["config", key, value])?;
-    }
-    git(source, &["add", "--force", "--all"])?;
-    git(
-        source,
-        &[
-            "-c",
-            "user.name=Release validation",
-            "-c",
-            "user.email=release@localhost",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "gc.auto=0",
-            "-c",
-            "maintenance.auto=false",
-            "commit",
-            "--quiet",
-            "-m",
-            &format!("Validate {tag}"),
-        ],
-    )?;
-    let validated = git(source, &["rev-parse", "HEAD^{tree}"])?;
-    fs::write(
-        marker,
-        serde_json::to_vec_pretty(&json!({
-            "original": original, "validated": validated, "tag": tag,
-        }))?,
-    )?;
-    Ok((tag, validated))
 }
 
 fn linux_platform(architecture: &str) -> Result<&'static str> {

@@ -6,6 +6,7 @@ fn change_bands_distinguish_replacements_additions_and_deletions() {
         added: Color32::GREEN,
         deleted: Color32::RED,
         accent: Color32::BLUE,
+        moved: Color32::LIGHT_BLUE,
         text: Color32::WHITE,
     };
     for (old, new, expected) in [
@@ -73,6 +74,7 @@ fn next_change_scrolls_to_the_hunk_in_both_views() {
                         added: Color32::GREEN,
                         deleted: Color32::RED,
                         accent: Color32::BLUE,
+                        moved: Color32::LIGHT_BLUE,
                         text: Color32::WHITE,
                     };
                     let scroll = super::super::diff_paint::paint_diff_document(
@@ -143,6 +145,7 @@ fn click_revert_chevron(staged: bool) -> Option<(usize, Kind)> {
         added: Color32::GREEN,
         deleted: Color32::RED,
         accent: Color32::BLUE,
+        moved: Color32::LIGHT_BLUE,
         text: Color32::WHITE,
     };
     let ctx = egui::Context::default();

@@ -42,6 +42,7 @@ pub(crate) fn diff_editor_options(input: DiffEditorOptionsInput<'_>) -> SourceOp
         font_size: style.prefs.editor_font_size,
         line_height: 1.0,
         caret_blink: style.prefs.editor_caret_blink,
+        rainbow_brackets: style.prefs.editor_rainbow_brackets,
         palette: Some(style.palette),
         // The status row carries the Vim command line; modeless needs none.
         show_status: vim,

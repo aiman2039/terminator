@@ -1,5 +1,7 @@
+use super::command::git;
 use super::*;
 use anyhow::bail;
+use serde_json::Value;
 use std::{process::Command, sync::Mutex};
 
 fn arguments(command: &Command) -> Vec<String> {
@@ -42,13 +44,6 @@ struct Fixture {
     options: Options,
     runner: GitRunner,
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let (export, marker) = export_paths(&self.root);
-        let _ = fs::remove_dir_all(export);
-        let _ = fs::remove_file(marker);
-    }
-}
 impl Fixture {
     fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
@@ -60,6 +55,7 @@ impl Fixture {
             ("user.email", "fixture@localhost"),
             ("commit.gpgsign", "false"),
             ("core.hooksPath", "/dev/null"),
+            ("core.fsmonitor", "false"),
         ] {
             git(&root, &["config", key, value]).unwrap();
         }
@@ -141,7 +137,7 @@ fn check_only_preserves_staged_unstaged_deleted_and_untracked_work() {
         .execute(|source, _| {
             assert!(
                 fs::read_to_string(source.join("Cargo.toml"))?
-                    .contains("version = \"0.2.0\" # retain comment")
+                    .contains("version = \"0.1.0\" # retain comment")
             );
             // `git checkout-index` converts LF to CRLF on Windows
             // (core.autocrlf), so compare line-ending-insensitively.
@@ -150,7 +146,8 @@ fn check_only_preserves_staged_unstaged_deleted_and_untracked_work() {
                 "unstaged\n"
             );
             assert!(source.join("new").exists());
-            assert!(!source.join("ignored").exists());
+            assert!(source.join("ignored").exists());
+            assert_eq!(source, fixture.root);
             assert!(!source.join("crates/sample/src/lib.rs").exists());
             assert_eq!(fixture.state(), before);
             Ok(())
@@ -168,6 +165,235 @@ fn failed_validation_preserves_version_index_and_commit() {
         .execute(|_, _| bail!("fixture failure"))
         .unwrap_err();
     assert!(error.to_string().contains("fixture failure"));
+    assert_eq!(fixture.state(), before);
+}
+
+#[test]
+fn release_checks_current_checkout_and_restores_version_after_failure() {
+    let mut fixture = Fixture::new();
+    fixture.options.check_only = false;
+    let before = fixture.state();
+    let tracked_time = fs::metadata(fixture.root.join("tracked"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    let error = fixture
+        .execute(|source, _| {
+            assert_eq!(source, fixture.root);
+            assert!(fs::read_to_string(source.join("Cargo.toml"))?.contains("0.2.0"));
+            assert_eq!(
+                fs::metadata(source.join("tracked"))?.modified()?,
+                tracked_time
+            );
+            bail!("fixture failure")
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("fixture failure"));
+    assert_eq!(fixture.state(), before);
+    assert_eq!(fixture.remote_head(), before.0);
+}
+
+#[test]
+fn failed_release_preserves_concurrent_manifest_edit() {
+    let mut fixture = Fixture::new();
+    fixture.options.check_only = false;
+    let before = fixture.state();
+    let error = fixture
+        .execute(|source, _| {
+            fs::write(source.join("Cargo.toml"), "concurrent manifest edit\n")?;
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("Source changed"));
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("Cargo.toml")).unwrap(),
+        "concurrent manifest edit\n"
+    );
+    assert_eq!(fs::read(fixture.root.join("Cargo.lock")).unwrap(), before.3);
+    assert_eq!(fixture.remote_head(), before.0);
+}
+
+#[test]
+fn check_only_keeps_source_timestamps_on_repeated_runs() {
+    let fixture = Fixture::new();
+    let paths = ["Cargo.toml", "Cargo.lock", "tracked"];
+    let times = paths.map(|name| {
+        fs::metadata(fixture.root.join(name))
+            .unwrap()
+            .modified()
+            .unwrap()
+    });
+    for _ in 0..2 {
+        fixture
+            .execute(|source, _| {
+                assert_eq!(source, fixture.root);
+                Ok(())
+            })
+            .unwrap();
+    }
+    for (name, time) in paths.into_iter().zip(times) {
+        assert_eq!(
+            fs::metadata(fixture.root.join(name))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            time
+        );
+    }
+}
+
+#[test]
+fn host_checks_inherit_the_normal_cargo_target_and_wrapper() {
+    struct HostRunner;
+    impl Runner for HostRunner {
+        fn run(&self, _: &mut Command) -> Result<()> {
+            unreachable!()
+        }
+        fn output(&self, _: &mut Command) -> Result<String> {
+            unreachable!()
+        }
+        fn logged(&self, command: &mut Command, path: &Path) -> Result<()> {
+            assert!(
+                command
+                    .get_envs()
+                    .all(|(key, _)| key != "CARGO_TARGET_DIR" && key != "RUSTC_WRAPPER")
+            );
+            fs::write(path, "fixture host check")?;
+            Ok(())
+        }
+    }
+    let fixture = Fixture::new();
+    let artifacts = fixture.root.join(".artifacts/releases/cache-check");
+    fs::create_dir_all(&artifacts).unwrap();
+    validate(ValidateInput {
+        source: &fixture.root,
+        artifacts: &artifacts,
+        options: &fixture.options,
+        runner: &HostRunner,
+    })
+    .unwrap();
+}
+
+#[test]
+fn linux_mounts_linked_worktree_git_metadata_without_copying_source() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97.1\"\n",
+    )
+    .unwrap();
+    git(&fixture.root, &["add", "rust-toolchain.toml"]).unwrap();
+    git(&fixture.root, &["commit", "--quiet", "-m", "Toolchain"]).unwrap();
+    let linked = fixture._temporary.path().join("linked");
+    git(
+        &fixture.root,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            linked.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    assert!(linked.join(".git").is_file());
+    let artifacts = fixture.root.join(".artifacts/releases/worktree-check");
+    fs::create_dir_all(&artifacts).unwrap();
+    let runner = FakeRunner::default();
+    validate(ValidateInput {
+        source: &linked,
+        artifacts: &artifacts,
+        options: &Options {
+            skip_windows: true,
+            linux_image: Some("existing:local".into()),
+            ..Options::default()
+        },
+        runner: &runner,
+    })
+    .unwrap();
+    let common = git(
+        &linked,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .unwrap();
+    let commands = runner.commands.lock().unwrap();
+    let docker = commands
+        .iter()
+        .find(|args| args.starts_with(&["docker".into(), "run".into()]))
+        .unwrap();
+    assert!(
+        docker
+            .iter()
+            .any(|arg| arg == &format!("type=bind,src={common},dst={common},readonly"))
+    );
+    assert!(!docker.iter().any(|arg| arg.contains("cp -a")));
+}
+
+#[test]
+fn checks_reject_content_edits_to_already_dirty_and_untracked_files() {
+    struct EditingRunner<'a>(&'a Path);
+    impl Runner for EditingRunner<'_> {
+        fn run(&self, command: &mut Command) -> Result<()> {
+            if arguments(command).last().is_some_and(|arg| arg == "test") {
+                fs::write(self.0, "changed during validation\n")?;
+            }
+            Ok(())
+        }
+        fn output(&self, _: &mut Command) -> Result<String> {
+            unreachable!()
+        }
+        fn logged(&self, _: &mut Command, _: &Path) -> Result<()> {
+            unreachable!()
+        }
+    }
+    for name in ["tracked", "new"] {
+        let fixture = Fixture::new();
+        let path = fixture.root.join(name);
+        fs::write(&path, "existing changes\n").unwrap();
+        let error = checks::run_with(checks::RunWithInput {
+            root: &fixture.root,
+            output: &fixture.root.join(".artifacts/check"),
+            platform: checks::Platform::Windows,
+            runner: &EditingRunner(&path),
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Validation changed source files")
+        );
+    }
+}
+
+#[test]
+fn windows_archive_includes_working_source_without_builds_or_git_settings() {
+    let fixture = Fixture::new();
+    fs::write(fixture.root.join("tracked"), "staged\n").unwrap();
+    git(&fixture.root, &["add", "tracked"]).unwrap();
+    fs::write(fixture.root.join("tracked"), "unstaged\n").unwrap();
+    fs::write(fixture.root.join("new"), "new\n").unwrap();
+    fs::write(fixture.root.join("ignored"), "private\n").unwrap();
+    fs::remove_file(fixture.root.join("crates/sample/src/lib.rs")).unwrap();
+    let before = fixture.state();
+    let archive = fixture._temporary.path().join("source.tar.gz");
+    windows::source_archive(&fixture.root, &archive).unwrap();
+    let output = fixture._temporary.path().join("extracted");
+    tar::Archive::new(flate2::read::GzDecoder::new(
+        fs::File::open(archive).unwrap(),
+    ))
+    .unpack(&output)
+    .unwrap();
+    let source = output.join("source");
+    assert_eq!(
+        fs::read_to_string(source.join("tracked"))
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "unstaged\n"
+    );
+    assert!(source.join("new").exists());
+    for excluded in ["ignored", ".git", ".artifacts", "crates/sample/src/lib.rs"] {
+        assert!(!source.join(excluded).exists(), "Included {excluded}");
+    }
     assert_eq!(fixture.state(), before);
 }
 
@@ -199,66 +425,8 @@ fn changed_snapshot_stops_release() {
             Ok(())
         })
         .unwrap_err();
-    assert!(error.to_string().contains("Checks changed source"));
+    assert!(error.to_string().contains("Source changed"));
     assert_eq!(fixture.state(), before);
-}
-
-#[test]
-fn a_retry_of_the_same_tree_reuses_the_exported_source() {
-    let fixture = Fixture::new();
-    let mut exported = None;
-    fixture
-        .execute(|source, _| {
-            assert!(fs::read_to_string(source.join("Cargo.toml"))?.contains("version = \"0.2.0\""));
-            exported = Some(source.to_path_buf());
-            Ok(())
-        })
-        .unwrap();
-    let source = exported.unwrap();
-    assert_eq!(source, export_paths(&fixture.root).0);
-    assert!(!source.starts_with(&fixture.root));
-    let before = fs::metadata(source.join("Cargo.toml"))
-        .unwrap()
-        .modified()
-        .unwrap();
-    // The second run must reuse the export: a fresh export copies the tree
-    // again, moves every file time and rebuilds every crate, and a second
-    // version bump would publish 0.3.0.
-    fixture
-        .execute(|source, _| {
-            assert!(fs::read_to_string(source.join("Cargo.toml"))?.contains("0.2.0"));
-            Ok(())
-        })
-        .unwrap();
-    assert_eq!(
-        before,
-        fs::metadata(source.join("Cargo.toml"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        "the reuse must not rewrite the exported files"
-    );
-    assert!(fixture.runner.commands.lock().unwrap().is_empty());
-}
-
-#[test]
-fn a_changed_export_is_not_reused() {
-    let fixture = Fixture::new();
-    let mut exported = None;
-    fixture
-        .execute(|source, _| {
-            exported = Some(source.to_path_buf());
-            Ok(())
-        })
-        .unwrap();
-    let source = exported.unwrap();
-    fs::write(source.join("local-edit"), "dirty\n").unwrap();
-    fixture
-        .execute(|source, _| {
-            assert!(!source.join("local-edit").exists());
-            Ok(())
-        })
-        .unwrap();
 }
 
 #[test]
@@ -640,6 +808,11 @@ fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
                 .windows(2)
                 .any(|pair| pair == ["--fail-under-lines", "50"])
     }));
+    // Parallel debug links of the GUI fixtures run out of Docker memory.
+    assert!(commands.iter().any(|args| {
+        args.iter().any(|arg| arg == "--examples")
+            && args.windows(2).any(|pair| pair == ["--jobs", "2"])
+    }));
 }
 
 #[test]
@@ -892,15 +1065,12 @@ fn docker_plan_keeps_source_read_only_and_records_windows_skip() {
         .iter()
         .find(|args| args.starts_with(&["docker".into(), "run".into()]))
         .unwrap();
-    assert!(
-        docker
-            .iter()
-            .any(|arg| arg.ends_with("dst=/snapshot,readonly"))
-    );
+    assert!(docker.iter().any(|arg| arg.ends_with("dst=/src,readonly")));
     assert!(docker.iter().any(|arg| arg == "linux/amd64"));
     assert!(docker.windows(2).any(|args| args == ["--pull", "never"]));
     for volume in [
         "terminator-release-linux-target",
+        "terminator-release-linux-nextest",
         "terminator-release-linux-registry",
         "terminator-release-linux-git",
     ] {

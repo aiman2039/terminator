@@ -38,8 +38,8 @@ impl App {
         if requests.blame_toggle {
             self.toggle_editor_blame(path);
         }
-        if let Some(line) = requests.blame_click {
-            self.open_blame_commit(path, line);
+        if let Some((line, web)) = requests.blame_click {
+            self.open_blame_commit(path, line, web);
         }
     }
 

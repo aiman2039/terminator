@@ -604,3 +604,28 @@ fn git_refresh_rerequests_only_diffs_whose_file_changed() {
     assert_eq!(refreshed, [tab("x.rs").key()]);
     assert!(app.loading.contains(&tab("x.rs").key()));
 }
+
+#[test]
+fn diff_navigation_shortcuts_apply_only_to_an_active_diff() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, _requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.selected = Some("a".into());
+    assert!(!app.shortcut_applies(Action::DiffNextFile));
+    app.spawn_diff(SpawnDiff {
+        cwd: "/a".into(),
+        path: "/a/file.rs".into(),
+        staged: false,
+        native: true,
+    });
+    for action in [
+        Action::DiffNextChange,
+        Action::DiffPrevChange,
+        Action::DiffNextFile,
+        Action::DiffPrevFile,
+    ] {
+        assert!(app.shortcut_applies(action), "{action:?}");
+        app.run_shortcut(&ctx, action);
+        assert_eq!(app.diff_nav.take(), Some(action));
+    }
+}

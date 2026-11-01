@@ -1,13 +1,8 @@
 use super::command::{Runner, cmd, git};
-use super::{
-    ExportSourceInput, Options, export_paths, export_source, reusable_export, source_tree,
-};
+use super::{Options, source_tree, version};
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::Path};
 
 pub(super) struct ExecuteInput<'a, R, V>
 where
@@ -43,36 +38,86 @@ where
         .prefix("terminator-release-")
         .tempdir()?;
     let original = source_tree(root, temporary.path())?;
-    let (source, marker) = export_paths(root);
-    let (tag, validated) = select_source(root, temporary.path(), (&source, &marker, &original))?;
+    let (next, manifest, lock) = version::prepare(root)?;
+    let tag = format!("v{next}");
     if !options.check_only {
         refuse_existing_tag(root, &tag)?;
     }
+    // Check-only uses the current version without touching source files.
+    // Restore our version edit on failure, unless another writer changed it.
+    let mut version_edit = VersionEdit::new(root, manifest, lock)?;
+    if !options.check_only {
+        version_edit.apply()?;
+    }
+    let validated = source_tree(root, temporary.path())?;
     fs::write(
         artifacts.join("source.json"),
         serde_json::to_vec_pretty(&json!({
             "base_commit":head, "original_tree":original, "validated_tree":validated, "tag":tag,
         }))?,
     )?;
-    validate(&source, &artifacts)?;
-    ensure!(
-        git(&source, &["status", "--porcelain"])?.is_empty()
-            && git(&source, &["rev-parse", "HEAD^{tree}"])? == validated,
-        "Checks changed source files. Review the logs; no release was made."
+    println!(
+        "Checking the current checkout: {}. Keep source files unchanged until checks finish.",
+        root.display()
     );
+    validate(root, &artifacts)?;
     ensure!(
         git(root, &["rev-parse", "HEAD"])? == head
             && git(root, &["symbolic-ref", "--short", "HEAD"])? == branch
-            && source_tree(root, temporary.path())? == original,
+            && source_tree(root, temporary.path())? == validated,
         "Source changed during validation. Run the checks again."
     );
     if options.check_only {
         println!(
-            "Selected checks passed for {tag}. Version, index, commits and remote are unchanged."
+            "Selected checks passed for the current version. Version, index, commits and remote are unchanged."
         );
         return Ok(());
     }
-    publish(root, runner, (&source, &tag, &validated, &artifacts))
+    // Publication owns the version edit from here, even if push/dispatch fails.
+    version_edit.applied = false;
+    publish(root, runner, (&tag, &validated, &artifacts))
+}
+
+struct VersionEdit<'a> {
+    root: &'a Path,
+    files: [(&'static str, Vec<u8>, String); 2],
+    applied: bool,
+}
+
+impl<'a> VersionEdit<'a> {
+    fn new(root: &'a Path, manifest: String, lock: String) -> Result<Self> {
+        Ok(Self {
+            root,
+            files: [
+                ("Cargo.toml", fs::read(root.join("Cargo.toml"))?, manifest),
+                ("Cargo.lock", fs::read(root.join("Cargo.lock"))?, lock),
+            ],
+            applied: false,
+        })
+    }
+
+    fn apply(&mut self) -> Result<()> {
+        self.applied = true;
+        for (name, _, changed) in &self.files {
+            fs::write(self.root.join(name), changed)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for VersionEdit<'_> {
+    fn drop(&mut self) {
+        if self.applied {
+            for (name, original, changed) in &self.files {
+                let path = self.root.join(name);
+                if fs::read(&path).is_ok_and(|bytes| bytes == changed.as_bytes())
+                    && let Err(error) = fs::write(&path, original)
+                {
+                    eprintln!("Could not restore {}: {error}", path.display());
+                }
+            }
+        }
+    }
 }
 
 /// Releases run from an up-to-date master; returns HEAD and the branch name.
@@ -100,29 +145,6 @@ fn check_branch(root: &Path, options: &Options, runner: &impl Runner) -> Result<
     Ok((head, branch))
 }
 
-/// Reuse a validated export of this tree or export a fresh one; returns the tag
-/// and validated tree.
-fn select_source(
-    root: &Path,
-    temporary: &Path,
-    (source, marker, original): (&PathBuf, &PathBuf, &str),
-) -> Result<(String, String)> {
-    if let Some((tag, validated)) = reusable_export(source, marker, original) {
-        println!(
-            "Reusing the validated source for {tag}: {}",
-            source.display()
-        );
-        return Ok((tag, validated));
-    }
-    export_source(ExportSourceInput {
-        root,
-        temporary,
-        source,
-        marker,
-        original,
-    })
-}
-
 fn refuse_existing_tag(root: &Path, tag: &str) -> Result<()> {
     ensure!(
         git(root, &["tag", "--list", tag])?.is_empty()
@@ -140,11 +162,8 @@ fn refuse_existing_tag(root: &Path, tag: &str) -> Result<()> {
 fn publish(
     root: &Path,
     runner: &impl Runner,
-    (source, tag, validated, artifacts): (&Path, &str, &str, &Path),
+    (tag, validated, artifacts): (&str, &str, &Path),
 ) -> Result<()> {
-    for name in ["Cargo.toml", "Cargo.lock"] {
-        fs::copy(source.join(name), root.join(name))?;
-    }
     git(root, &["add", "--all"])?;
     ensure!(
         git(root, &["write-tree"])? == validated,

@@ -34,6 +34,14 @@ fn field_mut<'a>(document: &'a mut DocumentMut, path: &[&str]) -> Result<&'a mut
     })
 }
 pub fn bump(root: &Path) -> Result<String> {
+    let (next, manifest, lock) = prepare(root)?;
+    fs::write(root.join("Cargo.toml"), manifest)?;
+    fs::write(root.join("Cargo.lock"), lock)?;
+    println!("Bumped workspace version to {next}");
+    Ok(next)
+}
+
+pub(super) fn prepare(root: &Path) -> Result<(String, String, String)> {
     let mut manifest = document(&root.join("Cargo.toml"))?;
     let old = field(&manifest, &["workspace", "package", "version"])?
         .as_str()
@@ -63,10 +71,7 @@ pub fn bump(root: &Path) -> Result<String> {
         field_mut(&mut manifest, &["workspace", "package", "version"])?,
         &next,
     )?;
-    fs::write(root.join("Cargo.toml"), manifest.to_string())?;
-    fs::write(root.join("Cargo.lock"), lock.to_string())?;
-    println!("Bumped workspace version: {old} -> {next}");
-    Ok(next)
+    Ok((next, manifest.to_string(), lock.to_string()))
 }
 
 /// Names of workspace member packages whose version is `version.workspace = true`.

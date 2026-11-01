@@ -109,10 +109,11 @@ impl Services {
                     .parent()
                     .map(std::path::Path::to_path_buf)
                     .unwrap_or_default();
-                anyhow::Ok(
-                    crate::git_log::blame_with_contents(&cwd, &file, Some(&text))
-                        .map(|blame| blame.entries),
-                )
+                anyhow::Ok(crate::git_log::blame_with_contents(
+                    &cwd,
+                    &file,
+                    Some(&text),
+                ))
             })
             .await
             .unwrap_or_else(|error| Err(format!("{error:#}")));

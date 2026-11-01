@@ -280,6 +280,7 @@ pub(in super::super) fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>)
         colors,
         metrics,
     } = paint;
+    let colors = colors.for_line(line);
     let (bg, sign) = diff_row_style(line.kind, colors);
     let cols = gutter_cols(metrics, gutter);
     let code = ui

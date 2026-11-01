@@ -70,6 +70,10 @@ jobs:
             echo "::error::Tag $EVENT_TAG must match workspace version $tag"
             exit 1
           fi
+          if [[ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
+            echo "::error::Release $tag is already published. Bump the version."
+            exit 1
+          fi
           if git show-ref --verify --quiet "refs/tags/$tag"; then
             test "$(git rev-parse "refs/tags/$tag^{commit}")" = "$sha" || {
               echo "::error::Existing tag $tag points to another commit; select that tag to retry or bump the version."

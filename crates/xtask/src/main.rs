@@ -38,7 +38,7 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Task {
-    /// Validate a versioned source copy, then commit, push and release it.
+    /// Validate the current checkout, then commit, push and release it.
     #[command(args_override_self = true)]
     Release(release::Options),
     /// Run the local platform's isolated release checks.

@@ -155,6 +155,36 @@ impl VimEngine {
         self.preferred_col = col;
     }
 
+    /// Alt+drag column selection: one caret on each line from `anchor` to
+    /// `to`, each selecting the same columns (clamped to its line). The
+    /// caret on `to`'s line is the primary one.
+    pub fn column_select<B: Buffer>(&mut self, doc: &B, anchor: Cursor, to: Cursor) {
+        if !self.modeless {
+            return;
+        }
+        let last = doc.line_count().saturating_sub(1);
+        let (from_line, to_line) = (anchor.line.min(last), to.line.min(last));
+        let caret_on = |line: usize| {
+            let len = doc.line_text(line).chars().count();
+            let (start, end) = (anchor.col.min(len), to.col.min(len));
+            Caret {
+                mode: if start == end {
+                    Mode::Normal
+                } else {
+                    Mode::Visual
+                },
+                anchor: Cursor { line, col: start },
+                cursor: Cursor { line, col: end },
+                preferred_col: to.col,
+            }
+        };
+        self.extra_carets = (from_line.min(to_line)..=from_line.max(to_line))
+            .filter(|line| *line != to_line)
+            .map(caret_on)
+            .collect();
+        self.load_caret(caret_on(to_line));
+    }
+
     /// Add Selection for Next Occurrence: with no selection, select the
     /// word at the caret; otherwise select the next match of the newest
     /// selection's text (wrapping) as a new caret. Returns false when
@@ -386,6 +416,63 @@ mod tests {
 
     fn type_char(engine: &mut VimEngine, doc: &mut Doc, c: char) {
         engine.for_each_caret(doc, |engine, doc| engine.modeless_key(doc, Key::Char(c)));
+    }
+
+    #[test]
+    fn column_select_makes_one_caret_per_line_clamped_to_each_line() {
+        let mut doc = Doc::new("abcdef\nab\nabcdef\n");
+        let mut engine = modeless(&mut doc, 0, 0);
+        engine.column_select(&doc, Cursor { line: 0, col: 1 }, Cursor { line: 2, col: 4 });
+        let mut spans: Vec<_> = engine
+            .carets()
+            .iter()
+            .map(|caret| {
+                (
+                    caret.anchor.line,
+                    caret.anchor.col,
+                    caret.cursor.col,
+                    caret.mode,
+                )
+            })
+            .collect();
+        spans.sort_unstable_by_key(|span| span.0);
+        assert_eq!(
+            spans,
+            [
+                (0, 1, 4, Mode::Visual),
+                (1, 1, 2, Mode::Visual),
+                (2, 1, 4, Mode::Visual)
+            ]
+        );
+        assert_eq!(engine.cursor, Cursor { line: 2, col: 4 });
+    }
+
+    #[test]
+    fn typing_after_column_select_edits_every_line_in_one_undo() {
+        let mut doc = Doc::new("abcd\nabcd\nabcd\n");
+        let mut engine = modeless(&mut doc, 0, 0);
+        engine.column_select(&doc, Cursor { line: 0, col: 1 }, Cursor { line: 2, col: 3 });
+        type_char(&mut engine, &mut doc, 'X');
+        assert_eq!(doc.text(), "aXd\naXd\naXd\n");
+        doc.end_run();
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "abcd\nabcd\nabcd\n");
+    }
+
+    #[test]
+    fn zero_width_column_select_places_plain_carets() {
+        let mut doc = Doc::new("ab\nab\n");
+        let mut engine = modeless(&mut doc, 0, 0);
+        engine.column_select(&doc, Cursor { line: 1, col: 1 }, Cursor { line: 0, col: 1 });
+        assert_eq!(engine.carets().len(), 2);
+        assert!(
+            engine
+                .carets()
+                .iter()
+                .all(|caret| caret.mode == Mode::Normal)
+        );
+        type_char(&mut engine, &mut doc, '-');
+        assert_eq!(doc.text(), "a-b\na-b\n");
     }
 
     #[test]

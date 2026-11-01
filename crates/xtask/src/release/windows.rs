@@ -142,14 +142,7 @@ Write-Output ($base.Replace('\', '/'))
             .prefix("windows-release-")
             .tempdir()?;
         let archive = temporary.path().join("source.tar.gz");
-        let encoder = flate2::write::GzEncoder::new(
-            fs::File::create(&archive)?,
-            flate2::Compression::default(),
-        );
-        let mut bundle = tar::Builder::new(encoder);
-        bundle.follow_symlinks(false);
-        bundle.append_dir_all("source", source)?;
-        bundle.into_inner()?.finish()?;
+        source_archive(source, &archive)?;
         runner.run(
             cmd(source, "scp", &["-B"])
                 .arg(&archive)
@@ -177,6 +170,12 @@ $env:RUNNER_TEMP = (Join-Path $base 'artifacts').Replace('\', '/')
 $env:CARGO_TARGET_DIR = (Join-Path $env:USERPROFILE '.terminator-release/target').Replace('\', '/')
 $env:CARGO_HUSKY_DONT_INSTALL_HOOKS = '1'
 Set-Location (Join-Path $base 'source')
+git init --quiet
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
+git add --all
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
+git -c user.name=Release -c user.email=release@localhost -c commit.gpgsign=false -c core.hooksPath=/dev/null commit --quiet -m 'Release source'
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
 & '{}' 'scripts/release-check.sh'
 exit $LASTEXITCODE
 ",
@@ -211,6 +210,22 @@ exit $LASTEXITCODE
             .arg(artifacts.join("artifacts.tar.gz")),
         )
     }
+}
+
+/// Transfer Git-visible source only, without build output or local Git settings.
+pub(super) fn source_archive(source: &Path, archive: &Path) -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let tree = super::source_tree(source, temporary.path())?;
+    System.run(
+        cmd(
+            source,
+            "git",
+            &["archive", "--format=tar.gz", "--prefix=source/"],
+        )
+        .arg("--output")
+        .arg(archive)
+        .arg(tree),
+    )
 }
 
 #[cfg(test)]

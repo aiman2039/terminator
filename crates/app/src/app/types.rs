@@ -450,7 +450,7 @@ pub(crate) enum Update {
     Favicon(String, Option<Vec<u8>>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),
     GitBase(PathBuf, u64, Option<String>),
-    EditorBlame(PathBuf, u64, Result<Vec<git_log::BlameEntry>, String>),
+    EditorBlame(PathBuf, u64, Result<git_log::BlameData, String>),
     CommitFiles(String, Result<Vec<(char, PathBuf)>, String>),
     GitView(String, GitView),
     DirectoryPreview(

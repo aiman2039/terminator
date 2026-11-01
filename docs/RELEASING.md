@@ -66,6 +66,8 @@ The workflow runs only through this manual trigger. Branch pushes, tag pushes,
 and publishing a GitHub release do not start it.
 
 All builds use the resolved commit SHA. Version mismatches fail before building.
+A version that is already published also fails in `prepare`, before any build.
+A draft release can still be retried.
 To retry an older release after master has moved, select its tag as the workflow
 ref and leave the tag input empty.
 The workflow never moves existing tags. Bump the version for a new revision.

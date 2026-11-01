@@ -64,6 +64,8 @@ impl App {
             ui.radio_value(&mut options.highlight, value, label)
                 .on_hover_text(tip);
         }
+        ui.checkbox(&mut options.moved, "Show moved lines")
+            .on_hover_text("Blocks deleted in one place and added in another use the accent color");
         if *options != before {
             // Staging and discarding still apply the real lines.
             pass.refresh = true;

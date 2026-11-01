@@ -111,7 +111,8 @@ struct ViewRequests {
     recent_open: Option<PathBuf>,
     activated_editor: bool,
     blame_toggle: bool,
-    blame_click: Option<usize>,
+    /// Clicked blame line, and whether Cmd/Ctrl was held (open on web).
+    blame_click: Option<(usize, bool)>,
     complete_now: bool,
     signature_request: Option<(native_lsp::Position, usize, usize)>,
     format_now: bool,

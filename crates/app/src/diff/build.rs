@@ -123,6 +123,16 @@ pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocume
             new_end..originals.new.len(),
         );
     }
+    if options.moved {
+        moved::mark_moved(
+            &mut doc,
+            moved::MarkMovedInput {
+                old: &originals.old,
+                new: &originals.new,
+                options,
+            },
+        );
+    }
     doc
 }
 
@@ -279,6 +289,7 @@ impl Sides<'_, '_> {
             old_no: number(old),
             new_no: number(new),
             spans: line_spans(highlighted, index, text),
+            moved: false,
         }
     }
 }
@@ -302,6 +313,7 @@ fn push_gap_row(doc: &mut DiffDocument, old: std::ops::Range<usize>, new: std::o
             rgb: fallback_rgb(),
             intra: Intra::None,
         }],
+        moved: false,
     };
     doc.gaps.push(review::Gap {
         old,
