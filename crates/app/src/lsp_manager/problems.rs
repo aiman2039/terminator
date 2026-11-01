@@ -100,6 +100,9 @@ impl LspManager {
         if let Some(note) = self.unavailable.get(doc.server.language) {
             return Some(note.clone());
         }
+        if let Some(note) = self.trust_note(&doc.server.root) {
+            return Some(note);
+        }
         let server = self.servers.get(&doc.server)?;
         if server.ready {
             return None;

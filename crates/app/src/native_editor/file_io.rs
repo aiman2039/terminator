@@ -34,6 +34,13 @@ impl NativeFileIo {
         std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
     }
 
+    /// Every line break is `\r\n`. Only then does the buffer hold `\n` and
+    /// the save write `\r\n`; mixed endings stay as the bytes on disk.
+    pub(super) fn all_crlf(text: &str) -> bool {
+        let crlf = text.matches("\r\n").count();
+        crlf > 0 && text.matches('\n').count() == crlf && text.matches('\r').count() == crlf
+    }
+
     pub(super) fn text_hash(text: &str) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

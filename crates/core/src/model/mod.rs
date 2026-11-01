@@ -244,6 +244,8 @@ pub const WORKTREES_CAPABILITY: &str = "worktrees-v1";
 pub const SHUTDOWN_IF_IDLE_CAPABILITY: &str = "shutdown-if-idle-v1";
 pub const STABLE_HELPER_CAPABILITY: &str = "stable-helper-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
+/// `Request::SessionForPids` maps hook ancestor PIDs to a session.
+pub const SESSION_FOR_PIDS_CAPABILITY: &str = "session-for-pids-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
 pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
 pub const NTFY_CAPABILITY: &str = "ntfy-v1";

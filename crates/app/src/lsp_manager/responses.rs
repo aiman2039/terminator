@@ -7,21 +7,53 @@ pub(super) struct OnResponseInput<'a> {
     pub(super) error: Option<L::ResponseError>,
 }
 
+/// Decode one framed body on the server's reader task, off the GUI
+/// thread: JSON parse, typed diagnostics, and dropping notifications the
+/// manager ignores (`$/progress` floods). `None` means nothing to route.
+pub(super) fn decode_body(key: &ServerKey, body: &[u8]) -> Option<PumpEvent> {
+    let message = L::parse_message(body)?;
+    if let L::LspMessage::Notification { method, params } = &message {
+        if method != "textDocument/publishDiagnostics" {
+            return None;
+        }
+        let (uri, items) = L::parse_diagnostics(params)?;
+        let path = L::uri_to_path(&uri)?;
+        return Some(PumpEvent::Diagnostics { path, items });
+    }
+    Some(PumpEvent::Message {
+        key: key.clone(),
+        message,
+    })
+}
+
 impl LspManager {
+    /// Decode and route one body on the calling thread (tests and
+    /// fixtures; live servers decode on their reader task).
+    #[cfg(test)]
     pub(super) fn on_body(&mut self, key: &ServerKey, body: &[u8]) {
-        let Some(message) = L::parse_message(body) else {
-            return;
-        };
-        match message {
-            L::LspMessage::Notification { method, params } => {
-                if method == "textDocument/publishDiagnostics"
-                    && let Some((uri, items)) = L::parse_diagnostics(&params)
-                    && let Some(path) = L::uri_to_path(&uri)
-                    && self.docs.contains_key(&path)
-                {
+        if let Some(event) = decode_body(key, body) {
+            self.on_event(event);
+        }
+    }
+
+    pub(super) fn on_event(&mut self, event: PumpEvent) {
+        match event {
+            PumpEvent::Message { key, message } => self.on_message(&key, message),
+            PumpEvent::Diagnostics { path, items } => {
+                if self.docs.contains_key(&path) {
                     self.diagnostics.insert(path, items);
                 }
             }
+            PumpEvent::Down { key } => self.on_server_down(&key),
+            PumpEvent::SpawnFailed { key, note } => self.on_spawn_failed(&key, &note),
+        }
+    }
+
+    fn on_message(&mut self, key: &ServerKey, message: L::LspMessage) {
+        match message {
+            // Only diagnostics are routed; `decode_body` turns them into
+            // their own event and drops the rest.
+            L::LspMessage::Notification { .. } => {}
             L::LspMessage::Response { id, result, error } => {
                 self.on_response(OnResponseInput {
                     key,

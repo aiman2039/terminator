@@ -73,6 +73,34 @@ fn decoder_skips_header_without_length() {
 }
 
 #[test]
+fn decoder_rejects_body_length_above_cap() {
+    let mut decoder = FrameDecoder::default();
+    assert!(
+        decoder
+            .feed(b"Content-Length: 99999999999\r\n\r\n{}")
+            .is_empty()
+    );
+    assert!(decoder.overflowed());
+    // Poisoned: later valid frames are ignored, nothing is buffered.
+    assert!(decoder.feed(&frame(b"{}")).is_empty());
+}
+
+#[test]
+fn decoder_rejects_header_without_terminator_above_cap() {
+    let mut decoder = FrameDecoder::default();
+    let noise = vec![b'x'; MAX_HEADER_BYTES.saturating_add(1)];
+    assert!(decoder.feed(&noise).is_empty());
+    assert!(decoder.overflowed());
+}
+
+#[test]
+fn decoder_accepts_frames_within_limits() {
+    let mut decoder = FrameDecoder::default();
+    assert_eq!(decoder.feed(&frame(b"{}")), vec![b"{}".to_vec()]);
+    assert!(!decoder.overflowed());
+}
+
+#[test]
 fn classifies_request_notification_response() {
     let request = parse_message(br#"{"jsonrpc":"2.0","id":1,"method":"m","params":{"a":1}}"#);
     assert!(matches!(

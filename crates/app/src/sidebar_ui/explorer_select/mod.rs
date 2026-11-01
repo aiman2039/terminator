@@ -191,6 +191,7 @@ impl App {
     pub(super) fn explorer_rename(&mut self, path: &Path) {
         self.open_name_prompt(workspace_ops::NamePrompt::Rename {
             from: path.to_owned(),
+            dir: path.is_dir(),
             name: path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())

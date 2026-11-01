@@ -88,6 +88,7 @@ pub(crate) enum PaletteItem {
     VncProfile(String, String),
     NewWorktree,
     OpenPlayer,
+    CheckForUpdates,
     ToggleIdeSidebarHeight,
     SaveLayout,
     ApplyLayout(String),
@@ -197,6 +198,7 @@ impl PaletteItem {
             Self::VncProfile(_, name) => name.clone(),
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
+            Self::CheckForUpdates => "Check for Updates…".into(),
             Self::ToggleIdeSidebarHeight => "Toggle IDE sidebar height".into(),
             Self::SaveLayout => "Save layout".into(),
             Self::ApplyLayout(name) => name.clone(),
@@ -208,6 +210,7 @@ impl PaletteItem {
             Self::AddProject
             | Self::NewWorktree
             | Self::OpenPlayer
+            | Self::CheckForUpdates
             | Self::ToggleIdeSidebarHeight
             | Self::SaveLayout => self.title(),
             Self::Action(action) if pinned_action(*action) => self.title(),

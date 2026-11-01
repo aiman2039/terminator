@@ -92,12 +92,31 @@ fn status_options(input: Option<Vec<u8>>, allow_no_matches: bool) -> CommandOpti
 
 /// NUL-delimited stdin batch for [`CHECK_IGNORE_ARGV`].
 pub fn stdin_batch(entries: &[Entry]) -> Vec<u8> {
+    paths_batch(entries.iter().map(|entry| entry.path.as_path()))
+}
+
+/// NUL-delimited stdin batch of `paths` for [`CHECK_IGNORE_ARGV`].
+pub fn paths_batch<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<u8> {
     let mut input = Vec::new();
-    for entry in entries {
-        input.extend_from_slice(&terminator_core::os_bytes(entry.path.as_os_str()));
+    for path in paths {
+        input.extend_from_slice(&terminator_core::os_bytes(path.as_os_str()));
         input.push(0);
     }
     input
+}
+
+/// The paths to check for the entries of directory `dir`, through its real
+/// location. Git refuses paths "beyond a symbolic link", so a symlinked
+/// folder inside a repository must not be checked by its alias path.
+pub fn real_paths(dir: &Path, entries: &[Entry]) -> Vec<PathBuf> {
+    let real = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    entries
+        .iter()
+        .map(|entry| match entry.path.file_name() {
+            Some(name) => real.join(name),
+            None => entry.path.clone(),
+        })
+        .collect()
 }
 
 /// Whether `path` appears in [`CHECK_IGNORE_ARGV`] output.
@@ -136,13 +155,12 @@ pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
     // files use the same rules as the user's repository. Keep dotfiles visible.
     if in_git {
         for batch in entries.chunks_mut(1000) {
-            let output = git::run_blocking(
-                path,
-                CHECK_IGNORE_ARGV,
-                status_options(Some(stdin_batch(batch)), true),
-            )?;
-            for entry in batch.iter_mut() {
-                entry.ignored |= is_ignored(&output, &entry.path);
+            let real = real_paths(path, batch);
+            let input = paths_batch(real.iter().map(PathBuf::as_path));
+            let output =
+                git::run_blocking(path, CHECK_IGNORE_ARGV, status_options(Some(input), true))?;
+            for (entry, real) in batch.iter_mut().zip(&real) {
+                entry.ignored |= is_ignored(&output, real);
             }
         }
     }
@@ -216,5 +234,34 @@ mod tests {
         assert!(!ignored(".gitignore"));
         assert!(!ignored("keep.log"));
         assert!(!ignored("tracked.log"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_folder_inside_a_repo_lists_with_ignore_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        git(root, &["init", "-q"]);
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        fs::create_dir(root.join("real")).unwrap();
+        for name in ["a.log", "b.rs"] {
+            fs::write(root.join("real").join(name), "").unwrap();
+        }
+        std::os::unix::fs::symlink("real", root.join("link")).unwrap();
+        let entries = entries(&root.join("link")).unwrap();
+        let ignored = |name: &str| {
+            entries
+                .iter()
+                .find(|e| e.path.file_name().unwrap() == name)
+                .unwrap()
+                .ignored
+        };
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.path.starts_with(root.join("link")))
+        );
+        assert!(ignored("a.log"));
+        assert!(!ignored("b.rs"));
     }
 }

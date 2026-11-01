@@ -11,7 +11,7 @@ egui = { version = "0.37", default-features = false }
 ignore = "0.4"
 lsp-types = "0.97"
 nucleo = "0.5"
-ropey = "1.6"
+ropey = { version = "1.6", default-features = false, features = ["cr_lines", "simd"] }
 serde_json = "1"
 syntect = "5"
 tree-sitter = "0.27"

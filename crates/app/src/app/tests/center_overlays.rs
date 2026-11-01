@@ -126,3 +126,42 @@ fn create_hides_settings_without_ending_session() {
     app.open_settings();
     assert_eq!(app.settings_search, "shell");
 }
+
+#[test]
+fn hide_center_overlay_closes_command_palette() {
+    let (mut app, _, _dir) = fixture();
+    app.open_command_palette();
+    app.palette.query = "main".into();
+    app.hide_center_overlay();
+    assert!(!app.palette.open);
+    assert!(app.palette.query.is_empty());
+}
+
+#[test]
+fn palette_takes_focus_only_once_after_opening() {
+    let (mut app, ctx, _dir) = fixture();
+    app.open_command_palette();
+    assert!(app.palette.focus_pending);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.palette_center(ui));
+    output.textures_delta.clear();
+    assert!(!app.palette.focus_pending);
+}
+
+#[test]
+fn escape_closes_command_palette() {
+    let (mut app, ctx, _dir) = fixture();
+    app.open_command_palette();
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| app.palette_center(ui));
+    output.textures_delta.clear();
+    assert!(!app.palette.open);
+}

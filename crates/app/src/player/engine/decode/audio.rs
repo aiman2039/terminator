@@ -1,5 +1,6 @@
 use super::super::super::tap;
 use super::super::analysis::Analysis;
+use super::super::equalizer::Equalizer;
 use super::super::handle::{Controls, Desired, Event, MAX_PCM_SAMPLES, Playable, Status};
 use super::super::pipeline::{
     PipelineGuard, PlaybackCounters, PreparedSource, StartOutputInput, StreamInput, StreamReader,
@@ -72,6 +73,7 @@ pub(in super::super) fn decode_audio(input: DecodeAudioInput) -> Result<()> {
         rate: device.rate,
         channel: 0,
         mix: 0.0,
+        eq: Equalizer::new(device.channels.get(), device.rate.get()),
     };
     let title = source.title().to_owned();
     let radio = source.radio();

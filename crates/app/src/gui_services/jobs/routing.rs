@@ -170,6 +170,31 @@ impl JobRouting {
             Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
             Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),
             Job::SaveAppearance(..) => ("catalog", "appearance".into(), Policy::OrderedMutation),
+            _ => return Self::files_route(job),
+        };
+        Some(route)
+    }
+
+    /// Local file, Git, search and platform jobs. They never queue behind
+    /// daemon Control (`daemon`/`workspace`): a slow commit+push or a
+    /// full-text search must not hold back a new terminal.
+    fn files_route(job: &Job) -> Option<Route> {
+        let route = match job {
+            Job::Workspace(root, _) => (
+                "workspace-op",
+                root.display().to_string(),
+                Policy::OrderedMutation,
+            ),
+            Job::Search { root, .. } => (
+                "search",
+                root.display().to_string(),
+                Policy::OrderedMutation,
+            ),
+            Job::Favicon(url) => ("favicon", url.clone(), Policy::OrderedMutation),
+            Job::PasteClipboard(_) => ("platform", "clipboard".into(), Policy::OrderedMutation),
+            Job::Browser(_) | Job::External(_) | Job::TestExternal(..) => {
+                ("platform", "open".into(), Policy::OrderedMutation)
+            }
             _ => return None,
         };
         Some(route)
@@ -322,5 +347,52 @@ impl JobRouting {
                 _
             )
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn key(job: &Job) -> (&'static str, String) {
+        let context = JobRouting::context(job);
+        (context.subsystem, context.resource)
+    }
+
+    #[test]
+    fn slow_local_jobs_do_not_share_the_daemon_create_queue() {
+        let create = key(&Job::Control(
+            Box::new(Request::Create {
+                project: "p".into(),
+                cwd: None,
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            }),
+            After::Create(None),
+        ));
+        let root = PathBuf::from("/repo");
+        let slow = [
+            Job::Workspace(
+                root.clone(),
+                crate::workspace_ops::Op::Stage(root.join("a")),
+            ),
+            Job::Search {
+                id: 1,
+                root: root.clone(),
+                query: crate::search::Query::default(),
+                show_ignored: false,
+            },
+            Job::Favicon("https://example.com".into()),
+            Job::PasteClipboard("s".into()),
+            Job::Browser("https://example.com".into()),
+            Job::External(root.join("a")),
+            Job::TestExternal(root, "true".into(), Vec::new()),
+        ];
+        for job in &slow {
+            assert_ne!(key(job), create);
+        }
     }
 }

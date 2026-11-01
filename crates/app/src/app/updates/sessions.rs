@@ -101,7 +101,7 @@ impl App {
         &mut self,
         session: Session,
         split: Option<String>,
-        target: Option<Vec<Tab>>,
+        (target, origin): (Option<Vec<Tab>>, Option<String>),
     ) {
         let previous_workspace = self
             .layouts
@@ -119,7 +119,7 @@ impl App {
             self.editor_origins.insert(session.id.clone(), anchors);
         }
         if let Some(target) = target {
-            self.focus_created_target(&session.project_id, &target);
+            self.focus_created_target(&session.project_id, origin.as_deref(), &target);
         }
         let same_workspace = previous_workspace.as_ref()
             == self
@@ -144,12 +144,21 @@ impl App {
         }
     }
 
-    /// Activates the workspace and pane holding the first anchor tab.
-    fn focus_created_target(&mut self, project: &str, target: &[Tab]) {
+    /// Activates the originating top-level tab (or, when it is unknown or
+    /// gone, the one holding the first anchor) and the anchor's pane.
+    pub(crate) fn focus_created_target(
+        &mut self,
+        project: &str,
+        origin: Option<&str>,
+        target: &[Tab],
+    ) {
         let Some(dock) = self.layouts.get_mut(project) else {
             return;
         };
-        if let Some(tab) = target.iter().find(|tab| dock.contains(tab)) {
+        if let Some(origin) = origin.filter(|id| dock.tabs.iter().any(|tab| tab.id == *id)) {
+            dock.active = origin.to_owned();
+            dock.record_active();
+        } else if let Some(tab) = target.iter().find(|tab| dock.contains(tab)) {
             dock.activate_containing(tab);
         }
         if let Some(path) = target.iter().find_map(|tab| dock.find_tab(tab)) {

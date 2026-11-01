@@ -38,7 +38,19 @@ impl Shared {
 
     pub(super) fn on_shell_prompt(&self, session: &str) -> Result<Outcome> {
         let _ = self.runtime(session)?;
-        Ok(Outcome::Changed)
+        // Nothing changes on a prompt; do not bump the revision or persist.
+        Ok(Outcome::Reply(Response::Ok))
+    }
+
+    pub(super) fn cwd_unchanged(&self, session: &str, path: &std::path::Path) -> bool {
+        cwd_unchanged(&relock(&self.state), session, path)
+    }
+
+    pub(super) fn on_session_for_pids(&self, pids: &[u32]) -> Outcome {
+        Outcome::Reply(match session_for_pids(&relock(&self.state), pids) {
+            Some(id) => Response::Text(id.into()),
+            None => Response::Ok,
+        })
     }
 
     pub(super) fn on_screen(&self, session: &str) -> Result<Outcome> {
@@ -198,5 +210,76 @@ impl Shared {
         rx.recv_timeout(Duration::from_secs(3))?
             .map_err(anyhow::Error::msg)?;
         Ok(())
+    }
+}
+
+/// True when `session` is live, local and already at the confirmed `path`.
+fn cwd_unchanged(state: &State, session: &str, path: &std::path::Path) -> bool {
+    state.sessions.iter().any(|r| {
+        r.id == session
+            && r.lifecycle.live()
+            && r.remote.is_none()
+            && r.cwd_confirmed
+            && r.cwd == path
+    })
+}
+
+/// The one live session whose shell PID is among `pids`; `None` when none or
+/// several match.
+fn session_for_pids<'a>(state: &'a State, pids: &[u32]) -> Option<&'a str> {
+    let mut matches = state
+        .sessions
+        .iter()
+        .filter(|s| s.lifecycle.live() && s.pid.is_some_and(|pid| pids.contains(&pid)));
+    match (matches.next(), matches.next()) {
+        (Some(session), None) => Some(session.id.as_str()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state_with(sessions: &[(&str, u32)]) -> State {
+        let mut state = State::default();
+        for (id, pid) in sessions {
+            state.sessions.push(Session {
+                review: false,
+                remote: None,
+                id: (*id).into(),
+                project_id: String::new(),
+                label: String::new(),
+                cwd: PathBuf::from("/work"),
+                kind: SessionKind::Shell,
+                file: None,
+                lifecycle: Lifecycle::Running,
+                created: 0,
+                exit_code: None,
+                rows: 24,
+                cols: 80,
+                generation: String::new(),
+                pid: Some(*pid),
+                truncated: false,
+                cwd_confirmed: true,
+            });
+        }
+        state
+    }
+
+    #[test]
+    fn repeated_prompt_cwd_is_not_a_change() {
+        let state = state_with(&[("a", 10)]);
+        assert!(cwd_unchanged(&state, "a", std::path::Path::new("/work")));
+        assert!(!cwd_unchanged(&state, "a", std::path::Path::new("/other")));
+        assert!(!cwd_unchanged(&state, "b", std::path::Path::new("/work")));
+    }
+
+    #[test]
+    fn hook_ancestors_map_to_exactly_one_live_session() {
+        let state = state_with(&[("a", 10), ("b", 20)]);
+        assert_eq!(session_for_pids(&state, &[99, 20, 1]), Some("b"));
+        assert_eq!(session_for_pids(&state, &[99]), None);
+        assert_eq!(session_for_pids(&state, &[10, 20]), None);
     }
 }

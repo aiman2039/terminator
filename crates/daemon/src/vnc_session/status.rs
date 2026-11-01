@@ -12,7 +12,7 @@ pub(super) fn mark_connected(
         let mut rt = relock(runtime);
         rt.status = VncSessionStatus::Connected;
         rt.error = None;
-        rt.revision = rt.revision.saturating_add(1);
+        rt.bump();
     }
     let mut state = relock(&shared.state);
     if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
@@ -53,7 +53,7 @@ pub(super) fn mark_failed(input: MarkFailedInput<'_>) {
         rt.status = VncSessionStatus::Failed;
         rt.error = Some(message.clone());
         rt.input_tx = None;
-        rt.revision = rt.revision.saturating_add(1);
+        rt.bump();
     }
     let mut state = relock(&shared.state);
     if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
@@ -88,7 +88,7 @@ pub(super) fn mark_disconnected(input: MarkDisconnectedInput<'_>) {
         rt.status = VncSessionStatus::Disconnected;
         rt.error.clone_from(&reason);
         rt.input_tx = None;
-        rt.revision = rt.revision.saturating_add(1);
+        rt.bump();
     }
     let mut state = relock(&shared.state);
     if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id)

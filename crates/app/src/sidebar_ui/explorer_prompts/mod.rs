@@ -305,10 +305,10 @@ impl App {
             field.request_focus();
             // Rename selects the name without its extension, so typing
             // replaces the stem (`IntelliJ`).
-            if let workspace_ops::NamePrompt::Rename { from, .. } = prompt
+            if let workspace_ops::NamePrompt::Rename { from, dir, .. } = prompt
                 && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), prompt_id)
             {
-                let stem = if from.is_dir() {
+                let stem = if *dir {
                     name.chars().count()
                 } else {
                     from.file_stem()
@@ -348,8 +348,8 @@ impl App {
             workspace_ops::NamePrompt::Folder { dir, .. } => {
                 workspace_ops::NamePrompt::Folder { dir, name }
             }
-            workspace_ops::NamePrompt::Rename { from, .. } => {
-                workspace_ops::NamePrompt::Rename { from, name }
+            workspace_ops::NamePrompt::Rename { from, dir, .. } => {
+                workspace_ops::NamePrompt::Rename { from, name, dir }
             }
         });
         if submit {
@@ -367,8 +367,8 @@ impl App {
         let icon = match &prompt {
             workspace_ops::NamePrompt::File { .. } => "File",
             workspace_ops::NamePrompt::Folder { .. } => "Folder",
-            workspace_ops::NamePrompt::Rename { from, .. } => {
-                if from.is_dir() {
+            workspace_ops::NamePrompt::Rename { from, dir, .. } => {
+                if *dir {
                     "Folder"
                 } else {
                     icons::file_icon(from)
@@ -467,7 +467,7 @@ impl App {
             workspace_ops::NamePrompt::Folder { dir, name } => {
                 workspace_ops::Op::CreateDir(dir.join(name.trim()))
             }
-            workspace_ops::NamePrompt::Rename { from, name } => {
+            workspace_ops::NamePrompt::Rename { from, name, .. } => {
                 let Some(parent) = from.parent().map(std::path::Path::to_path_buf) else {
                     return;
                 };

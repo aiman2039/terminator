@@ -10,10 +10,24 @@ use std::{
     },
     thread,
 };
-use terminator_core::transport;
+use terminator_core::{Response, transport, write_frame};
 
 use crate::notifications;
-use crate::server::{Shared, drain_wake, serve};
+use crate::server::{ATTACHED, Shared, drain_wake, serve};
+
+/// Concurrent request handlers, not counting attach streams.
+const MAX_REQUESTS: usize = 256;
+/// Hard cap on all handler threads, attach streams included.
+const MAX_CONNECTIONS: usize = 4096;
+
+/// Why a new connection is refused, or `None` when it may be served.
+fn refusal(active: usize, attached: usize) -> Option<&'static str> {
+    if active >= MAX_CONNECTIONS {
+        return Some("Too many open connections to the session service; try again");
+    }
+    (active.saturating_sub(attached) >= MAX_REQUESTS)
+        .then_some("Session service is busy with too many requests; try again")
+}
 
 /// The main thread's connection loop, run until shutdown is requested.
 pub(crate) struct AcceptLoop<'a> {
@@ -110,8 +124,12 @@ impl AcceptLoop<'_> {
         Ok(())
     }
 
-    fn spawn_connection(&self, stream: transport::Stream) {
-        if self.active.load(Ordering::Relaxed) > 256 {
+    fn spawn_connection(&self, mut stream: transport::Stream) {
+        let active = self.active.load(Ordering::Relaxed);
+        if let Some(reason) = refusal(active, ATTACHED.load(Ordering::Relaxed)) {
+            // Tell the client why instead of a bare EOF. The frame is small
+            // and the socket fresh, so this does not block the loop.
+            let _ = write_frame(&mut stream, &Response::Error(reason.into()));
             return;
         }
         let s = Arc::clone(self.shared);
@@ -129,5 +147,17 @@ impl AcceptLoop<'_> {
             }
             count.fetch_sub(1, Ordering::Relaxed);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_streams_do_not_starve_short_requests() {
+        assert_eq!(refusal(300, 100), None);
+        assert!(refusal(MAX_REQUESTS, 0).is_some());
+        assert!(refusal(MAX_CONNECTIONS, MAX_CONNECTIONS).is_some());
     }
 }

@@ -9,21 +9,26 @@ pub(crate) struct ActionsPopup {
     pub path: PathBuf,
     /// Generation of the in-flight request (`None` once answered).
     pub generation: Option<u64>,
+    /// Buffer revision the actions were asked for; a pick after an edit
+    /// is refused, since the action ranges point at the older text.
+    pub revision: u64,
     pub items: Vec<native_lsp::CodeActionItem>,
     pub selected: usize,
     pub anchor: Option<egui::Rect>,
 }
 
 /// Apply LSP text edits (UTF-16 ranges) to a buffer, last first so earlier
-/// ranges stay valid, as one undo step. Returns whether anything changed.
+/// ranges stay valid, as one undo step. Edits at the same position apply
+/// in reverse array order, so their texts land in array order (LSP).
+/// Returns whether anything changed.
 pub(crate) fn apply_text_edits(buffer: &mut Doc, edits: &[native_lsp::RenameTextEdit]) -> bool {
-    let mut ranges = edit_ranges(buffer, edits);
-    ranges.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    let mut ranges: Vec<_> = edit_ranges(buffer, edits).into_iter().enumerate().collect();
+    ranges.sort_by(|(i, a), (j, b)| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(j.cmp(i)));
     if ranges.is_empty() {
         return false;
     }
     buffer.begin_undo_group();
-    for (from, to, text) in ranges {
+    for (_, (from, to, text)) in ranges {
         buffer.delete(from..to);
         buffer.insert(from, text);
     }
@@ -149,6 +154,14 @@ impl App {
     /// editors; edits to files that are not open are reported, not lost
     /// silently.
     pub(crate) fn apply_workspace_edit(&mut self, files: Vec<native_lsp::RenameFileEdit>) {
+        if let Some(stale) = files.iter().find(|file| self.edit_is_stale(file)) {
+            self.error = Some(format!(
+                "{} changed since the action was computed. Try again.",
+                native_lsp::uri_to_path(&stale.uri)
+                    .map_or_else(|| stale.uri.clone(), |path| path.display().to_string())
+            ));
+            return;
+        }
         let mut closed = Vec::new();
         for file in files {
             let open = native_lsp::uri_to_path(&file.uri)
@@ -198,12 +211,42 @@ impl App {
         }
     }
 
+    /// A file edit whose server version no longer matches the open
+    /// buffer's synced version.
+    fn edit_is_stale(&self, file: &native_lsp::RenameFileEdit) -> bool {
+        let Some(version) = file.version else {
+            return false;
+        };
+        native_lsp::uri_to_path(&file.uri)
+            .filter(|path| self.native_docs.contains_key(path))
+            .is_some_and(|path| self.lsp.document_version(&path) != Some(version))
+    }
+
+    /// The open buffer at `path` is still at `revision`.
+    fn buffer_at_revision(&self, path: &Path, revision: u64) -> bool {
+        self.native_docs
+            .get(path)
+            .and_then(NativeDoc::buffer)
+            .is_some_and(|buffer| buffer.revision() == revision)
+    }
+
     /// Apply a picked action: its edit now, or ask the server to resolve it.
-    pub(crate) fn run_code_action(&mut self, path: &Path, item: &native_lsp::CodeActionItem) {
+    /// `revision` is the buffer revision the actions were listed for.
+    pub(crate) fn run_code_action(
+        &mut self,
+        path: &Path,
+        item: &native_lsp::CodeActionItem,
+        revision: u64,
+    ) {
+        if !self.buffer_at_revision(path, revision) {
+            self.info = Some("The file changed since the actions were listed; try again".into());
+            return;
+        }
         match native_lsp::code_action_edits(&item.raw) {
             Ok(files) => self.apply_workspace_edit(files),
             Err(_) if item.raw.get("data").is_some() => {
                 self.resolve_attempts = 0;
+                self.resolve_revision = revision;
                 if !self.lsp.request_resolve(path, &item.raw) {
                     self.error = Some("The language server is not ready".into());
                 }
@@ -263,6 +306,10 @@ impl App {
             }
         }
         if let Some((path, action)) = self.lsp.edit_answers.resolved.take() {
+            if !self.buffer_at_revision(&path, self.resolve_revision) {
+                self.info = Some("The file changed before the action resolved; try again".into());
+                return;
+            }
             match native_lsp::code_action_edits(&action) {
                 Ok(files) => self.apply_workspace_edit(files),
                 // Servers answer an edit-less action while their analysis
@@ -354,5 +401,52 @@ mod tests {
         );
         assert_eq!(buffer.text(), "    }\n");
         assert_eq!(engine.cursor().col, 4);
+    }
+
+    #[test]
+    fn inserts_at_one_position_keep_their_array_order() {
+        let mut buffer = Doc::new("x");
+        let at = |text| {
+            edit(EditInput {
+                line: 0,
+                from: 0,
+                to: 0,
+                text,
+            })
+        };
+        assert!(apply_text_edits(&mut buffer, &[at("A"), at("B")]));
+        assert_eq!(buffer.text(), "ABx");
+    }
+
+    #[test]
+    fn a_code_action_picked_after_an_edit_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let path = dir.path().join("a.rs");
+        let mut native = NativeDoc::new(path.clone(), false);
+        native.doc = Some(Doc::new("let a = 1;\n"));
+        let listed = native.doc.as_ref().map_or(0, Doc::revision);
+        native.doc.as_mut().unwrap().insert(0, "// typed\n");
+        app.native_docs.insert(path.clone(), native);
+        let uri = native_lsp::file_uri(&path).unwrap().to_string();
+        let item = native_lsp::CodeActionItem {
+            title: "Rename".into(),
+            kind: None,
+            preferred: false,
+            raw: serde_json::json!({"edit": {"changes": {uri: [{
+                "range": {"start": {"line": 0, "character": 4},
+                          "end": {"line": 0, "character": 5}},
+                "newText": "b"
+            }]}}}),
+        };
+        app.run_code_action(&path, &item, listed);
+        let text = app.native_docs[&path].buffer().unwrap().text();
+        assert_eq!(text, "// typed\nlet a = 1;\n");
+        // At the listed revision the same action applies.
+        let current = app.native_docs[&path].buffer().unwrap().revision();
+        app.run_code_action(&path, &item, current);
+        let text = app.native_docs[&path].buffer().unwrap().text();
+        assert_eq!(text, "// tbped\nlet a = 1;\n");
     }
 }

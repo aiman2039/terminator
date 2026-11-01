@@ -106,7 +106,7 @@ fn apply_cursor(runtime: &Arc<Mutex<VncRuntime>>, rect: vnc::Rect, pixels: Vec<u
             rgba: B64.encode(pixels),
         });
         rt.cursor_serial = rt.cursor_serial.saturating_add(1);
-        rt.revision = rt.revision.saturating_add(1);
+        rt.bump();
     }
     true
 }
@@ -168,7 +168,7 @@ pub(super) fn apply_vnc_event(input: ApplyVncEventInput<'_>) -> bool {
             if rt.options.clipboard.receive() && text.len() <= terminator_core::vnc::MAX_CLIPBOARD {
                 rt.clipboard = Some(text);
             }
-            rt.revision = rt.revision.saturating_add(1);
+            rt.bump();
             true
         }
         VncEvent::Error(err) => {

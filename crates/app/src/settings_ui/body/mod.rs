@@ -38,10 +38,10 @@ impl App {
                         self.installation_settings(ui);
                         ui.add_space(12.0);
                         ui.separator();
-                        #[cfg(any(windows, test))]
+                        #[cfg(any(not(target_os = "macos"), test))]
                         self.windows_updates
                             .settings(ui, &mut self.settings_draft.automatic_update_checks);
-                        #[cfg(not(windows))]
+                        #[cfg(target_os = "macos")]
                         self.updater.settings(ui);
                     }
                 });

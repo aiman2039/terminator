@@ -67,8 +67,8 @@ impl App {
         language: Language,
         requests: &mut ViewRequests,
     ) {
-        if let Some(item) = requests.picked_action.take() {
-            self.run_code_action(path, &item);
+        if let Some((item, revision)) = requests.picked_action.take() {
+            self.run_code_action(path, &item, revision);
         }
         // Both act on the text as typed: send it past the debounce.
         if !(requests.format_now || requests.actions_at.is_some()) {
@@ -88,14 +88,14 @@ impl App {
             }
         }
         if let Some(range) = requests.actions_at.take() {
-            self.native_view_code_actions(path, range, requests.caret_rect);
+            self.native_view_code_actions(path, (range, revision), requests.caret_rect);
         }
     }
 
     fn native_view_code_actions(
         &mut self,
         path: &Path,
-        range: native_lsp::Range,
+        (range, revision): (native_lsp::Range, u64),
         anchor: Option<egui::Rect>,
     ) {
         match self.lsp.request_code_actions(path, range) {
@@ -103,6 +103,7 @@ impl App {
                 self.code_actions = Some(ActionsPopup {
                     path: path.to_owned(),
                     generation: Some(generation),
+                    revision,
                     items: Vec::new(),
                     selected: 0,
                     anchor,
@@ -223,10 +224,21 @@ impl App {
     pub(super) fn native_view_lsp_requests(
         &mut self,
         site: ViewSite<'_>,
+        language: Language,
         requests: &mut ViewRequests,
     ) {
         let path = site.path;
         self.native_view_inlay_request(path);
+        // Positions come from the live buffer: send text still waiting on
+        // the sync debounce so the server answers for the same text.
+        if requests.hover_at.is_some()
+            || requests.goto_at.is_some()
+            || requests.references_at.is_some()
+            || requests.locate_at.is_some()
+            || requests.hierarchy_at.is_some()
+        {
+            let _ = self.push_live_text(path, language);
+        }
         if let Some((position, cursor)) = requests.hover_at.take() {
             self.lsp.request_hover(path, position, cursor);
         }

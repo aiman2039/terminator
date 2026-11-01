@@ -84,7 +84,7 @@ impl App {
         if tool == SidebarTool::Info {
             ui.label("Terminals run through OpenSSH. File access uses SFTP. Git changes are made in the SSH terminal.");
             ui.separator();
-            self.forwards_section(ui, project);
+            self.forwards_summary(ui, project);
             return true;
         }
         if matches!(tool, SidebarTool::Problems | SidebarTool::Structure) {

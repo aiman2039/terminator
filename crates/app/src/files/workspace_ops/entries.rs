@@ -284,7 +284,13 @@ pub(super) fn discard(root: &Path, path: &Path, untracked: bool) -> Result<Repor
 pub(super) fn create_file(root: &Path, path: &Path) -> Result<Report> {
     let path = new_nested_path(root, path)?;
     ensure!(!link_exists(&path), "{} already exists", path.display());
-    fs::write(&path, "").with_context(|| format!("create {}", path.display()))?;
+    // `create_new` fails on any existing entry, including a symlink, so a
+    // file made after the check above is never truncated.
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .with_context(|| format!("create {}", path.display()))?;
     Ok(Report::Message(format!("Created {}", path.display())))
 }
 

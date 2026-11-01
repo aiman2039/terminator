@@ -64,7 +64,11 @@ impl App {
             nav: &nav,
         });
         Self::progress_line(ui, nav.loading);
-        self.apply_browser_bar(&key, target, (draft, bar));
+        let address = self.apply_browser_bar(&key, target, (draft, bar));
+        address_error(ui, &key, address);
+        if let Some(url) = nav.blocked_download {
+            self.download_notice(ui, &key, url);
+        }
         if let Some(error) = self.browser_host.error(&key) {
             ui.colored_label(ui.visuals().error_fg_color, error);
             ui.weak("Open in browser to view the page in your system browser.");
@@ -162,17 +166,35 @@ impl App {
         ui.ctx().request_repaint();
     }
 
+    /// Downloads are disabled in the embedded view; say so instead of
+    /// dropping the click silently.
+    fn download_notice(&mut self, ui: &mut egui::Ui, key: &str, url: String) {
+        ui.horizontal(|ui| {
+            ui.label("Downloads are disabled in this view.");
+            if crate::browser::parse_url(&url).is_ok()
+                && ui.button("Open in system browser").clicked()
+            {
+                let _ = self.jobs.send(Job::Browser(url));
+                self.browser_host.dismiss_download(key);
+            }
+            if ui.button("Dismiss").clicked() {
+                self.browser_host.dismiss_download(key);
+            }
+        });
+    }
+
+    /// Applies the toolbar. Returns the address bar result when submitted.
     fn apply_browser_bar(
         &mut self,
         key: &str,
         target: &BrowserTarget,
         (draft, bar): (String, BrowserBar),
-    ) {
-        if bar.go
-            && let Ok(next) = BrowserTarget::from_http_url(&draft)
-            && next != *target
+    ) -> Option<Result<(), &'static str>> {
+        let address = bar.go.then(|| crate::browser::address_target(&draft));
+        if let Some(Ok(next)) = &address
+            && next != target
         {
-            self.browser_submit = Some((key.to_owned(), next));
+            self.browser_submit = Some((key.to_owned(), next.clone()));
         }
         self.browser_urls.insert(key.to_owned(), draft);
         if bar.back {
@@ -206,6 +228,24 @@ impl App {
                 }
             }
         }
+        address.map(|result| result.map(|_| ()))
+    }
+}
+
+/// Keeps the last address bar error under the toolbar until the next submit.
+fn address_error(ui: &mut egui::Ui, key: &str, submitted: Option<Result<(), &'static str>>) {
+    let id = ui.make_persistent_id(("browser-address-error", key));
+    ui.data_mut(|data| match submitted {
+        Some(Err(error)) => {
+            data.insert_temp(id, error);
+        }
+        Some(Ok(())) => {
+            data.remove_temp::<&'static str>(id);
+        }
+        None => {}
+    });
+    if let Some(error) = ui.data(|data| data.get_temp::<&'static str>(id)) {
+        ui.colored_label(ui.visuals().error_fg_color, error);
     }
 }
 
@@ -244,7 +284,7 @@ fn address_bar(ui: &mut egui::Ui, draft: &mut String, href: &str) -> bool {
                 .id(id)
                 .frame(egui::Frame::NONE)
                 .desired_width(ui.available_width())
-                .hint_text("Search or type a URL")
+                .hint_text("Enter a URL")
                 .layouter(&mut layouter)
                 .show(ui);
             #[cfg(feature = "test-support")]

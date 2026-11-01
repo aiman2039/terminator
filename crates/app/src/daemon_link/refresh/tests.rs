@@ -341,3 +341,31 @@ fn missing_cwd_refresh_stops_after_three_attempts() {
         Update::Refresh(2, ..)
     ));
 }
+
+#[test]
+fn rewatch_records_targets_in_shared_state_for_later_unwatch() {
+    use notify::RecursiveMode;
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let Ok(watcher) = notify::recommended_watcher(|_: notify::Result<notify::Event>| {}) else {
+        return;
+    };
+    let state = std::sync::Mutex::new(live::WatchState {
+        watcher: Some(watcher),
+        watched: Vec::new(),
+    });
+    // A pass whose result is dropped (cancelled refresh) still updates state.
+    let _ = live::rewatch(&state, vec![(first.clone(), RecursiveMode::Recursive)]);
+    assert_eq!(
+        state.lock().unwrap().watched,
+        vec![(first, RecursiveMode::Recursive)]
+    );
+    let _ = live::rewatch(&state, vec![(second.clone(), RecursiveMode::NonRecursive)]);
+    assert_eq!(
+        state.lock().unwrap().watched,
+        vec![(second, RecursiveMode::NonRecursive)]
+    );
+}

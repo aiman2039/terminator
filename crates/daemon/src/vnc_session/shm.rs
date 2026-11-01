@@ -6,8 +6,6 @@ use std::path::Path;
 use terminator_core::vnc::{MAX_FRAME_WAIT_MS, VncShmFrame, VncShmRequest};
 use terminator_sys::{FrameRect, SharedFrameWriter};
 
-/// How often a waiting frame request re-checks the revision.
-const WAIT_STEP: Duration = Duration::from_millis(2);
 const FILE_PREFIX: &str = "vnc-";
 const FILE_SUFFIX: &str = ".fb";
 
@@ -28,14 +26,18 @@ pub(crate) fn wait_for_revision(
 ) -> std::sync::MutexGuard<'_, VncRuntime> {
     let wait = Duration::from_millis(u64::from(wait_ms.min(MAX_FRAME_WAIT_MS)));
     let started = Instant::now();
+    let mut rt = relock(runtime);
     loop {
-        let mut rt = relock(runtime);
         rt.last_poll = Some(Instant::now());
-        if rt.revision > since || started.elapsed() >= wait {
+        let left = wait.saturating_sub(started.elapsed());
+        if rt.revision > since || left.is_zero() {
             return rt;
         }
-        drop(rt);
-        thread::sleep(WAIT_STEP);
+        // Sleep until a revision bump instead of polling the lock.
+        let changed = Arc::clone(&rt.changed);
+        rt = changed
+            .wait_timeout(rt, left)
+            .map_or_else(|poison| poison.into_inner().0, |(guard, _)| guard);
     }
 }
 

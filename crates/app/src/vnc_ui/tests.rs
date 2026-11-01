@@ -578,3 +578,14 @@ fn ctrl_and_cmd_chords_reach_the_remote_as_ctrl_chords() {
         vec![(CONTROL, true), (a, true), (a, false), (CONTROL, false)]
     );
 }
+
+#[test]
+fn empty_host_list_says_the_filter_matched_nothing() {
+    use super::sidebar::empty_hosts_hint;
+    assert_eq!(empty_hosts_hint(""), "No saved hosts. Click + to add one.");
+    assert_eq!(
+        empty_hosts_hint("  "),
+        "No saved hosts. Click + to add one."
+    );
+    assert_eq!(empty_hosts_hint("lab"), "No hosts match the filter.");
+}

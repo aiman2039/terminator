@@ -170,7 +170,7 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         self.updater.poll();
-        #[cfg(any(windows, test))]
+        #[cfg(any(not(target_os = "macos"), test))]
         if self
             .windows_updates
             .poll(self.settings_draft.automatic_update_checks)

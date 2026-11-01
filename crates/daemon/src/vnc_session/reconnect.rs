@@ -109,7 +109,7 @@ impl Retry<'_> {
         let mut rt = relock(self.runtime);
         rt.status = VncSessionStatus::Connecting;
         rt.error = Some(format!("Retry {attempt} in {delay}s: {message}"));
-        rt.revision = rt.revision.saturating_add(1);
+        rt.bump();
     }
 
     /// Counts the retry delay down one second at a time; false when cancelled.

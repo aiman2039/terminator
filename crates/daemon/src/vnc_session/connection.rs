@@ -167,6 +167,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
         .checked_sub(Duration::from_secs(1))
         .unwrap_or_else(Instant::now);
     let connected_at = Instant::now();
+    let mut detach_checked = connected_at;
     let mut adaptive = quality::Adaptive::default();
     let result = 'connection: loop {
         tokio::select! {
@@ -192,7 +193,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                         if resize.as_ref().is_some_and(|task|!task.is_finished()){continue;}
                         let client=client.clone();let runtime=Arc::clone(runtime);
                         resize=Some(tokio::spawn(async move{
-                            if let Err(e)=client.resize_desktop(width,height).await {let mut rt=relock(&runtime);rt.error=Some(format!("Remote resize failed: {e}"));rt.revision=rt.revision.saturating_add(1);}
+                            if let Err(e)=client.resize_desktop(width,height).await {let mut rt=relock(&runtime);rt.error=Some(format!("Remote resize failed: {e}"));rt.bump();}
                         }));
                     }
                     VncInputEvent::TypeText(text)=>{
@@ -208,12 +209,13 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                 }
             },
             _=tick.tick()=>{
-                if detach_due(shared,runtime,connected_at){
+                if detach_checked.elapsed()>=DETACH_CHECK && {detach_checked=Instant::now();detach_due(shared,runtime,connected_at)}{
                     // Nobody has looked at it for a long time: free the
                     // connection like an explicit Disconnect would.
                     let _=shared.vnc_disconnect(sid);
                     break Err(Failure::Cancelled);
                 }
+                if !relock(runtime).polled_recently(){tick.reset_after(IDLE_TICK);continue;} // unwatched: wake rarely
                 if let Err(e)=request_refresh(&client,runtime,spec.options.quality,&mut last_request).await{break Err(e);}
                 let update_ms=relock(runtime).stats.snapshot().update_ms;
                 if let Some(encodings)=adaptive.check(spec.options.quality,update_ms)
@@ -255,6 +257,10 @@ fn detach_limit(minutes: u32) -> Option<Duration> {
 
 /// How often the loop checks whether a new update request is due.
 const REFRESH_TICK: Duration = Duration::from_millis(8);
+/// Tick while no viewer is watching.
+const IDLE_TICK: Duration = Duration::from_millis(100);
+/// How often the detach timeout (and the state lock it needs) is checked.
+const DETACH_CHECK: Duration = Duration::from_secs(1);
 /// Ask again when an update request got no complete answer this long.
 const REFRESH_RESEND: Duration = Duration::from_secs(1);
 

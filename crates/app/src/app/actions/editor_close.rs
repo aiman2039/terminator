@@ -98,12 +98,32 @@ impl App {
                     .retain(|(_, prompted, _)| !prompted.iter().any(|id| ids.contains(id)));
                 match target {
                     editor_close::Target::Workspace(project, id) => {
-                        self.close_workspace_tab_now(&project, &id);
+                        self.close_checked_workspace(project, id, &ids);
                     }
                     editor_close::Target::Pane(sid) => self.remove_tab(&sid),
                 }
             }
             Err(error) => self.upsert_unsaved_close(target, ids, error),
+        }
+    }
+
+    /// Close a tab whose editors passed the async check. A session split in
+    /// while the check ran was never asked about, so the tab goes back
+    /// through `poll_workspace_close` instead of being removed with it.
+    fn close_checked_workspace(&mut self, project: String, tab_id: String, checked: &[String]) {
+        let added = self
+            .live_workspace_sessions(&project, &tab_id)
+            .iter()
+            .any(|sid| !checked.contains(sid));
+        if !added {
+            self.close_workspace_tab_now(&project, &tab_id);
+            return;
+        }
+        match &self.close_workspace {
+            None => self.close_workspace = Some((project, tab_id)),
+            Some((busy, _)) if *busy == project => self.close_workspace_queue.insert(0, tab_id),
+            // Another project's close is running; the user closes this tab again.
+            Some(_) => {}
         }
     }
 

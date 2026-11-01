@@ -57,6 +57,38 @@ impl App {
         std::sync::Arc::clone(&cache.visible)
     }
 
+    pub(super) fn remove_custom_station(&mut self, url: &str) {
+        let playing = self
+            .player
+            .station_index
+            .and_then(|index| self.radio_listing().get(index).map(|s| s.url.clone()));
+        self.preferences
+            .radio_stations
+            .retain(|station| station.url != url);
+        if let Some(playing) = playing {
+            self.player.station_index = self
+                .radio_listing()
+                .iter()
+                .position(|station| station.url == playing);
+        }
+    }
+
+    /// Catalog categories plus those only custom stations use.
+    pub(super) fn radio_categories(&self) -> Vec<String> {
+        let mut out = radio::categories_ready().to_vec();
+        for station in &self.preferences.radio_stations {
+            let category = if station.category.is_empty() {
+                "custom"
+            } else {
+                station.category.as_str()
+            };
+            if !out.iter().any(|name| name.eq_ignore_ascii_case(category)) {
+                out.push(category.to_owned());
+            }
+        }
+        out
+    }
+
     pub(super) fn play_radio(&mut self, project: &str, station: radio::Station) {
         let listing = self.radio_listing();
         let index = listing

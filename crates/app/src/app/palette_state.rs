@@ -14,6 +14,9 @@ pub(crate) struct PaletteState {
     pub(crate) query_changed_at: Instant,
     /// File Structure mode: list only this file's outline, in order.
     pub(crate) file_scope: Option<std::path::PathBuf>,
+    /// The search field takes focus once when this is set (on open or after
+    /// a filter chip), not every frame, so other fields keep their focus.
+    pub(crate) focus_pending: bool,
 }
 
 impl PaletteState {
@@ -26,6 +29,7 @@ impl PaletteState {
             cache: None,
             query_changed_at: Instant::now(),
             file_scope: None,
+            focus_pending: false,
         }
     }
 }

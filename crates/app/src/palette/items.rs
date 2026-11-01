@@ -130,6 +130,7 @@ impl App {
         items.push(PaletteItem::AddProject);
         items.extend(PINNED_ACTIONS.iter().copied().map(PaletteItem::Action));
         items.push(PaletteItem::OpenPlayer);
+        items.push(PaletteItem::CheckForUpdates);
         items.extend(PINNED_IDE_ACTIONS.iter().copied().map(PaletteItem::Action));
         items.extend([PaletteItem::ToggleIdeSidebarHeight, PaletteItem::SaveLayout]);
         for profile in &self.state.vnc_profiles {

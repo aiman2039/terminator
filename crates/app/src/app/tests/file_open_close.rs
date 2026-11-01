@@ -230,6 +230,7 @@ fn editor_exit_does_not_change_another_projects_focus() {
             session_fixture("editor", SessionKind::Editor),
             Some("right".into()),
             Some(vec![Tab::Terminal("shell".into())]),
+            None,
         ))
         .unwrap();
     drain_updates(&mut app, &ctx);

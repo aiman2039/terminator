@@ -28,7 +28,15 @@ enum Outcome {
 }
 
 impl Shared {
-    pub(crate) fn handle(self: &Arc<Self>, request: Request) -> Result<Response> {
+    pub(crate) fn handle(self: &Arc<Self>, mut request: Request) -> Result<Response> {
+        // Every shell prompt reports its cwd; skip the coordination lock and
+        // the persist when nothing changed.
+        if let Request::Cwd { session, path } = &request
+            && self.cwd_unchanged(session, path)
+        {
+            return Ok(Response::Ok);
+        }
+        self.vnc_keychain_unlocked(&mut request)?;
         let prepared = self.prepare_request(&request)?;
         if let Some(response) = prepared.early {
             return Ok(response);
@@ -51,10 +59,7 @@ impl Shared {
     // sarah-allow(large_function): one-line dispatch arms over every IPC request variant
     fn dispatch(self: &Arc<Self>, request: Request) -> Result<Outcome> {
         match request {
-            Request::VncProfileSave {
-                profile,
-                forget_password,
-            } => self.on_vnc_profile_save(profile, forget_password),
+            Request::VncProfileSave { profile, .. } => self.on_vnc_profile_save(profile),
             Request::VncForgetCredential { id } => self.on_vnc_forget_credential(&id),
             Request::VncTransfer { session, transfer } => self.on_vnc_transfer(&session, transfer),
             Request::VncTransferStatus { session, id } => {
@@ -125,6 +130,7 @@ impl Shared {
             Request::WorktreeRemove { project } => self.on_worktree_remove(&project),
             Request::Screen { session } => self.on_screen(&session),
             Request::Snapshot => Ok(self.on_snapshot()),
+            Request::SessionForPids { pids } => Ok(self.on_session_for_pids(&pids)),
             Request::Heartbeat { focused } => Ok(self.on_heartbeat(focused)),
             Request::Create {
                 project,

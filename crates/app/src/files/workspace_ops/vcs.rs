@@ -28,10 +28,36 @@ pub(super) fn git_path(input: GitPathInput<'_>) -> Result<Report> {
         verb,
     } = input;
     let relative = relative_arg(root, path)?;
+    let pathspec = literal(&relative);
     let mut args: Vec<&str> = prefix.to_vec();
-    args.push(&relative);
+    args.push(&pathspec);
     git_text(root, &args)?;
     Ok(Report::Message(format!("{verb} {relative}")))
+}
+
+/// A pathspec that matches only this exact path: no glob or magic.
+pub(super) fn literal(relative: &str) -> String {
+    format!(":(literal){relative}")
+}
+
+/// Stage many paths in one `git add`; pathspecs go through stdin so a large
+/// change set does not hit the argument limit.
+pub(super) fn stage_paths(root: &Path, paths: &[PathBuf]) -> Result<Report> {
+    if paths.is_empty() {
+        return Ok(Report::Message("Nothing to stage".into()));
+    }
+    let mut input = Vec::new();
+    for path in paths {
+        input.extend_from_slice(literal(&relative_arg(root, path)?).as_bytes());
+        input.push(0);
+    }
+    let mut options = git_options();
+    options.input = Some(input);
+    let args = ["add", "--pathspec-from-file=-", "--pathspec-file-nul"];
+    run_command(git::command(root, &args), options)?;
+    let count = paths.len();
+    let plural = if count == 1 { "" } else { "s" };
+    Ok(Report::Message(format!("Staged {count} file{plural}")))
 }
 
 /// Error prefix for a push that failed after its commit succeeded; the draft
@@ -101,7 +127,7 @@ pub(super) fn shelve(root: &Path, paths: &[PathBuf]) -> Result<Report> {
     ensure!(!paths.is_empty(), "Nothing staged to shelve");
     let mut relatives = Vec::new();
     for path in paths {
-        relatives.push(relative_arg(root, path)?);
+        relatives.push(literal(&relative_arg(root, path)?));
     }
     let mut args: Vec<&str> = vec![
         "stash",

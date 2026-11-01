@@ -1,6 +1,7 @@
 use super::super::tap;
 use super::analysis::download;
 use super::decode::Permanent;
+use super::equalizer::Equalizer;
 use super::handle::{COMPRESSED_SLOTS, Controls, Event, Handle, Outcome, Playable, Status};
 use super::pipeline::PreparedSource;
 use crate::player::engine::DownloadInput;
@@ -32,6 +33,7 @@ mod tests {
                     volume: AtomicU32::new(1.0_f32.to_bits()),
                     decoders: AtomicUsize::new(0),
                     connections: AtomicUsize::new(0),
+                    eq: Default::default(),
                 }),
                 counters: Arc::default(),
                 generation: 1,
@@ -39,6 +41,7 @@ mod tests {
                 rate: NonZero::new(8000).unwrap(),
                 channel: 0,
                 mix: 0.0,
+                eq: Equalizer::new(1, 8000),
             },
         )
     }
@@ -397,5 +400,43 @@ mod tests {
             .is_some()
         );
         server.await.unwrap();
+    }
+
+    fn sine_rms(source: &mut PreparedSource, producer: &mut rtrb::Producer<f32>, hz: f32) -> f32 {
+        let rate = 8000.0;
+        let mut sum = 0.0;
+        for n in 0..4000_u16 {
+            let t = f32::from(n) / rate;
+            producer
+                .push((2.0 * std::f32::consts::PI * hz * t).sin() * 0.1)
+                .unwrap();
+            let out = source.next().unwrap();
+            if n >= 2000 {
+                sum += out * out;
+            }
+        }
+        (sum / 2000.0).sqrt()
+    }
+
+    #[test]
+    fn equalizer_boosts_its_band_in_playback_and_bypasses_when_off() {
+        let (mut producer, mut source) = prepared(64);
+        let flat = sine_rms(&mut source, &mut producer, 1000.0);
+        let mut bands = [0.5; 10];
+        bands[4] = 1.0; // 1 kHz, +12 dB
+        let mut settings = super::super::EqSettings {
+            on: true,
+            preamp: 0.5,
+            bands,
+        };
+        source.controls.eq.store(settings);
+        let boosted = sine_rms(&mut source, &mut producer, 1000.0);
+        assert!(boosted / flat > 3.0, "flat {flat}, boosted {boosted}");
+        let far = sine_rms(&mut source, &mut producer, 3_900.0);
+        assert!(far / flat < 1.6, "flat {flat}, far {far}");
+        settings.on = false;
+        source.controls.eq.store(settings);
+        let off = sine_rms(&mut source, &mut producer, 1000.0);
+        assert!((off / flat - 1.0).abs() < 0.05, "flat {flat}, off {off}");
     }
 }

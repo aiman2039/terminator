@@ -414,6 +414,7 @@ fn hidden_sidebar_keeps_explorer_prompts() {
     app.name_prompt = Some(workspace_ops::NamePrompt::Rename {
         from: PathBuf::from("/a/old"),
         name: "kept".into(),
+        dir: false,
     });
     app.pending_delete = Some(PathBuf::from("/a/old"));
     for tool in [

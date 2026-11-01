@@ -173,6 +173,9 @@ impl App {
                 if self.header_agents_menu(ui) {
                     ui.close();
                 }
+                if self.header_updates_menu(ui) {
+                    ui.close();
+                }
                 if hide && self.header_sidebar_menu(ui) {
                     ui.close();
                 }

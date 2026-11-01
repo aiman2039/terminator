@@ -136,8 +136,16 @@ impl VimEngine {
     /// One undo unit; mode and selection are left alone. In Normal mode
     /// the paste becomes the repeatable change (insert at cursor); inside
     /// an insert session its text joins the session recording exactly when
-    /// it lands at the session end.
+    /// it lands at the session end. Pasted `\r\n` and `\r` become `\n`, so
+    /// a paste never adds stray carriage returns to the buffer.
     pub fn paste_text<B: Buffer>(&mut self, doc: &mut B, text: &str) {
+        let normalized;
+        let text = if text.contains('\r') {
+            normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            normalized.as_str()
+        } else {
+            text
+        };
         if text.is_empty() {
             return;
         }

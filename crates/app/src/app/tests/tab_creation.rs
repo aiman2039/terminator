@@ -225,6 +225,7 @@ fn delayed_split_stays_in_origin_tab_without_stealing_tab_selection() {
             session_fixture("split", SessionKind::Shell),
             Some("right".into()),
             Some(vec![Tab::Terminal("one".into())]),
+            None,
         ))
         .unwrap();
     drain_updates(&mut app, &ctx);
@@ -291,7 +292,7 @@ fn leaf_plus_opens_stacked_in_that_split() {
     let mut dock = app.layouts.remove("a").unwrap();
     app.apply_add_tab("a", &mut dock);
     app.layouts.insert("a".into(), dock);
-    let Job::Control(_, After::CreateAt(_, split)) = received.try_recv().unwrap() else {
+    let Job::Control(_, After::CreateAt(_, _, split)) = received.try_recv().unwrap() else {
         panic!("leaf plus stacks into the split");
     };
     assert_eq!(split, None);
@@ -336,7 +337,7 @@ fn file_open_here_routes_stacked_create() {
         target: &target,
         action: FileAction::Here,
     });
-    let Job::Control(_, After::CreateAt(_, split)) = received.try_recv().unwrap() else {
+    let Job::Control(_, After::CreateAt(_, _, split)) = received.try_recv().unwrap() else {
         panic!("Here opens stacked in the current split");
     };
     assert_eq!(split.as_deref(), Some("here"));
@@ -386,6 +387,7 @@ fn delayed_creation_uses_original_project_after_navigation_and_pane_removal() {
             session,
             None,
             Some(vec![Tab::Terminal("anchor".into())]),
+            None,
         ))
         .unwrap();
     drain_updates(&mut app, &ctx);
@@ -437,4 +439,36 @@ fn delayed_open_refreshes_inventory_without_overriding_new_selection() {
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert_eq!(app.selected.as_deref(), Some("b"));
+}
+
+#[test]
+fn split_lands_in_origin_tab_after_its_anchor_leaf_closed() {
+    let (mut app, ctx, _dir) = fixture();
+    app.insert("a", Tab::Terminal("one".into()), None);
+    let first = app.layouts["a"].active.clone();
+    app.insert("a", Tab::Terminal("keep".into()), Some("right"));
+    app.layouts
+        .get_mut("a")
+        .unwrap()
+        .add("second".into(), Tab::Terminal("two".into()));
+    // The origin leaf closes before the daemon replies.
+    app.layouts.get_mut("a").unwrap().remove_session("one");
+    app.update_tx
+        .send(Update::Created(
+            session_fixture("split", SessionKind::Shell),
+            Some("right".into()),
+            Some(vec![Tab::Terminal("one".into())]),
+            Some(first.clone()),
+        ))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.layouts["a"].active, "second");
+    let origin = app.layouts["a"].tabs.iter().find(|tab| tab.id == first);
+    assert!(
+        origin
+            .unwrap()
+            .layout
+            .find_tab(&Tab::Terminal("split".into()))
+            .is_some()
+    );
 }

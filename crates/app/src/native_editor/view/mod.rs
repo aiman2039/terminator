@@ -119,7 +119,8 @@ struct ViewRequests {
     /// The selection when formatting was asked for (range formatting).
     format_range: Option<native_lsp::Range>,
     actions_at: Option<native_lsp::Range>,
-    picked_action: Option<native_lsp::CodeActionItem>,
+    /// The picked action and the buffer revision it was listed for.
+    picked_action: Option<(native_lsp::CodeActionItem, u64)>,
     completion_request: Option<(native_lsp::Position, usize, usize)>,
     caret_rect: Option<egui::Rect>,
     source_scroll: Option<f32>,
@@ -153,7 +154,7 @@ impl App {
             node,
         };
         let services = self.services.clone();
-        self.native_view_load(path, self.state.settings.native_vim, &services);
+        self.native_view_load(ui, path, &services);
         if self.native_close_after_save_settled(path) {
             return;
         }
@@ -212,7 +213,7 @@ impl App {
         self.native_view_follow_up(path, &frame, &mut requests);
         self.native_lsp_sync(path, frame.language);
         self.request_editor_blame(ui.ctx(), path);
-        self.native_view_lsp_requests(site, &mut requests);
+        self.native_view_lsp_requests(site, frame.language, &mut requests);
         self.native_view_highlights(ui.ctx(), path, &frame.source_id);
         self.show_hover_popup(ui, path);
         self.native_view_deferred(ui, path, requests);

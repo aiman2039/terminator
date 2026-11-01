@@ -261,6 +261,7 @@ impl App {
 
     pub(crate) fn open_command_palette(&mut self) {
         self.palette.open = true;
+        self.palette.focus_pending = true;
         self.palette.file_scope = None;
         self.palette.query.clear();
         self.palette.index = 0;

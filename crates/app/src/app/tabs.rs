@@ -267,7 +267,8 @@ impl App {
             );
         }
         if let Some(split) = split {
-            After::CreateAt(anchors, Some(split.into()))
+            let tab = self.layouts.get(project).map(|dock| dock.active.clone());
+            After::CreateAt(tab, anchors, Some(split.into()))
         } else {
             After::Workspace(id(), anchors)
         }

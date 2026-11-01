@@ -18,7 +18,7 @@ use std::{
     collections::HashMap,
     fs,
     io::Write,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -74,6 +74,8 @@ pub(crate) struct VncRuntime {
     pub(crate) stats: stats::UpdateStats,
     /// An incremental update request is out and its update has not ended.
     update_pending: bool,
+    /// Notified on every revision bump; frame long-polls wait on it.
+    changed: Arc<Condvar>,
 }
 
 impl VncRuntime {
@@ -104,7 +106,14 @@ impl VncRuntime {
             cursor_serial: 0,
             stats: stats::UpdateStats::default(),
             update_pending: false,
+            changed: Arc::new(Condvar::new()),
         }
+    }
+
+    /// Marks new content and wakes viewers waiting for it.
+    pub(crate) fn bump(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+        self.changed.notify_all();
     }
 
     fn resize(&mut self, width: u16, height: u16) {
@@ -136,7 +145,7 @@ impl VncRuntime {
         // Every pixel changed: only a full frame can describe this now.
         self.dirty = None;
         self.shm_dirty = dirty::DirtyRects::Full;
-        self.revision = self.revision.saturating_add(1);
+        self.bump();
     }
 
     fn mark_dirty(&mut self, region: VncRegion) {
@@ -194,7 +203,7 @@ impl VncRuntime {
             width: u16::try_from(copy_w).unwrap_or(0),
             height: u16::try_from(copy_h).unwrap_or(0),
         });
-        self.revision = self.revision.saturating_add(1);
+        self.bump();
     }
 
     fn copy_rect(&mut self, dst: Rect, src: Rect) {

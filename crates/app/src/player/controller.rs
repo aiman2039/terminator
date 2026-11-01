@@ -27,11 +27,12 @@ pub(super) struct PlaySequentialInput<'a> {
     pub(super) repeat: bool,
 }
 
-/// Playlist edits that remove many tracks at once.
+/// Playlist edits that remove many tracks (or a whole list) at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlaylistConfirm {
     Crop,
     Clear,
+    DeleteList,
 }
 
 pub(crate) struct Skip<'a> {
@@ -78,6 +79,7 @@ pub(crate) struct Controller {
     pub(crate) eq_on: bool,
     pub(crate) eq_preamp: f32,
     pub(crate) eq_bands: [f32; 10],
+    pub(crate) eq_sent: Option<engine::EqSettings>,
     pub(crate) remaining_time: bool,
     pub(crate) url_prompt: bool,
     pub(crate) shuffle_bag: Vec<usize>,
@@ -120,6 +122,7 @@ impl Controller {
             eq_on: true,
             eq_preamp: 0.5,
             eq_bands: [0.5; 10],
+            eq_sent: None,
             remaining_time: false,
             url_prompt: false,
             shuffle_bag: Vec::new(),
@@ -201,6 +204,7 @@ impl Controller {
         {
             self.status = next;
         }
+        self.sync_eq();
         self.cache_duration();
         self.refresh_spectrum();
         if finished && self.project.as_deref() == Some(project) && self.file_index.is_some() {
@@ -357,8 +361,9 @@ impl Controller {
         self.engine.play(Playable::Stream { url, title: name });
     }
 
+    /// A file playing from another playlist has no index but is not radio.
     pub fn radio(&self) -> bool {
-        self.project.is_some() && self.file_index.is_none()
+        self.project.is_some() && self.file_index.is_none() && self.current_path.is_none()
     }
 
     pub fn play_offset(&mut self, skip: Skip<'_>) -> Option<usize> {

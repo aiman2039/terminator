@@ -22,7 +22,7 @@ fn root_falls_back_to_parent_dir() {
 
 #[test]
 fn unsupported_language_never_syncs() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/note.md");
     assert!(!manager.sync_doc(&path, Language::Markdown, 1));
     assert!(manager.row_marks(&path).is_empty());
@@ -31,7 +31,7 @@ fn unsupported_language_never_syncs() {
 
 #[test]
 fn errors_mark_the_file_and_its_folders_but_not_warnings() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let diagnostic = |severity| L::Diagnostic {
         range: L::Range {
             start: L::Position {
@@ -63,7 +63,7 @@ fn errors_mark_the_file_and_its_folders_but_not_warnings() {
 
 #[test]
 fn marks_keep_worst_severity_per_row_sorted() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/main.rs");
     manager.diagnostics.insert(
         path.clone(),
@@ -125,7 +125,7 @@ fn marks_keep_worst_severity_per_row_sorted() {
 
 #[test]
 fn problem_counts_start_empty_and_untracked() {
-    let manager = LspManager::new();
+    let manager = LspManager::trusting();
     assert_eq!(manager.problem_counts(), (0, 0, 0));
     assert!(!manager.tracked(std::path::Path::new("/tmp/never-opened.rs")));
     assert_eq!(
@@ -136,7 +136,7 @@ fn problem_counts_start_empty_and_untracked() {
 
 #[test]
 fn a_missing_server_stops_per_frame_resubmits() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let mut overrides = std::collections::BTreeMap::new();
     overrides.insert(
         "rust".to_owned(),
@@ -162,7 +162,7 @@ fn a_missing_server_stops_per_frame_resubmits() {
 
 #[test]
 fn debounce_fires_without_further_edits() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/debounced.rs");
     tracked(&mut manager, &path);
     // Nothing new to send for the already-submitted revision.
@@ -194,7 +194,7 @@ fn supervised_spawn_needs_no_caller_runtime() {
     let (tx, _rx) = std::sync::mpsc::channel::<crate::Update>();
     let paths = terminator_core::Paths::at(dir.path().to_owned());
     let (services, _owner) = crate::gui_services::Services::new(paths, ctx, tx).expect("services");
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     manager.set_services(services);
     let key = ServerKey {
         language: "rust",
@@ -245,7 +245,7 @@ fn second_project_server_starts_alongside_first() {
     let (tx, _rx) = std::sync::mpsc::channel::<crate::Update>();
     let paths = terminator_core::Paths::at(dir.path().to_owned());
     let (services, _owner) = crate::gui_services::Services::new(paths, ctx, tx).expect("services");
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     manager.set_services(services.clone());
     // `/bin/cat` stays alive on its piped stdin, so both actors are
     // long-lived: without root-scoped keys the second never admits.
@@ -294,7 +294,7 @@ fn second_project_server_starts_alongside_first() {
 /// no further submit needed.
 #[test]
 fn parked_text_opens_at_handshake_completion() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/pending.rs");
     tracked(&mut manager, &path);
     let key = manager.docs.get(&path).expect("doc").server.clone();
@@ -380,7 +380,7 @@ fn tracked(manager: &mut LspManager, path: &Path) {
 
 #[test]
 fn rename_response_is_preview_only_and_rejects_stale_buffer() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/rename.rs");
     tracked(&mut manager, &path);
     let key = manager.docs.get(&path).unwrap().server.clone();
@@ -437,7 +437,7 @@ fn rename_response_is_preview_only_and_rejects_stale_buffer() {
 
 #[test]
 fn workspace_symbol_results_follow_the_latest_query() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/symbols.rs");
     tracked(&mut manager, &path);
     let key = manager.docs.get(&path).unwrap().server.clone();
@@ -485,7 +485,7 @@ fn workspace_symbol_results_follow_the_latest_query() {
 
 #[test]
 fn diagnostics_route_to_tracked_docs_only() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/routed.rs");
     tracked(&mut manager, &path);
     let key = ServerKey {
@@ -526,7 +526,7 @@ fn diagnostics_route_to_tracked_docs_only() {
 
 #[test]
 fn prune_closes_docs_and_clears_state() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/gone.rs");
     tracked(&mut manager, &path);
     manager.diagnostics.insert(
@@ -578,7 +578,7 @@ async fn live_typescript_server_diagnostics_and_symbols() {
     let file = root.join("index.ts");
     std::fs::write(&file, source).expect("source");
 
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     assert!(manager.sync_doc(&file, Language::TypeScript, 1));
     manager.submit_text(SubmitTextInput {
         path: &file,
@@ -649,7 +649,7 @@ async fn live_rust_analyzer_diagnostics() {
     let file = root.join("src/main.rs");
     std::fs::write(&file, main).expect("main");
 
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
     manager.submit_text(SubmitTextInput {
         path: &file,
@@ -739,7 +739,7 @@ fn ready_server(
 
 #[test]
 fn empty_outline_retries_on_a_delay_instead_of_caching_forever() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/outline.rs");
     tracked(&mut manager, &path);
     let (key, mut sent) = ready_server(&mut manager, &path);
@@ -777,7 +777,7 @@ fn empty_outline_retries_on_a_delay_instead_of_caching_forever() {
 
 #[test]
 fn restart_clears_unavailable_and_reopens_documents() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/retry.rs");
     tracked(&mut manager, &path);
     let _ = ready_server(&mut manager, &path);
@@ -795,7 +795,7 @@ fn restart_clears_unavailable_and_reopens_documents() {
 
 #[test]
 fn failed_initialize_reports_the_server_message() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/app.ts");
     tracked(&mut manager, &path);
     let (key, _sent) = ready_server(&mut manager, &path);
@@ -818,7 +818,7 @@ fn failed_initialize_reports_the_server_message() {
 
 #[test]
 fn saved_server_path_restarts_only_that_language() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/live.rs");
     tracked(&mut manager, &path);
     let (key, _sent) = ready_server(&mut manager, &path);
@@ -863,7 +863,7 @@ async fn live_rust_analyzer_completion() {
     let main = "fn main() {\n    let v: Vec<i32> = Vec::new();\n    v.le\n}\n";
     let file = root.join("src/main.rs");
     std::fs::write(&file, main).expect("main");
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
     manager.submit_text(SubmitTextInput {
         path: &file,
@@ -921,7 +921,7 @@ async fn live_rust_analyzer_signature_help() {
         "fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {\n    add(1, \n}\n";
     let file = root.join("src/main.rs");
     std::fs::write(&file, main).expect("main");
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
     manager.submit_text(SubmitTextInput {
         path: &file,
@@ -985,7 +985,7 @@ async fn live_rust_analyzer_format_and_code_action() {
     let main = "fn main() {\n    let x = 1;\n    let _ = x;\n}\n";
     let file = root.join("src/main.rs");
     std::fs::write(&file, main).expect("main");
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
     manager.submit_text(SubmitTextInput {
         path: &file,
@@ -1097,7 +1097,7 @@ async fn live_rust_analyzer_inlay_hints() {
     let main = "fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {\n    let total = add(1, 2);\n    let _ = total;\n}\n";
     let file = root.join("src/main.rs");
     std::fs::write(&file, main).expect("main");
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
     manager.submit_text(SubmitTextInput {
         path: &file,
@@ -1159,7 +1159,7 @@ async fn live_rust_analyzer_call_hierarchy() {
     let main = "fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {\n    let _ = add(1, 2);\n}\n";
     let file = root.join("src/main.rs");
     std::fs::write(&file, main).expect("main");
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
     manager.submit_text(SubmitTextInput {
         path: &file,
@@ -1333,7 +1333,7 @@ impl LiveHierarchy<'_> {
 
 #[test]
 fn gated_requests_are_not_sent_without_the_server_capability() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/gated.rs");
     tracked(&mut manager, &path);
     let (key, mut sent) = ready_server(&mut manager, &path);
@@ -1395,7 +1395,7 @@ fn gated_requests_are_not_sent_without_the_server_capability() {
 
 #[test]
 fn document_highlight_answers_apply_to_their_revision_only() {
-    let mut manager = LspManager::new();
+    let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/highlight.rs");
     tracked(&mut manager, &path);
     let (key, _sent) = ready_server(&mut manager, &path);

@@ -15,8 +15,16 @@ use std::{
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use tokio::sync::watch;
 
-type Watches = Vec<(PathBuf, RecursiveMode)>;
-type SharedWatcher = Arc<Mutex<Option<notify::RecommendedWatcher>>>;
+pub(super) type Watches = Vec<(PathBuf, RecursiveMode)>;
+type SharedWatcher = Arc<Mutex<WatchState>>;
+
+/// The watcher and the paths it really watches, under one lock. `rewatch`
+/// updates both on the fs pool, so a refresh cancelled after it ran cannot
+/// leave watched paths that no later pass unwatches.
+pub(super) struct WatchState {
+    pub(super) watcher: Option<notify::RecommendedWatcher>,
+    pub(super) watched: Watches,
+}
 
 /// Selection and filesystem notifications are latest-value channels: no event backlog.
 pub fn spawn_async(service: Services) -> watch::Sender<Option<Request>> {
@@ -47,7 +55,6 @@ struct RefreshPass {
 
 /// What one refresh produced before it is merged into the listings.
 struct Loaded {
-    targets: Watches,
     fallback: bool,
     context: services::ContextData,
     directories: Vec<services::Listing>,
@@ -61,7 +68,6 @@ struct RefreshWorker {
     changed: watch::Receiver<u64>,
     dirty: Arc<Mutex<Dirty>>,
     watcher: SharedWatcher,
-    watched: Watches,
     missing_path: crate::retry_budget::RetryBudget,
     /// Final listings (with ignored flags) of the visible directories,
     /// for the request they were listed under: a watch event re-lists
@@ -97,8 +103,10 @@ impl RefreshWorker {
             requests,
             changed,
             dirty,
-            watcher: Arc::new(Mutex::new(watcher)),
-            watched: Vec::new(),
+            watcher: Arc::new(Mutex::new(WatchState {
+                watcher,
+                watched: Vec::new(),
+            })),
             missing_path: crate::retry_budget::RetryBudget::default(),
             listed: HashMap::new(),
             listed_for: None,
@@ -173,7 +181,6 @@ impl RefreshWorker {
         let work = load(LoadInput {
             service: &self.service,
             watcher: &self.watcher,
-            watched: self.watched.clone(),
             request,
             relist,
             operation: &operation,
@@ -262,12 +269,10 @@ impl RefreshWorker {
             full,
         } = pass;
         let Loaded {
-            targets,
             fallback,
             context,
             directories: fresh,
         } = loaded;
-        self.watched = targets;
         if *full {
             self.listed.clear();
         }
@@ -364,7 +369,6 @@ fn record_event(
 struct LoadInput<'a> {
     service: &'a Services,
     watcher: &'a SharedWatcher,
-    watched: Watches,
     request: &'a Request,
     relist: Vec<PathBuf>,
     operation: &'a CancellationToken,
@@ -376,7 +380,6 @@ async fn load(input: LoadInput<'_>) -> anyhow::Result<Loaded> {
     let LoadInput {
         service,
         watcher,
-        watched,
         request,
         relist,
         operation,
@@ -403,11 +406,9 @@ async fn load(input: LoadInput<'_>) -> anyhow::Result<Loaded> {
     .await;
     let targets = watch_targets(request, &context);
     let cache = Arc::clone(watcher);
-    let (targets, fallback) = service
+    let fallback = service
         .fs()
-        .run(operation, move || {
-            anyhow::Ok(rewatch(&cache, watched, targets))
-        })
+        .run(operation, move || anyhow::Ok(rewatch(&cache, targets)))
         .await?;
     let directories =
         services::directories_with_ignored_async(services::DirectoriesWithIgnoredAsyncInput {
@@ -418,22 +419,23 @@ async fn load(input: LoadInput<'_>) -> anyhow::Result<Loaded> {
         })
         .await;
     Ok(Loaded {
-        targets,
         fallback,
         context,
         directories,
     })
 }
 
-/// Swaps watched paths when the targets changed. Returns the targets and
-/// whether watching fell back to polling.
-fn rewatch(watcher: &SharedWatcher, old: Watches, targets: Watches) -> (Watches, bool) {
-    let mut watcher = watcher.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut fallback = watcher.is_none();
-    if let Some(watcher) = watcher.as_mut()
-        && old != targets
-    {
-        for (path, _) in old {
+/// Swaps watched paths when the targets changed and records them in the
+/// shared state. Returns whether watching fell back to polling.
+pub(super) fn rewatch(state: &Mutex<WatchState>, targets: Watches) -> bool {
+    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+    let WatchState { watcher, watched } = &mut *state;
+    let Some(watcher) = watcher.as_mut() else {
+        return true;
+    };
+    let mut fallback = false;
+    if *watched != targets {
+        for (path, _) in watched.drain(..) {
             let _ = watcher.unwatch(&path);
         }
         for (path, mode) in &targets {
@@ -441,6 +443,7 @@ fn rewatch(watcher: &SharedWatcher, old: Watches, targets: Watches) -> (Watches,
                 fallback = true;
             }
         }
+        *watched = targets;
     }
-    (targets, fallback)
+    fallback
 }

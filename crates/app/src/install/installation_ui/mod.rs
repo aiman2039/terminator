@@ -15,6 +15,32 @@ impl App {
         self.settings_section = SettingsSection::Updates;
     }
 
+    /// "Check for Updates…" from the header menu or the palette. Outside
+    /// macOS it starts a release check now; Sparkle owns it on macOS.
+    pub(crate) fn check_for_updates(&mut self) {
+        #[cfg(any(not(target_os = "macos"), test))]
+        self.windows_updates.check_now();
+        self.open_installation_settings();
+    }
+
+    /// Header "More" menu item. macOS has it in the native app menu.
+    pub(crate) fn header_updates_menu(&mut self, ui: &mut egui::Ui) -> bool {
+        if cfg!(target_os = "macos") {
+            return false;
+        }
+        let clicked = appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Check for Updates…",
+            icon: "RefreshCw",
+            shortcut: "",
+        })
+        .clicked();
+        if clicked {
+            self.check_for_updates();
+        }
+        clicked
+    }
+
     pub(crate) fn maybe_upgrade_idle_daemon(&mut self) {
         if self.exit.active()
             || !self.connected

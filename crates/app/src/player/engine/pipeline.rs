@@ -1,5 +1,6 @@
 use super::analysis::{Analysis, download};
 use super::decode::{DecodeAudioInput, Permanent, decode_audio};
+use super::equalizer::Equalizer;
 use super::handle::{COMPRESSED_SLOTS, Controls, Desired, Event, Playable, Status};
 use crate::player::engine::DownloadInput;
 use anyhow::{Context, Result, ensure};
@@ -251,6 +252,7 @@ pub(super) struct PreparedSource {
     pub(super) rate: NonZero<u32>,
     pub(super) channel: u16,
     pub(super) mix: f32,
+    pub(super) eq: Equalizer,
 }
 impl Iterator for PreparedSource {
     type Item = f32;
@@ -262,7 +264,8 @@ impl Iterator for PreparedSource {
             return Some(0.0);
         }
         match self.pcm.pop() {
-            Ok(sample) => {
+            Ok(raw) => {
+                let sample = self.eq.process(&self.controls.eq, self.channel, raw);
                 self.counters.buffering.store(false, Ordering::Relaxed);
                 self.counters.consumed.fetch_add(1, Ordering::Relaxed);
                 self.mix += sample;

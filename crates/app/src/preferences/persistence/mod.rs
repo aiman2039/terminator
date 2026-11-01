@@ -281,6 +281,9 @@ pub struct UiPreferences {
     /// Files kept at the top of the native editor's recent menu.
     #[serde(default)]
     pub pinned_native_files: HashSet<PathBuf>,
+    /// Language-server workspace trust per project root (true = trusted).
+    #[serde(default)]
+    pub lsp_trust: HashMap<PathBuf, bool>,
     pub playlists: Vec<Playlist>,
     pub selected_playlist: String,
     #[serde(default, skip_serializing)]
@@ -357,6 +360,7 @@ impl Default for UiPreferences {
             hosts_recent_first: false,
             recent_native_files: Vec::new(),
             pinned_native_files: HashSet::new(),
+            lsp_trust: HashMap::new(),
             playlists: Vec::new(),
             selected_playlist: String::new(),
             player_playlists: HashMap::new(),

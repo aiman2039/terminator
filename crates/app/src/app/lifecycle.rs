@@ -68,6 +68,7 @@ impl App {
         // the GUI thread, which owns no runtime and panics.
         let mut lsp = lsp_manager::LspManager::new();
         lsp.set_services(services.clone());
+        lsp.set_trust_decisions(&preferences.lsp_trust);
         Self {
             file_activation: None,
             git: super::git_panel_state::GitPanelState::default(),
@@ -100,7 +101,7 @@ impl App {
             exit: exit::Exit::default(),
             exit_attempt: 0,
             updater: updater::Updater::new(ctx),
-            #[cfg(any(windows, test))]
+            #[cfg(any(not(target_os = "macos"), test))]
             windows_updates: windows_updates::WindowsUpdateCheck::new(),
             #[cfg(all(not(test), target_os = "macos"))]
             status_waiting_shown: None,
@@ -299,6 +300,7 @@ impl App {
             signature: None,
             code_actions: None,
             resolve_attempts: 0,
+            resolve_revision: 0,
             action_apply: None,
             git_bases: HashMap::new(),
             git_base_pending: std::collections::HashSet::new(),

@@ -406,17 +406,14 @@ impl App {
         }
     }
     pub(crate) fn save_layouts(&mut self) {
-        let mut signature: Vec<(String, String)> = self
+        // Stream each layout into a hasher: no JSON tree or string per
+        // project every second. `sanitize_layout` only maps null x/y to 0,
+        // so the raw form detects the same changes.
+        let mut signature: Vec<(String, u64)> = self
             .layouts
             .iter()
             .filter(|(project, _)| self.can_persist_layout(project))
-            .map(|(project, layout)| {
-                let text = terminator_core::sanitize_layout(
-                    serde_json::to_value(layout).unwrap_or(serde_json::Value::Null),
-                )
-                .to_string();
-                (project.clone(), text)
-            })
+            .map(|(project, layout)| (project.clone(), layout_hash(layout)))
             .collect();
         signature.sort_by(|a, b| a.0.cmp(&b.0));
         if self.layout_signature.as_ref() == Some(&signature) {
@@ -429,4 +426,21 @@ impl App {
             .jobs
             .send(Job::PrepareLayouts(self.layout_generation, layouts));
     }
+}
+
+fn layout_hash(layout: &Workspace) -> u64 {
+    use std::hash::Hasher;
+    struct HashWriter(std::collections::hash_map::DefaultHasher);
+    impl std::io::Write for HashWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.write(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = HashWriter(std::collections::hash_map::DefaultHasher::new());
+    let _ = serde_json::to_writer(&mut writer, layout);
+    writer.0.finish()
 }

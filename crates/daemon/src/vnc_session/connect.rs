@@ -204,7 +204,7 @@ impl Shared {
                 let mut rt = relock(&runtime);
                 rt.input_tx = None;
                 rt.status = VncSessionStatus::Disconnected;
-                rt.revision = rt.revision.saturating_add(1);
+                rt.bump();
             }
         }
     }
@@ -276,7 +276,7 @@ impl Shared {
             let mut rt = relock(&runtime);
             rt.input_tx = None;
             rt.status = VncSessionStatus::Disconnected;
-            rt.revision = rt.revision.saturating_add(1);
+            rt.bump();
         }
         let mut state = relock(&self.state);
         if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session) {
