@@ -37,7 +37,7 @@ impl App {
         }
     }
 
-    fn drop_key_events(ctx: &egui::Context, key: egui::Key) {
+    pub(crate) fn drop_key_events(ctx: &egui::Context, key: egui::Key) {
         ctx.input_mut(|i| {
             i.events.retain(
                 |event| !matches!(event, egui::Event::Key { key: pressed, .. } if *pressed == key),

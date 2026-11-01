@@ -47,16 +47,95 @@ impl Diagnostics {
     }
 
     fn fire_next_action(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
-        let current_frame = ctx.cumulative_frame_nr();
-        let Some(action) = self.actions.get(self.action_index) else {
-            return;
+        // Lend the script out so firing can update the runner state.
+        let actions = std::mem::take(&mut self.actions);
+        if let Some(action) = actions.get(self.action_index) {
+            self.fire_action(ctx, input, action);
+        }
+        self.actions = actions;
+    }
+
+    fn fire_action(
+        &mut self,
+        ctx: &egui::Context,
+        input: &mut egui::RawInput,
+        action: &FixtureAction,
+    ) {
+        let rect = if action.check {
+            None
+        } else {
+            target_rect(ctx, &action.target, ctx.cumulative_frame_nr())
         };
-        if !self.action_ready(action, self.started.elapsed()) {
+        if !self.action_may_fire(ctx, action, rect) {
             return;
         }
-        let Some(rect) = target_rect(ctx, &action.target, current_frame) else {
-            return;
+        if let Some(rect) = rect {
+            self.send_action_input(action, rect, input);
+        }
+        if action.capture {
+            self.request_fixture_capture(ctx);
+            // A final check action ends the case once its state is reached.
+            self.requested |=
+                action.check && std::env::var_os("TERMINATOR_TEST_KEEP_OPEN").is_none();
+        }
+        self.last_action = Some((action.at_ms, self.started.elapsed()));
+        crate::console::Console::err(format_args!("Fixture action: {}", action.target));
+        self.action_index = self.action_index.saturating_add(1);
+    }
+
+    /// Whether `action` fires now, given its target `rect` (`None` while it
+    /// is not shown, and always for a check action). Waiting actions fire on
+    /// state, timed actions on their `at_ms` schedule.
+    fn action_may_fire(
+        &mut self,
+        ctx: &egui::Context,
+        action: &FixtureAction,
+        rect: Option<egui::Rect>,
+    ) -> bool {
+        let frame = ctx.cumulative_frame_nr();
+        let elapsed = self.started.elapsed();
+        let Some(wait) = &action.wait else {
+            return (action.check || rect.is_some()) && self.action_ready(action, elapsed);
         };
+        let frames = self.pending.observe(self.action_index, rect, elapsed);
+        let stable = (!action.check).then_some(frames);
+        let since_previous = self
+            .last_action
+            .map_or(elapsed, |(_, at)| elapsed.saturating_sub(at));
+        let unmet = if !action.check && elapsed < super::wait::STARTUP_SETTLE {
+            Some("startup to settle".to_owned())
+        } else if stable == Some(0) {
+            Some("target to show".to_owned())
+        } else {
+            let shown = |target: &str| target_rect(ctx, target, frame).is_some();
+            wait.unmet(shown, since_previous, stable)
+        };
+        if let Some(reason) = unmet {
+            if stable == Some(0)
+                && self.action_index > 0
+                && let Some(after) = wait.retry_after()
+                && self.pending.take_retry(after, elapsed)
+            {
+                // The previous step's input was lost (a popup did not open).
+                self.action_index = self.action_index.saturating_sub(1);
+                crate::console::Console::err(format_args!(
+                    "Fixture retrying the step before {}",
+                    action.target
+                ));
+                return false;
+            }
+            self.pending.report_slow(&action.target, &reason, elapsed);
+            return false;
+        }
+        true
+    }
+
+    fn send_action_input(
+        &mut self,
+        action: &FixtureAction,
+        rect: egui::Rect,
+        input: &mut egui::RawInput,
+    ) {
         let pos = action_position(action, rect);
         self.pointer = Some(pos);
         input.focused = true;
@@ -80,12 +159,6 @@ impl Diagnostics {
             }
             ActionInput::None => {}
         }
-        if action.capture {
-            self.request_fixture_capture(ctx);
-        }
-        self.last_action = Some((action.at_ms, self.started.elapsed()));
-        crate::console::Console::err(format_args!("Fixture action: {}", action.target));
-        self.action_index = self.action_index.saturating_add(1);
     }
 }
 
@@ -103,7 +176,11 @@ fn isolate_fixture_input(input: &mut egui::RawInput) {
 }
 
 /// The target's rect, if it was recorded on the previous frame.
-fn target_rect(ctx: &egui::Context, target: &str, current_frame: u64) -> Option<egui::Rect> {
+pub(super) fn target_rect(
+    ctx: &egui::Context,
+    target: &str,
+    current_frame: u64,
+) -> Option<egui::Rect> {
     ctx.data(|d| {
         d.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", target)))
             .filter(|_| {

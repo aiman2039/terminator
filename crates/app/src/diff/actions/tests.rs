@@ -521,3 +521,53 @@ async fn picked_lines_stage_unstage_and_discard_only_themselves() {
         "a\nnew one\nz\n"
     );
 }
+
+#[tokio::test]
+async fn whitespace_display_policy_stages_and_discards_exact_source_text() {
+    let fixture = Fixture::new("file.txt", Some(&original()));
+    let working = original()
+        .replace("line 2\n", "\tfirst  change \n")
+        .replace("line 25\n", "line   25  \n");
+    std::fs::write(fixture.absolute(), &working).unwrap();
+    let exact = fixture.doc(false).await;
+    assert_eq!(exact.hunks.len(), 2);
+    let view = super::super::DiffView {
+        context: exact.context,
+        revealed: Vec::new(),
+        options: super::super::DiffOptions {
+            whitespace: super::super::Whitespace::All,
+            ..super::super::DiffOptions::default()
+        },
+    };
+    let loose = Arc::new(exact.rebuild(Path::new("file.txt"), false, &view));
+    assert_eq!(loose.hunks.len(), 1, "whitespace-only change is hidden");
+    assert!(loose.source.is_some());
+    // Staging writes the real working line, whitespace included, and
+    // leaves the hidden whitespace-only change unstaged.
+    fixture
+        .change(Arc::clone(&loose), 0, Kind::Stage)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.index(),
+        original().replace("line 2\n", "\tfirst  change \n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        working
+    );
+    // Discard under the same policy restores the exact index line.
+    fixture.git(&["reset", "-q", "--", "file.txt"]);
+    let loose = Arc::new(
+        fixture
+            .doc(false)
+            .await
+            .rebuild(Path::new("file.txt"), false, &view),
+    );
+    fixture.change(loose, 0, Kind::Discard).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        original().replace("line 25\n", "line   25  \n")
+    );
+    assert_eq!(fixture.index(), original());
+}

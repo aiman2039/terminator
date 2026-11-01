@@ -911,3 +911,66 @@ fn late_snapshot_cannot_erase_a_newer_project_inventory() {
     assert_eq!(app.state.projects.len(), projects);
     assert_eq!(app.state.revision, 20);
 }
+
+#[test]
+fn delayed_reply_from_an_old_connection_cannot_replace_a_newer_revision() {
+    let (mut app, _, _dir) = fixture();
+    let mut fresh = app.state.clone();
+    fresh.generation = "owner".into();
+    fresh.revision = 20;
+    fresh.client_observation = 5;
+    fresh.sessions.push(session_fixture(
+        "created-after-reconnect",
+        SessionKind::Shell,
+    ));
+    app.apply_state(fresh.clone());
+    // The old socket answers last, so its observation number is higher.
+    let mut late = fresh.clone();
+    late.revision = 18;
+    late.client_observation = 9;
+    late.sessions.clear();
+    app.apply_state(late);
+    assert_eq!(app.state.revision, 20);
+    assert!(
+        app.state
+            .sessions
+            .iter()
+            .any(|session| session.id == "created-after-reconnect")
+    );
+    // The next live update is not lost behind the rejected reply.
+    let mut next = fresh;
+    next.revision = 21;
+    next.client_observation = 10;
+    next.sessions
+        .push(session_fixture("after-late-reply", SessionKind::Shell));
+    app.apply_state(next);
+    assert_eq!(app.state.revision, 21);
+    let ids: Vec<_> = app.state.sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids.iter()
+            .filter(|id| **id == "created-after-reconnect")
+            .count(),
+        1,
+        "{ids:?}"
+    );
+    assert!(ids.contains(&"after-late-reply"));
+}
+
+#[test]
+fn delayed_reply_from_a_previous_owner_cannot_replace_the_new_catalog() {
+    let (mut app, _, _dir) = fixture();
+    let mut fresh = app.state.clone();
+    fresh.generation = "new-owner".into();
+    fresh.catalog_revision = 8;
+    fresh.revision = 1;
+    fresh.client_observation = 5;
+    app.apply_state(fresh.clone());
+    let mut late = fresh;
+    late.generation = "old-owner".into();
+    late.catalog_revision = 7;
+    late.revision = 40;
+    late.client_observation = 9;
+    app.apply_state(late);
+    assert_eq!(app.state.generation, "new-owner");
+    assert_eq!(app.state.catalog_revision, 8);
+}

@@ -243,6 +243,44 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # The full Linux release check (#145). The local release no longer runs it
+  # in Docker and does not wait for this job; it uses the same image recipe.
+  linux-release-check:
+    name: Linux release check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Build Linux release image
+        uses: docker/build-push-action@v6
+        with:
+          context: scripts
+          file: scripts/release-linux.Dockerfile
+          load: true
+          tags: terminator-release-linux:ci
+          cache-from: type=gha,scope=release-linux
+          cache-to: type=gha,mode=max,scope=release-linux
+      - name: Release checks (host Linux, same steps as the local Docker stage)
+        run: |
+          mkdir -p "$RUNNER_TEMP/linux-release-check"
+          docker run --rm --init \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src" \
+            --mount "type=bind,src=$RUNNER_TEMP/linux-release-check,dst=/artifacts" \
+            -e CARGO_TARGET_DIR=/build -e RUNNER_TEMP=/artifacts -e CARGO_TERM_COLOR \
+            terminator-release-linux:ci \
+            bash -euo pipefail -c 'git config --global --add safe.directory /src; bash scripts/release-check.sh'
+      - name: Upload Linux release check logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release-check
+          path: ${{ runner.temp }}/linux-release-check
+          if-no-files-found: warn
+          retention-days: 14
+
   coverage:
     name: Coverage
     runs-on: ubuntu-24.04

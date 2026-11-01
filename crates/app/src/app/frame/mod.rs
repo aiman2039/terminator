@@ -121,6 +121,7 @@ impl eframe::App for App {
         }
         self.begin_frame_visibility(&ctx);
         self.handle_vnc_escape_keys(&ctx);
+        self.switcher_input(&ctx);
         self.run_shortcuts(&ctx);
         self.suspend_hidden_rename(&ctx);
         if self.state_loaded {
@@ -146,6 +147,7 @@ impl eframe::App for App {
         if cfg!(target_os = "linux") {
             window_resize_edges(ui);
         }
+        self.paint_switcher(&ctx);
         self.paint_windows(&ctx, frame);
         self.popups.end_frame();
         self.dismiss_stale_hover_popup(&ctx);

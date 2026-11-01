@@ -48,6 +48,9 @@ runs:
       with:
         shared-key: release-${{ inputs.runner-label }}-${{ inputs.target }}
         cache-bin: false
+        # #69: keep workspace crates too. Each release bumps the version in
+        # Cargo.lock, so the exact key changes and new artifacts are saved.
+        cache-workspace-crates: true
         cache-on-failure: true
         save-if: ${{ github.ref == 'refs/heads/master' }}
     - name: Remove legacy cached package output
@@ -66,9 +69,13 @@ runs:
       shell: bash
       env:
         TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-release-state
+        TARGET: ${{ inputs.target }}
       run: |
+        # #71: record the build time in the job summary beside the timing reports.
+        start=$SECONDS
         cargo run --locked --package xtask --timings -- \
           package --timings --output "$RUNNER_TEMP/terminator-package"
+        echo "Release build ($TARGET): $((SECONDS - start)) s. Compile and link detail: cargo-timings-$TARGET artifact." >> "$GITHUB_STEP_SUMMARY"
     - name: Archive and inspect package
       shell: bash
       env:

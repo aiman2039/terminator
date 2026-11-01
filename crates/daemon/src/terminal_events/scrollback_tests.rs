@@ -8,12 +8,12 @@ use alacritty_terminal::{
 };
 
 #[derive(Clone)]
-struct IgnoreEvents;
+pub(super) struct IgnoreEvents;
 impl EventListener for IgnoreEvents {
     fn send_event(&self, _: Event) {}
 }
 
-fn history_rows(screen: &vt100::Screen) -> Vec<String> {
+pub(super) fn history_rows(screen: &vt100::Screen) -> Vec<String> {
     let mut history = screen.clone();
     history.set_scrollback(usize::MAX);
     (1..=history.scrollback())
@@ -25,7 +25,7 @@ fn history_rows(screen: &vt100::Screen) -> Vec<String> {
         .collect()
 }
 
-fn gui_replay(parser: &vt100::Parser<Events>) -> Term<IgnoreEvents> {
+pub(super) fn gui_replay(parser: &vt100::Parser<Events>) -> Term<IgnoreEvents> {
     let (rows, cols) = parser.screen().size();
     let mut term = Term::new(
         Config::default(),
@@ -37,7 +37,7 @@ fn gui_replay(parser: &vt100::Parser<Events>) -> Term<IgnoreEvents> {
     term
 }
 
-fn gui_row(term: &Term<IgnoreEvents>, row: i32) -> String {
+pub(super) fn gui_row(term: &Term<IgnoreEvents>, row: i32) -> String {
     (0..term.columns())
         .map(|column| term.grid()[Line(row)][Column(column)].c)
         .collect::<String>()

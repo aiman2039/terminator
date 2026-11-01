@@ -7,3 +7,4 @@ pub(super) mod session_info;
 pub(super) mod settings_controls;
 pub(super) mod shortcuts;
 pub(super) mod sidebar_cache;
+pub(super) mod switcher;

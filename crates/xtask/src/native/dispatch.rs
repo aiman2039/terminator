@@ -104,6 +104,44 @@ pub(crate) fn capture(
 pub(crate) fn plain(input: CaptureInput<'_>) -> Result<String> {
     capture(input, |_| Ok(()))
 }
+/// Like `plain`, but the case ends as soon as `done` holds instead of at
+/// `after`, which stays the upper bound. The driver writes a marker once the
+/// daemon state passes; a final check action waits for it and captures.
+pub(crate) fn capture_when(
+    mut input: CaptureInput<'_>,
+    done: impl FnMut(&Value) -> bool,
+) -> Result<String> {
+    let h = input.h;
+    let marker = h.root.join(format!("fixture-{}.done", input.name));
+    if marker.exists() {
+        fs::remove_file(&marker)?;
+    }
+    input
+        .actions
+        .as_array_mut()
+        .context("Fixture actions are not a list")?
+        .push(json!({
+            "target":"fixture-done","check":true,"capture":true,
+            "wait":{"file":{"path":marker}}
+        }));
+    let seconds = input.after.div_ceil(1000).saturating_add(10);
+    capture(input, |_| {
+        h.wait(done, seconds)?;
+        fs::write(&marker, "")?;
+        Ok(())
+    })
+}
+/// Actions that each wait for their target to hold still instead of a time.
+pub(crate) fn waiting(actions: Value) -> Value {
+    let mut actions = actions;
+    for action in actions.as_array_mut().into_iter().flatten() {
+        if let Some(action) = action.as_object_mut() {
+            action.remove("at_ms");
+            action.entry("wait").or_insert_with(|| json!({}));
+        }
+    }
+    actions
+}
 pub(crate) fn prefs(h: &Harness) -> Result<Value> {
     Ok(serde_json::from_slice(&fs::read(
         h.root.join("ui-preferences.json"),

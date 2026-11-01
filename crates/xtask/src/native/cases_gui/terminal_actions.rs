@@ -1,5 +1,5 @@
 use super::super::super::harness::{Harness, git, id, require_first_layout, session, sessions};
-use super::super::dispatch::{CaptureInput, Options, plain, prefs, setup};
+use super::super::dispatch::{CaptureInput, Options, capture_when, prefs, setup, waiting};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{fs, path::Path, thread, time::Duration};
@@ -44,39 +44,44 @@ fn retain_ended_shell(h: &Harness, p: &Value) -> Result<()> {
 }
 
 fn history_tool(h: &Harness, o: &Options, p: &Value) -> Result<()> {
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "history",
-        actions: json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1100,"target":"tool-History"}]),
-        after: 2500,
-    })?;
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "history",
+            actions: waiting(json!([{"target":"header-overflow"},{"target":"tool-History"}])),
+            after: 15000,
+        },
+        |_| prefs(h).is_ok_and(|prefs| prefs.get("tool").is_some_and(|tool| tool == "history")),
+    )?;
     ensure!(
         prefs(h)?.get("tool").is_some_and(|tool| tool == "history"),
         "Global History selection not saved"
     );
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "history-collapsed",
-        actions: json!([
-            {"at_ms":1000,"target":format!("history-project:{}",id(p))}
-        ]),
-        after: 2000,
-    })?;
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "history-collapsed",
+            actions: waiting(json!([{"target":format!("history-project:{}",id(p))}])),
+            after: 15000,
+        },
+        |_| history_expanded(h, p).is_ok_and(|expanded| expanded == Some(false)),
+    )?;
     ensure!(
         history_expanded(h, p)? == Some(false),
         "History collapse not saved"
     );
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "history-expanded",
-        actions: json!([
-            {"at_ms":1000,"target":format!("history-project:{}",id(p))}
-        ]),
-        after: 2000,
-    })?;
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "history-expanded",
+            actions: waiting(json!([{"target":format!("history-project:{}",id(p))}])),
+            after: 15000,
+        },
+        |_| history_expanded(h, p).is_ok_and(|expanded| expanded == Some(true)),
+    )?;
     ensure!(
         history_expanded(h, p)? == Some(true),
         "History expansion not saved"
@@ -92,13 +97,21 @@ fn history_expanded(h: &Harness, p: &Value) -> Result<Option<bool>> {
 }
 
 fn git_open(h: &Harness, o: &Options) -> Result<()> {
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "git-open",
-        actions: json!([{"at_ms":1000,"target":"tool-Git"},{"at_ms":1900,"target":"git-file-README.md"}]),
-        after: 3500,
-    })?;
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "git-open",
+            actions: waiting(json!([{"target":"tool-Git"},{"target":"git-file-README.md"}])),
+            after: 15000,
+        },
+        |state| {
+            require_first_layout(state).is_ok_and(|layout| {
+                let layout = layout.to_string();
+                layout.contains("README.md") && layout.contains("Diff")
+            })
+        },
+    )?;
     let git_state = h.state()?;
     let layout = require_first_layout(&git_state)?.to_string();
     ensure!(
@@ -122,31 +135,46 @@ fn hover_editor(h: &Harness, o: &Options, (s, source): (&[Value], &Path)) -> Res
         )?;
         thread::sleep(Duration::from_millis(50));
     }
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "hover-editor",
-        actions: json!([{"at_ms":1100,"target":"terminal","hover":true},{"at_ms":1700,"target":"terminal","hover_offset":[45,10]},{"at_ms":2400,"target":"Open in editor split"}]),
-        after: 4000,
-    })?;
-    ensure!(
-        sessions(&h.state()?)
+    let opened = |state: &Value| {
+        sessions(state)
             .iter()
-            .any(|s| s["kind"] == "editor" && s["file"] == source.to_string_lossy().as_ref()),
-        "Terminal path hover did not open file"
-    );
+            .any(|s| s["kind"] == "editor" && s["file"] == source.to_string_lossy().as_ref())
+    };
+    // The path hover needs the shell output drawn first, which no target
+    // shows, so the hovers keep their times; the popup row and the end wait.
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "hover-editor",
+            actions: json!([
+                {"at_ms":1100,"target":"terminal","hover":true},
+                {"at_ms":1700,"target":"terminal","hover_offset":[45,10]},
+                {"target":"Open in editor split","wait":{}}
+            ]),
+            after: 15000,
+        },
+        opened,
+    )?;
+    ensure!(opened(&h.state()?), "Terminal path hover did not open file");
     Ok(())
 }
 
 fn lower_split(h: &Harness, o: &Options) -> Result<()> {
     let before = sessions(&h.state()?).len();
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "lower-split",
-        actions: json!([{"at_ms":1100,"target":"terminal","right_click":true},{"at_ms":2000,"target":"Split down"}]),
-        after: 3500,
-    })?;
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "lower-split",
+            actions: waiting(json!([
+                {"target":"terminal","right_click":true},
+                {"target":"Split down","wait":{"retry_previous_ms":1500}}
+            ])),
+            after: 15000,
+        },
+        |state| sessions(state).len() == before.saturating_add(1),
+    )?;
     ensure!(
         sessions(&h.state()?).len() == before.saturating_add(1),
         "Lower pane split failed"

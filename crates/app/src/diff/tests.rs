@@ -341,3 +341,28 @@ fn ignored_whitespace_is_never_marked_as_a_word_change() {
         .collect();
     assert_eq!(joined, "a  =  b");
 }
+
+#[test]
+fn word_marks_pair_changed_lines_by_position_and_skip_unpaired_lines() {
+    let doc = build_view(
+        "let a = 1;\nlet b = 2;\n",
+        "let a = 10;\nlet bb = 2;\nlet c = 3;\n",
+        DiffOptions::default(),
+    );
+    assert_eq!(doc.hunks.len(), 1);
+    let rows = |kind: LineKind| doc.unified.iter().filter(move |line| line.kind == kind);
+    let deletes: Vec<_> = rows(LineKind::Delete).map(changed_runs).collect();
+    let inserts: Vec<_> = rows(LineKind::Insert).map(changed_runs).collect();
+    assert_eq!(deletes, [vec!["1"], vec!["b"]]);
+    assert_eq!(inserts[0], ["10"]);
+    assert_eq!(inserts[1], ["bb"]);
+    assert!(
+        inserts[2].is_empty(),
+        "an unpaired added line has no word marks"
+    );
+    // Every row still shows its full original text.
+    let text: Vec<String> = rows(LineKind::Insert)
+        .map(|line| line.spans.iter().map(|s| s.text.as_str()).collect())
+        .collect();
+    assert_eq!(text, ["let a = 10;", "let bb = 2;", "let c = 3;"]);
+}

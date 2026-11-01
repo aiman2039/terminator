@@ -3,7 +3,7 @@ mod terminal_actions;
 
 use super::super::harness::{Harness, first_layout, sessions};
 use super::dispatch::CaptureInput;
-use super::dispatch::{Options, plain, setup};
+use super::dispatch::{Options, capture_when, plain, setup, waiting};
 use anyhow::{Context, Result, anyhow, ensure};
 pub(crate) use control::control;
 use serde_json::{Value, json};
@@ -71,32 +71,44 @@ fn first_tab_count(state: &Value) -> Result<usize> {
 pub(crate) fn browser(o: &Options) -> Result<()> {
     let (h, _, s, root) = setup("browser")?;
     write_pages(&root)?;
-    plain(CaptureInput {
-        h: &h,
-        opts: o,
-        name: "html",
-        actions: json!([{"at_ms":1100,"target":"explorer-file:page.html"}]),
-        after: 3500,
-    })?;
+    capture_when(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "html",
+            actions: waiting(json!([{"target":"explorer-file:page.html"}])),
+            after: 15000,
+        },
+        |state| check_browser_tab(state).is_ok(),
+    )?;
     check_browser_tab(&h.state()?)?;
-    plain(CaptureInput {
-        h: &h,
-        opts: o,
-        name: "browser-close",
-        actions: json!([{"at_ms":1100,"target":"workspace-close:Navigation complete"}]),
-        after: 3000,
-    })?;
+    capture_when(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "browser-close",
+            actions: waiting(json!([{"target":"workspace-close:Navigation complete"}])),
+            after: 15000,
+        },
+        |state| first_tab_count(state).is_ok_and(|count| count == 1),
+    )?;
     ensure!(
         first_tab_count(&h.state()?)? == 1,
         "Browser close did not remove tab"
     );
-    plain(CaptureInput {
-        h: &h,
-        opts: o,
-        name: "explicit-text",
-        actions: json!([{"at_ms":1100,"target":"explorer-file:page.html","right_click":true},{"at_ms":1600,"target":"Open as text"}]),
-        after: 3500,
-    })?;
+    capture_when(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "explicit-text",
+            actions: waiting(json!([
+                {"target":"explorer-file:page.html","right_click":true},
+                {"target":"Open as text","wait":{"retry_previous_ms":1500}}
+            ])),
+            after: 15000,
+        },
+        |state| sessions(state).len() == 7,
+    )?;
     ensure!(
         sessions(&h.state()?).len() == 7,
         "Open as text did not create an editor"

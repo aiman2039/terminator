@@ -94,6 +94,8 @@ impl Settings {
             ("diff_prev_change".into(), "shift+F7".into()),
             ("diff_next_file".into(), "alt+F7".into()),
             ("diff_prev_file".into(), "alt+shift+F7".into()),
+            ("tab_switcher_back".into(), "ctrl+shift+Tab".into()),
+            ("tab_switcher".into(), "ctrl+Tab".into()),
         ]
         .into()
     }

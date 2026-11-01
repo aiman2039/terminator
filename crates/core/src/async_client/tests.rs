@@ -1,7 +1,7 @@
 use super::*;
 use crate::{Envelope, MAX_FRAME, PROTOCOL_VERSION, transport::AsyncStream, write_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-fn fixture() -> (tempfile::TempDir, Client, crate::transport::AsyncListener) {
+pub(super) fn fixture() -> (tempfile::TempDir, Client, crate::transport::AsyncListener) {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::at(dir.path().into());
     paths.init().unwrap();
@@ -14,7 +14,7 @@ fn fixture() -> (tempfile::TempDir, Client, crate::transport::AsyncListener) {
     );
     (dir, client, listener)
 }
-async fn envelope(socket: &mut AsyncStream) -> Envelope {
+pub(super) async fn envelope(socket: &mut AsyncStream) -> Envelope {
     let len = socket.read_u32().await.unwrap() as usize;
     let mut bytes = vec![0; len];
     socket.read_exact(&mut bytes).await.unwrap();
@@ -299,7 +299,7 @@ fn archived_mutation_marks_only_retired_writes_for_cache_eviction() {
 }
 
 use crate::generations::{Catalog, Generation, Status};
-fn test_owner(root: &Paths, catalog: &Catalog) -> Generation {
+pub(super) fn test_owner(root: &Paths, catalog: &Catalog) -> Generation {
     let id = crate::id();
     let owner = Generation {
         data: root.data.join("generations").join(&id),

@@ -53,6 +53,19 @@ impl Workspace {
         self.tabs.iter().map(|tab| tab.id.clone()).collect()
     }
 
+    /// Top-level tab IDs in most-recent order: the active tab, then the
+    /// recorded MRU list, then tabs never selected in strip order.
+    pub fn mru_ids(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::with_capacity(self.tabs.len());
+        let known = std::iter::once(&self.active).chain(&self.recent_tabs);
+        for id in known.chain(self.tabs.iter().map(|tab| &tab.id)) {
+            if self.tabs.iter().any(|tab| &tab.id == id) && !out.contains(id) {
+                out.push(id.clone());
+            }
+        }
+        out
+    }
+
     pub fn ids_before(&self, id: &str) -> Vec<String> {
         self.ids().into_iter().take_while(|tab| tab != id).collect()
     }

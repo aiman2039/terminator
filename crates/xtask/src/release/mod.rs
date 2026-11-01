@@ -27,14 +27,18 @@ pub struct Options {
     /// Validate without changing versions, commits or remotes.
     #[arg(long)]
     pub check_only: bool,
-    /// Explicitly omit Linux execution.
-    #[arg(long)]
+    /// Also run the Linux checks in local Docker. By default the release
+    /// leaves Linux to CI and does not wait for its result (#145).
+    #[arg(long, conflicts_with = "skip_linux")]
+    pub with_linux: bool,
+    /// Omit Linux execution (the default; kept for existing scripts).
+    #[arg(long, hide = true)]
     pub skip_linux: bool,
     /// Rebuild the Linux image even when its exact configuration is cached.
-    #[arg(long)]
+    #[arg(long, requires = "with_linux")]
     pub rebuild_linux_image: bool,
     /// Use an existing local Linux image instead of building the repository recipe.
-    #[arg(long, conflicts_with = "rebuild_linux_image")]
+    #[arg(long, conflicts_with = "rebuild_linux_image", requires = "with_linux")]
     pub linux_image: Option<String>,
     /// Explicitly omit Windows execution; keep macOS cross-checks.
     #[arg(long)]
@@ -51,6 +55,13 @@ pub struct Options {
         default_value = "C:/Program Files/Git/bin/bash.exe"
     )]
     pub windows_bash: String,
+}
+
+impl Options {
+    /// Local Docker Linux checks run only on explicit request; CI owns them.
+    pub fn runs_linux(&self) -> bool {
+        self.with_linux && !self.skip_linux
+    }
 }
 
 struct Lock {
@@ -123,7 +134,7 @@ pub fn run(mut options: Options) -> Result<()> {
             require("scp")?;
         }
     }
-    if !options.skip_linux {
+    if options.runs_linux() {
         require("docker")?;
     }
     std::thread::scope(|scope| -> Result<()> {

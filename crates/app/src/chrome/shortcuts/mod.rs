@@ -69,6 +69,10 @@ actions! {
     DiffPrevChange => "diff_prev_change", "Diff: previous change";
     DiffNextFile => "diff_next_file", "Diff: next file";
     DiffPrevFile => "diff_prev_file", "Diff: previous file";
+    // Backward first: egui ignores extra Shift, so Ctrl+Tab would also
+    // consume Ctrl+Shift+Tab.
+    SwitcherBack => "tab_switcher_back", "Recent tab switcher (backward)";
+    SwitcherNext => "tab_switcher", "Recent tab switcher";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

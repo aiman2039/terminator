@@ -1,7 +1,8 @@
 use super::super::CaptureInput;
 use super::super::{
-    Context, Duration, Harness, Options, PathBuf, Result, Value, ensure, fs, git, id, json, plain,
-    require_first_layout, save_prefs, session_closed, session_ids, sessions, thread,
+    Context, Duration, Harness, Options, PathBuf, Result, Value, capture_when, ensure, fs, git, id,
+    json, plain, require_first_layout, save_prefs, session_closed, session_ids, sessions, thread,
+    waiting,
 };
 use super::{Expected, init_repo, inspect, verify};
 
@@ -125,28 +126,29 @@ fn gui_review(
         h,
         &json!({"version":1,"tool":"Git","visible":true,"typography_migrated":true}),
     )?;
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "review",
-        actions: json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1600,"target":"Open changes"}]),
-        after: 3500,
-    })?;
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "review",
+            actions: open_changes(json!([])),
+            after: 15000,
+        },
+        |state| running_review(state).is_some(),
+    )?;
     let state = h.state()?;
-    let review = sessions(&state)
-        .iter()
-        .rev()
-        .find(|s| s["review"] == true && s["lifecycle"] == "running")
-        .context("Native review not created")?;
+    let review = running_review(&state).context("Native review not created")?;
     reopen_review(h, o, (&state, review))?;
-    plain(CaptureInput {
-        h,
-        opts: o,
-        name: "review-closed",
-        actions: json!([{"at_ms":1200,"target":"workspace-close:Diff: review.rs"}]),
-        after: 3000,
-    })?;
-    h.wait(|s| session_closed(s, id(review)), 5)?;
+    capture_when(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "review-closed",
+            actions: waiting(json!([{"target":"workspace-close:Diff: review.rs"}])),
+            after: 15000,
+        },
+        |s| session_closed(s, id(review)),
+    )?;
     ensure!(
         session_ids(require_first_layout(&h.state()?)?) == [id(shell)],
         "Closing review affected shell"
@@ -162,10 +164,7 @@ fn reopen_review(h: &Harness, o: &Options, (state, review): (&Value, &Value)) ->
         h,
         opts: o,
         name: "review-reopen",
-        actions: json!([
-            {"at_ms":1200,"target":"git-file-review.rs","right_click":true},
-            {"at_ms":1600,"target":"Open changes"}
-        ]),
+        actions: open_changes(json!([])),
         after: 3200,
     })?;
     ensure!(
@@ -218,11 +217,7 @@ fn native_side_by_side(h: &Harness, o: &Options) -> Result<()> {
         h,
         opts: o,
         name: "native-side-by-side",
-        actions: json!([
-            {"at_ms":1200,"target":"git-file-review.rs","right_click":true},
-            {"at_ms":1600,"target":"Open changes"},
-            {"at_ms":2200,"target":"diff-side-by-side"}
-        ]),
+        actions: open_changes(json!([{"target":"diff-side-by-side"}])),
         after: 3500,
     })?;
     ensure!(
@@ -230,4 +225,25 @@ fn native_side_by_side(h: &Harness, o: &Options) -> Result<()> {
         "Native diff allocated a PTY"
     );
     Ok(())
+}
+
+/// Right-click the review file, pick Open changes, then run `then`; every
+/// step waits for its target instead of a time.
+fn open_changes(then: Value) -> Value {
+    let mut actions = json!([
+        {"target":"git-file-review.rs","right_click":true},
+        {"target":"Open changes","wait":{"retry_previous_ms":1500}}
+    ]);
+    if let (Some(all), Some(then)) = (actions.as_array_mut(), then.as_array()) {
+        all.extend(then.iter().cloned());
+    }
+    waiting(actions)
+}
+
+/// The newest running review session.
+fn running_review(state: &Value) -> Option<&Value> {
+    sessions(state)
+        .iter()
+        .rev()
+        .find(|s| s["review"] == true && s["lifecycle"] == "running")
 }

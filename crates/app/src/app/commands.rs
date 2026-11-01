@@ -15,11 +15,16 @@ impl App {
         {
             return false;
         }
+        let switcher = matches!(action, Action::SwitcherNext | Action::SwitcherBack);
+        if self.switcher.is_some() {
+            return switcher;
+        }
         if self.settings_open || self.player_open {
-            return matches!(
-                action,
-                Action::OpenSettings | Action::OpenPalette | Action::ToggleIdeMode
-            );
+            return switcher
+                || matches!(
+                    action,
+                    Action::OpenSettings | Action::OpenPalette | Action::ToggleIdeMode
+                );
         }
         true
     }
@@ -135,6 +140,8 @@ impl App {
             Action::NextAttention => self.next_attention(),
             Action::NewBrowser => self.open_new_browser_tab(None),
             Action::NewVnc => self.open_new_vnc_tab(None),
+            Action::SwitcherNext => self.step_switcher(false),
+            Action::SwitcherBack => self.step_switcher(true),
             Action::DiffNextChange
             | Action::DiffPrevChange
             | Action::DiffNextFile

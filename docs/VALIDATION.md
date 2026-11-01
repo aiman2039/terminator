@@ -1,5 +1,101 @@
 # Validation evidence — 2026-09-08
 
+## Event-driven GUI fixtures (#144) — 2026-11-02
+
+Converted: diff-hunks, legacy-diff, reviews, terminal-actions, browser. A
+`wait` action fires when its target holds still for 3 frames and its
+conditions pass (`present`, `absent`, `file`, `settle_ms`). Waiting actions
+do not fire in the first 1.2 s (startup panels redraw rows, and a click
+before then was lost). `retry_previous_ms` fires the previous step again (at
+most 3 times per case) when a popup target does not show, because egui can
+drop a right-click. Vim key steps keep a 150 ms gap: no state shows that a
+key was handled.
+
+macOS, `cargo xtask gui all --jobs 8`: 23 of 23 passed. In the parallel pass,
+diff-hunks (case timeout under load) and scrolling-bounded (not converted)
+failed, then passed alone. Before this change, the issue recorded 8 of 23
+parallel failures. Each converted case also passed alone.
+
+## Linux release checks in CI (#145) — 2026-11-02
+
+`cargo xtask release` no longer runs the Linux Docker stage by default
+(`--with-linux` restores it) and does not wait for CI. CI job
+`linux-release-check` builds the same `scripts/release-linux.Dockerfile`
+image and runs `scripts/release-check.sh`. Unit tests passed. The CI job has
+not run yet; the next release run is its first check.
+
+## Terminal resize and replay tests (#74) — 2026-11-02
+
+Status: passed on macOS 2026-11-02 (`cargo test --workspace --all-features`: 1738 passed, 0 failed; `cargo xtask integration`: passed, `resize_replay` true). Linux runs in CI.
+
+Parser and replay (`crates/daemon/src/terminal_events/resize_tests.rs`):
+`main_screen_shrink_and_expand_cycles_replay_the_daemon_screen`,
+`alternate_screen_resize_while_detached_replays_and_restores_primary`, and
+`live_output_after_a_detached_resize_matches_a_continuous_parser` compare the
+vt100 screen with its attachment replay in an Alacritty `Term` (history,
+visible rows, cursor, size) after each width/height shrink and expand.
+GUI model: `gui_height_resize_keeps_the_selected_text_and_width_resize_clears_it`
+and `gui_width_reflow_round_trip_restores_wrapped_text_and_cursor`.
+Real PTY (`cargo xtask integration`, `integration/resize.rs`): live `Resize`,
+resize while detached, and alternate-screen replay at a new size; the shell
+reports each size with `stty size`. Native rendering evidence: not collected.
+Known gap, not changed: vt100 does not reflow on width change, so the daemon
+replay can differ from a GUI that stayed attached and reflowed.
+
+## Reconnect and snapshot replay fault tests (#75) — 2026-11-02
+
+Status: passed on macOS 2026-11-02 (`cargo test --workspace --all-features`: 1738 passed, 0 failed; `cargo xtask integration`: passed, `resize_replay` true). Linux runs in CI.
+
+Transport faults (`crates/core/src/async_client/fault_tests.rs`), isolated
+sockets and catalogs only: `silent_open_connection_fails_a_read_at_its_deadline`,
+`silent_open_connection_after_a_mutation_is_uncertain_and_sent_once`,
+`concurrent_requests_receive_only_their_own_delayed_replies`,
+`delayed_old_snapshot_is_observed_after_the_newer_one`, and
+`owner_change_during_snapshot_assembly_supersedes_instead_of_mixing`.
+GUI apply rules (`app/tests/daemon_recovery.rs`):
+`delayed_reply_from_an_old_connection_cannot_replace_a_newer_revision` (also
+checks that the next update is applied once) and
+`delayed_reply_from_a_previous_owner_cannot_replace_the_new_catalog`. Live
+output after an attach snapshot is covered by
+`live_output_after_a_detached_resize_matches_a_continuous_parser` (#74).
+Observation, not changed: a PTY read that ends inside an escape sequence at
+the moment of an attach would send the rest of that sequence after a clean
+snapshot; the GUI could show those bytes as text. No test covers it yet.
+
+## Filesystem watcher recovery (#76) — 2026-11-02
+
+Status: passed on macOS 2026-11-02 (`cargo test --workspace --all-features`: 1738 passed, 0 failed; `cargo xtask integration`: passed, `resize_replay` true). Linux runs in CI.
+
+Tests (`crates/app/src/daemon_link/refresh/recovery_tests.rs`):
+`event_burst_stays_bounded_and_wakes_the_worker_once`,
+`rescan_flag_and_watch_errors_relist_every_visible_folder`,
+`symlink_seen_dangling_mid_retarget_relists_its_folder`,
+`recreated_root_is_watched_again_under_the_same_path`,
+`failed_watch_keeps_polling_until_the_path_returns`,
+`deleted_and_recreated_root_refreshes_and_keeps_watching`,
+`symlinked_folder_follows_retarget_removal_and_recreation`, and
+`overflow_with_a_slow_consumer_refreshes_tree_and_git_once`.
+
+Fixes in `refresh/live.rs` and `refresh/mod.rs`:
+- `rewatch` compared only target paths. inotify drops the watch of a deleted
+  directory, so a recreated root or folder with the same path was not watched
+  again (only the 30 s poll saw changes). It now also compares device/inode.
+- A failed watch reported polling only on the first pass; later passes used
+  the 30 s interval. The failure now stays until the targets change.
+- A symlink event recorded while the link was dangling did not re-list the
+  link folder. A changed path now also matches the visible path itself.
+
+notify vs JetBrains fswatcher: both use FSEvents on macOS and inotify on
+Linux. fswatcher (Apache-2.0, first published 2026-09, few users) gives
+async per-path streams, explicit `Rescan` events, symlink canonicalization,
+and watches for paths that do not exist yet; it needs Tokio `full` and
+`futures`. notify 8.2 (CC0-1.0) is mature and widely used, already in the
+tree, and gives synchronous callbacks and `need_rescan()`. Terminator already
+canonicalizes, coalesces into a bounded latest-value set, rescans on overflow,
+and polls on failure. Decision: keep notify. No measured gap supports a
+replacement; revisit if the recovery tests show backend faults that the
+identity check and polling cannot cover.
+
 ## Windows Git history path assertion — 2026-10-29
 
 Actions run `40931234238`, job `123650002272`, passed 1,557 tests and failed

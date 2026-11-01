@@ -1,7 +1,7 @@
 use super::super::CaptureInput;
 use super::super::{
-    Context, Harness, Options, PathBuf, Result, Value, capture, ensure, fs, git, json, save_prefs,
-    sessions,
+    Context, Harness, Options, Path, PathBuf, Result, Value, capture, ensure, fs, git, json,
+    save_prefs, sessions, waiting,
 };
 use super::{disable_signing_and_hooks, init_repo};
 
@@ -89,94 +89,98 @@ fn drive_hunks(
     o: &Options,
     (root, source, texts): (&PathBuf, &PathBuf, &Texts),
 ) -> Result<String> {
-    let Texts {
-        changed,
-        middle,
-        discarded,
-        edited,
-    } = texts;
+    let staged = h.root.join("fixture-diff-hunks-staged");
     capture(
         CaptureInput {
             h,
             opts: o,
             name: "diff-hunks",
-            actions: with_buffer_edit(
-                json!([
-                {"at_ms":1200,"target":"git-file-hunks.txt","right_click":true},
-                {"at_ms":1600,"target":"Open changes"},
-                {"at_ms":2200,"target":"diff-next"},
-                {"at_ms":2600,"target":"diff-hunk-action-1"},
-                {"at_ms":3700,"target":"diff-previous"},
-                {"at_ms":4100,"target":"diff-hunk-discard-0"},
-                {"at_ms":4500,"target":"diff-confirm-discard"},
-                {"at_ms":5900,"target":"diff-undo"},
-                {"at_ms":6500,"target":"diff-side-by-side"},
-                {"at_ms":7100,"target":"diff-marker-1"},
-                {"at_ms":8200,"target":"diff-marker-0"},
-                {"at_ms":8600,"target":"diff-menu"},
-                {"at_ms":9000,"target":"Collapse unchanged lines"},
-                {"at_ms":10700,"target":"diff-edit-save"},
-                {"at_ms":11700,"target":"diff-undo"},
-                {"at_ms":12700,"target":"diff-unified"},
-                {"at_ms":13000,"target":"diff-edit-split"},
-                {"at_ms":13400,"target":"diff-right-editor"},
-                {"at_ms":13700,"target":"diff-right-editor","key":"I"},
-                {"at_ms":14000,"target":"diff-right-editor","input":"unified edit"},
-                {"at_ms":14300,"target":"diff-right-editor","key":"Escape"},
-                {"at_ms":16000,"target":"diff-edit-save"}
-                ]),
-                edited,
-            ),
-            after: 17100,
+            actions: hunk_actions(source, &staged, texts),
+            after: 60000,
         },
         |_| {
+            // The index is not a file the GUI can watch: tell it once the
+            // stage reached Git. Each later step waits for the file state
+            // the step before it must leave.
             h.wait(
                 |_| {
-                    git(root, &["show", ":hunks.txt"]).is_ok_and(|bytes| bytes == middle.as_bytes())
+                    git(root, &["show", ":hunks.txt"])
+                        .is_ok_and(|bytes| bytes == texts.middle.as_bytes())
                 },
-                8,
+                30,
             )?;
-            h.wait(
-                |_| fs::read_to_string(source).is_ok_and(|text| text == *discarded),
-                5,
-            )?;
-            h.wait(
-                |_| fs::read_to_string(source).is_ok_and(|text| text == *changed),
-                5,
-            )?;
-            h.wait(
-                |_| fs::read_to_string(source).is_ok_and(|text| text == *edited),
-                8,
-            )?;
-            h.wait(
-                |_| fs::read_to_string(source).is_ok_and(|text| text == *changed),
-                5,
-            )?;
-            h.wait(
-                |_| fs::read_to_string(source).is_ok_and(|text| text.contains("unified edit")),
-                8,
-            )?;
+            fs::write(&staged, "")?;
             Ok(())
         },
     )
 }
 
-/// `actions` plus the Vim keys that replace the split editor's buffer with
-/// `edited` (`ggdG`, then insert), in time order.
-fn with_buffer_edit(mut actions: Value, edited: &str) -> Value {
-    let edit = json!([
-        {"at_ms":9700,"target":"diff-right-editor"},
-        {"at_ms":9850,"target":"diff-right-editor","key":"G"},
-        {"at_ms":9950,"target":"diff-right-editor","key":"G"},
-        {"at_ms":10050,"target":"diff-right-editor","key":"D"},
-        {"at_ms":10150,"target":"diff-right-editor","key":"G","shift":true},
-        {"at_ms":10250,"target":"diff-right-editor","key":"I"},
-        {"at_ms":10350,"target":"diff-right-editor","input":edited},
-        {"at_ms":10450,"target":"diff-right-editor","key":"Escape"}
+/// The diff-hunks script. Each action waits for its target to hold still,
+/// and for the file state its previous action must leave.
+fn hunk_actions(source: &Path, staged: &Path, texts: &Texts) -> Value {
+    let Texts {
+        changed,
+        discarded,
+        edited,
+        ..
+    } = texts;
+    let is = |text: &str| json!({"file":{"path":source,"equals":text}});
+    let mut actions = json!([
+        {"target":"git-file-hunks.txt","right_click":true},
+        {"target":"Open changes","wait":{"retry_previous_ms":1500}},
+        {"target":"diff-next"},
+        {"target":"diff-hunk-action-1"},
+        {"target":"diff-previous","wait":{"file":{"path":staged}}},
+        // The view reloads after the stage reached Git; let it settle.
+        {"target":"diff-hunk-discard-0","wait":{"settle_ms":600}},
+        {"target":"diff-confirm-discard","wait":{"retry_previous_ms":1500}},
+        {"target":"diff-undo","wait":is(discarded)},
+        {"target":"diff-side-by-side","wait":is(changed)},
+        {"target":"diff-marker-1"},
+        {"target":"diff-marker-0"},
+        {"target":"diff-menu"},
+        {"target":"Collapse unchanged lines","wait":{"retry_previous_ms":1500}}
     ]);
-    if let (Some(all), Some(edit)) = (actions.as_array_mut(), edit.as_array()) {
-        all.extend(edit.iter().cloned());
-        all.sort_by_key(|action| action["at_ms"].as_u64().unwrap_or_default());
+    let rest = json!([
+        {"target":"diff-edit-save","wait":key_gap()},
+        {"target":"diff-undo","wait":is(edited)},
+        {"target":"diff-unified","wait":is(changed)},
+        {"target":"diff-edit-split"},
+        {"target":"diff-right-editor"},
+        {"target":"diff-right-editor","key":"I","wait":key_gap()},
+        {"target":"diff-right-editor","input":"unified edit","wait":key_gap()},
+        {"target":"diff-right-editor","key":"Escape","wait":key_gap()},
+        {"target":"diff-edit-save","wait":key_gap()},
+        {"target":"fixture-done","check":true,"capture":true,
+         "wait":{"file":{"path":source,"contains":"unified edit"}}}
+    ]);
+    if let (Some(all), Some(edit), Some(rest)) = (
+        actions.as_array_mut(),
+        buffer_edit(edited).as_array(),
+        rest.as_array(),
+    ) {
+        all.extend(edit.iter().chain(rest).cloned());
     }
-    actions
+    waiting(actions)
+}
+
+/// The Vim keys that replace the split editor's buffer with `edited`
+/// (`ggdG`, then insert). No state shows that the editor handled a key, so
+/// key steps keep the timed script's spacing (`key_gap`).
+fn buffer_edit(edited: &str) -> Value {
+    json!([
+        {"target":"diff-right-editor"},
+        {"target":"diff-right-editor","key":"G","wait":key_gap()},
+        {"target":"diff-right-editor","key":"G","wait":key_gap()},
+        {"target":"diff-right-editor","key":"D","wait":key_gap()},
+        {"target":"diff-right-editor","key":"G","shift":true,"wait":key_gap()},
+        {"target":"diff-right-editor","key":"I","wait":key_gap()},
+        {"target":"diff-right-editor","input":edited,"wait":key_gap()},
+        {"target":"diff-right-editor","key":"Escape","wait":key_gap()}
+    ])
+}
+
+/// Spacing between editor key steps (the old timeline used 100 ms).
+fn key_gap() -> Value {
+    json!({"settle_ms":150})
 }
