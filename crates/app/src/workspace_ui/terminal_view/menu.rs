@@ -142,6 +142,20 @@ impl Viewer<'_> {
             self.app.open_scrollback_search(ui.ctx(), sid);
             ui.close();
         }
+        if session.kind == SessionKind::Shell
+            && session.lifecycle.live()
+            && self.app.command_blocks_supported(session)
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Commands…",
+                icon: "History",
+                shortcut: "",
+            })
+            .clicked()
+        {
+            self.app.open_command_blocks(sid);
+            ui.close();
+        }
         if session.kind == SessionKind::Editor && !session.review {
             self.terminal_editor_items(ui, sid);
         }

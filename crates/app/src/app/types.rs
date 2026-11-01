@@ -201,6 +201,8 @@ pub(crate) enum After {
     /// dock even after focus or project changes.
     Float(egui::ViewportId, Vec<Tab>, Option<String>),
     Text(String),
+    /// Shell integration blocks for this session.
+    CommandBlocks(String),
 }
 pub(crate) enum Job {
     PrepareLayouts(u64, Vec<(String, Workspace)>),
@@ -254,6 +256,13 @@ pub(crate) enum Job {
     GitBase(PathBuf, u64),
     /// Blame a native buffer's text `(path, buffer revision, text)`.
     EditorBlame(PathBuf, u64, String),
+    /// Stage the working-tree changes under one editor gutter block.
+    StageGutterBlock {
+        cwd: PathBuf,
+        path: PathBuf,
+        lines: std::ops::Range<usize>,
+        text: String,
+    },
     TestExternal(PathBuf, String, Vec<String>),
     Workspace(PathBuf, workspace_ops::Op),
     Search {
@@ -323,6 +332,7 @@ pub(crate) enum Job {
     },
     /// Load a commit-log or blame tab off the GUI thread.
     GitView(Tab),
+    LocalHistory(crate::local_history::Op),
 }
 /// Loaded contents of a commit-log or blame tab.
 pub(crate) enum GitView {
@@ -445,6 +455,7 @@ pub(crate) enum Update {
     StripCreated(Session, Option<String>, Vec<Tab>),
     FloatCreated(Session, egui::ViewportId, Option<String>, Vec<Tab>),
     Text(String, String),
+    CommandBlocks(String, Vec<terminator_core::command_blocks::CommandBlock>),
     Diff(String, Result<diff::DiffDocument, String>),
     DiffAction(Tab, bool, Result<diff::actions::Outcome, String>),
     DiffActionFailed(String, String),
@@ -453,9 +464,12 @@ pub(crate) enum Update {
     Favicon(String, Option<Vec<u8>>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),
     GitBase(PathBuf, u64, Option<String>),
+    /// A gutter block staged `(path, message or error)`.
+    GutterStaged(PathBuf, Result<String, String>),
     EditorBlame(PathBuf, u64, Result<git_log::BlameData, String>),
     CommitFiles(String, Result<Vec<(char, PathBuf)>, String>),
     GitView(String, GitView),
+    LocalHistory(crate::local_history::Reply),
     DirectoryPreview(
         u64,
         PathBuf,

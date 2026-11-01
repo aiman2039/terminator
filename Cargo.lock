@@ -7461,6 +7461,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sysinfo",
  "tempfile",
  "terminator-sys",
@@ -7486,6 +7487,7 @@ dependencies = [
  "futures-util",
  "image",
  "keyring",
+ "notify",
  "notify-rust",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
@@ -7507,6 +7509,7 @@ dependencies = [
  "uuid",
  "vnc-rs",
  "vt100",
+ "vte",
  "zeroize",
 ]
 

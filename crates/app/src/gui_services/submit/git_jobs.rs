@@ -69,9 +69,41 @@ impl Services {
                 updates.push(Update::GitBase(path, generation, base));
                 Ok(())
             }
+            job @ Job::StageGutterBlock { .. } => {
+                self.stage_gutter_block(job, &cancel, updates).await;
+                Ok(())
+            }
             Job::GitView(tab) => self.git_view(tab, cancel, updates).await,
             _ => anyhow::bail!(MISROUTED),
         }
+    }
+
+    async fn stage_gutter_block(
+        &self,
+        job: Job,
+        cancel: &CancellationToken,
+        updates: &mut Vec<Update>,
+    ) {
+        let Job::StageGutterBlock {
+            cwd,
+            path,
+            lines,
+            text,
+        } = job
+        else {
+            return;
+        };
+        let result = crate::diff::actions::stage_block(crate::diff::actions::StageBlockInput {
+            service: self,
+            cwd,
+            path: path.clone(),
+            lines,
+            text,
+            cancel,
+        })
+        .await
+        .map_err(|error| format!("{error:#}"));
+        updates.push(Update::GutterStaged(path, result));
     }
 
     async fn commit_files(&self, input: CommitFilesInput<'_>) -> Result<()> {

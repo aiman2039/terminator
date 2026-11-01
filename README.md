@@ -25,6 +25,7 @@
 - **AI agent alerts** — see when an agent needs attention or finishes work, with supported agent hooks enabled.
 - **Files and editing** — browse project files and open them in Neovim or your preferred editor.
 - **Git changes** — see changed files and compare staged or working changes side by side.
+- **Local History** — file snapshots on every change, with a timeline, a diff against the current file, and revert; a safety net while agents edit.
 - **Markdown previews** — read formatted documents or edit with a live preview beside your text.
 - **Image previews** — open images and SVGs, zoom in, or fit them to the window.
 - **Terminal search and history** — find text in terminal output and revisit past sessions.

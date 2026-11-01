@@ -183,11 +183,13 @@ impl App {
                 });
             }
             Update::Text(key, text) => self.handle_text(key, text),
+            Update::CommandBlocks(sid, blocks) => self.handle_command_blocks(sid, blocks),
             Update::Diff(key, result) => self.handle_diff(key, result),
             Update::DiffActionFailed(key, error) => self.handle_diff_action_failed(key, error),
             Update::DiffAction(tab, undoing, result) => {
                 self.handle_diff_action(tab, undoing, result);
             }
+            Update::GutterStaged(path, result) => self.handle_gutter_staged(&path, result),
             Update::DirectoryPreview(generation, cwd, path, entries) => {
                 self.handle_directory_preview(DirectoryPreviewInput {
                     generation,
@@ -214,6 +216,7 @@ impl App {
             Update::Info(i) => self.info = Some(i),
             Update::Workspace(op, result) => self.handle_workspace(op, result),
             Update::GitView(key, view) => self.handle_git_view(&key, view),
+            Update::LocalHistory(reply) => self.handle_local_history(reply),
             Update::CommitFiles(hash, files) => {
                 self.commit_files.insert(hash, Some(files));
             }

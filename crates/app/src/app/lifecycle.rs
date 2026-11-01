@@ -13,6 +13,7 @@ impl App {
     pub(crate) fn command_dialog_open(&self) -> bool {
         self.palette.open
             || self.search_open
+            || self.commands_session.is_some()
             || self.worktree_open
             || self.worktree_draft.is_some()
             || self.worktree_remove.is_some()
@@ -276,7 +277,10 @@ impl App {
             search: String::new(),
             search_session: None,
             search_open: false,
+            commands_session: None,
+            command_blocks: HashMap::new(),
             worktree_open: false,
+            local_history: None,
             terminal_find: HashMap::new(),
             history_filter: HashMap::new(),
             native_docs: HashMap::new(),
@@ -293,6 +297,7 @@ impl App {
             pending_native_close: Vec::new(),
             pending_native_splits: Vec::new(),
             pending_goto: Vec::new(),
+            pending_gutter_diffs: Vec::new(),
             usages: None,
             hierarchy: None,
             find_bar: None,

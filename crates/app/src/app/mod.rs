@@ -5,6 +5,7 @@ pub(crate) mod app_state;
 mod apply_state;
 mod center;
 mod client;
+mod command_blocks;
 mod commands;
 mod docking;
 pub(crate) mod drag_state;

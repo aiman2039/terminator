@@ -8,12 +8,14 @@ pub mod async_client;
 pub mod async_process;
 #[cfg(feature = "async-client")]
 pub mod async_service;
+pub mod command_blocks;
 pub mod crash;
 pub mod editor_prefs;
 pub mod generations;
 pub mod git;
 pub mod idle_close;
 mod ipc;
+pub mod local_history;
 pub mod metadata;
 mod model;
 pub mod recovery;

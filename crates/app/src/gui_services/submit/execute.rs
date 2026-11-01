@@ -91,7 +91,9 @@ impl Services {
             | Job::CommitFiles(..)
             | Job::EditorBlame(..)
             | Job::GitBase(..)
+            | Job::StageGutterBlock { .. }
             | Job::GitView(..)) => self.git_job(job, cancel, updates).await,
+            Job::LocalHistory(op) => self.local_history_job(op, cancel, updates).await,
             job @ (Job::RemoteAdd { .. }
             | Job::RemoteRead { .. }
             | Job::HostKey { .. }

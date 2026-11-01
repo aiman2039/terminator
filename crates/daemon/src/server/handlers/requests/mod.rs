@@ -1,5 +1,6 @@
 mod editor;
 mod lifecycle;
+mod local_history;
 mod notifications;
 mod prepare;
 mod projects;
@@ -129,6 +130,7 @@ impl Shared {
             }),
             Request::WorktreeRemove { project } => self.on_worktree_remove(&project),
             Request::Screen { session } => self.on_screen(&session),
+            Request::CommandBlocks { session, since } => self.on_command_blocks(&session, since),
             Request::Snapshot => Ok(self.on_snapshot()),
             Request::SessionForPids { pids } => Ok(self.on_session_for_pids(&pids)),
             Request::Heartbeat { focused } => Ok(self.on_heartbeat(focused)),
@@ -212,6 +214,12 @@ impl Shared {
             Request::EditorStatus { session } => self.on_editor_status(&session),
             Request::Shutdown | Request::ShutdownIfIdle => self.on_shutdown(),
             Request::RetireIfDraining => self.on_retire_if_draining(),
+            Request::LocalHistoryList { path } => self.on_local_history_list(&path),
+            Request::LocalHistoryRead { path, id } => self.on_local_history_read(&path, &id),
+            Request::LocalHistoryLabel { project, label } => {
+                self.on_local_history_label(&project, label)
+            }
+            Request::LocalHistoryRevert { path, id } => self.on_local_history_revert(&path, &id),
             _ => bail!("Request requires an attached stream"),
         }
     }

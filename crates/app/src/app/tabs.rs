@@ -326,6 +326,8 @@ impl App {
             || self.worktree_open
             || self.worktree_draft.is_some()
             || self.search_open
+            || self.commands_session.is_some()
+            || self.local_history.is_some()
     }
     pub(crate) fn sidebar_rename_can_show(&self, sid: &str) -> bool {
         let Some((project_id, label, live, kind)) = self

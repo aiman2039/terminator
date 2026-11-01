@@ -86,6 +86,13 @@ pub enum Request {
         generation: u64,
         jobs_empty: bool,
     },
+    /// Shell integration blocks with `id > since`, oldest first. Replies
+    /// `Response::CommandBlocks`. Requires `command-blocks-v1`.
+    CommandBlocks {
+        session: String,
+        #[serde(default)]
+        since: u64,
+    },
     WorktreeList {
         project: String,
     },
@@ -261,6 +268,30 @@ pub enum Request {
     Shutdown,
     ShutdownIfIdle,
     RetireIfDraining,
+    /// Snapshots and labels of one local file, newest first. Replies
+    /// `Response::LocalHistory`. Requires `local-history-v1`.
+    LocalHistoryList {
+        path: PathBuf,
+    },
+    /// The text of one snapshot of `path`. Replies `Response::Text`.
+    /// Requires `local-history-v1`.
+    LocalHistoryRead {
+        path: PathBuf,
+        id: String,
+    },
+    /// Adds a timeline marker for every file of the project. Requires
+    /// `local-history-v1`.
+    LocalHistoryLabel {
+        project: String,
+        label: String,
+    },
+    /// Records the current content of `path`, then writes snapshot `id`
+    /// back to it. Sent only on an explicit, confirmed user action.
+    /// Requires `local-history-v1`.
+    LocalHistoryRevert {
+        path: PathBuf,
+        id: String,
+    },
 }
 impl Request {
     /// How long a client waits for this request's response. Requests whose
@@ -278,7 +309,9 @@ impl Request {
             | Self::ForwardStatus
             | Self::WorktreeAdd { .. }
             | Self::WorktreeRemove { .. } => 40,
-            Self::VncFrame { .. } | Self::CloseIdleSessions { .. } => 30,
+            Self::VncFrame { .. }
+            | Self::CloseIdleSessions { .. }
+            | Self::LocalHistoryRevert { .. } => 30,
             // Writing the OS keychain can wait on a macOS permission prompt.
             Self::VncProfileSave { .. } | Self::VncForgetCredential { .. } => 120,
             _ => 3,
@@ -303,6 +336,7 @@ impl Request {
             Self::CloseIdleSessions { .. } => "CloseIdleSessions",
             Self::ShellCommand { .. } => "ShellCommand",
             Self::ShellPrompt { .. } => "ShellPrompt",
+            Self::CommandBlocks { .. } => "CommandBlocks",
             Self::WorktreeList { .. } => "WorktreeList",
             Self::WorktreeAdd { .. } => "WorktreeAdd",
             Self::WorktreeRemove { .. } => "WorktreeRemove",
@@ -348,6 +382,10 @@ impl Request {
             Self::Shutdown => "Shutdown",
             Self::ShutdownIfIdle => "ShutdownIfIdle",
             Self::RetireIfDraining => "RetireIfDraining",
+            Self::LocalHistoryList { .. } => "LocalHistoryList",
+            Self::LocalHistoryRead { .. } => "LocalHistoryRead",
+            Self::LocalHistoryLabel { .. } => "LocalHistoryLabel",
+            Self::LocalHistoryRevert { .. } => "LocalHistoryRevert",
         }
     }
 }
@@ -377,6 +415,7 @@ pub enum Response {
         last: bool,
     },
     Worktrees(Vec<worktrees::GitWorktree>),
+    CommandBlocks(Vec<crate::command_blocks::CommandBlock>),
     VncCreated(vnc::VncSession),
     VncTransferStatus(vnc::VncTransferStatus),
     VncFrame(Box<vnc::VncFrame>),
@@ -393,6 +432,7 @@ pub enum Response {
     Data(String),
     End,
     Error(String),
+    LocalHistory(Vec<crate::local_history::Entry>),
 }
 impl Response {
     pub fn checked(self) -> Result<Self> {

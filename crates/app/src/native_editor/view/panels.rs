@@ -113,16 +113,29 @@ impl ViewPass<'_> {
     }
 
     pub(super) fn gutter_popup(&mut self, ui: &egui::Ui, gutter_hunks: &[gutter::GutterHunk]) {
-        let rollback_index = self.popups.gutter.as_ref().map(|popup| popup.index);
-        if gutter::popup_ui(gutter::PopupUiInput {
+        let index = self.popups.gutter.as_ref().map(|popup| popup.index);
+        let action = gutter::popup_ui(gutter::PopupUiInput {
             ui,
             popup: &mut self.popups.gutter,
             hunks: gutter_hunks,
             deleted: self.frame.change_colors[2],
-        }) && let Some(hunk) = rollback_index.and_then(|index| gutter_hunks.get(index))
-            && let Some(live) = self.doc.doc.as_mut()
-        {
-            gutter::rollback(live, &mut self.doc.engine, hunk);
+            can_stage: !self.doc.dirty(),
+        });
+        let Some(hunk) = index.and_then(|index| gutter_hunks.get(index)) else {
+            return;
+        };
+        match action {
+            gutter::PopupAction::Rollback => {
+                if let Some(live) = self.doc.doc.as_mut() {
+                    gutter::rollback(live, &mut self.doc.engine, hunk);
+                }
+            }
+            gutter::PopupAction::ShowDiff => self.requests.gutter_diff = true,
+            gutter::PopupAction::Stage => {
+                self.requests.gutter_stage =
+                    self.doc.doc.as_ref().map(|live| (hunk.mark, live.text()));
+            }
+            gutter::PopupAction::None => {}
         }
     }
 

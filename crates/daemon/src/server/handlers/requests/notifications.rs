@@ -54,6 +54,7 @@ impl Shared {
 
     pub(super) fn on_hook(&self, event: HookEvent) -> Result<Outcome> {
         let _operation = relock(&self.terminal_operations);
+        self.label_agent_run(&event);
         let should_os = relock(&self.state)
             .settings
             .os_events

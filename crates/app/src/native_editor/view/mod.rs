@@ -64,6 +64,8 @@ struct ViewFrame {
     blame_offer: Option<bool>,
     inlay_answer: Option<(u64, Arc<[native_lsp::InlayHint]>)>,
     remote_snapshot: bool,
+    /// Offer Local History: a local file and a capable daemon.
+    local_history: bool,
     git_base: Option<Arc<str>>,
     change_colors: [Color32; 3],
 }
@@ -108,11 +110,16 @@ struct ViewRequests {
     rename_at: Option<native_lsp::Position>,
     open_file_picker: bool,
     toggle_pin: bool,
+    open_local_history: bool,
     recent_open: Option<PathBuf>,
     activated_editor: bool,
     blame_toggle: bool,
     /// Clicked blame line, and whether Cmd/Ctrl was held (open on web).
     blame_click: Option<(usize, bool)>,
+    /// Gutter popup: open the working-tree diff of this file.
+    gutter_diff: bool,
+    /// Gutter popup: stage this block of the saved buffer text.
+    gutter_stage: Option<(terminator_native_edit::view::ChangeMark, String)>,
     complete_now: bool,
     signature_request: Option<(native_lsp::Position, usize, usize)>,
     format_now: bool,

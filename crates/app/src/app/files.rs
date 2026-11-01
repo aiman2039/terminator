@@ -290,6 +290,7 @@ impl App {
     pub(crate) fn browser_covered(&self) -> bool {
         self.settings_open
             || self.player_open
+            || self.local_history.is_some()
             || self.command_dialog_open()
             || self.picker_active
             || self.close_session.is_some()
@@ -464,7 +465,9 @@ impl App {
         self.remote_ui.close();
         self.remote_ui.import = None;
         self.close_scrollback_search();
+        self.close_command_blocks();
         self.worktree_open = false;
+        self.local_history = None;
         self.shortcut_capture = None;
         if self.palette.open {
             self.close_palette();

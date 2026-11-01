@@ -57,7 +57,11 @@ async fn current(service: &Services, change: &Undo, cancel: &CancellationToken) 
     }
 }
 
-async fn apply(service: &Services, change: &Undo, cancel: &CancellationToken) -> Result<()> {
+pub(super) async fn apply(
+    service: &Services,
+    change: &Undo,
+    cancel: &CancellationToken,
+) -> Result<()> {
     let root = change.root.clone();
     let path = change.path.clone();
     service
@@ -109,6 +113,13 @@ async fn apply(service: &Services, change: &Undo, cancel: &CancellationToken) ->
     Ok(())
 }
 
+/// Serializes the full read/check/apply sequence across native diff tabs
+/// and editor gutters.
+pub(super) fn mutations() -> &'static tokio::sync::Mutex<()> {
+    static MUTATIONS: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    MUTATIONS.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 pub(crate) struct ExecuteInput<'a> {
     pub(crate) service: &'a Services,
     pub(crate) request: Request,
@@ -123,12 +134,7 @@ pub(crate) async fn execute(input: ExecuteInput<'_>) -> Result<Outcome> {
         staged,
         cancel,
     } = input;
-    // Serialize the full read/check/apply sequence across native diff tabs.
-    static MUTATIONS: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    let _guard = MUTATIONS
-        .get_or_init(|| tokio::sync::Mutex::new(()))
-        .lock()
-        .await;
+    let _guard = mutations().lock().await;
     let actions = Actions { service, cancel };
     match request {
         Request::Save { document, text } => actions.save(&document, text, staged).await,

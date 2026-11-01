@@ -40,6 +40,14 @@ impl App {
             self.search_history_center(ui);
             return;
         }
+        if self.commands_session.is_some() {
+            self.command_blocks_center(ui);
+            return;
+        }
+        if self.local_history.is_some() {
+            self.local_history_center(ui);
+            return;
+        }
         self.ssh_page_or_vnc_center(ui);
     }
 

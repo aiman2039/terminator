@@ -87,7 +87,31 @@ impl App {
             });
         }
         ui.weak("Limits apply to saved output; records and resume commands remain.");
+        self.local_history_setting(ui);
         self.vnc_detach_setting(ui);
+    }
+
+    /// How long Local History keeps file snapshots (`local-history-v1`).
+    fn local_history_setting(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible("Local History days", "snapshots files revert age") {
+            return;
+        }
+        let supported = self.local_history_supported();
+        ui.add_enabled_ui(supported, |ui| {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Local History days",
+                description: "How long file snapshots are kept. 0 stops recording.",
+                add_control: |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings_draft.local_history_days)
+                            .range(0..=3650),
+                    );
+                },
+            });
+        })
+        .response
+        .on_disabled_hover_text("Requires an updated daemon.");
     }
 
     /// How long a VNC session with no open tab stays connected.

@@ -195,6 +195,16 @@ impl App {
         if requests.open_file_picker {
             self.open_path = true;
         }
+        if requests.open_local_history {
+            self.open_local_history(path.to_owned());
+        }
+        // The diff tab opens once the workspace is checked back in.
+        if requests.gutter_diff {
+            self.pending_gutter_diffs.push(path.to_owned());
+        }
+        if let Some((mark, text)) = requests.gutter_stage.take() {
+            self.stage_gutter_block(path, mark, text);
+        }
         if requests.toggle_pin {
             if frame.files.pinned {
                 self.preferences.pinned_native_files.remove(path);
