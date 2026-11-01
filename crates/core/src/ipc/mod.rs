@@ -263,9 +263,9 @@ impl Request {
     #[must_use]
     pub fn response_deadline(&self) -> Duration {
         Duration::from_secs(match self {
-            Self::RemoteProject { .. }
-            | Self::ProbeRemoteProject { .. }
-            | Self::ScanHostKey { .. }
+            // Above the longest SSH command timeout the daemon allows.
+            Self::RemoteProject { .. } | Self::ProbeRemoteProject { .. } => 130,
+            Self::ScanHostKey { .. }
             | Self::TrustHostKey { .. }
             | Self::StartForward { .. }
             | Self::StopForward { .. }

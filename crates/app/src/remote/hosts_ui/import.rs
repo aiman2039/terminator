@@ -2,8 +2,8 @@
 //! import. Each chosen alias is added either at its login directory (one
 //! connection each, so it must sign in without a prompt) or at a fixed
 //! path (no connection). Adds run one at a time.
-use super::quick_aliases;
-use crate::{App, Job, appearance, vnc_ui::form};
+use super::unsaved_aliases;
+use crate::{App, Job, vnc_ui::form};
 use eframe::egui::{self, RichText};
 use std::collections::VecDeque;
 use terminator_core::{
@@ -95,30 +95,25 @@ impl HostImport {
 
 impl App {
     pub(crate) fn open_ssh_import(&mut self) {
-        self.hide_center_overlay();
+        self.show_ssh_page();
         self.remote_ui.import = Some(HostImport::new());
         self.load_config_hosts();
     }
 
-    /// The main pane while the import page is open.
-    pub(crate) fn ssh_import_center(&mut self, ui: &mut egui::Ui) {
+    /// The SSH page body while import is open.
+    pub(crate) fn ssh_import_body(&mut self, ui: &mut egui::Ui) {
         self.fill_import_candidates();
         let mut close = false;
-        egui::Frame::NONE.inner_margin(16.0).show(ui, |ui| {
-            ui.set_min_size(ui.available_size());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Import SSH hosts").size(18.0).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close = appearance::sidebar_action(ui, "X", "Close").clicked();
+        egui::ScrollArea::vertical()
+            .id_salt("ssh-import")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                form::card(ui, |ui| {
+                    ui.label(RichText::new("Import hosts").size(16.0).strong());
+                    ui.add_space(6.0);
+                    close |= self.ssh_import_form(ui);
                 });
             });
-            egui::ScrollArea::vertical()
-                .id_salt("ssh-import")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    form::card(ui, |ui| close |= self.ssh_import_form(ui));
-                });
-        });
         if close {
             self.remote_ui.import = None;
         }
@@ -133,7 +128,7 @@ impl App {
             return;
         };
         if import.candidates.is_none() {
-            let candidates = quick_aliases(config, &self.state.remote_projects, "")
+            let candidates = unsaved_aliases(config, &self.state.remote_projects, "")
                 .into_iter()
                 .map(|host| Candidate {
                     host: host.clone(),
@@ -320,7 +315,7 @@ fn import_progress(ui: &mut egui::Ui, import: &HostImport) -> bool {
     if !import.failed.is_empty() && !import.running() {
         form::hint(
             ui,
-            "Add hosts that failed from the Hosts sidebar: quick connect shows a fix for each error.",
+            "Add hosts that failed with New host on the SSH page: Test connection shows a fix for each error.",
             "",
         );
     }

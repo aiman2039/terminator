@@ -275,16 +275,27 @@ pub(super) fn git_change_tree(input: GitChangeTreeInput<'_, '_>) {
             },
         });
     }
-    for (change, label) in node.files.iter().zip(&node.labels) {
-        git_change_row(GitChangeRowInput {
-            ui,
-            ctx,
-            outcome,
-            change,
-            group,
-            label,
-        });
+    if node.files.is_empty() {
+        return;
     }
+    // Files have no chevron. Reserve its width so a file is one level deeper
+    // than its folder, aligned with sibling folders' checkboxes.
+    let gutter = ui.spacing().indent + ui.spacing().item_spacing.x;
+    ui.horizontal_top(|ui| {
+        ui.add_space(gutter);
+        ui.vertical(|ui| {
+            for (change, label) in node.files.iter().zip(&node.labels) {
+                git_change_row(GitChangeRowInput {
+                    ui,
+                    ctx,
+                    outcome,
+                    change,
+                    group,
+                    label,
+                });
+            }
+        });
+    });
 }
 
 /// One folder of the change tree within one group.

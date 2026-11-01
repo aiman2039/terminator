@@ -1,6 +1,7 @@
 mod address_book;
-mod book_keys;
-mod card;
+pub(crate) use address_book::CardAction;
+pub(crate) mod book_keys;
+pub(crate) mod card;
 mod clipboard;
 mod connect;
 mod display;

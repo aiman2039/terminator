@@ -153,6 +153,42 @@ jobs:
           rust-version: ${{ env.RUST_VERSION }}
           tag: ${{ needs.prepare.outputs.tag }}
 
+  build-linux-portable:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    name: Build portable ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - name: Build on AlmaLinux 8 and verify glibc and libraries
+        run: sh scripts/portable-linux.sh
+      - name: Name the archive
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/portable"
+          mv target/portable-package/terminator-linux.tar.gz \
+            "$RUNNER_TEMP/portable/terminator-${TAG}-${TARGET}-portable.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-portable-${{ matrix.target }}
+          path: ${{ runner.temp }}/portable/*
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
   build-windows:
     needs: prepare
     name: Build x86_64-pc-windows-msvc
@@ -309,7 +345,7 @@ jobs:
                 status=$?
               fi
               # CloudKit ticket lookup can fail after notarization is accepted.
-              if [[ "$status" -ne 68 || "$attempt" -eq 5 ]]; then
+              if [[ "$status" -ne 68 || "$attempt" -eq 7 ]]; then
                 return "$status"
               fi
               echo "::warning::Stapler $action ticket lookup failed (68); retry $attempt/4 in $((attempt * 15)) seconds"
@@ -377,7 +413,7 @@ jobs:
 
   upload-draft:
     # Build in parallel with validation, but never upload unvalidated assets.
-    needs: [prepare, checks, security, build-linux, build-windows, assemble-macos]
+    needs: [prepare, checks, security, build-linux, build-linux-portable, build-windows, assemble-macos]
     if: needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     concurrency:

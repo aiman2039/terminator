@@ -1,4 +1,11 @@
 #![forbid(unsafe_code)]
+#[cfg_attr(
+    not(feature = "webview"),
+    expect(
+        dead_code,
+        reason = "The webview host is the only user of the profile and navigation helpers"
+    )
+)]
 mod browser;
 mod chrome;
 mod daemon_link;

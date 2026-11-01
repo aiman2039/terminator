@@ -32,7 +32,12 @@ Settings → SSH sets the keep-alive interval (`ServerAliveInterval`, default
 stays open after its last terminal (`ControlPersist`, default 10 min) and the
 connect timeout (default 10 s). They apply to OpenSSH processes the daemon
 starts after the change. The section needs `ssh-settings-v1`; older daemons
-keep the defaults.
+keep the defaults. The command timeout (default 30 s, 5–120 s) limits one
+background call (connection test, login directory, files, Git), sign-in
+included; increase it for slow or distant hosts. It needs
+`ssh-command-timeout-v1`; older daemons keep their fixed 5 s limit. A host can
+override it in Properties ("Command timeout", blank uses the setting); the
+daemon stores it with the project (`ssh-host-timeout-v1`).
 
 SSH terminals are interactive: OpenSSH prompts in the terminal for passwords,
 key passphrases and 2FA codes, and asks about an unknown host key there. The
@@ -103,29 +108,32 @@ calls (sign-in, host-key trust). Progress lives in daemon memory; transfers
 started by an earlier daemon generation are not shown. A project cannot be
 removed while a transfer runs. VNC SFTP transfers share the same code.
 
-## Hosts sidebar
+## Hosts sidebar and SSH page
 
 The Hosts tool lists SSH projects in collapsible groups (state kept in
 `ui-preferences.json`), each row showing `user@host:port · root · last
 connection`. The History toggle sorts each group by last connection instead of
 by name. The dot is green while `ssh -O check` finds a live OpenSSH master on
 the project's control socket; the check runs off the GUI thread every 10
-seconds, only while the sidebar is visible. The terminal icon (or a
-double-click on the name) opens a terminal; the row menu holds Properties,
-Duplicate, Set group, Port forwards and Remove.
+seconds, only while the sidebar or SSH page is visible. The terminal icon (or
+a double-click on the name) opens a terminal; the row menu holds Properties,
+Duplicate, Set group, Port forwards and Remove. Up/Down in the filter field
+move a selection; Enter opens a terminal on the selected or first match.
 
-The filter field also connects: Up/Down move a selection over the visible
-hosts and config aliases, and Enter opens the selected or first match. With no
-match, Enter quick-connects a typed `host`, `user@host`, `host:port` or
-`user@host:port`. Quick connect probes the login directory with `pwd -P`, adds
-a project rooted there and opens a terminal. A failed quick connect shows one
-fix: "Set up…" (sign-in needed: opens Properties, where the user sets the path
-and signs in through a terminal), "Review host key", or "Retry".
+Opening the Hosts tool (or "Show all hosts" in its header) shows the SSH page
+in the main pane, like the VNC page: an address bar, group chips, Import…, a
+List/Grid switch, and saved hosts as cards with a "New host" card. Typing
+filters the cards. Enter or Connect on a typed `host`, `user@host`, `host:port`
+or `user@host:port` opens a terminal on the matching saved host, or opens New
+host with the address filled in. Double-click or Enter on a card opens a
+terminal; its menu holds Open terminal, Properties, Duplicate and Remove.
 
-New, Properties and Duplicate open SSH host Properties in the main pane (like
-VNC Properties): config alias picker, host, port and user, name, remote path
-("Login directory" probes it), group, and folded key files (`~/` expands to the
-home directory). For a host that is not a config alias, `ssh -G` runs off the
+New, Properties and Duplicate open SSH host Properties on the SSH page (like
+VNC Properties): host (any name, with an optional menu of `~/.ssh/config`
+aliases), port and user, name, group, remote path ("Login directory" probes
+it), and folded key files (`~/` expands to the home directory). Adding a new
+host with a blank remote path probes the login directory first and adds the
+host there. For a host that is not a config alias, `ssh -G` runs off the
 GUI thread and the page shows what `~/.ssh/config` sets for it. "Test
 connection" probes without saving. Errors carry the same one fix button; for a
 sign-in error it saves and opens a terminal. Saving an existing project sends
@@ -137,13 +145,13 @@ last-connection time are kept. Duplicate copies a project without id, layout or
 forwards; saving a copy with the same host and root is refused. The daemon
 records `last_connected` when an SSH shell starts (`ssh-edit-v1`).
 
-The key icon in the Hosts header opens a main-pane import page that lists
+Import… on the SSH page opens an import page that lists
 `~/.ssh/config` aliases with no saved project. Chosen hosts are added one at a
 time, either at their login directory (one batch connection each, so hosts
 needing a password or 2FA fail and are listed) or at one path for all (no
 connection), with an optional group.
 
-Grouping, removal and quick connect need a daemon advertising `ssh-hosts-v1`. Removal is refused while the project has live terminals, VNC sessions or running transfers, and it stops the project's OpenSSH master unless another project or live session uses the same socket.
+Grouping and removal need a daemon advertising `ssh-hosts-v1`. Removal is refused while the project has live terminals, VNC sessions or running transfers, and it stops the project's OpenSSH master unless another project or live session uses the same socket.
 
 ## Port forwarding
 

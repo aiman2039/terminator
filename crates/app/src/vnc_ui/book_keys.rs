@@ -4,17 +4,18 @@ use super::card::CARD_WIDTH;
 use super::*;
 
 /// Space between cards, both directions.
-pub(super) const CARD_GAP: f32 = 12.0;
+pub(crate) const CARD_GAP: f32 = 12.0;
 
 /// Keyboard control of the cards while no text field has focus: arrows
 /// move the selection, Enter connects, Delete asks to remove, and
 /// Command/Ctrl+I opens Properties.
-pub(super) fn grid_key_action(
+pub(crate) fn grid_key_action<T: Clone>(
     ui: &egui::Ui,
-    profiles: &[VncProfile],
+    items: &[T],
+    id_of: fn(&T) -> &str,
     selected: &mut Option<String>,
-) -> Option<(VncProfile, CardAction)> {
-    if profiles.is_empty() || ui.ctx().memory(|m| m.focused().is_some()) {
+) -> Option<(T, CardAction)> {
+    if items.is_empty() || ui.ctx().memory(|m| m.focused().is_some()) {
         return None;
     }
     let columns = card_columns(ui.available_width());
@@ -43,17 +44,17 @@ pub(super) fn grid_key_action(
     });
     let current = selected
         .as_ref()
-        .and_then(|id| profiles.iter().position(|p| &p.id == id));
-    let last = profiles.len().saturating_sub(1);
+        .and_then(|id| items.iter().position(|p| id_of(p) == id));
+    let last = items.len().saturating_sub(1);
     let index = match (current, step) {
         (None, Step::Forward(0)) => return None,
         (None, _) => 0,
         (Some(at), Step::Forward(n)) => at.saturating_add(n).min(last),
         (Some(at), Step::Back(n)) => at.saturating_sub(n),
     };
-    let profile = profiles.get(index)?;
-    *selected = Some(profile.id.clone());
-    action.map(|action| (profile.clone(), action))
+    let item = items.get(index)?;
+    *selected = Some(id_of(item).to_owned());
+    action.map(|action| (item.clone(), action))
 }
 
 enum Step {
@@ -120,7 +121,7 @@ mod tests {
         let mut run = |key, modifiers| {
             let mut result = None;
             let mut output = ctx.run_ui(press(key, modifiers), |ui| {
-                result = grid_key_action(ui, &hosts, &mut selected);
+                result = grid_key_action(ui, &hosts, |p| &p.id, &mut selected);
             });
             output.textures_delta.clear();
             (

@@ -7,6 +7,9 @@ use super::header::{
     ProjectHeaderChrome, header_action_view, header_icon_button, header_tool_bounds,
     header_visible_count, project_header_chrome, project_title_width,
 };
+/// Narrower than this, the center toolbar and its project switcher are hidden.
+const TOOLBAR_MIN_WIDTH: f32 = 120.0;
+
 impl App {
     pub(super) fn show_git_sidebar(&mut self) {
         self.preferences.right_projects = false;
@@ -97,10 +100,19 @@ impl App {
 
     /// Left-align the project name; spare width is drag space between the
     /// name and Player, Agents, and hide, which stay packed on the right.
+    /// The name is left out while the toolbar project switcher shows it.
     /// A narrow sidebar folds Player and Agents into the menu.
-    pub(super) fn project_header_cluster(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn project_header_cluster(
+        &mut self,
+        ui: &mut egui::Ui,
+        toolbar_shows_project: bool,
+    ) {
         self.note_agent_bar_badge(ui);
-        let name = self.project_header_name();
+        let name = if toolbar_shows_project {
+            String::new()
+        } else {
+            self.project_header_name()
+        };
         let natural = project_title_width(ui, &name);
         let chrome = project_header_chrome(ui.available_width(), natural);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -214,7 +226,7 @@ impl App {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
                 self.window_controls(ui);
-                self.project_header_cluster(ui);
+                self.project_header_cluster(ui, tabs_rect.width() >= TOOLBAR_MIN_WIDTH);
             },
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
@@ -259,7 +271,7 @@ impl App {
     /// (opens the Git sidebar; switching stays a Git-panel action), and
     /// Search Everywhere. Collapses away on narrow windows.
     pub(super) fn toolbar_cluster(&mut self, ui: &mut egui::Ui) {
-        if ui.available_width() < 120.0 {
+        if ui.available_width() < TOOLBAR_MIN_WIDTH {
             return;
         }
         ui.spacing_mut().item_spacing.x = 4.0;

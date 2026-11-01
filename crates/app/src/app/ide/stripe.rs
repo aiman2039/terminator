@@ -239,8 +239,10 @@ impl App {
             }
             return;
         }
-        if matches!(tool, StripeTool::Tool(SidebarTool::Vnc)) {
-            self.show_vnc_page();
+        match tool {
+            StripeTool::Tool(SidebarTool::Vnc) => self.show_vnc_page(),
+            StripeTool::Tool(SidebarTool::Hosts) => self.show_ssh_page(),
+            _ => {}
         }
         if right {
             match tool {

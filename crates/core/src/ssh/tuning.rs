@@ -6,6 +6,8 @@ use std::sync::RwLock;
 
 /// `ssh_*` settings and the advertised [`TUNING_CAPABILITY`].
 pub const TUNING_CAPABILITY: &str = "ssh-settings-v1";
+/// The daemon honors [`Tuning::command_timeout_seconds`].
+pub const COMMAND_TIMEOUT_CAPABILITY: &str = "ssh-command-timeout-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tuning {
@@ -16,6 +18,9 @@ pub struct Tuning {
     pub reuse_minutes: u32,
     /// `ConnectTimeout`.
     pub connect_timeout_seconds: u32,
+    /// Limit for one batch call (connection check, login directory, Git
+    /// status), sign-in included. Must cover a slow first connection.
+    pub command_timeout_seconds: u32,
 }
 
 impl Tuning {
@@ -23,15 +28,24 @@ impl Tuning {
         keepalive_seconds: 15,
         reuse_minutes: 10,
         connect_timeout_seconds: 10,
+        command_timeout_seconds: 30,
     };
     pub const KEEPALIVE_SECONDS: std::ops::RangeInclusive<u32> = 5..=300;
     pub const REUSE_MINUTES: std::ops::RangeInclusive<u32> = 1..=1440;
     pub const CONNECT_TIMEOUT_SECONDS: std::ops::RangeInclusive<u32> = 3..=120;
+    /// Stays below the IPC deadline of SSH project requests.
+    pub const COMMAND_TIMEOUT_SECONDS: std::ops::RangeInclusive<u32> = 5..=120;
 
     pub fn valid(&self) -> bool {
         Self::KEEPALIVE_SECONDS.contains(&self.keepalive_seconds)
             && Self::REUSE_MINUTES.contains(&self.reuse_minutes)
             && Self::CONNECT_TIMEOUT_SECONDS.contains(&self.connect_timeout_seconds)
+            && Self::COMMAND_TIMEOUT_SECONDS.contains(&self.command_timeout_seconds)
+    }
+
+    #[must_use]
+    pub fn command_timeout(self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.command_timeout_seconds))
     }
 
     pub(super) fn connect_args(self) -> [String; 3] {
@@ -63,7 +77,8 @@ pub fn set_tuning(tuning: Tuning) {
     }
 }
 
-pub(super) fn current() -> Tuning {
+/// The tuning that OpenSSH processes started now use.
+pub fn current() -> Tuning {
     *CURRENT.read().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -77,6 +92,7 @@ mod tests {
             keepalive_seconds: 30,
             reuse_minutes: 60,
             connect_timeout_seconds: 5,
+            command_timeout_seconds: 60,
         };
         assert_eq!(
             tuning.connect_args(),
@@ -93,5 +109,11 @@ mod tests {
             ..crate::Settings::default()
         };
         assert!(settings.validate().is_err());
+        assert_eq!(tuning.command_timeout(), std::time::Duration::from_mins(1));
+        let short = Tuning {
+            command_timeout_seconds: 1,
+            ..Tuning::DEFAULT
+        };
+        assert!(!short.valid());
     }
 }

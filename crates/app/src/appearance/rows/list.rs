@@ -90,17 +90,8 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
             .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
         return response;
     }
-    if response.hovered() || selected {
-        ui.painter().rect_filled(
-            response.rect,
-            4,
-            if selected {
-                ui.visuals().selection.bg_fill
-            } else {
-                ui.visuals().widgets.hovered.bg_fill
-            },
-        );
-    }
+    paint_row_fill(ui, &response, selected);
+    let trailing = fitted_trailing(ui, label, trailing, response.rect.width() - label_left);
     let right = response.rect.right() - trailing_width(ui, trailing, tint);
     let rect = egui::Rect::from_min_max(
         egui::pos2(response.rect.left() + label_left, response.rect.top()),
@@ -137,6 +128,39 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     });
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
+}
+
+fn paint_row_fill(ui: &egui::Ui, response: &egui::Response, selected: bool) {
+    if response.hovered() || selected {
+        ui.painter().rect_filled(
+            response.rect,
+            4,
+            if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                ui.visuals().widgets.hovered.bg_fill
+            },
+        );
+    }
+}
+
+/// The label wins over a trailing status word: when both do not fit, the
+/// word is dropped (row tooltips still carry it). The `●` dot always stays.
+fn fitted_trailing<'t>(ui: &egui::Ui, label: &str, trailing: &'t str, room: f32) -> &'t str {
+    if trailing.is_empty() || trailing == "●" {
+        return trailing;
+    }
+    let color = Color32::PLACEHOLDER;
+    let label_width = ui
+        .painter()
+        .layout_no_wrap(label.into(), TextStyle::Body.resolve(ui.style()), color)
+        .size()
+        .x;
+    if label_width + trailing_width(ui, trailing, color) <= room {
+        trailing
+    } else {
+        ""
+    }
 }
 
 fn trailing_width(ui: &egui::Ui, trailing: &str, tint: Color32) -> f32 {

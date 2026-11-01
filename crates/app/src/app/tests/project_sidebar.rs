@@ -635,19 +635,18 @@ fn player_chrome_paints_next_to_the_project_bell() {
     }
     paint_header(&mut app, &ctx, &[]);
     let rect = header_target(&ctx);
-    let name = rect("project-header-name").expect("project name");
     let chrome = rect("player-chrome").expect("player chrome");
     let bell = rect("left-agent-bar").expect("project bell");
     let toggle = rect("toggle-left-sidebar").expect("hide sidebar");
     let controls = rect("window-controls").expect("window controls");
     assert!(rect("project-header-menu").is_none());
     assert!(
-        name.left() >= controls.right() - 1.0 && name.left() - controls.right() < 16.0,
-        "the name hugs the left, after the traffic lights, name={name:?} controls={controls:?}"
+        rect("toolbar-project").is_some() && rect("project-header-name").is_none(),
+        "the project name shows once, in the toolbar switcher"
     );
     assert!(
-        chrome.left() - name.right() > 8.0,
-        "spare width sits between the name and the player, name={name:?} chrome={chrome:?}"
+        chrome.left() - controls.right() > 8.0,
+        "spare width sits between the traffic lights and the player, controls={controls:?} chrome={chrome:?}"
     );
     assert!(
         chrome.right() <= bell.left() + 1.0 && bell.left() - chrome.right() < 8.0,
@@ -658,8 +657,8 @@ fn player_chrome_paints_next_to_the_project_bell() {
         "bell sits against hide, bell={bell:?} toggle={toggle:?}"
     );
     assert!(
-        (name.center().y - toggle.center().y).abs() < 2.0,
-        "name and hide share a row, name={name:?} toggle={toggle:?}"
+        (controls.center().y - toggle.center().y).abs() < 2.0,
+        "traffic lights and hide share a row, controls={controls:?} toggle={toggle:?}"
     );
     assert!(
         toggle.right() > app.project_width - 16.0,
@@ -713,6 +712,18 @@ fn default_sidebar_keeps_player_and_bell_beside_hide() {
 
 #[test]
 #[cfg(feature = "test-support")]
+fn project_name_stays_in_the_sidebar_header_when_the_toolbar_has_no_room() {
+    let (mut app, ctx, _dir) = fixture();
+    app.project_width = 420.0;
+    app.preferences.width = 2000.0;
+    paint_header(&mut app, &ctx, &[]);
+    let rect = header_target(&ctx);
+    assert!(rect("toolbar-project").is_none());
+    assert!(rect("project-header-name").is_some());
+}
+
+#[test]
+#[cfg(feature = "test-support")]
 fn narrow_project_header_puts_player_and_bell_in_the_menu() {
     let (mut app, ctx, _dir) = fixture();
     app.project_width = 120.0;
@@ -729,7 +740,10 @@ fn narrow_project_header_puts_player_and_bell_in_the_menu() {
     assert!(rect("project-header-menu").is_some());
     assert!(rect("player-chrome").is_none());
     assert!(rect("left-agent-bar").is_none());
-    assert!(rect("project-header-name").is_some());
+    assert!(
+        rect("project-header-name").is_none(),
+        "the toolbar switcher already names the project"
+    );
     let menu = rect("project-header-menu").expect("menu");
     let pos = menu.center();
     paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);

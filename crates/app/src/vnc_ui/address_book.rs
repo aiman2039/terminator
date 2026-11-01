@@ -3,11 +3,11 @@
 //! Properties on this page; the sidebar only lists hosts.
 use super::*;
 use book_keys::{CARD_GAP, grid_key_action};
-use card::{CARD_HEIGHT, CARD_WIDTH, PaintCardInput, new_host_card, paint_card};
+use card::{CARD_HEIGHT, CARD_WIDTH, CardContent, PaintCardInput, new_host_card, paint_card};
 use terminator_core::vnc::{DEFAULT_PORT, VncSessionStatus};
 
 /// What the user did on one card this frame.
-pub(super) enum CardAction {
+pub(crate) enum CardAction {
     Connect,
     Properties,
     Duplicate,
@@ -156,10 +156,14 @@ impl App {
         profiles.sort_by_key(|p| std::cmp::Reverse(p.last_connected));
         self.vnc_book_controls(ui, &labels);
         ui.add_space(8.0);
-        let mut actions: Vec<(VncProfile, CardAction)> =
-            grid_key_action(ui, &profiles, &mut self.vnc_sidebar.selected_host)
-                .into_iter()
-                .collect();
+        let mut actions: Vec<(VncProfile, CardAction)> = grid_key_action(
+            ui,
+            &profiles,
+            |p| &p.id,
+            &mut self.vnc_sidebar.selected_host,
+        )
+        .into_iter()
+        .collect();
         actions.extend(self.vnc_host_items(ui, &profiles));
         ui.add_space(10.0);
         let count = profiles.len();
@@ -232,7 +236,7 @@ impl App {
                     actions.push((profile.clone(), action));
                 }
             }
-            if new_host_card(ui).clicked() {
+            if new_host_card(ui, "Add a VNC host").clicked() {
                 self.vnc_sidebar.begin_new();
             }
         });
@@ -272,7 +276,7 @@ impl App {
             rect,
             hovered: response.hovered(),
             selected: self.vnc_sidebar.selected_host.as_deref() == Some(profile.id.as_str()),
-            profile,
+            content: CardContent::vnc(profile),
             texture: texture.as_ref(),
             status,
         });
@@ -292,7 +296,7 @@ impl App {
             rect,
             hovered: response.hovered(),
             selected: self.vnc_sidebar.selected_host.as_deref() == Some(profile.id.as_str()),
-            profile,
+            content: CardContent::vnc(profile),
             texture: None,
             status,
         });

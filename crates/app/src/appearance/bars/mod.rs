@@ -177,7 +177,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
             status_tint,
             spin,
             kind,
-            title_tint,
+            title_tint: Some(tint),
         },
     );
     paint_title(
@@ -222,11 +222,11 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     }
 }
 
-/// Brief focus emphasis, fading to a thin, translucent steady-state outline.
+/// Brief focus emphasis that fades out; the pane title carries steady focus.
 pub fn focus_stroke(accent: Color32, elapsed: std::time::Duration) -> egui::Stroke {
     let progress = ((elapsed.as_secs_f32() - 0.2) / 1.0).clamp(0.0, 1.0);
     let strength = (1.0 - progress).powi(2);
-    let alpha = u8_from_f32((70.0 + 185.0 * strength).round());
+    let alpha = u8_from_f32((255.0 * strength).round());
     egui::Stroke::new(
         1.0 + strength,
         Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha),

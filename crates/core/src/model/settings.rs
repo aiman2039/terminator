@@ -52,6 +52,7 @@ impl Default for Settings {
             ssh_keepalive_seconds: crate::ssh::Tuning::DEFAULT.keepalive_seconds,
             ssh_reuse_minutes: crate::ssh::Tuning::DEFAULT.reuse_minutes,
             ssh_connect_timeout_seconds: crate::ssh::Tuning::DEFAULT.connect_timeout_seconds,
+            ssh_command_timeout_seconds: crate::ssh::Tuning::DEFAULT.command_timeout_seconds,
         }
     }
 }
@@ -98,6 +99,7 @@ impl Settings {
             keepalive_seconds: self.ssh_keepalive_seconds,
             reuse_minutes: self.ssh_reuse_minutes,
             connect_timeout_seconds: self.ssh_connect_timeout_seconds,
+            command_timeout_seconds: self.ssh_command_timeout_seconds,
         }
     }
 

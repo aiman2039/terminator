@@ -1,50 +1,16 @@
-//! Hosts sidebar rendering: header, address bar, collapsible groups and
-//! quick connect. Host rows live in `rows`.
-use super::{HostCursor, HostGroup, group_hosts, parse_target, quick_aliases};
+//! Hosts sidebar rendering: header, filter and collapsible groups. Host
+//! rows live in `rows`; adding and editing happen on the SSH page.
+use super::{HostGroup, group_hosts};
 use crate::{App, appearance};
 use eframe::egui;
-use terminator_core::{
-    remote::RemoteProject,
-    ssh::{ConfigHost, SshFailure},
-};
+use terminator_core::remote::RemoteProject;
 
 /// Data shared by the scrollable part of the Hosts sidebar.
 pub(super) struct HostListing<'a> {
     pub(super) projects: &'a [RemoteProject],
     pub(super) groups: &'a [HostGroup<'a>],
-    pub(super) aliases: &'a [&'a ConfigHost],
-    pub(super) config_loaded: bool,
     pub(super) filtering: bool,
     pub(super) managed: bool,
-    pub(super) quick_busy: bool,
-}
-
-/// The fix offered next to a quick-connect error.
-#[derive(Clone, Copy)]
-enum QuickFix {
-    /// Open Properties so the user sets a path and signs in in a terminal.
-    SetUp,
-    HostKey,
-    Retry,
-}
-
-impl QuickFix {
-    fn for_failure(failure: &SshFailure) -> Option<Self> {
-        match failure {
-            SshFailure::AuthFailed => Some(Self::SetUp),
-            SshFailure::UnknownHostKey | SshFailure::ChangedHostKey => Some(Self::HostKey),
-            SshFailure::Unreachable => Some(Self::Retry),
-            SshFailure::Other(_) => None,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::SetUp => "Set up…",
-            Self::HostKey => "Review host key",
-            Self::Retry => "Retry",
-        }
-    }
 }
 
 impl App {
@@ -60,38 +26,26 @@ impl App {
             return;
         }
         let managed = self.hosts_supported();
-        if self.remote_ui.hosts.config_generation == 0 {
-            self.load_config_hosts();
-        }
         self.poll_host_status(ui.ctx());
         self.poll_forwards(ui.ctx());
 
         let projects = self.state.remote_projects.clone();
         let filter = self.preferences.hosts_filter.clone();
         let groups = group_hosts(&projects, &filter, self.preferences.hosts_recent_first);
-        let config = self.remote_ui.hosts.config_hosts.clone();
-        let aliases = config
-            .as_deref()
-            .map(|c| quick_aliases(c, &projects, &filter))
-            .unwrap_or_default();
         let listing = HostListing {
             projects: &projects,
             groups: &groups,
-            aliases: &aliases,
-            config_loaded: config.is_some(),
             filtering: !filter.trim().is_empty(),
             managed,
-            quick_busy: self.remote_ui.hosts.quick.is_some(),
         };
-        self.hosts_address_bar(ui, &listing);
+        self.hosts_filter_bar(ui, &listing);
         self.hosts_error_row(ui);
         if !managed {
-            ui.weak("Restart the session service to group, remove and quick-connect hosts.");
+            ui.weak("Restart the session service to group and remove hosts.");
         }
         ui.add_space(6.0);
         appearance::sidebar_scroll("hosts-sidebar").show(ui, |ui| {
             self.host_groups(ui, &listing);
-            self.quick_connect_section(ui, &listing);
         });
     }
 
@@ -102,14 +56,8 @@ impl App {
                 if appearance::sidebar_action(ui, "Plus", "New SSH host").clicked() {
                     self.new_ssh_host();
                 }
-                if appearance::sidebar_action(ui, "FileKey", "Import hosts from ~/.ssh/config")
-                    .clicked()
-                {
-                    self.open_ssh_import();
-                }
-                if appearance::sidebar_action(ui, "RefreshCw", "Reload ~/.ssh/config").clicked() {
-                    self.load_config_hosts();
-                    self.remote_ui.hosts.status_polled = None;
+                if appearance::sidebar_action(ui, "LayoutDashboard", "Show all hosts").clicked() {
+                    self.show_ssh_page();
                 }
                 let recent = self.preferences.hosts_recent_first;
                 let tip = if recent {
@@ -131,40 +79,26 @@ impl App {
         });
     }
 
-    /// Rows the keyboard can select, in display order.
-    fn cursor_entries(&self, listing: &HostListing<'_>) -> Vec<HostCursor> {
+    /// Project ids the keyboard can select, in display order.
+    fn cursor_entries(&self, listing: &HostListing<'_>) -> Vec<String> {
         let mut entries = Vec::new();
         for group in listing.groups {
             if !self.group_collapsed(group, listing) {
-                entries.extend(
-                    group
-                        .projects
-                        .iter()
-                        .map(|p| HostCursor::Project(p.id.clone())),
-                );
+                entries.extend(group.projects.iter().map(|p| p.id.clone()));
             }
-        }
-        if listing.managed {
-            entries.extend(
-                listing
-                    .aliases
-                    .iter()
-                    .map(|h| HostCursor::Alias(h.alias.clone())),
-            );
         }
         entries
     }
 
-    /// Filter field that also connects: arrows move the selection, Enter
-    /// opens the selected or first match, or quick-connects a typed
-    /// `user@host:port`.
-    fn hosts_address_bar(&mut self, ui: &mut egui::Ui, listing: &HostListing<'_>) {
+    /// Filter field: arrows move the selection, Enter opens a terminal on
+    /// the selected or first match.
+    fn hosts_filter_bar(&mut self, ui: &mut egui::Ui, listing: &HostListing<'_>) {
         let entries = self.cursor_entries(listing);
         let mut submit = false;
         ui.horizontal(|ui| {
             let field = ui.add(
                 appearance::singleline(&mut self.preferences.hosts_filter)
-                    .hint_text("Filter, or connect to user@host…")
+                    .hint_text("Filter hosts…")
                     .desired_width((ui.available_width() - 28.0).max(60.0)),
             );
             if field.changed() {
@@ -193,11 +127,20 @@ impl App {
             }
         });
         if submit {
-            self.submit_host_address(&entries, listing);
+            let chosen = self
+                .remote_ui
+                .hosts
+                .cursor
+                .clone()
+                .filter(|c| entries.contains(c))
+                .or_else(|| entries.first().cloned());
+            if let Some(id) = chosen {
+                self.open_host_terminal(id);
+            }
         }
     }
 
-    fn move_host_cursor(&mut self, entries: &[HostCursor], down: bool) {
+    fn move_host_cursor(&mut self, entries: &[String], down: bool) {
         let last = entries.len().saturating_sub(1);
         let hosts = &mut self.remote_ui.hosts;
         let next = match hosts
@@ -213,80 +156,16 @@ impl App {
         hosts.cursor = entries.get(next).cloned();
     }
 
-    fn submit_host_address(&mut self, entries: &[HostCursor], listing: &HostListing<'_>) {
-        let typed = self.preferences.hosts_filter.trim().to_owned();
-        let chosen = self
-            .remote_ui
-            .hosts
-            .cursor
-            .clone()
-            .filter(|c| entries.contains(c))
-            .or_else(|| {
-                (!typed.is_empty())
-                    .then(|| entries.first().cloned())
-                    .flatten()
-            });
-        match chosen {
-            Some(HostCursor::Project(id)) => self.open_host_terminal(id),
-            Some(HostCursor::Alias(alias)) if !listing.quick_busy => self.quick_connect(&alias),
-            Some(HostCursor::Alias(_)) => {}
-            None if listing.managed && !listing.quick_busy => {
-                if let Some(ssh) = parse_target(&typed) {
-                    self.quick_connect_to(ssh);
-                }
-            }
-            None => {}
-        }
-    }
-
     fn hosts_error_row(&mut self, ui: &mut egui::Ui) {
         let Some(error) = self.remote_ui.hosts.error.clone() else {
             return;
         };
-        let failure = self.remote_ui.hosts.failure.clone();
-        let fix = failure
-            .as_ref()
-            .and_then(|(ssh, project)| Some((QuickFix::for_failure(ssh)?, project.clone())));
-        let mut chosen = None;
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
-            if let Some((fix, _)) = &fix
-                && ui.small_button(fix.label()).clicked()
-            {
-                chosen = Some(*fix);
-            }
             if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
                 self.remote_ui.hosts.error = None;
-                self.remote_ui.hosts.failure = None;
             }
         });
-        if let (Some(fix), Some((ssh, project))) = (chosen, failure) {
-            self.apply_quick_fix(fix, ssh, project);
-        }
-    }
-
-    fn apply_quick_fix(&mut self, fix: QuickFix, ssh: SshFailure, project: RemoteProject) {
-        self.remote_ui.hosts.error = None;
-        self.remote_ui.hosts.failure = None;
-        match fix {
-            QuickFix::SetUp => {
-                let mut draft = project;
-                if draft.root == terminator_core::remote::HOME_ROOT {
-                    draft.root.clear();
-                }
-                self.open_ssh_properties(draft);
-                self.remote_ui.error = Some(
-                    "Password or 2FA sign-in happens in a terminal. Set the remote path, then add the host."
-                        .into(),
-                );
-            }
-            QuickFix::HostKey => self.prompt_host_key(
-                project.ssh.clone(),
-                crate::remote_ui::Retry::Quick(Box::new(project)),
-                ssh == SshFailure::ChangedHostKey,
-            ),
-            QuickFix::Retry => self.start_quick_connect(project),
-        }
     }
 
     fn group_collapsed(&self, group: &HostGroup<'_>, listing: &HostListing<'_>) -> bool {
@@ -297,11 +176,9 @@ impl App {
 
     fn host_groups(&mut self, ui: &mut egui::Ui, listing: &HostListing<'_>) {
         if listing.projects.is_empty() {
-            ui.weak(
-                "No saved SSH hosts. Click +, import from ~/.ssh/config, or type user@host above.",
-            );
+            ui.weak("No saved SSH hosts. Click + to add one.");
         } else if listing.groups.is_empty() {
-            ui.weak("No matching hosts. Press Enter to connect to what you typed.");
+            ui.weak("No matching hosts.");
         }
         let any_group = listing.groups.iter().any(|g| g.name.is_some());
         for group in listing.groups {
@@ -344,61 +221,5 @@ impl App {
             height: 24.0,
             trailing: &count,
         })
-    }
-
-    fn quick_connect_section(&mut self, ui: &mut egui::Ui, listing: &HostListing<'_>) {
-        ui.separator();
-        ui.weak("Quick connect · ~/.ssh/config");
-        if !listing.config_loaded {
-            ui.weak("Loading…");
-            return;
-        }
-        if listing.aliases.is_empty() {
-            ui.weak("No other config hosts.");
-        }
-        for host in listing.aliases {
-            let selected = self.remote_ui.hosts.cursor.as_ref()
-                == Some(&HostCursor::Alias(host.alias.clone()));
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(&host.alias).selectable(false))
-                    .on_hover_text(crate::remote_ui::config_host_summary(host));
-                if selected {
-                    ui.weak("↵");
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    self.quick_connect_button(ui, host, listing);
-                });
-            });
-        }
-    }
-
-    fn quick_connect_button(
-        &mut self,
-        ui: &mut egui::Ui,
-        host: &ConfigHost,
-        listing: &HostListing<'_>,
-    ) {
-        let connecting = self
-            .remote_ui
-            .hosts
-            .quick
-            .as_ref()
-            .is_some_and(|q| q.ssh.host == host.alias);
-        if connecting {
-            ui.add(egui::Spinner::new());
-            return;
-        }
-        let response = ui
-            .add_enabled_ui(listing.managed && !listing.quick_busy, |ui| {
-                appearance::sidebar_action(
-                    ui,
-                    "Play",
-                    "Quick connect: add the home directory and open a terminal",
-                )
-            })
-            .inner;
-        if response.clicked() {
-            self.quick_connect(&host.alias);
-        }
     }
 }

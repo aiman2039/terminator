@@ -1,7 +1,6 @@
 //! One saved host in the Hosts sidebar: status dot, name, a subtitle with
 //! address, path and last connection, and actions. Rarely used actions sit
 //! in the row menu; the forwards toggle shows on hover or while in use.
-use super::HostCursor;
 use crate::{App, appearance};
 use eframe::egui::{self, RichText};
 use terminator_core::{Request, remote::RemoteProject};
@@ -54,8 +53,7 @@ impl App {
         };
         ui.colored_label(color, "●").on_hover_text(tip);
         let selected = self.selected.as_deref() == Some(project.id.as_str())
-            || self.remote_ui.hosts.cursor.as_ref()
-                == Some(&HostCursor::Project(project.id.clone()));
+            || self.remote_ui.hosts.cursor.as_deref() == Some(project.id.as_str());
         let name = ui.selectable_label(selected, &project.name);
         if name.double_clicked() {
             self.open_host_terminal(project.id.clone());

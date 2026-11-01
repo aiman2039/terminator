@@ -305,6 +305,7 @@ pub(crate) fn remote_project(name: &str, ssh: SshOptions) -> RemoteProject {
         group: None,
         forwards: Vec::new(),
         last_connected: 0,
+        command_timeout_seconds: None,
     }
 }
 fn probe(h: &Harness, project: &RemoteProject) -> Result<Response> {

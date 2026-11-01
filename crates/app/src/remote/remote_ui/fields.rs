@@ -1,5 +1,5 @@
-//! Field groups of SSH host Properties: config picker, connection, group
-//! and sign-in key files.
+//! Field groups of SSH host Properties: connection (with a config alias
+//! menu), group and sign-in key files.
 use super::*;
 use crate::vnc_ui::form;
 
@@ -14,6 +14,7 @@ pub(crate) fn blank_project() -> RemoteProject {
         group: None,
         forwards: Vec::new(),
         last_connected: 0,
+        command_timeout_seconds: None,
     }
 }
 
@@ -33,37 +34,43 @@ pub(crate) fn config_host_summary(host: &ConfigHost) -> String {
     text
 }
 
-/// "From SSH config" picker. Choosing an alias leaves user and port blank so
-/// OpenSSH applies the configured `User`, `Port`, `ProxyJump` and keys.
-pub(super) fn config_host_picker(
+/// Host and port on one row, then the user. The host field takes any name;
+/// its menu lists `~/.ssh/config` aliases. Choosing an alias leaves user
+/// and port blank so OpenSSH applies the configured `User`, `Port`,
+/// `ProxyJump` and keys.
+pub(super) fn connection_fields(
     ui: &mut egui::Ui,
-    hosts: Option<&[ConfigHost]>,
     draft: &mut RemoteProject,
+    hosts: Option<&[ConfigHost]>,
 ) {
-    let selected = hosts.and_then(|h| h.iter().find(|h| h.alias == draft.ssh.host));
-    let text = match (hosts, selected) {
-        (None, _) => "Loading…".to_owned(),
-        (Some([]), _) => "No hosts in ~/.ssh/config".to_owned(),
-        (Some(_), Some(host)) => host.alias.clone(),
-        (Some(_), None) => "Choose a host…".to_owned(),
-    };
+    let config = hosts.and_then(|h| h.iter().find(|h| h.alias == draft.ssh.host));
+    let port_hint = config
+        .and_then(|h| h.port)
+        .map_or_else(|| "22".to_owned(), |p| p.to_string());
+    let user_hint = config.filter(|h| !h.user.is_empty()).map_or_else(
+        || "From SSH config or local user".to_owned(),
+        |h| h.user.clone(),
+    );
     let mut chosen = None;
-    form::label(ui, "From SSH config");
-    ui.add_enabled_ui(hosts.is_some_and(|h| !h.is_empty()), |ui| {
-        egui::ComboBox::from_id_salt("ssh-config-host")
-            .selected_text(text)
-            .width(ui.available_width())
-            .show_ui(ui, |ui| {
-                for host in hosts.unwrap_or_default() {
-                    let label = format!("{}  ·  {}", host.alias, config_host_summary(host));
-                    if ui
-                        .selectable_label(host.alias == draft.ssh.host, label)
-                        .clicked()
-                    {
-                        chosen = Some(host.alias.clone());
-                    }
-                }
+    ui.horizontal(|ui| {
+        let menu = appearance::TOOLBAR_BUTTON + 4.0;
+        let width = (ui.available_width() - form::NUMBER_WIDTH - menu - 8.0).max(120.0);
+        ui.vertical(|ui| {
+            ui.set_width(width + menu);
+            form::label(ui, "Host or config alias");
+            ui.horizontal(|ui| {
+                ui.add(
+                    appearance::singleline(&mut draft.ssh.host)
+                        .hint_text("build.example.com")
+                        .desired_width(width),
+                );
+                chosen = config_menu(ui, hosts);
             });
+        });
+        ui.vertical(|ui| {
+            form::label(ui, "Port");
+            appearance::optional_port(ui, &mut draft.ssh.port, &port_hint);
+        });
     });
     if let Some(alias) = chosen {
         if draft.name.trim().is_empty() || draft.name == draft.ssh.host {
@@ -73,38 +80,68 @@ pub(super) fn config_host_picker(
         draft.ssh.username.clear();
         draft.ssh.port = None;
     }
+    form::text(ui, "User", &mut draft.ssh.username, &user_hint);
 }
 
-/// Host and port on one row, then the user.
-pub(super) fn connection_fields(
-    ui: &mut egui::Ui,
-    draft: &mut RemoteProject,
-    config: Option<&ConfigHost>,
-) {
-    let port_hint = config
-        .and_then(|h| h.port)
-        .map_or_else(|| "22".to_owned(), |p| p.to_string());
-    ui.horizontal(|ui| {
-        let width = (ui.available_width() - form::NUMBER_WIDTH - 8.0).max(120.0);
-        ui.vertical(|ui| {
-            ui.set_width(width);
-            form::label(ui, "Host or config alias");
-            ui.add(
-                appearance::singleline(&mut draft.ssh.host)
-                    .hint_text("build.example.com")
-                    .desired_width(width),
-            );
-        });
-        ui.vertical(|ui| {
-            form::label(ui, "Port");
-            appearance::optional_port(ui, &mut draft.ssh.port, &port_hint);
-        });
+/// Optional menu of `~/.ssh/config` aliases; returns the chosen alias.
+fn config_menu(ui: &mut egui::Ui, hosts: Option<&[ConfigHost]>) -> Option<String> {
+    let mut chosen = None;
+    let available = hosts.is_some_and(|h| !h.is_empty());
+    let tip = match hosts {
+        None => "Loading ~/.ssh/config…",
+        Some([]) => "No hosts in ~/.ssh/config",
+        Some(_) => "Choose a host from ~/.ssh/config (optional)",
+    };
+    ui.add_enabled_ui(available, |ui| {
+        appearance::icon_menu_button(ui, "ChevronDown", |ui| {
+            for host in hosts.unwrap_or_default() {
+                let label = format!("{}  ·  {}", host.alias, config_host_summary(host));
+                if ui.button(label).clicked() {
+                    chosen = Some(host.alias.clone());
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(tip)
+        .on_disabled_hover_text(tip);
     });
-    let user_hint = config.filter(|h| !h.user.is_empty()).map_or_else(
-        || "From SSH config or local user".to_owned(),
-        |h| h.user.clone(),
+    chosen
+}
+
+/// Per-host limit for one background SSH call; blank uses Settings → SSH.
+/// `enabled` only when the daemon stores it (`ssh-host-timeout-v1`).
+pub(super) fn timeout_field(
+    ui: &mut egui::Ui,
+    value: &mut Option<u32>,
+    default: u32,
+    enabled: bool,
+) {
+    form::label(ui, "Command timeout (seconds)");
+    ui.add_enabled_ui(enabled, |ui| {
+        let mut text = value.map_or_else(String::new, |v| v.to_string());
+        let hint = format!("{default} (Settings → SSH)");
+        let response = ui.add(
+            appearance::singleline(&mut text)
+                .hint_text(hint)
+                .desired_width(160.0),
+        );
+        if response.changed() {
+            let text = text.trim();
+            if text.is_empty() {
+                *value = None;
+            } else if let Ok(seconds) = text.parse::<u32>() {
+                *value = Some(seconds);
+            }
+        }
+    })
+    .response
+    .on_disabled_hover_text("Requires an updated session service.");
+    form::hint(
+        ui,
+        "Time for one background call (test, login directory, files, Git), sign-in included. 5–120 s. Increase it for slow or distant hosts.",
+        "",
     );
-    form::text(ui, "User", &mut draft.ssh.username, &user_hint);
 }
 
 /// A key file path; `~/` expands to the home directory, blank clears it.

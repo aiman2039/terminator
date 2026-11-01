@@ -35,6 +35,7 @@ mod name_prompts;
 mod native_editor_panes;
 mod pane_drag;
 mod project_sidebar;
+mod ssh_page;
 #[cfg(feature = "test-support")]
 mod status_info;
 mod tab_creation;

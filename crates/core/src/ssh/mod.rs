@@ -10,7 +10,9 @@ mod failure;
 mod tuning;
 pub use config::{ConfigHost, ConfigSource, config_hosts, parse_config_aliases, parse_config_host};
 pub use failure::{SshError, SshFailure, classify};
-pub use tuning::{TUNING_CAPABILITY, Tuning, set_tuning};
+pub use tuning::{
+    COMMAND_TIMEOUT_CAPABILITY, TUNING_CAPABILITY, Tuning, current as current_tuning, set_tuning,
+};
 
 /// `ScanHostKey`, `TrustHostKey` and `Response::SshError`.
 pub const HOST_KEYS_CAPABILITY: &str = "ssh-hostkeys-v1";

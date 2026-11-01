@@ -54,7 +54,9 @@ pub(super) fn execute(input: ExecuteInput<'_>) -> Result<Vec<u8>> {
     let output = run_command(
         command,
         CommandOptions {
-            timeout: Duration::from_secs(5),
+            // Per host, else Settings → SSH; a first connection can
+            // include sign-in.
+            timeout: project.command_timeout(),
             stdout_limit: limit,
             stderr_limit: STDERR_LIMIT,
             accepted_exit_codes: None,
@@ -382,6 +384,7 @@ mod tests {
             group: None,
             forwards: Vec::new(),
             last_connected: 0,
+            command_timeout_seconds: None,
         }
     }
     #[test]

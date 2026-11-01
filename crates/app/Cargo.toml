@@ -35,7 +35,7 @@ merman = { version = "0.9", default-features = false, features = ["all-diagrams"
 pulldown-cmark = { version = "0.13", default-features = false }
 url = "2"
 uuid.workspace = true
-wry = "0.57"
+wry = { version = "0.57", optional = true }
 rodio = "0.23"
 cpal = "0.17"
 spectrum-analyzer = "2"
@@ -66,8 +66,10 @@ base64.workspace = true
 linkify = "0.11"
 
 [features]
-default = ["wgpu"]
+default = ["wgpu", "webview"]
 wgpu = ["eframe/wgpu"]
+# OS webview Browser tabs (WKWebView / WebKitGTK). Off for the portable Linux build.
+webview = ["dep:wry", "dep:gtk"]
 test-support = ["dep:egui-winit", "egui-winit/test-support", "terminator-updater/test-support"]
 
 [dependencies.image]
@@ -86,7 +88,7 @@ default-features = false
 features = ["user-hooks"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
+gtk = { version = "0.18", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3.1"

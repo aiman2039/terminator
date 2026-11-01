@@ -5719,3 +5719,22 @@ denied), the sarah limits and all workspace tests passed, except
 fails at a `git push` to its temporary fixture remote in this worktree and uses
 no changed code. The GUI was not launched and no native fixture or live SSH
 host was exercised.
+
+## UI polish: flush panes and visible defects (2026-11-01)
+
+Compared `cargo xtask gui launch` captures before and after on macOS (Glow, 1x).
+The project name now shows once, in the toolbar switcher. The sidebar header
+keeps it only when the toolbar has no room. The Markdown code-block copy glyph
+renders from the bundled Noto Sans Symbols 2 subset instead of a system
+missing-glyph box. Narrow session rows keep the full label and drop the status
+word. Split panes are flush with a 1px border-color splitter. The pane outline
+fades out after the focus flash. The inactive pane title is muted.
+
+New unit tests: `markdown_code_block_copy_glyphs_render_from_bundled_fonts`,
+`narrow_session_row_keeps_the_label_and_drops_the_status_word`,
+`project_name_stays_in_the_sidebar_header_when_the_toolbar_has_no_room`. Each
+failed before its fix. App and core tests, workspace Clippy (all targets and
+features, warnings denied) and the sarah limits passed. `cargo xtask gui all`
+passed every case except `scrolling-bounded` under five workers. That case then
+passed twice when run alone. Saved themes keep their explicit
+`pane_divider_width`; only the default IntelliJ preset changed from 8 to 1.

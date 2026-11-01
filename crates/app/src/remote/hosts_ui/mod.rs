@@ -1,7 +1,8 @@
-//! Hosts sidebar: saved SSH projects in collapsible groups, live
-//! connection dots, quick connect for `~/.ssh/config` aliases and typed
-//! `user@host:port` targets, and a page that imports many config hosts.
+//! SSH hosts: the Hosts sidebar lists saved SSH projects in collapsible
+//! groups with live connection dots; the SSH page in the main pane (like
+//! the VNC page) finds, adds, edits and imports hosts.
 pub(crate) mod import;
+mod page;
 mod rows;
 mod sidebar;
 #[cfg(test)]
@@ -16,8 +17,8 @@ use std::{
     time::{Duration, Instant},
 };
 use terminator_core::{
-    remote::{HOME_ROOT, RemoteProject},
-    ssh::{ConfigHost, SshFailure, SshOptions},
+    remote::RemoteProject,
+    ssh::{ConfigHost, SshOptions},
 };
 
 /// How often visible host dots re-run `ssh -O check`.
@@ -27,7 +28,18 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 pub(crate) struct HostsState {
-    /// `~/.ssh/config` aliases; `None` until the first load finishes.
+    /// The SSH page fills the main pane.
+    pub page_open: bool,
+    /// The page's address bar: filters cards, or names a new host.
+    pub address: String,
+    pub page_error: Option<String>,
+    /// The card the keyboard acts on.
+    pub selected_card: Option<String>,
+    /// Show only this group's cards.
+    pub group_filter: Option<String>,
+    /// Rows instead of cards.
+    pub list_view: bool,
+    /// `~/.ssh/config` aliases for the import page; `None` until loaded.
     pub config_hosts: Option<Vec<ConfigHost>>,
     /// The config load this sidebar waits for; 0 before the first request.
     pub config_generation: u64,
@@ -36,15 +48,10 @@ pub(crate) struct HostsState {
     pub status_pending: bool,
     pub status_polled: Option<Instant>,
     pub confirm_remove: Option<String>,
-    /// The quick connect behind `error`, with its SSH failure, for the fix
-    /// button.
-    pub failure: Option<(SshFailure, RemoteProject)>,
-    /// Keyboard selection while the filter field has focus.
-    pub cursor: Option<HostCursor>,
+    /// Keyboard selection (a project id) while the filter field has focus.
+    pub cursor: Option<String>,
     /// Project id and the group name being typed.
     pub editing_group: Option<(String, String)>,
-    /// Quick connect in flight: probing the login directory, then adding.
-    pub quick: Option<RemoteProject>,
     pub error: Option<String>,
     /// Daemon forward status (`ssh-forwarding-v1`).
     pub forwards: terminator_core::remote::ForwardStatus,
@@ -57,13 +64,6 @@ pub(crate) struct HostsState {
     /// Projects whose forwards are expanded in the Hosts sidebar.
     pub forwards_open: HashSet<String>,
     pub forward_draft: Option<crate::forwards_ui::ForwardDraft>,
-}
-
-/// One row the keyboard can select in the Hosts sidebar.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum HostCursor {
-    Project(String),
-    Alias(String),
 }
 
 pub(crate) struct HostGroup<'a> {
@@ -80,7 +80,7 @@ impl HostGroup<'_> {
     }
 }
 
-fn matches(project: &RemoteProject, filter: &str) -> bool {
+pub(super) fn matches(project: &RemoteProject, filter: &str) -> bool {
     filter.is_empty()
         || [
             project.name.as_str(),
@@ -147,7 +147,7 @@ pub(crate) fn parse_target(text: &str) -> Option<SshOptions> {
 
 /// Config aliases no saved project connects to by name, filtered like
 /// [`group_hosts`].
-pub(crate) fn quick_aliases<'a>(
+pub(crate) fn unsaved_aliases<'a>(
     hosts: &'a [ConfigHost],
     projects: &[RemoteProject],
     filter: &str,
@@ -255,90 +255,5 @@ impl App {
     pub(crate) fn open_host_terminal(&mut self, id: String) {
         self.select_project(id);
         self.create(None);
-    }
-
-    /// Probes the alias's login directory, then adds a project rooted there
-    /// and opens a terminal in it.
-    pub(crate) fn quick_connect(&mut self, alias: &str) {
-        self.quick_connect_to(SshOptions {
-            host: alias.to_owned(),
-            ..SshOptions::default()
-        });
-    }
-
-    /// Quick connect to typed or config options, named after them.
-    pub(crate) fn quick_connect_to(&mut self, ssh: SshOptions) {
-        let project = RemoteProject {
-            name: ssh.authority(),
-            ssh,
-            root: HOME_ROOT.to_owned(),
-            ..crate::remote_ui::blank_project()
-        };
-        self.start_quick_connect(project);
-    }
-
-    pub(crate) fn start_quick_connect(&mut self, project: RemoteProject) {
-        self.remote_ui.hosts.error = None;
-        self.remote_ui.hosts.failure = None;
-        self.remote_ui.hosts.quick = Some(project.clone());
-        let _ = self.jobs.send(Job::RemoteAdd {
-            project,
-            probe: true,
-            generation: self.selection_generation,
-        });
-    }
-
-    /// Advances the quick connect in flight for `project`.
-    pub(crate) fn apply_quick_connect(
-        &mut self,
-        project: &RemoteProject,
-        generation: u64,
-        result: Result<crate::remote_ui::FormResult, crate::remote_ui::Failure>,
-    ) {
-        if self.remote_ui.hosts.quick.as_ref() != Some(project) {
-            return;
-        }
-        self.remote_ui.hosts.quick = None;
-        match result {
-            Ok(crate::remote_ui::FormResult::Probe(root)) => {
-                let mut added = project.clone();
-                added.root = root;
-                self.remote_ui.hosts.quick = Some(added.clone());
-                let _ = self.jobs.send(Job::RemoteAdd {
-                    project: added,
-                    probe: false,
-                    generation,
-                });
-            }
-            Ok(crate::remote_ui::FormResult::Added(state)) => {
-                let id = state
-                    .remote_projects
-                    .iter()
-                    .find(|p| p.ssh == project.ssh && p.root == project.root)
-                    .map(|p| p.id.clone());
-                self.apply_state(*state);
-                if let Some(id) = id {
-                    self.open_host_terminal(id);
-                }
-            }
-            Err(failure) => {
-                if let Some(
-                    ssh @ (terminator_core::ssh::SshFailure::UnknownHostKey
-                    | terminator_core::ssh::SshFailure::ChangedHostKey),
-                ) = &failure.ssh
-                {
-                    let changed = *ssh == terminator_core::ssh::SshFailure::ChangedHostKey;
-                    self.prompt_host_key(
-                        project.ssh.clone(),
-                        crate::remote_ui::Retry::Quick(Box::new(project.clone())),
-                        changed,
-                    );
-                }
-                self.remote_ui.hosts.error = Some(failure.text);
-                if let Some(ssh) = failure.ssh {
-                    self.remote_ui.hosts.failure = Some((ssh, project.clone()));
-                }
-            }
-        }
     }
 }

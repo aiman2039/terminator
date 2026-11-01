@@ -133,6 +133,20 @@ pub fn panel_frame(theme: &AppearanceConfig) -> egui::Frame {
         .stroke(egui::Stroke::new(theme.border_width, color(&theme.border)))
         .inner_margin(egui::Margin::same(8))
 }
+/// Split panes sit flush with a 1px-style splitter and no per-pane outline.
+pub fn dock_style(ui_style: &egui::Style, theme: &AppearanceConfig) -> egui_dock::Style {
+    let mut style = egui_dock::Style::from_egui(ui_style);
+    style.tab_bar.height = 32.0;
+    style.buttons.add_tab_align = egui_dock::style::TabAddAlign::Left;
+    style.separator.width = theme.pane_divider_width;
+    style.separator.extra_interact_width = 6.0;
+    style.separator.color_idle = color(&theme.border);
+    style.main_surface_border_rounding = egui::CornerRadius::ZERO;
+    style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
+    style.tab.tab_body.stroke = egui::Stroke::NONE;
+    style
+}
+
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     for (name, bytes, family) in [
@@ -171,48 +185,48 @@ pub fn install(ctx: &egui::Context) {
             .or_default()
             .insert(0, name.into());
     }
-    fonts.font_data.insert(
-        "Noto Sans Symbols 2 Braille".into(),
-        egui::FontData::from_static(include_bytes!(
-            "../../assets/fonts/NotoSansSymbols2-Braille.ttf"
-        ))
-        .into(),
-    );
-    for family in [
-        FontFamily::Monospace,
-        FontFamily::Name(BOLD_FAMILY.into()),
-        FontFamily::Name(ITALIC_FAMILY.into()),
-    ] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .push("Noto Sans Symbols 2 Braille".into());
-    }
-    fonts.font_data.insert(
-        "Noto Sans Hebrew".into(),
-        egui::FontData::from_static(include_bytes!(
-            "../../assets/fonts/NotoSansHebrew-Regular.ttf"
-        ))
-        .into(),
-    );
-    for family in [
+    let terminal = [
         FontFamily::Monospace,
         FontFamily::Name(BOLD_FAMILY.into()),
         FontFamily::Name(ITALIC_FAMILY.into()),
         FontFamily::Proportional,
-        FontFamily::Name("Semibold".into()),
-    ] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .push("Noto Sans Hebrew".into());
-    }
+    ];
+    push_fallback(
+        &mut fonts,
+        (
+            "Noto Sans Symbols 2",
+            include_bytes!("../../assets/fonts/NotoSansSymbols2-Subset.ttf"),
+        ),
+        terminal.clone(),
+    );
+    push_fallback(
+        &mut fonts,
+        (
+            "Noto Sans Hebrew",
+            include_bytes!("../../assets/fonts/NotoSansHebrew-Regular.ttf"),
+        ),
+        terminal
+            .into_iter()
+            .chain([FontFamily::Name("Semibold".into())]),
+    );
     ctx.set_fonts(fonts);
     egui_extras::install_image_loaders(ctx);
     apply(ctx, &AppearanceConfig::default());
 }
+/// Append a font as the last fallback of each family.
+fn push_fallback(
+    fonts: &mut egui::FontDefinitions,
+    (name, bytes): (&str, &'static [u8]),
+    families: impl IntoIterator<Item = FontFamily>,
+) {
+    fonts
+        .font_data
+        .insert(name.into(), egui::FontData::from_static(bytes).into());
+    for family in families {
+        fonts.families.entry(family).or_default().push(name.into());
+    }
+}
+
 pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     let light = theme.is_light();
     set_chrome(theme);

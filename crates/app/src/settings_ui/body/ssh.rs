@@ -10,7 +10,20 @@ struct TuningRow<'a> {
     value: &'a mut u32,
     range: std::ops::RangeInclusive<u32>,
     suffix: &'static str,
+    /// The running daemon honors this row.
+    enabled: bool,
 }
+
+/// Row labels and their search keywords, in row order.
+const SEARCH: [(&str, &str); 4] = [
+    ("Keep-alive", "keepalive serveraliveinterval idle drop"),
+    (
+        "Keep shared connection",
+        "reuse controlpersist multiplex master",
+    ),
+    ("Connect timeout", "connecttimeout unreachable"),
+    ("Command timeout", "timeout probe slow sign-in login"),
+];
 
 impl App {
     pub(super) fn ssh_settings(&mut self, ui: &mut egui::Ui) {
@@ -18,20 +31,10 @@ impl App {
         ui.weak(
             "Applies to new SSH connections. Host names, users, keys and jumps come from ~/.ssh/config.",
         );
-        let supported = self
-            .state
-            .capabilities
-            .iter()
-            .any(|c| c == terminator_core::ssh::TUNING_CAPABILITY);
-        let shown = [
-            ("Keep-alive", "keepalive serveraliveinterval idle drop"),
-            (
-                "Keep shared connection",
-                "reuse controlpersist multiplex master",
-            ),
-            ("Connect timeout", "connecttimeout unreachable"),
-        ]
-        .map(|(label, keywords)| self.field_visible(label, keywords));
+        let has = |name: &str| self.state.capabilities.iter().any(|c| c == name);
+        let supported = has(terminator_core::ssh::TUNING_CAPABILITY);
+        let command_timeout = has(terminator_core::ssh::COMMAND_TIMEOUT_CAPABILITY);
+        let shown = SEARCH.map(|(label, keywords)| self.field_visible(label, keywords));
         let draft = &mut self.settings_draft;
         let rows = [
             TuningRow {
@@ -40,6 +43,7 @@ impl App {
                 value: &mut draft.ssh_keepalive_seconds,
                 range: Tuning::KEEPALIVE_SECONDS,
                 suffix: " s",
+                enabled: true,
             },
             TuningRow {
                 label: "Keep shared connection",
@@ -47,6 +51,7 @@ impl App {
                 value: &mut draft.ssh_reuse_minutes,
                 range: Tuning::REUSE_MINUTES,
                 suffix: " min",
+                enabled: true,
             },
             TuningRow {
                 label: "Connect timeout",
@@ -54,6 +59,15 @@ impl App {
                 value: &mut draft.ssh_connect_timeout_seconds,
                 range: Tuning::CONNECT_TIMEOUT_SECONDS,
                 suffix: " s",
+                enabled: true,
+            },
+            TuningRow {
+                label: "Command timeout",
+                description: "Seconds one background SSH call (connection test, login directory, files, Git) may take, sign-in included. Increase it for slow or distant hosts.",
+                value: &mut draft.ssh_command_timeout_seconds,
+                range: Tuning::COMMAND_TIMEOUT_SECONDS,
+                suffix: " s",
+                enabled: command_timeout,
             },
         ];
         ui.add_enabled_ui(supported, |ui| {
@@ -66,7 +80,8 @@ impl App {
                     label: row.label,
                     description: row.description,
                     add_control: |ui| {
-                        ui.add(
+                        ui.add_enabled(
+                            row.enabled,
                             egui::DragValue::new(row.value)
                                 .range(row.range)
                                 .suffix(row.suffix),
@@ -81,10 +96,16 @@ impl App {
             .add_enabled(supported, egui::Button::new("Reset to defaults"))
             .clicked()
         {
-            let defaults = Settings::default();
-            self.settings_draft.ssh_keepalive_seconds = defaults.ssh_keepalive_seconds;
-            self.settings_draft.ssh_reuse_minutes = defaults.ssh_reuse_minutes;
-            self.settings_draft.ssh_connect_timeout_seconds = defaults.ssh_connect_timeout_seconds;
+            self.reset_ssh_settings();
         }
+    }
+
+    fn reset_ssh_settings(&mut self) {
+        let defaults = Settings::default();
+        let draft = &mut self.settings_draft;
+        draft.ssh_keepalive_seconds = defaults.ssh_keepalive_seconds;
+        draft.ssh_reuse_minutes = defaults.ssh_reuse_minutes;
+        draft.ssh_connect_timeout_seconds = defaults.ssh_connect_timeout_seconds;
+        draft.ssh_command_timeout_seconds = defaults.ssh_command_timeout_seconds;
     }
 }

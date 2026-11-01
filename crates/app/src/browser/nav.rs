@@ -2,6 +2,7 @@
 use eframe::egui;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(feature = "webview")]
 use wry::WebView;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -73,11 +74,13 @@ impl NavStates {
 
 /// Bit 1 = can go back, bit 2 = can go forward. Engines without the
 /// Navigation API report both, so the buttons stay usable.
+#[cfg(feature = "webview")]
 const HISTORY_JS: &str = "typeof navigation === 'undefined' ? 3 : \
     (navigation.canGoBack ? 1 : 0) + (navigation.canGoForward ? 2 : 0)";
 
 /// Refreshes back/forward availability. wry has no safe native query, so ask
 /// the page; the answer arrives later through the shared state.
+#[cfg(feature = "webview")]
 pub(crate) fn refresh_history(view: &WebView, states: &NavStates, key: &str) {
     let states = states.clone();
     let key = key.to_owned();
@@ -91,6 +94,7 @@ pub(crate) fn refresh_history(view: &WebView, states: &NavStates, key: &str) {
 }
 
 /// The page's declared icon, else `/favicon.ico` on http(s) origins.
+#[cfg(feature = "webview")]
 const FAVICON_JS: &str = "(() => { \
     const link = document.querySelector('link[rel~=\"icon\"]'); \
     if (link && link.href) return link.href; \
@@ -99,6 +103,7 @@ const FAVICON_JS: &str = "(() => { \
 
 /// Reads the page icon URL after a load. Only plain http(s) URLs are kept;
 /// the GUI downloads the bytes itself, outside the page.
+#[cfg(feature = "webview")]
 pub(crate) fn refresh_favicon(view: &WebView, states: &NavStates, key: &str) {
     let states = states.clone();
     let key = key.to_owned();
@@ -109,11 +114,13 @@ pub(crate) fn refresh_favicon(view: &WebView, states: &NavStates, key: &str) {
 }
 
 /// Decodes the script's JSON string result into an allowed icon URL.
+#[cfg(any(feature = "webview", test))]
 fn favicon_url(result: &str) -> Option<String> {
     let url = serde_json::from_str::<String>(result).ok()?;
     crate::browser::parse_url(&url).ok()
 }
 
+#[cfg(feature = "webview")]
 pub(crate) fn stop(view: &WebView) {
     let _ = view.evaluate_script("window.stop()");
 }

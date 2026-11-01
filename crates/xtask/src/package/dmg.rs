@@ -103,7 +103,7 @@ pub fn local_dmg(input: LocalDmgInput) -> Result<()> {
     let staging = tempfile::Builder::new()
         .prefix(".building-")
         .tempdir_in(&destination)?;
-    run(!release, timings, Some(staging.path().to_owned()))?;
+    run(!release, timings, Some(staging.path().to_owned()), false)?;
     let dmg_timer = StageTimer::new("DMG");
     let app = staging.path().join("Terminator.app");
     let image = staging.path().join("Terminator.dmg");

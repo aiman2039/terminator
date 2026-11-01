@@ -231,6 +231,8 @@ pub struct Settings {
     pub ssh_reuse_minutes: u32,
     /// OpenSSH `ConnectTimeout`.
     pub ssh_connect_timeout_seconds: u32,
+    /// Limit for one SSH batch call (`ssh-command-timeout-v1`).
+    pub ssh_command_timeout_seconds: u32,
 }
 mod error;
 mod hooks;

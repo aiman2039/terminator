@@ -13,6 +13,8 @@ pub const CAPABILITY: &str = "ssh-projects-v1";
 pub const HOSTS_CAPABILITY: &str = "ssh-hosts-v1";
 /// `UpdateRemoteProject` and [`RemoteProject::last_connected`].
 pub const EDIT_CAPABILITY: &str = "ssh-edit-v1";
+/// [`RemoteProject::command_timeout_seconds`] is stored and honored.
+pub const HOST_TIMEOUT_CAPABILITY: &str = "ssh-host-timeout-v1";
 /// [`Operation::Upload`], [`Operation::Download`] and
 /// [`Operation::TransferStatus`].
 pub const TRANSFER_CAPABILITY: &str = "ssh-transfer-v1";
@@ -44,6 +46,8 @@ pub enum RemoteError {
     InvalidRelativePath { path: String },
     #[error("File name must be one path component without controls")]
     InvalidFileName { name: String },
+    #[error("SSH command timeout must be between 5 and 120 seconds")]
+    InvalidTimeout { seconds: u32 },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteProject {
@@ -65,6 +69,10 @@ pub struct RemoteProject {
     /// never. Set by the daemon only.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last_connected: u64,
+    /// Limit for one batch SSH call to this host; `None` uses Settings →
+    /// SSH (`ssh-host-timeout-v1`). Omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_timeout_seconds: Option<u32>,
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -90,6 +98,11 @@ impl RemoteProject {
             });
         }
         validate_forwards(&self.forwards)?;
+        if let Some(seconds) = self.command_timeout_seconds
+            && !crate::ssh::Tuning::COMMAND_TIMEOUT_SECONDS.contains(&seconds)
+        {
+            return Err(RemoteError::InvalidTimeout { seconds });
+        }
         let valid_id = self.id.len() <= 128
             && self
                 .id
@@ -119,6 +132,14 @@ impl RemoteProject {
             });
         }
         Ok(())
+    }
+    /// This host's batch-call limit, else the Settings → SSH one.
+    #[must_use]
+    pub fn command_timeout(&self) -> std::time::Duration {
+        self.command_timeout_seconds.map_or_else(
+            || crate::ssh::current_tuning().command_timeout(),
+            |seconds| std::time::Duration::from_secs(u64::from(seconds)),
+        )
     }
     pub fn absolute(&self, relative: &str) -> Result<String, RemoteError> {
         validate_relative(relative)?;
@@ -310,6 +331,7 @@ mod tests {
             group: None,
             forwards: Vec::new(),
             last_connected: 0,
+            command_timeout_seconds: None,
         };
         assert_ne!(p.identity_path(), std::path::PathBuf::from(&p.root));
         assert_eq!(
@@ -317,6 +339,43 @@ mod tests {
             "/workspace/project/src/main.rs"
         );
         assert!(p.absolute("../local").is_err());
+    }
+    #[test]
+    fn host_timeout_is_optional_bounded_and_overrides_settings() {
+        let mut p = RemoteProject {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            ssh: SshOptions {
+                host: "slow.example.com".into(),
+                ..SshOptions::default()
+            },
+            root: "/home/me".into(),
+            layout: serde_json::Value::Null,
+            group: None,
+            forwards: Vec::new(),
+            last_connected: 0,
+            command_timeout_seconds: None,
+        };
+        // Unset: older readers see the same JSON, and Settings decides.
+        assert!(
+            !serde_json::to_string(&p)
+                .unwrap()
+                .contains("command_timeout")
+        );
+        assert_eq!(
+            p.command_timeout(),
+            crate::ssh::current_tuning().command_timeout()
+        );
+        p.command_timeout_seconds = Some(90);
+        assert!(p.validate().is_ok());
+        assert_eq!(p.command_timeout(), std::time::Duration::from_secs(90));
+        let json = serde_json::to_string(&p).unwrap();
+        let back: RemoteProject = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.command_timeout_seconds, Some(90));
+        for bad in [0, 4, 121] {
+            p.command_timeout_seconds = Some(bad);
+            assert!(p.validate().is_err(), "{bad}");
+        }
     }
     #[test]
     fn upload_names_are_single_safe_components() {

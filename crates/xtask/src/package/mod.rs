@@ -124,14 +124,19 @@ fn licenses(destination: &Path) -> Result<()> {
     )?;
     Ok(())
 }
-pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()> {
+pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>, portable: bool) -> Result<()> {
     let build_timer = StageTimer::new("Build");
     let shell = xshell::Shell::new()?;
     let _cwd = shell.push_dir(root());
     // xtask is already running; an optimized copy is not part of the package.
     let release_flag = (!debug).then_some("--release");
     let timing_flag = timings.then_some("--timings");
-    xshell::cmd!(shell, "cargo build --locked -p terminator -p terminator-daemon -p terminator-hook {release_flag...} {timing_flag...}").run()?;
+    let feature_flags: &[&str] = if portable {
+        &["--no-default-features", "--features", "terminator/wgpu"]
+    } else {
+        &[]
+    };
+    xshell::cmd!(shell, "cargo build --locked -p terminator -p terminator-daemon -p terminator-hook {release_flag...} {timing_flag...} {feature_flags...}").run()?;
     drop(build_timer);
     let _package_timer = StageTimer::new("Package");
     let binaries = std::env::var_os("CARGO_TARGET_DIR")

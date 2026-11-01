@@ -93,6 +93,9 @@ enum Task {
         timings: bool,
         #[arg(long)]
         output: Option<PathBuf>,
+        /// Build without the OS webview (no WebKitGTK link) for older Linux distributions.
+        #[arg(long)]
+        portable: bool,
     },
     /// Build and package a local DMG without installing it.
     LocalDmg {
@@ -238,7 +241,8 @@ fn dispatch(task: Task) -> Result<()> {
             debug,
             timings,
             output,
-        } => package::run(debug, timings, output),
+            portable,
+        } => package::run(debug, timings, output, portable),
         Task::LocalDmg {
             release,
             styled,

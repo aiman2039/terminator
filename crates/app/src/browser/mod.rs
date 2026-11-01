@@ -1,5 +1,9 @@
 //! GUI-owned browser tab identity. The native view is mounted later.
 pub(crate) mod favicon;
+#[cfg(feature = "webview")]
+pub(crate) mod host;
+#[cfg(not(feature = "webview"))]
+#[path = "host_off.rs"]
 pub(crate) mod host;
 pub(crate) mod nav;
 use anyhow::{Context, Result};
@@ -135,6 +139,7 @@ pub(crate) fn rewrite_html_tabs(value: &mut serde_json::Value) {
 }
 
 /// Points the webview at the isolated named store for this data directory.
+#[cfg(feature = "webview")]
 pub(crate) fn apply_store<'a>(
     builder: wry::WebViewBuilder<'a>,
     data_dir: &Path,

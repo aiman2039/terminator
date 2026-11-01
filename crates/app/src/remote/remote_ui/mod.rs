@@ -68,8 +68,6 @@ pub(crate) enum Retry {
         generation: u64,
     },
     Project(String),
-    /// Hosts sidebar quick connect: probe the login directory again.
-    Quick(Box<RemoteProject>),
 }
 pub(crate) struct HostKeyPrompt {
     pub ssh: SshOptions,
@@ -91,6 +89,9 @@ pub(crate) struct RemoteUi {
     pub busy: bool,
     /// Open a terminal once the host is added or saved.
     pub connect_after: bool,
+    /// A new host without a remote path: probe the login directory, then
+    /// add the host there.
+    pub save_after_probe: bool,
     /// `ssh -G` for the typed host, so the page shows what the config sets.
     pub probe: crate::vnc_ui::ssh_probe::SshProbe,
     pub resolved: Option<crate::vnc_ui::ssh_probe::SshHostConfig>,
@@ -143,6 +144,7 @@ impl RemoteUi {
         self.failure = None;
         self.busy = false;
         self.connect_after = draft.id.is_empty();
+        self.save_after_probe = false;
         self.resolved = None;
         self.draft = Some(draft);
         self.config_generation

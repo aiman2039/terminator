@@ -8,6 +8,8 @@ Rust 1.97.1 and the committed Cargo.lock. It does not use Docker.
 | macOS Apple Silicon | `macos-15` | `terminator-vVERSION-macos.dmg` |
 | Linux x86-64 | `ubuntu-24.04` | `terminator-vVERSION-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux ARM64 | `ubuntu-24.04-arm` | `terminator-vVERSION-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux x86-64 portable | `ubuntu-24.04` (AlmaLinux 8 container) | `terminator-vVERSION-x86_64-unknown-linux-gnu-portable.tar.gz` |
+| Linux ARM64 portable | `ubuntu-24.04-arm` (AlmaLinux 8 container) | `terminator-vVERSION-aarch64-unknown-linux-gnu-portable.tar.gz` |
 | Windows x86-64 | `windows-2025` | `terminator-vVERSION-x86_64-pc-windows-msvc.zip` |
 
 Each package includes the GUI, daemon, hook executable, and the existing
@@ -114,8 +116,12 @@ and [GitHub's certificate setup](https://docs.github.com/en/actions/how-tos/depl
   The packager declares macOS 12 as its minimum, but these runner-built releases have not been
   validated on that older OS.
 - Linux packages are dynamically linked GNU/Linux builds produced on Ubuntu
-  24.04. Use Ubuntu 24.04 or a compatible newer distribution; older glibc systems
-  and Alpine/musl are not supported by these assets. Runtime desktop libraries
+  24.04. Use Ubuntu 24.04 or a compatible newer distribution with WebKitGTK 4.1.
+  The `-portable` Linux assets are built in an AlmaLinux 8 container (glibc 2.28)
+  without the `webview` feature, so they run on RHEL 8 and newer but have no
+  in-app Browser tabs. `scripts/portable-linux.sh` builds one and checks it in a
+  clean AlmaLinux 8 image: no unresolved libraries, no WebKit link, and no glibc
+  symbol newer than 2.28. Alpine/musl is not supported. Runtime desktop libraries
   and an XDG portal backend are described in the [setup guide](REFERENCE.md#build-and-run).
 - Windows needs a port of Unix sockets, process/session handling, and packaging.
   It cannot be added simply by extending the build matrix. BSD, mobile, and web

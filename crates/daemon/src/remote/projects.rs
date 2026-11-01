@@ -123,6 +123,7 @@ mod tests {
             group: None,
             forwards: Vec::new(),
             last_connected: 42,
+            command_timeout_seconds: None,
         }
     }
 

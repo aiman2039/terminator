@@ -276,7 +276,7 @@ impl App {
         project: &str,
         strip: &mut egui_dock::DockState<Tab>,
     ) {
-        let style = self.dock_style(ui);
+        let style = appearance::dock_style(ui.style(), &self.theme);
         self.refresh_strip_pane_maps(strip);
         DockArea::new(strip)
             // Distinct area id: an in-strip reorder stays here. Dragging

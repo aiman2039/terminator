@@ -119,7 +119,6 @@ impl App {
                     generation,
                 });
             }
-            Retry::Quick(project) => self.start_quick_connect(*project),
             Retry::Project(id) => {
                 self.remote_ui.host_key_declined.remove(&id);
                 if let Some(view) = self.remote_ui.views.get_mut(&id) {

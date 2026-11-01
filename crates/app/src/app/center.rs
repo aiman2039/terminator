@@ -403,17 +403,6 @@ impl App {
         });
     }
 
-    pub(crate) fn dock_style(&self, ui: &egui::Ui) -> egui_dock::Style {
-        let mut style = egui_dock::Style::from_egui(ui.style());
-        style.tab_bar.height = 32.0;
-        style.buttons.add_tab_align = egui_dock::style::TabAddAlign::Left;
-        style.separator.width = self.theme.pane_divider_width;
-        style.separator.color_idle = appearance::color(&self.theme.window);
-        style.main_surface_border_rounding = egui::CornerRadius::same(2);
-        style.tab.tab_body.corner_radius = egui::CornerRadius::same(2);
-        style
-    }
-
     /// Pane lookup for the floating window under render, rebuilt every
     /// time (small docks; no cache). Only the window under render may
     /// read these; the main-dock maps are untouched.
@@ -439,7 +428,7 @@ impl App {
             project,
             dock,
         } = input;
-        let style = self.dock_style(ui);
+        let style = appearance::dock_style(ui.style(), &self.theme);
         self.refresh_float_pane_maps(dock);
         DockArea::new(dock)
             .id(egui::Id::unique(("float-dock", viewport)))
@@ -465,7 +454,7 @@ impl App {
 
     pub(crate) fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {
         self.drag.drop_tabs.clear();
-        let style = self.dock_style(ui);
+        let style = appearance::dock_style(ui.style(), &self.theme);
         self.refresh_pane_maps(project, dock);
         // Issuing tab for close requests: the rendered tab (mirroring
         // `Deref` selection). The issuing pane needs no capture here:

@@ -1,7 +1,7 @@
-//! SSH host Properties in the main pane: add, edit or duplicate a saved SSH
-//! project. Same look as VNC Properties: section captions, labels above
-//! fields, and one accent button.
-use super::fields::{config_host_picker, connection_fields, group_field, sign_in_fields};
+//! SSH host Properties on the SSH page: add, edit or duplicate a saved SSH
+//! project. Same look as VNC Properties: a titled card, section captions,
+//! labels above fields, and one accent button.
+use super::fields::{connection_fields, group_field, sign_in_fields, timeout_field};
 use super::*;
 use crate::vnc_ui::form;
 use eframe::egui::RichText;
@@ -50,21 +50,19 @@ impl FormFix {
 }
 
 impl App {
-    /// The main pane: SSH Properties or import while open, else the VNC
-    /// page or the workspace.
+    /// The main pane: the SSH page while open, else the VNC page or the
+    /// workspace.
     pub(crate) fn ssh_page_or_vnc_center(&mut self, ui: &mut egui::Ui) {
-        if self.remote_ui.open {
-            self.ssh_properties_center(ui);
-        } else if self.remote_ui.import.is_some() {
-            self.ssh_import_center(ui);
+        if self.ssh_page_visible() {
+            self.ssh_page_center(ui);
         } else {
             self.vnc_page_or_workspace_center(ui);
         }
     }
 
-    /// Opens SSH Properties in the main pane on `draft`.
+    /// Opens SSH Properties on the SSH page on `draft`.
     pub(crate) fn open_ssh_properties(&mut self, draft: RemoteProject) {
-        self.hide_center_overlay();
+        self.show_ssh_page();
         let generation = self.remote_ui.open_draft(draft);
         let _ = self.jobs.send(Job::SshConfigHosts(generation));
     }
@@ -91,30 +89,25 @@ impl App {
             .any(|c| c == terminator_core::remote::EDIT_CAPABILITY)
     }
 
-    /// The main pane while SSH Properties is open.
-    pub(crate) fn ssh_properties_center(&mut self, ui: &mut egui::Ui) {
+    /// The SSH page body while Properties is open.
+    pub(crate) fn ssh_properties_body(&mut self, ui: &mut egui::Ui) {
         let mut actions = PageActions::default();
-        let editing = self
-            .remote_ui
-            .draft
-            .as_ref()
-            .is_some_and(|d| !d.id.is_empty());
-        egui::Frame::NONE.inner_margin(16.0).show(ui, |ui| {
-            ui.set_min_size(ui.available_size());
-            ui.horizontal(|ui| {
-                let title = if editing { "SSH host" } else { "New SSH host" };
-                ui.label(RichText::new(title).size(18.0).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    actions.cancel = appearance::sidebar_action(ui, "X", "Close").clicked();
+        let draft = self.remote_ui.draft.as_ref();
+        let editing = draft.is_some_and(|d| !d.id.is_empty());
+        let title = match draft {
+            Some(d) if editing => format!("{} – Properties", d.name),
+            _ => "New host".to_owned(),
+        };
+        egui::ScrollArea::vertical()
+            .id_salt("ssh-properties")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                form::card(ui, |ui| {
+                    ui.label(RichText::new(title).size(16.0).strong());
+                    ui.add_space(6.0);
+                    self.ssh_properties_form(ui, editing, &mut actions);
                 });
             });
-            egui::ScrollArea::vertical()
-                .id_salt("ssh-properties")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    form::card(ui, |ui| self.ssh_properties_form(ui, editing, &mut actions));
-                });
-        });
         if self.remote_ui.probe.busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
@@ -131,15 +124,26 @@ impl App {
         }
         self.ssh_properties_error(ui, editing, actions);
         let groups = self.group_names();
+        let default_timeout = self.state.settings.ssh_command_timeout_seconds;
+        let host_timeout = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == terminator_core::remote::HOST_TIMEOUT_CAPABILITY);
         let remote = &mut self.remote_ui;
         let Some(draft) = remote.draft.as_mut() else {
             return;
         };
         let hosts = remote.config_hosts.as_deref();
-        form::section(ui, "Connection");
-        config_host_picker(ui, hosts, draft);
+        form::section(ui, "Server");
+        connection_fields(ui, draft, hosts);
+        timeout_field(
+            ui,
+            &mut draft.command_timeout_seconds,
+            default_timeout,
+            host_timeout,
+        );
         let config = hosts.and_then(|h| h.iter().find(|h| h.alias == draft.ssh.host));
-        connection_fields(ui, draft, config);
         if let Some(found) = remote.probe.poll(&draft.ssh.host) {
             remote.resolved = Some(found);
         }
@@ -156,15 +160,16 @@ impl App {
         {
             form::hint(ui, &found.found(), "");
         }
-        form::section(ui, "Project");
         let name_hint = draft.ssh.host.clone();
         form::text(ui, "Name", &mut draft.name, &name_hint);
+        group_field(ui, &mut draft.group, &groups);
+        form::section(ui, "Project");
         form::label(ui, "Remote path");
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 130.0).max(80.0);
             ui.add(
                 appearance::singleline(&mut draft.root)
-                    .hint_text("/home/you/project")
+                    .hint_text("Blank: the login directory")
                     .desired_width(width),
             );
             actions.login_dir = ui
@@ -175,7 +180,6 @@ impl App {
                 .on_hover_text("Connect and use the directory SSH starts in")
                 .clicked();
         });
-        group_field(ui, &mut draft.group, &groups);
         sign_in_fields(ui, &mut draft.ssh);
         Self::ssh_properties_footer(ui, remote, (supported, editing), actions);
     }
@@ -188,7 +192,7 @@ impl App {
         (supported, editing): (bool, bool),
         actions: &mut PageActions,
     ) {
-        ui.add_space(12.0);
+        ui.add_space(8.0);
         let label = if editing {
             "Open a terminal after saving"
         } else {
@@ -196,7 +200,8 @@ impl App {
         };
         ui.checkbox(&mut remote.connect_after, label);
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.separator();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_enabled_ui(supported && !remote.busy, |ui| {
                 let save = if editing { "Save" } else { "Add host" };
                 actions.save = form::primary_button(ui, save).clicked();
@@ -266,8 +271,24 @@ impl App {
         {
             HOME_ROOT.clone_into(&mut draft.root);
             self.submit_ssh_properties(true);
-        } else if actions.test || actions.save {
-            self.submit_ssh_properties(actions.test);
+        } else if actions.test {
+            self.submit_ssh_properties(true);
+        } else if actions.save {
+            self.save_ssh_properties();
+        }
+    }
+
+    /// Saves the draft. A new host without a remote path first probes the
+    /// login directory, then adds the host there.
+    pub(crate) fn save_ssh_properties(&mut self) {
+        let Some(draft) = &self.remote_ui.draft else {
+            return;
+        };
+        if draft.id.is_empty() && draft.root.trim().is_empty() {
+            self.remote_ui.save_after_probe = true;
+            self.submit_ssh_properties(true);
+        } else {
+            self.submit_ssh_properties(false);
         }
     }
 
@@ -289,7 +310,7 @@ impl App {
 
     /// Validates the draft and sends a probe, an add, or (with an id) an
     /// update.
-    fn submit_ssh_properties(&mut self, probe: bool) {
+    pub(crate) fn submit_ssh_properties(&mut self, probe: bool) {
         let Some(mut project) = self.remote_ui.draft.clone() else {
             return;
         };
@@ -312,6 +333,7 @@ impl App {
         if let Err(error) = checked {
             self.remote_ui.error = Some(error);
             self.remote_ui.failure = None;
+            self.remote_ui.save_after_probe = false;
             return;
         }
         self.remote_ui.draft = Some(project.clone());

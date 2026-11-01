@@ -74,55 +74,58 @@ pub(super) fn operation(
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(15), async {
-            let mut command = tokio::process::Command::new("ssh");
-            command
-                .args(terminator_core::ssh::arguments(
-                    &project.ssh,
-                    false,
-                    control,
-                )?)
-                .arg("-s")
-                .arg("--")
-                .arg(&project.ssh.host)
-                .arg("sftp")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            for key in terminator_core::ssh::private_environment_keys() {
-                command.env_remove(key);
-            }
-            let mut child = command.spawn().context("Cannot start SSH SFTP service")?;
-            let stderr = super::capture_stderr(&mut child);
-            let stdin = child.stdin.take().context("SFTP stdin unavailable")?;
-            let stdout = child.stdout.take().context("SFTP stdout unavailable")?;
-            let sftp = match Sftp::new(stdin, stdout, SftpOptions::default()).await {
-                Ok(sftp) => sftp,
-                Err(error) => {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
-                    return Err(super::sftp_failure(error.into(), stderr).await);
+        tokio::time::timeout(
+            Duration::from_secs(15).max(project.command_timeout()),
+            async {
+                let mut command = tokio::process::Command::new("ssh");
+                command
+                    .args(terminator_core::ssh::arguments(
+                        &project.ssh,
+                        false,
+                        control,
+                    )?)
+                    .arg("-s")
+                    .arg("--")
+                    .arg(&project.ssh.host)
+                    .arg("sftp")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true);
+                for key in terminator_core::ssh::private_environment_keys() {
+                    command.env_remove(key);
                 }
-            };
-            let mut fs = sftp.fs();
-            let result = dispatch_operation(DispatchOperationInput {
-                sftp: &sftp,
-                fs: &mut fs,
-                project,
-                operation,
-            })
-            .await;
-            drop(fs);
-            let close = sftp.close().await;
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            match (result, close) {
-                (Ok(result), Ok(())) => Ok::<_, anyhow::Error>(result),
-                (Err(error), _) => Err(super::sftp_failure(error, stderr).await),
-                (Ok(_), Err(error)) => Err(super::sftp_failure(error.into(), stderr).await),
-            }
-        })
+                let mut child = command.spawn().context("Cannot start SSH SFTP service")?;
+                let stderr = super::capture_stderr(&mut child);
+                let stdin = child.stdin.take().context("SFTP stdin unavailable")?;
+                let stdout = child.stdout.take().context("SFTP stdout unavailable")?;
+                let sftp = match Sftp::new(stdin, stdout, SftpOptions::default()).await {
+                    Ok(sftp) => sftp,
+                    Err(error) => {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        return Err(super::sftp_failure(error.into(), stderr).await);
+                    }
+                };
+                let mut fs = sftp.fs();
+                let result = dispatch_operation(DispatchOperationInput {
+                    sftp: &sftp,
+                    fs: &mut fs,
+                    project,
+                    operation,
+                })
+                .await;
+                drop(fs);
+                let close = sftp.close().await;
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                match (result, close) {
+                    (Ok(result), Ok(())) => Ok::<_, anyhow::Error>(result),
+                    (Err(error), _) => Err(super::sftp_failure(error, stderr).await),
+                    (Ok(_), Err(error)) => Err(super::sftp_failure(error.into(), stderr).await),
+                }
+            },
+        )
         .await
         .context("SSH file operation timed out")?
     })

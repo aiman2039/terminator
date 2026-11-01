@@ -19,12 +19,17 @@ const COLORS: &[(&str, &str)] = &[
 
 impl App {
     pub(super) fn terminal_title_color(&self, sid: &str) -> Color32 {
+        self.terminal_chosen_title_color(sid)
+            .unwrap_or_else(|| appearance::color(&self.theme.accent))
+    }
+
+    /// The title color the user picked in Terminal appearance, if any.
+    pub(super) fn terminal_chosen_title_color(&self, sid: &str) -> Option<Color32> {
         self.preferences
             .terminal_styles
             .get(sid)
             .and_then(|style| style.color.as_deref())
             .map(appearance::color)
-            .unwrap_or_else(|| appearance::color(&self.theme.accent))
     }
 
     pub(super) fn terminal_title_icon(&self, sid: &str, fallback: &'static str) -> &'static str {

@@ -71,7 +71,7 @@ impl AppearanceConfig {
             status_waiting: "#E2C08D".into(),
             status_failed: "#C74E39".into(),
             border_width: 1.0,
-            pane_divider_width: 8.0,
+            pane_divider_width: 1.0,
             density: Density::Comfortable,
             editor: crate::editor_prefs::EditorPrefs::default(),
         }

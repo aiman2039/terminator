@@ -1,32 +1,53 @@
-//! Painting of address-book host cards: thumbnail, status dot, name and
-//! endpoint, plus the dashed "New host" card.
+//! Painting of address-book host cards (VNC and SSH pages): thumbnail,
+//! status dot, name and subtitle, plus the dashed "New host" card.
 use super::*;
 
-pub(super) const CARD_WIDTH: f32 = 184.0;
+pub(crate) const CARD_WIDTH: f32 = 184.0;
 const THUMB_HEIGHT: f32 = 112.0;
-pub(super) const CARD_HEIGHT: f32 = THUMB_HEIGHT + 48.0;
+pub(crate) const CARD_HEIGHT: f32 = THUMB_HEIGHT + 48.0;
 const CARD_RADIUS: f32 = 8.0;
-pub(super) const ROW_HEIGHT: f32 = 44.0;
+pub(crate) const ROW_HEIGHT: f32 = 44.0;
 
-pub(super) struct PaintCardInput<'a> {
-    pub(super) ui: &'a egui::Ui,
-    pub(super) rect: egui::Rect,
-    pub(super) hovered: bool,
-    pub(super) selected: bool,
-    pub(super) profile: &'a VncProfile,
-    pub(super) texture: Option<&'a TextureHandle>,
-    pub(super) status: Option<egui::Color32>,
+/// What one card or row shows.
+pub(crate) struct CardContent {
+    pub(crate) name: String,
+    pub(crate) subtitle: String,
+    /// Glyph drawn in the thumbnail area when there is no image.
+    pub(crate) placeholder: &'static str,
+    /// Small glyph in the thumbnail's top-right corner.
+    pub(crate) corner: Option<&'static str>,
 }
 
-/// Card body: thumbnail (live screen or a monitor glyph), status dot,
-/// name and endpoint.
-pub(super) fn paint_card(input: PaintCardInput<'_>) {
+impl CardContent {
+    pub(super) fn vnc(profile: &VncProfile) -> Self {
+        Self {
+            name: profile.display_name(),
+            subtitle: subtitle(profile),
+            placeholder: "Monitor",
+            corner: profile.view_only.then_some("Eye"),
+        }
+    }
+}
+
+pub(crate) struct PaintCardInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) rect: egui::Rect,
+    pub(crate) hovered: bool,
+    pub(crate) selected: bool,
+    pub(crate) content: CardContent,
+    pub(crate) texture: Option<&'a TextureHandle>,
+    pub(crate) status: Option<egui::Color32>,
+}
+
+/// Card body: thumbnail (live screen or a placeholder glyph), status dot,
+/// name and subtitle.
+pub(crate) fn paint_card(input: PaintCardInput<'_>) {
     let PaintCardInput {
         ui,
         rect,
         hovered,
         selected,
-        profile,
+        content,
         texture,
         status,
     } = input;
@@ -50,7 +71,7 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
         egui::pos2(rect.left() + 8.0, rect.top() + 8.0),
         egui::vec2(rect.width() - 16.0, THUMB_HEIGHT - 8.0),
     );
-    paint_thumbnail(ui, thumb, texture);
+    paint_thumbnail(ui, thumb, texture, content.placeholder);
     if let Some(color) = status {
         painter.circle_filled(
             egui::pos2(thumb.left() + 10.0, thumb.top() + 10.0),
@@ -58,14 +79,14 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
             color,
         );
     }
-    if profile.view_only {
+    if let Some(icon) = content.corner {
         appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
             ui,
             rect: egui::Rect::from_min_size(
                 egui::pos2(thumb.right() - 22.0, thumb.top() + 4.0),
                 egui::vec2(18.0, 18.0),
             ),
-            icon: "Eye",
+            icon,
             size: 14.0,
             tint: visuals.weak_text_color(),
         });
@@ -73,7 +94,7 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
     let text_left = rect.left() + 10.0;
     let width = rect.width() - 20.0;
     let name = painter.layout(
-        profile.display_name(),
+        content.name,
         egui::FontId::proportional(13.0),
         visuals.strong_text_color(),
         width,
@@ -84,7 +105,7 @@ pub(super) fn paint_card(input: PaintCardInput<'_>) {
         visuals.strong_text_color(),
     );
     let endpoint = painter.layout(
-        subtitle(profile),
+        content.subtitle,
         egui::FontId::proportional(11.0),
         visuals.weak_text_color(),
         width,
@@ -114,13 +135,13 @@ fn subtitle(profile: &VncProfile) -> String {
 }
 
 /// A list-view row: status dot, name, and subtitle. `texture` is unused.
-pub(super) fn paint_row(input: PaintCardInput<'_>) {
+pub(crate) fn paint_row(input: PaintCardInput<'_>) {
     let PaintCardInput {
         ui,
         rect,
         hovered,
         selected,
-        profile,
+        content,
         status,
         ..
     } = input;
@@ -142,7 +163,7 @@ pub(super) fn paint_row(input: PaintCardInput<'_>) {
     let left = rect.left() + 28.0;
     let width = (rect.width() - 36.0).max(40.0);
     let name = painter.layout(
-        profile.display_name(),
+        content.name,
         egui::FontId::proportional(13.0),
         visuals.strong_text_color(),
         width,
@@ -153,7 +174,7 @@ pub(super) fn paint_row(input: PaintCardInput<'_>) {
         visuals.strong_text_color(),
     );
     let detail = painter.layout(
-        subtitle(profile),
+        content.subtitle,
         egui::FontId::proportional(11.0),
         visuals.weak_text_color(),
         width,
@@ -165,8 +186,13 @@ pub(super) fn paint_row(input: PaintCardInput<'_>) {
     );
 }
 
-/// The screen image fitted into `thumb`, or a monitor glyph without one.
-fn paint_thumbnail(ui: &egui::Ui, thumb: egui::Rect, texture: Option<&TextureHandle>) {
+/// The screen image fitted into `thumb`, or `placeholder` without one.
+fn paint_thumbnail(
+    ui: &egui::Ui,
+    thumb: egui::Rect,
+    texture: Option<&TextureHandle>,
+    placeholder: &'static str,
+) {
     let visuals = ui.visuals();
     ui.painter()
         .rect_filled(thumb, 4.0, visuals.extreme_bg_color);
@@ -178,7 +204,7 @@ fn paint_thumbnail(ui: &egui::Ui, thumb: egui::Rect, texture: Option<&TextureHan
         None => appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
             ui,
             rect: thumb,
-            icon: "Monitor",
+            icon: placeholder,
             size: 32.0,
             tint: visuals.weak_text_color(),
         }),
@@ -216,7 +242,8 @@ fn fit_rect(outer: egui::Rect, size: egui::Vec2) -> egui::Rect {
     egui::Rect::from_center_size(outer.center(), egui::vec2(size.x * scale, size.y * scale))
 }
 
-pub(super) fn new_host_card(ui: &mut egui::Ui) -> egui::Response {
+/// The dashed "New host" card; `tip` shows on hover.
+pub(crate) fn new_host_card(ui: &mut egui::Ui, tip: &str) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(CARD_WIDTH, CARD_HEIGHT), egui::Sense::click());
     let visuals = ui.visuals();
@@ -245,5 +272,5 @@ pub(super) fn new_host_card(ui: &mut egui::Ui) -> egui::Response {
         egui::FontId::proportional(12.0),
         visuals.weak_text_color(),
     );
-    response.on_hover_text("Add a VNC host")
+    response.on_hover_text(tip)
 }

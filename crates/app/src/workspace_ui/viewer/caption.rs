@@ -150,7 +150,7 @@ impl Viewer<'_> {
                 } else {
                     &session.label
                 },
-                title_tint: Some(self.app.terminal_title_color(sid)),
+                title_tint: self.app.terminal_chosen_title_color(sid),
                 active: self.app.active_session.as_ref() == Some(sid),
                 branch: branch.as_deref(),
                 status: self.app.terminal_status_color(session),

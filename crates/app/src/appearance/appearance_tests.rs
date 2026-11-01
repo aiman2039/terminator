@@ -48,6 +48,20 @@ mod row_tests {
     }
 
     #[test]
+    fn markdown_code_block_copy_glyphs_render_from_bundled_fonts() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+        output.textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            let font_id = FontId::proportional(12.0);
+            for c in ['🗐', '✔'] {
+                assert!(fonts.has_glyph(&font_id, c), "missing {c}");
+            }
+        });
+    }
+
+    #[test]
     fn terminal_fonts_cover_braille_block() {
         let ctx = egui::Context::default();
         install(&ctx);
@@ -388,7 +402,7 @@ mod row_tests {
     }
 
     #[test]
-    fn focus_border_fades_and_stays_soft() {
+    fn focus_border_flashes_then_fades_out() {
         let accent = Color32::from_rgb(56, 113, 225);
         let strong = focus_stroke(accent, std::time::Duration::ZERO);
         let fading = focus_stroke(accent, std::time::Duration::from_millis(700));
@@ -397,8 +411,7 @@ mod row_tests {
         assert_eq!(strong.color.a(), 255);
         assert!(fading.width < strong.width && fading.width > steady.width);
         assert!(fading.color.a() < strong.color.a() && fading.color.a() > steady.color.a());
-        assert_eq!(steady.width, 1.0);
-        assert_eq!(steady.color.a(), 70);
+        assert_eq!(steady.color.a(), 0);
         assert_eq!(
             steady,
             focus_stroke(accent, std::time::Duration::from_mins(1))
@@ -443,6 +456,52 @@ mod row_tests {
             texts[1]
         );
         assert_eq!(texts[0].left(), texts[1].left());
+    }
+
+    #[test]
+    fn narrow_session_row_keeps_the_label_and_drops_the_status_word() {
+        fn painted(ctx: &egui::Context, width: f32) -> Vec<(String, bool)> {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(width);
+                session_row_spec(
+                    ui,
+                    SessionRowSpec {
+                        label: "Review checklist",
+                        icon: "Terminal",
+                        selected: false,
+                        trailing: "background",
+                        tint: Color32::GRAY,
+                        icon_tint: None,
+                        spin: false,
+                        subtitle: None,
+                        brand: None,
+                    },
+                );
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => {
+                        Some((text.galley.text().to_owned(), text.galley.elided))
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+        let whole = |texts: &[(String, bool)], s: &str| texts.contains(&(s.into(), false));
+        let any = |texts: &[(String, bool)], s: &str| texts.iter().any(|(t, _)| t == s);
+        let ctx = egui::Context::default();
+        install(&ctx);
+        painted(&ctx, 400.0);
+        let wide = painted(&ctx, 400.0);
+        assert!(whole(&wide, "Review checklist") && whole(&wide, "background"));
+        let narrow = painted(&ctx, 150.0);
+        assert!(
+            whole(&narrow, "Review checklist") && !any(&narrow, "background"),
+            "{narrow:?}"
+        );
     }
 
     #[test]

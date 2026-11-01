@@ -13,10 +13,6 @@ impl App {
         generation: u64,
         result: Result<crate::remote_ui::FormResult, crate::remote_ui::Failure>,
     ) {
-        if self.remote_ui.hosts.quick.as_ref() == Some(&project) {
-            self.apply_quick_connect(&project, generation, result);
-            return;
-        }
         if self.import_owns(&project) {
             self.apply_import_result(&project, result);
             return;
@@ -49,7 +45,11 @@ impl App {
         }
         self.remote_ui.error = None;
         self.remote_ui.failure = None;
-        self.info = Some("SSH connection verified.".into());
+        if std::mem::take(&mut self.remote_ui.save_after_probe) {
+            self.submit_ssh_properties(false);
+        } else {
+            self.info = Some("SSH connection verified.".into());
+        }
     }
 
     fn remote_added(&mut self, project: &RemoteProject, generation: u64, state: State) {
@@ -82,6 +82,13 @@ impl App {
         generation: u64,
         failure: crate::remote_ui::Failure,
     ) {
+        // A trusted host key retries the probe, which still saves after it.
+        if !matches!(
+            failure.ssh,
+            Some(SshFailure::UnknownHostKey | SshFailure::ChangedHostKey)
+        ) {
+            self.remote_ui.save_after_probe = false;
+        }
         if matches!(
             failure.ssh,
             Some(SshFailure::UnknownHostKey | SshFailure::ChangedHostKey)

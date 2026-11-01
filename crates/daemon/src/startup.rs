@@ -155,6 +155,8 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::remote::TRANSFER_CAPABILITY.into(),
         terminator_core::remote::EDIT_CAPABILITY.into(),
         terminator_core::ssh::TUNING_CAPABILITY.into(),
+        terminator_core::ssh::COMMAND_TIMEOUT_CAPABILITY.into(),
+        terminator_core::remote::HOST_TIMEOUT_CAPABILITY.into(),
         vnc::FEATURES_CAPABILITY.into(),
         vnc::LABELS_CAPABILITY.into(),
         vnc::ERRORS_CAPABILITY.into(),

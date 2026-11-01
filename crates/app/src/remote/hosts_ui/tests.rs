@@ -12,6 +12,7 @@ fn project(id: &str, host: &str, group: Option<&str>) -> RemoteProject {
         group: group.map(Into::into),
         forwards: Vec::new(),
         last_connected: 0,
+        command_timeout_seconds: None,
     }
 }
 fn names(groups: &[HostGroup<'_>]) -> Vec<(Option<String>, Vec<String>)> {
@@ -92,7 +93,7 @@ fn host_filter_matches_name_host_root_and_group() {
 }
 
 #[test]
-fn quick_connect_lists_only_unsaved_aliases() {
+fn import_lists_only_unsaved_aliases() {
     let config = vec![
         ConfigHost {
             alias: "alpha".into(),
@@ -106,10 +107,10 @@ fn quick_connect_lists_only_unsaved_aliases() {
         },
     ];
     let projects = vec![project("db", "alpha", None)];
-    let aliases: Vec<_> = quick_aliases(&config, &projects, "")
+    let aliases: Vec<_> = unsaved_aliases(&config, &projects, "")
         .into_iter()
         .map(|h| h.alias.as_str())
         .collect();
     assert_eq!(aliases, ["beta"]);
-    assert!(quick_aliases(&config, &projects, "zzz").is_empty());
+    assert!(unsaved_aliases(&config, &projects, "zzz").is_empty());
 }
