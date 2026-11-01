@@ -96,3 +96,16 @@ fn a_new_query_cancels_the_search_in_flight_and_drops_its_answer() {
     assert!(second_cancel.load(Ordering::Relaxed));
     assert!(find.outcome.is_none());
 }
+
+#[test]
+fn a_cancelled_line_scan_stops_inside_the_file_even_without_matches() {
+    let regex = regex::Regex::new("needle").unwrap();
+    let text = "hay\n".repeat(1000);
+    assert_eq!(
+        super::search::file_hits(&text, &regex, 10, &AtomicBool::new(true)),
+        None
+    );
+    let text = "needle\n".repeat(5);
+    let hits = super::search::file_hits(&text, &regex, 3, &AtomicBool::new(false)).unwrap();
+    assert_eq!(hits.len(), 3);
+}

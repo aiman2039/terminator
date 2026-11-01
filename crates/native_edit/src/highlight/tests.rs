@@ -253,3 +253,49 @@ fn cache_only_recomputes_on_key_change() {
     assert!(cache.is_current(Language::Rust, true, 2));
     assert!(!cache.is_current(Language::Rust, false, 2));
 }
+
+#[test]
+fn a_large_buffer_highlights_on_a_worker_without_blocking_the_frame() {
+    let ctx = egui::Context::default();
+    let text = "fn a() { let x = 1; }\n".repeat(SYNC_HIGHLIGHT_BYTES / 20);
+    assert!(text.len() > SYNC_HIGHLIGHT_BYTES);
+    let mut cache = HighlightCache::default();
+    let input = |revision| EnsureInput {
+        language: Language::Rust,
+        dark: true,
+        revision,
+        text: &text,
+    };
+    cache.ensure_async(input(1), &ctx);
+    // The call returns before the parse: nothing is current yet.
+    assert!(!cache.is_current(Language::Rust, true, 1));
+    // While the worker runs (or once it landed) no new text is wanted.
+    assert!(!cache.wants_text(Language::Rust, true, 1));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !cache.is_current(Language::Rust, true, 1) {
+        assert!(std::time::Instant::now() < deadline, "worker never landed");
+        cache.wants_text(Language::Rust, true, 1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!cache.line(0).is_empty());
+    // A newer revision wants text again and keeps the old spans painted.
+    assert!(cache.wants_text(Language::Rust, true, 2));
+    assert!(!cache.line(0).is_empty());
+}
+
+#[test]
+fn a_small_buffer_still_highlights_in_the_same_call() {
+    let ctx = egui::Context::default();
+    let mut cache = HighlightCache::default();
+    cache.ensure_async(
+        EnsureInput {
+            language: Language::Rust,
+            dark: true,
+            revision: 1,
+            text: "fn a() {}",
+        },
+        &ctx,
+    );
+    assert!(cache.is_current(Language::Rust, true, 1));
+    assert!(!cache.line(0).is_empty());
+}

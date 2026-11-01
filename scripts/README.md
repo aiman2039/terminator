@@ -49,18 +49,22 @@ Live-provider tests, ignored tests, soak tests, signing, and notarization are
 outside this local gate.
 
 Linux uses an Ubuntu 24.04 image, the repository Rust version, Neovim v0.11.6,
-Xvfb/Openbox, software rendering, the same checks and package build, and CI's
-50% line-coverage threshold. It uses the Docker server's native architecture:
+Xvfb/Openbox, software rendering, and the same checks and package build.
+Coverage runs only in CI. The image links with mold and builds line-table debug
+info, so parallel links fit in Docker's memory. It uses the Docker server's native architecture:
 `linux/arm64` on Apple Silicon, or `linux/amd64` on x64 hosts. Emulation changes
 the shell executable reported by the kernel and cannot pass the strict
 idle-close identity checks. ARM64 local tests do not replace CI's x64 tests.
-Docker must be running. Linux reads the current checkout through a read-only
+Docker must be running. Give the Docker VM at least 12 GB of memory (Docker
+Desktop > Settings > Resources; 16 GB is better). With the 7.7 GB default,
+parallel debug links of the GUI binaries can run out of memory (linker killed
+with signal 9), and the release must limit build jobs. Linux reads the current checkout through a read-only
 mount; it does not copy the source or use the host's build output. Images and Cargo build volumes are separate for each
 architecture; registry and Git source caches are shared. The image imports
 the installed toolchain from the official Rust image while keeping Ubuntu as
-its runtime. Required components come from `rust-toolchain.toml`, with LLVM
-tools added for coverage, so fresh containers do not need to install missing
-components. Audit, deny, coverage, nextest, and Neovim use pinned upstream binaries
+its runtime. Required components come from `rust-toolchain.toml`, plus clippy
+and rustfmt, so fresh containers do not need to install missing
+components. Audit, deny, nextest, and Neovim use pinned upstream binaries
 with SHA-256 checksums for each architecture; the Cargo tools have
 independent build stages. Bash, zsh, and fish are installed for idle-close tests.
 An empty build context keeps source edits from invalidating setup layers.
@@ -98,7 +102,14 @@ unchanged, run `cargo xtask release-check` on Windows with an isolated
 `RUNNER_TEMP`, collect artifacts, and return a nonzero status on any failure.
 
 Logs, screenshots, packages, and `results.json` remain under
-`.artifacts/releases/run-*`; skips are explicit in the summary. The release
+`.artifacts/releases/run-*`; skips are explicit in the summary. Each stage
+records its steps (name, status, seconds, first error lines) in `results.json`,
+and the release prints one summary of all stages at the end. Static checks
+(fmt, audit, deny, Windows Clippy, async-boundary) and the fixture steps
+(integration, idle-close, `gui all`, package) all run even after another one
+fails; a Clippy or unit-test failure stops the platform. When host fixture steps
+fail beside the Linux container, only those steps run again after Linux ends
+(`release-check --only STEP,...`, logged as `host-retry`). The release
 file lock prevents two local flows from running together and is released by
 the OS when the process exits, including a forced stop. The file remains on
 disk; do not delete it. For an empty legacy lock directory from the older

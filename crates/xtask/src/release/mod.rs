@@ -234,9 +234,7 @@ fn linux_image_tag(input: LinuxImageTagInput<'_>) -> String {
 }
 
 fn rust_components(toolchain: &toml_edit::DocumentMut) -> Result<String> {
-    let mut components: BTreeSet<String> = ["clippy", "rustfmt", "llvm-tools-preview"]
-        .map(str::to_owned)
-        .into();
+    let mut components: BTreeSet<String> = ["clippy", "rustfmt"].map(str::to_owned).into();
     if let Some(configured) = version::field(toolchain, &["toolchain"])?.get("components") {
         for component in configured
             .as_array()

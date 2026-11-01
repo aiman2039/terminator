@@ -1,6 +1,6 @@
 use super::command::{Runner, cmd, git};
 use super::{
-    LinuxImageTagInput, Options, linux_image_tag, linux_platform, rust_components, version,
+    LinuxImageTagInput, Options, checks, linux_image_tag, linux_platform, rust_components, version,
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -37,6 +37,16 @@ impl<R: Runner> Stages<'_, R> {
         Ok(())
     }
     fn run(&self, name: &str, command: &mut std::process::Command) -> Result<()> {
+        self.run_with_steps(name, command, None)
+    }
+    /// Run a stage and record its result, log, and the per-step records the
+    /// release check wrote (in `steps_dir`, or the stage directory).
+    fn run_with_steps(
+        &self,
+        name: &str,
+        command: &mut std::process::Command,
+        steps_dir: Option<&Path>,
+    ) -> Result<()> {
         let destination = self.artifacts.join(name);
         fs::create_dir(&destination)?;
         command
@@ -45,18 +55,76 @@ impl<R: Runner> Stages<'_, R> {
             .env("CARGO_HUSKY_DONT_INSTALL_HOOKS", "1");
         println!("==> {name}: {command:?}");
         let started = Instant::now();
-        let result = self.runner.logged(command, &destination.join("run.log"));
+        let log = destination.join("run.log");
+        let result = self.runner.logged(command, &log);
+        let steps = read_steps(steps_dir.unwrap_or(&destination));
         self.record(
             name,
-            json!({"status":if result.is_ok() {"passed"} else {"failed"}, "seconds":started.elapsed().as_secs_f64()}),
+            json!({
+                "status": if result.is_ok() {"passed"} else {"failed"},
+                "seconds": started.elapsed().as_secs_f64(),
+                "log": log,
+                "steps": steps,
+            }),
         )?;
-        result.with_context(|| {
-            format!(
-                "{name} failed. See {}",
-                destination.join("run.log").display()
-            )
-        })
+        result.with_context(|| format!("{name} failed. See {}", log.display()))
     }
+    /// One line per stage, plus the first error line of each failed step.
+    fn summary(&self) -> Result<String> {
+        let results = self
+            .results
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Release results lock poisoned"))?;
+        let mut lines = vec!["Release summary:".to_owned()];
+        for (stage, value) in results.iter() {
+            let Some(status) = value["status"].as_str() else {
+                continue;
+            };
+            let seconds = value["seconds"]
+                .as_f64()
+                .map(|s| format!(" ({s:.0} s)"))
+                .unwrap_or_default();
+            lines.push(format!("  {stage}: {status}{seconds}"));
+            for step in value["steps"].as_array().into_iter().flatten() {
+                if step["status"] == "failed" {
+                    let error = step["error"]
+                        .as_str()
+                        .and_then(|e| e.lines().next())
+                        .unwrap_or("failed");
+                    lines.push(format!(
+                        "    - {} failed: {error}",
+                        step["name"].as_str().unwrap_or("?")
+                    ));
+                }
+            }
+            if status == "failed"
+                && let Some(log) = value["log"].as_str()
+            {
+                lines.push(format!("    log: {log}"));
+            }
+        }
+        Ok(lines.join("\n"))
+    }
+}
+
+/// The step records a release check wrote into `dir`, if any.
+fn read_steps(dir: &Path) -> Option<Vec<checks::Step>> {
+    serde_json::from_slice(&fs::read(dir.join(checks::STEPS_FILE)).ok()?).ok()
+}
+
+/// The failed steps of a stage when all of them are fixture steps that a
+/// rerun with `--only` can repeat. `None` when a rerun cannot help.
+fn retryable_failures(dir: &Path) -> Option<Vec<String>> {
+    let failed: Vec<String> = read_steps(dir)?
+        .into_iter()
+        .filter(|step| step.status == "failed")
+        .map(|step| step.name)
+        .collect();
+    (!failed.is_empty()
+        && failed
+            .iter()
+            .all(|name| checks::FIXTURE_STEPS.contains(&name.as_str())))
+    .then_some(failed)
 }
 
 pub(super) struct ValidateInput<'a, R> {
@@ -101,11 +169,15 @@ pub(super) fn validate(input: ValidateInput<'_, impl Runner>) -> Result<()> {
         let platform = platform.context("Missing Linux platform")?;
         Some((platform, stages.linux_image(options, platform)?))
     };
-    stages.run_platforms(linux_plan)?;
-    if !options.skip_windows {
-        stages.windows(options)?;
-    }
-    Ok(())
+    let result = stages.run_platforms(linux_plan).and_then(|()| {
+        if options.skip_windows {
+            Ok(())
+        } else {
+            stages.windows(options)
+        }
+    });
+    println!("{}", stages.summary()?);
+    result
 }
 
 impl<R: Runner> Stages<'_, R> {
@@ -225,19 +297,27 @@ impl<R: Runner> Stages<'_, R> {
 impl<R: Runner + Sync> Stages<'_, R> {
     /// Run the host and Linux checks in parallel. The host's real-PTY and
     /// GUI fixtures use short timed waits that the Linux container's build
-    /// can starve, so a host failure during a parallel run is rerun once
-    /// alone after Linux ends.
+    /// can starve, so after Linux ends the failed fixture steps (only those)
+    /// run once more. Other failures repeat every time and are not rerun.
     fn run_platforms(&self, linux_plan: Option<(&'static str, String)>) -> Result<()> {
         let parallel = linux_plan.is_some();
         let (host, linux) = self.run_platforms_together(linux_plan)?;
         let host = match host {
-            Err(first) if parallel => {
-                println!("Retrying host checks alone after a parallel failure: {first:#}");
-                self.run(
-                    "host-retry",
-                    &mut cmd(self.source, "bash", &["scripts/release-check.sh"]),
-                )
-            }
+            Err(first) if parallel => match retryable_failures(&self.artifacts.join("host")) {
+                Some(only) => {
+                    let only = only.join(",");
+                    println!("Retrying host fixture steps {only} alone after a parallel failure");
+                    self.run(
+                        "host-retry",
+                        &mut cmd(
+                            self.source,
+                            "bash",
+                            &["scripts/release-check.sh", "--only", &only],
+                        ),
+                    )
+                }
+                None => Err(first),
+            },
             host => host,
         };
         host?;
@@ -291,7 +371,7 @@ impl<R: Runner + Sync> Stages<'_, R> {
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?;
         fs::create_dir(&output)?;
-        self.run(
+        self.run_with_steps(
             "linux",
             &mut cmd(
                 source,
@@ -332,6 +412,7 @@ impl<R: Runner + Sync> Stages<'_, R> {
                     "git config --global --add safe.directory /src; bash scripts/release-check.sh",
                 ],
             ),
+            Some(&output),
         )
     }
 }
