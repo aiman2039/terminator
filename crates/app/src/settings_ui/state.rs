@@ -72,7 +72,8 @@ impl SettingsSection {
         match self {
             Self::Appearance => "theme accent density color hex font",
             Self::Terminal => {
-                "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout"
+                "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout lsp language server \
+                 markdown html css scss less json toml yaml"
             }
             Self::Editor => "native font size line spacing height caret blink cursor",
             Self::Notifications => "alert os desktop dismiss sound ntfy channel machine test",

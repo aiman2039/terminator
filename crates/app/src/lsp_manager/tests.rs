@@ -23,8 +23,8 @@ fn root_falls_back_to_parent_dir() {
 #[test]
 fn unsupported_language_never_syncs() {
     let mut manager = LspManager::trusting();
-    let path = crate::test_path("/tmp/note.md");
-    assert!(!manager.sync_doc(&path, Language::Markdown, 1));
+    let path = crate::test_path("/tmp/run.sh");
+    assert!(!manager.sync_doc(&path, Language::Shell, 1));
     assert!(manager.row_marks(&path).is_empty());
     assert!(manager.problems_for(&path).is_empty());
 }

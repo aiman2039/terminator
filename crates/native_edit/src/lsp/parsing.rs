@@ -321,37 +321,6 @@ pub(super) fn native_location(uri: &lsp_types::Uri, range: &lsp_types::Range) ->
     }
 }
 
-/// Server family id for a language, if it has a server. TypeScript and
-/// JavaScript share one family, because one `typescript-language-server`
-/// serves both; the per-file `didOpen` id comes from
-/// [`language_id_for_path`].
-#[must_use]
-pub fn server_language(language: Language) -> Option<&'static str> {
-    match language {
-        Language::Rust => Some("rust"),
-        Language::Python => Some("python"),
-        Language::TypeScript | Language::JavaScript => Some("typescript"),
-        _ => None,
-    }
-}
-
-/// Protocol `languageId` for `didOpen`: TypeScript and JavaScript have
-/// several (`.tsx` is `typescriptreact`, `.jsx` is `javascriptreact`).
-#[must_use]
-pub fn language_id_for_path(path: &Path, language: Language) -> Option<&'static str> {
-    match language {
-        Language::Rust => Some("rust"),
-        Language::Python => Some("python"),
-        Language::TypeScript => Some(if extension(path) == "tsx" {
-            "typescriptreact"
-        } else {
-            "typescript"
-        }),
-        Language::JavaScript => Some(javascript_id(path)),
-        _ => None,
-    }
-}
-
 pub(super) fn javascript_id(path: &Path) -> &'static str {
     if extension(path) == "jsx" {
         "javascriptreact"
@@ -364,28 +333,6 @@ pub(super) fn extension(path: &Path) -> String {
     path.extension()
         .map(|value| value.to_string_lossy().to_lowercase())
         .unwrap_or_default()
-}
-
-/// Server binary candidates for a language, in preference order. Only
-/// languages here get a server; everything else edits without LSP.
-#[must_use]
-pub fn server_candidates(language: Language) -> &'static [&'static str] {
-    match language {
-        Language::Rust => &["rust-analyzer"],
-        Language::Python => &["pylsp"],
-        Language::TypeScript | Language::JavaScript => &["typescript-language-server"],
-        _ => &[],
-    }
-}
-
-/// Extra command-line arguments the server needs. TypeScript's server
-/// speaks LSP only on stdio, which it selects with `--stdio`.
-#[must_use]
-pub fn server_args(language: Language) -> &'static [&'static str] {
-    match language {
-        Language::TypeScript | Language::JavaScript => &["--stdio"],
-        _ => &[],
-    }
 }
 
 /// First candidate found on `PATH`: `path_env` is the raw `PATH` value so
