@@ -95,6 +95,7 @@ impl Shared {
             closing: false,
             inputs_in_flight: 0,
             shell_executable,
+            commands: crate::commands::Commands::default(),
         }));
         Ok(Spawned {
             child,

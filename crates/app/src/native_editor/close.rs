@@ -316,6 +316,9 @@ impl App {
         for jump in jumps {
             self.apply_goto_jump(jump);
         }
+        for path in std::mem::take(&mut self.pending_gutter_diffs) {
+            self.show_gutter_diff(&path);
+        }
         if let Some(force) = self.pending_quit_all.take() {
             self.drain_quit_all(force);
         }

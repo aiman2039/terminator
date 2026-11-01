@@ -102,3 +102,16 @@ fn notification_sound_defaults_on_and_round_trips() {
     let encoded = serde_json::to_value(&off).unwrap();
     assert_eq!(encoded["notification_sound"], false);
 }
+
+#[test]
+fn local_history_days_default_to_7_for_old_settings_and_are_bounded() {
+    let old: Settings = serde_json::from_value(serde_json::json!({"history_days": 30})).unwrap();
+    assert_eq!(old.local_history_days, 7);
+    let mut s = Settings {
+        local_history_days: 0,
+        ..Settings::default()
+    };
+    assert!(s.validate().is_ok(), "0 turns recording off");
+    s.local_history_days = 3651;
+    assert!(s.validate().is_err());
+}

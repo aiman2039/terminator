@@ -24,6 +24,7 @@ pub(crate) use files::{
     editor_close, external_editor, file_actions, image_preview, search, workspace_ops,
 };
 pub(crate) use git::git_log;
+pub(crate) use git::local_history;
 pub(crate) use git::merge;
 pub(crate) use git::worktree_ui;
 pub(crate) use install::daemon_upgrade;

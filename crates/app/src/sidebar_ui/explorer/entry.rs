@@ -253,6 +253,7 @@ impl App {
                     excluded: self.explorer_excluded(&entry.path),
                     bookmarked: self.preferences.explorer_bookmarks.contains(&entry.path),
                     nested: row.nests.then(|| self.explorer_row_expanded(row)),
+                    local_history: self.local_history_supported(),
                 },
             },
         );

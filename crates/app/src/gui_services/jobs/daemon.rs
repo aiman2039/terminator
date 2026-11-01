@@ -229,6 +229,11 @@ impl Services {
                     updates.push(Update::Text(key, text));
                 }
             }
+            Response::CommandBlocks(blocks) => {
+                if let After::CommandBlocks(sid) = after {
+                    updates.push(Update::CommandBlocks(sid, blocks));
+                }
+            }
             _ => {}
         }
         Ok(())

@@ -162,6 +162,8 @@ pub fn read_only(request: &Request) -> bool {
             | Request::WorktreeList { .. }
             | Request::ShellCommand { .. }
             | Request::VncFrame { .. }
+            | Request::LocalHistoryList { .. }
+            | Request::LocalHistoryRead { .. }
     )
 }
 

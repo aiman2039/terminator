@@ -168,6 +168,7 @@ impl App {
         let root = self.op_root().unwrap_or_else(|| path.to_path_buf());
         match local {
             ExplorerLocal::Reveal => self.queue_workspace(workspace_ops::Op::Reveal(path.into())),
+            ExplorerLocal::LocalHistory => self.open_local_history(path.to_owned()),
             ExplorerLocal::CopyRelative => {
                 ui.ctx()
                     .copy_text(workspace_ops::relative_display(&root, path));

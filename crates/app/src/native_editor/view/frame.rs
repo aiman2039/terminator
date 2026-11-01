@@ -62,6 +62,7 @@ impl App {
             blame_offer,
             inlay_answer,
             remote_snapshot,
+            local_history: !remote_snapshot && self.local_history_supported(),
             git_base,
             change_colors: [
                 appearance::color(&self.theme.git_added),

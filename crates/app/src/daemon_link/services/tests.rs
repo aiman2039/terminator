@@ -129,7 +129,7 @@ fn untracked_descendants_get_individual_decorations() {
 fn space_and_line_paths() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(tmp.path().join("space file.rs"), "hello").unwrap();
-    let (p, line) = resolve_path("space file.rs:12:3", tmp.path()).unwrap();
+    let (p, line, _) = resolve_location("space file.rs:12:3", tmp.path()).unwrap();
     assert_eq!(p.file_name().unwrap(), "space file.rs");
     assert_eq!(line, Some(12));
     let target = resolve_target("space file.rs:12:3", tmp.path()).unwrap();
@@ -197,4 +197,22 @@ fn target_compact_shortens_home_and_keeps_the_full_path_for_copy() {
         Target::File(PathBuf::from("/tmp/terminator-paste.png"), None, None).compact(),
         "/tmp/terminator-paste.png"
     );
+}
+
+#[test]
+fn compiler_and_url_locations_resolve_to_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("app.ts"), "x").unwrap();
+    fs::write(tmp.path().join("my file.rs"), "x").unwrap();
+    let target = resolve_target("app.ts(10,3):", tmp.path()).unwrap();
+    assert!(matches!(target, Target::File(_, Some(10), Some(3))));
+    let target = resolve_target("app.ts:4:", tmp.path()).unwrap();
+    assert!(matches!(target, Target::File(_, Some(4), None)));
+    let url = format!(
+        "file://{}/my%20file.rs#L7",
+        tmp.path().display().to_string().replace(' ', "%20")
+    );
+    let target = resolve_target(&url, tmp.path()).unwrap();
+    assert!(matches!(target, Target::File(_, Some(7), None)));
+    assert!(resolve_target("missing.rs:3", tmp.path()).is_err());
 }

@@ -12,6 +12,14 @@ use terminator_core::*;
 use super::super::super::shared::{HistoryJob, Runtime, Shared, relock};
 use crate::terminal_events;
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
 /// Pending query replies per session; more are dropped, never waited for.
 const REPLY_QUEUE: usize = 64;
 
@@ -89,6 +97,7 @@ impl Shared {
     ) -> std::collections::VecDeque<String> {
         let mut rt = relock(runtime);
         terminal_events::process(&mut rt.parser, data);
+        let _finished = rt.commands.process(data, now_ms());
         let replies = std::mem::take(&mut rt.parser.callbacks_mut().replies);
         let notices = std::mem::take(&mut rt.parser.callbacks_mut().notices);
         let frame = Response::Data(B64.encode(data));

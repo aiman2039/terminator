@@ -298,7 +298,12 @@ pub struct App {
     pub(crate) search: String,
     pub(crate) search_session: Option<String>,
     pub(crate) search_open: bool,
+    /// Terminal whose shell integration commands fill the main pane.
+    pub(crate) commands_session: Option<String>,
+    pub(crate) command_blocks: HashMap<String, Vec<terminator_core::command_blocks::CommandBlock>>,
     pub(crate) worktree_open: bool,
+    /// The Local History page fills the main pane (same pattern as Player).
+    pub(crate) local_history: Option<crate::local_history::Page>,
     pub(crate) terminal_find: HashMap<String, TerminalFind>,
     pub(crate) history_filter: HashMap<String, String>,
     pub(crate) native_docs: HashMap<PathBuf, native_editor::NativeDoc>,
@@ -333,6 +338,8 @@ pub struct App {
     /// checked out, so looking up the originating project there always
     /// misses and drops the jump.
     pub(crate) pending_goto: Vec<lsp_manager::GotoJump>,
+    /// Gutter "Show diff" files, opened once the workspace is checked in.
+    pub(crate) pending_gutter_diffs: Vec<PathBuf>,
     /// Read-only reference list for the native editor.
     /// Find Usages / declaration chooser window.
     pub(crate) usages: Option<crate::native_editor::UsagesView>,

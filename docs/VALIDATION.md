@@ -1,5 +1,19 @@
 # Validation evidence — 2026-09-08
 
+## Shell integration, Local History, gutter staging, link filters (#81, #82, #84, #87) — 2026-11-02
+
+macOS: `sh scripts/check.sh all` (async-boundary, fmt, build, clippy, audit,
+deny) and `sarah` passed. `sh scripts/check.sh test`: 1787 tests; two new
+link-filter tests failed on the first run (a wrong expectation and the
+quote/punctuation trim order), were fixed, and then passed. The zsh and bash
+integration snippets are run by unit tests in real shells. `cargo xtask
+integration`: the first run timed out once in the blocked-paste Stop case
+(session still `stopping` after 5 s); the second run passed. No native GUI
+fixture was run for the Commands page, the Local History page or the gutter
+Stage hunk / Show diff buttons. Gutter staging has no test against a real
+Git repository. CI caching (#68, #69) and release timing (#71) need two
+release runs to measure.
+
 ## Event-driven GUI fixtures (#144) — 2026-11-02
 
 Converted: diff-hunks, legacy-diff, reviews, terminal-actions, browser. A

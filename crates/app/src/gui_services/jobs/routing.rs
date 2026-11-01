@@ -106,12 +106,16 @@ impl JobRouting {
                 vec![Update::Diff(tab.key(), Err(busy()))]
             }
             Job::DiffAction(tab, _) => vec![Update::DiffActionFailed(tab.key(), busy())],
+            Job::StageGutterBlock { path, .. } => {
+                vec![Update::GutterStaged(path.clone(), Err(busy()))]
+            }
             Job::ResolveTarget(key, _, _) => vec![Update::ResolvedTarget(key.clone(), None)],
             Job::ExitSave(id, _) => vec![Update::ExitSaved(*id, Err(busy()))],
             Job::GitView(tab) => vec![Update::GitView(
                 tab.key(),
                 crate::GitView::failed(tab, busy()),
             )],
+            Job::LocalHistory(op) => vec![Update::LocalHistory(op.failed(busy()))],
             _ => Vec::new(),
         }
     }
@@ -148,8 +152,14 @@ impl JobRouting {
                 ("diff", tab.key(), Policy::ReplaceableRead)
             }
             Job::DiffAction(tab, _) => ("diff-action", tab.key(), Policy::OrderedMutation),
+            Job::StageGutterBlock { path, .. } => (
+                "diff-action",
+                format!("gutter:{}", path.display()),
+                Policy::OrderedMutation,
+            ),
             Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
             Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
+            Job::LocalHistory(op) => crate::local_history::route(op),
             Job::LinePreviews(..) => ("files", "line-previews".into(), Policy::ReplaceableRead),
             Job::CommitFiles(_, hash) => (
                 "git",

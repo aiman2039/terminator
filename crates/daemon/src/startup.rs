@@ -144,6 +144,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
+        terminator_core::command_blocks::CAPABILITY.into(),
         SESSION_FOR_PIDS_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),
         AGENT_PRESENCE_CAPABILITY.into(),
@@ -164,6 +165,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         vnc::START_COMMAND_CAPABILITY.into(),
         vnc::SHM_CAPABILITY.into(),
         vnc::DETACH_TIMEOUT_CAPABILITY.into(),
+        terminator_core::local_history::CAPABILITY.into(),
     ];
     if catalog {
         state.daemon_build = Some(generations::build_identity(
@@ -215,6 +217,7 @@ pub(crate) struct Started {
     pub(crate) shared: Arc<Shared>,
     pub(crate) history_rx: mpsc::Receiver<HistoryJob>,
     pub(crate) alert_rx: mpsc::Receiver<String>,
+    pub(crate) local_history_rx: mpsc::Receiver<crate::workers::LocalHistoryJob>,
 }
 
 pub(crate) fn start_shared(input: StartInput) -> Started {
@@ -228,6 +231,8 @@ pub(crate) fn start_shared(input: StartInput) -> Started {
     } = input;
     let (history, history_rx) = mpsc::sync_channel::<HistoryJob>(512);
     let (alerts, alert_rx) = mpsc::sync_channel::<String>(64);
+    let (local_history, local_history_rx) =
+        mpsc::sync_channel::<crate::workers::LocalHistoryJob>(4096);
     let shared = Arc::new(Shared {
         helper,
         catalog_paths,
@@ -247,11 +252,13 @@ pub(crate) fn start_shared(input: StartInput) -> Started {
         ntfy_cooldown: Mutex::new(ntfy::Cooldown::default()),
         forwards: Mutex::new(crate::remote::Forwards::default()),
         remote_transfers: Mutex::new(crate::remote::Transfers::default()),
+        local_history,
     });
     Started {
         shared,
         history_rx,
         alert_rx,
+        local_history_rx,
     }
 }
 

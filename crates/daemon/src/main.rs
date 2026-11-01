@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod accept;
+mod commands;
 mod console;
 mod editor;
 mod helper;
@@ -21,6 +22,7 @@ enum Launch {
 }
 mod remote;
 mod shell;
+mod shell_integration;
 mod storage;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
@@ -67,6 +69,7 @@ fn main() -> Result<()> {
     workers::HistoryWorker::spawn(Arc::downgrade(&shared), started.history_rx);
     workers::AlertWorker::spawn(Arc::downgrade(&shared), started.alert_rx);
     workers::GenerationWorker::spawn(Arc::downgrade(&shared));
+    workers::LocalHistoryWorker::spawn(Arc::downgrade(&shared), started.local_history_rx);
     presence::start(Arc::downgrade(&shared));
     let active = Arc::new(AtomicUsize::new(0));
     let mut wake = startup::install_waker()?;

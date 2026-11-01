@@ -16,10 +16,12 @@ base64.workspace = true
 portable-pty = "0.9"
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 vt100 = "0.16"
+vte = "0.15"
 rusqlite = { version = "0.40", features = ["bundled"] }
 fs2 = "0.4"
 rustix.workspace = true
 notify-rust = "4"
+notify = "8"
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "io-util", "macros", "process", "fs"] }
 vnc = { package = "vnc-rs", version = "0.6" }

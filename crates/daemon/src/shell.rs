@@ -24,6 +24,7 @@ pub fn prepare(paths: &Paths, shell: &str, helper: &Path) -> Result<CommandBuild
                     content += &format!(
                         "autoload -Uz add-zsh-hook\n_terminator_cwd() {{ {hook} cwd \"$PWD\" >/dev/null 2>&1; }}\nadd-zsh-hook precmd _terminator_cwd\nadd-zsh-hook chpwd _terminator_cwd\n"
                     );
+                    content += crate::shell_integration::ZSH;
                 }
                 // zsh reads subsequent startup files using ZDOTDIR; restore original after zlogin.
                 if file != ".zlogin" {
@@ -36,7 +37,8 @@ pub fn prepare(paths: &Paths, shell: &str, helper: &Path) -> Result<CommandBuild
         }
         "bash" => {
             let content = format!(
-                "[[ -f ~/.bashrc ]] && source ~/.bashrc\n_terminator_cwd() {{ {hook} cwd \"$PWD\" >/dev/null 2>&1; }}\nif declare -p PROMPT_COMMAND 2>/dev/null | command grep -q 'declare -a'; then PROMPT_COMMAND+=(_terminator_cwd); else PROMPT_COMMAND=\"${{PROMPT_COMMAND:+$PROMPT_COMMAND; }}_terminator_cwd\"; fi\n"
+                "[[ -f ~/.bashrc ]] && source ~/.bashrc\n_terminator_cwd() {{ {hook} cwd \"$PWD\" >/dev/null 2>&1; }}\nif declare -p PROMPT_COMMAND 2>/dev/null | command grep -q 'declare -a'; then PROMPT_COMMAND+=(_terminator_cwd); else PROMPT_COMMAND=\"${{PROMPT_COMMAND:+$PROMPT_COMMAND; }}_terminator_cwd\"; fi\n{}",
+                crate::shell_integration::BASH
             );
             let rc = dir.join("bashrc");
             atomic_write(&rc, content.as_bytes())?;
@@ -48,7 +50,8 @@ pub fn prepare(paths: &Paths, shell: &str, helper: &Path) -> Result<CommandBuild
             cmd.arg("-i");
             cmd.arg("-C");
             cmd.arg(format!(
-                "function _terminator_cwd --on-event fish_prompt; {hook} cwd \"$PWD\" >/dev/null 2>&1; end"
+                "function _terminator_cwd --on-event fish_prompt; {hook} cwd \"$PWD\" >/dev/null 2>&1; end\n{}",
+                crate::shell_integration::FISH
             ));
         }
         _ => {

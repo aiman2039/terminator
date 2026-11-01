@@ -30,6 +30,7 @@ impl ViewPass<'_> {
     /// narrow pane instead of wrapping to a second row.
     fn header_row(&mut self, ui: &mut egui::Ui) -> Option<usize> {
         self.header_recent(ui);
+        self.header_local_history(ui);
         self.header_bookmark(ui);
         self.header_references(ui);
         self.header_reload(ui);
@@ -245,6 +246,14 @@ impl ViewPass<'_> {
         {
             self.requests.toggle_pin = true;
             ui.memory_mut(|memory| memory.request_focus(self.file_focus()));
+        }
+    }
+
+    fn header_local_history(&mut self, ui: &mut egui::Ui) {
+        if self.frame.local_history
+            && appearance::sidebar_action(ui, "Archive", "Local History").clicked()
+        {
+            self.requests.open_local_history = true;
         }
     }
 

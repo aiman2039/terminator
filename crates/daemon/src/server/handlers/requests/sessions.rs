@@ -59,6 +59,18 @@ impl Shared {
         Ok(Outcome::Reply(Response::Text(screen)))
     }
 
+    pub(super) fn on_command_blocks(&self, session: &str, since: u64) -> Result<Outcome> {
+        let runtime = self.runtime(session)?;
+        let blocks = relock(&runtime)
+            .commands
+            .tracker()
+            .blocks()
+            .filter(|block| block.id > since)
+            .cloned()
+            .collect();
+        Ok(Outcome::Reply(Response::CommandBlocks(blocks)))
+    }
+
     pub(super) fn on_create(
         self: &Arc<Self>,
         input: super::super::sessions::CreateInput,

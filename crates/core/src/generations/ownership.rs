@@ -110,6 +110,7 @@ fn request_sessions(request: &Request) -> (Option<&str>, Option<&str>) {
         | Request::EditorSave { session }
         | Request::EditorStatus { session }
         | Request::Screen { session }
+        | Request::CommandBlocks { session, .. }
         | Request::TerminalNotify { session, .. }
         | Request::ShellCommand { session }
         | Request::ShellPrompt { session, .. }

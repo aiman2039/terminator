@@ -37,6 +37,8 @@ pub(crate) struct Runtime {
     pub(crate) closing: bool,
     pub(crate) inputs_in_flight: usize,
     pub(crate) shell_executable: Option<std::path::PathBuf>,
+    /// Shell integration command blocks (`command-blocks-v1`).
+    pub(crate) commands: crate::commands::Commands,
 }
 /// A cloned input descriptor must not keep a failed output connection alive.
 pub(crate) struct Disconnect(pub(crate) transport::Stream);
@@ -73,6 +75,8 @@ pub(crate) struct Shared {
     /// Background SSH project file transfers. Lock after `state`, never
     /// before.
     pub(crate) remote_transfers: Mutex<crate::remote::Transfers>,
+    /// Labels and file changes for the Local History recorder.
+    pub(crate) local_history: SyncSender<crate::workers::LocalHistoryJob>,
 }
 
 #[cfg(test)]

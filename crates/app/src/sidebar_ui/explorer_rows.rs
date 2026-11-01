@@ -173,6 +173,8 @@ pub(super) fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMod
 pub enum ExplorerLocal {
     /// Open the file's Git history.
     History,
+    /// Open the file's Local History snapshots.
+    LocalHistory,
     /// Diff the working file against a branch (or other revision).
     CompareWith(String),
     Reveal,
@@ -195,6 +197,8 @@ pub struct FileRowMarks {
     pub bookmarked: bool,
     /// `Some(open)` for a file with nested files.
     pub nested: Option<bool>,
+    /// The daemon records Local History (`local-history-v1`).
+    pub local_history: bool,
 }
 
 #[derive(Default)]

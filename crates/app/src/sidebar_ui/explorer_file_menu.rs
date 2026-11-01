@@ -133,6 +133,9 @@ impl FileRowMenu<'_> {
             ExplorerLocal::CopyRelative,
         );
         item(ui, "Copy file name", "Copy", ExplorerLocal::CopyName);
+        if marks.local_history {
+            item(ui, "Local History", "History", ExplorerLocal::LocalHistory);
+        }
         ui.separator();
         item(ui, "Rename", "Pencil", ExplorerLocal::Rename);
         item(ui, "Duplicate", "Copy", ExplorerLocal::Duplicate);

@@ -53,6 +53,7 @@ impl Default for Settings {
             ssh_reuse_minutes: crate::ssh::Tuning::DEFAULT.reuse_minutes,
             ssh_connect_timeout_seconds: crate::ssh::Tuning::DEFAULT.connect_timeout_seconds,
             ssh_command_timeout_seconds: crate::ssh::Tuning::DEFAULT.command_timeout_seconds,
+            local_history_days: 7,
         }
     }
 }
@@ -148,6 +149,11 @@ impl Settings {
         if self.vnc_detached_timeout_minutes > 1440 {
             return Err(SettingsError::VncDetachedTimeout {
                 minutes: self.vnc_detached_timeout_minutes,
+            });
+        }
+        if self.local_history_days > 3650 {
+            return Err(SettingsError::LocalHistoryDays {
+                days: self.local_history_days,
             });
         }
         if !self.ssh_tuning().valid() {

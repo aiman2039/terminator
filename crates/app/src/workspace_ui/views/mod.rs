@@ -4,6 +4,7 @@ use crate::app::OpenFileModeInput;
 
 mod browser;
 mod commit_log;
+mod local_history;
 mod revisions;
 
 impl App {

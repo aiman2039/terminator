@@ -173,11 +173,20 @@ pub(crate) fn rollback(buffer: &mut Doc, engine: &mut VimEngine, hunk: &GutterHu
     let _ = engine.place_cursor(buffer, line, col);
 }
 
-/// The clicked change's popup: what the lines were, and Rollback.
+/// The clicked change's popup: what the lines were, and its actions.
 pub(crate) struct GutterPopup {
     pub path: PathBuf,
     pub index: usize,
     pub at: egui::Pos2,
+}
+
+/// What the user picked in the change popup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PopupAction {
+    None,
+    Rollback,
+    ShowDiff,
+    Stage,
 }
 
 pub(crate) struct PopupUiInput<'a> {
@@ -185,25 +194,28 @@ pub(crate) struct PopupUiInput<'a> {
     pub(crate) popup: &'a mut Option<GutterPopup>,
     pub(crate) hunks: &'a [GutterHunk],
     pub(crate) deleted: egui::Color32,
+    /// Stage works on the saved file only.
+    pub(crate) can_stage: bool,
 }
 
-/// Paint the popup; returns true when Rollback was pressed, and clears
-/// `popup` when the user closes it.
-pub(crate) fn popup_ui(input: PopupUiInput<'_>) -> bool {
+/// Paint the popup; returns the picked action, and clears `popup` when
+/// the user picks one or closes it.
+pub(crate) fn popup_ui(input: PopupUiInput<'_>) -> PopupAction {
     let PopupUiInput {
         ui,
         popup,
         hunks,
         deleted,
+        can_stage,
     } = input;
     let Some(open) = popup.as_ref() else {
-        return false;
+        return PopupAction::None;
     };
     let Some(hunk) = hunks.get(open.index) else {
         *popup = None;
-        return false;
+        return PopupAction::None;
     };
-    let mut rollback = false;
+    let mut action = PopupAction::None;
     let mut close = false;
     egui::Area::new(egui::Id::unique(("native-gutter-change", &open.path)))
         .order(egui::Order::Foreground)
@@ -218,7 +230,17 @@ pub(crate) fn popup_ui(input: PopupUiInput<'_>) -> bool {
                         ChangeKind::Deleted => "Deleted lines",
                     });
                     if ui.button("Rollback").clicked() {
-                        rollback = true;
+                        action = PopupAction::Rollback;
+                    }
+                    if ui.button("Show diff").clicked() {
+                        action = PopupAction::ShowDiff;
+                    }
+                    if ui
+                        .add_enabled(can_stage, egui::Button::new("Stage hunk"))
+                        .on_disabled_hover_text("Save the file first")
+                        .clicked()
+                    {
+                        action = PopupAction::Stage;
                     }
                     if appearance::sidebar_action(ui, "X", "Close").clicked() {
                         close = true;
@@ -242,10 +264,10 @@ pub(crate) fn popup_ui(input: PopupUiInput<'_>) -> bool {
     if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
         close = true;
     }
-    if rollback || close {
+    if action != PopupAction::None || close {
         *popup = None;
     }
-    rollback
+    action
 }
 
 impl App {
@@ -261,6 +283,41 @@ impl App {
                 .send(Job::GitBase(path.to_owned(), self.git_base_generation));
         }
         entry.and_then(|(_, base)| base.clone())
+    }
+
+    /// The cwd of `path`'s native diff tab: the project's Git root when
+    /// it holds the file (so the Git sidebar's tab is reused), else the
+    /// file's folder.
+    pub(crate) fn gutter_diff_cwd(&self, path: &Path) -> Option<PathBuf> {
+        self.git_root()
+            .filter(|root| path.starts_with(root))
+            .or_else(|| path.parent().map(Path::to_path_buf))
+    }
+
+    /// Open the native working-tree diff of `path`.
+    pub(crate) fn show_gutter_diff(&mut self, path: &Path) {
+        if let Some(cwd) = self.gutter_diff_cwd(path) {
+            self.spawn_diff(SpawnDiff {
+                cwd,
+                path: path.to_owned(),
+                staged: false,
+                native: true,
+            });
+        }
+    }
+
+    /// Stage the working-tree changes under one gutter block of the saved
+    /// buffer `text`, on a background job.
+    pub(crate) fn stage_gutter_block(&mut self, path: &Path, mark: ChangeMark, text: String) {
+        let Some(cwd) = path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let _ = self.jobs.send(Job::StageGutterBlock {
+            cwd,
+            path: path.to_owned(),
+            lines: mark.start..mark.end,
+            text,
+        });
     }
 
     pub(crate) fn apply_git_base(&mut self, path: PathBuf, generation: u64, base: Option<String>) {

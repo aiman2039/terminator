@@ -20,6 +20,12 @@ The daemon uses one `vt100` parser and screen model for bounded screen/history s
 
 Only visible terminal widgets remain attached in the GUI. Switching projects or hiding a tab releases the temporary bridge while preserving the daemon-owned session. Returning reattaches the same session. Slow subscribers are disconnected rather than blocking unrelated sessions; their next attachment obtains a fresh snapshot.
 
+## Shell integration and terminal links
+
+The wrapper startup files for zsh, bash and fish emit OSC 133 prompt and command marks, OSC 633 `E` (command line, zsh and fish) and `P;Cwd`. Set `TERMINATOR_SHELL_INTEGRATION=0` to turn them off. The daemon also accepts OSC 633 and the JetBrains OSC 1341 events from other shells. A second, light `vte` pass in the PTY reader (`crates/daemon/src/commands.rs`) finds the marks and the printed text between them; the `vt100` model stays the only screen state. Each live session keeps at most 500 command blocks (command, cwd, exit code, start/finish time, the last 64 KiB of output) in memory. Blocks are not written to disk and end with the session. The GUI asks for them with `CommandBlocks` only when the session's generation advertises `command-blocks-v1`. The terminal context menu opens a Commands page in the main pane: failed commands are red, one command's output can be copied, and a click scrolls the terminal to the command line. Blocks come only from marks, never from terminal text.
+
+Terminal links: the widget extracts the token under the pointer; the GUI file worker resolves it, never the render loop. Link filters (`daemon_link/services/links.rs`) propose `path:line[:col]`, `path(line[,col])` and `file://` candidates; the first existing file wins. The daemon does not detect links: the GUI worker already runs off the render loop and has the session cwd, so no daemon request or capability is needed.
+
 ## Identity and persistence
 
 A terminal ID is independent of its project path, PID, or provider conversation. Invocation IDs include the agent process identity and provider session. Hook events are deduplicated, and sequence numbers are honored when provided. Notification read/dismissal state is distinct from the observed agent state.
@@ -198,6 +204,32 @@ rejection. Hidden tabs release preview caches and image textures. Markdown links
 are routed to explicit local-file or HTTP(S) opening actions; remote image fetches
 and HTML execution are absent. Preview focus suppresses editor input, while the
 original editor and its unsaved-close lifecycle remain daemon-owned.
+
+## Local History
+
+The daemon records file snapshots (`local-history-v1`) in
+`$data/local-history` (mode 0700/0600): content-addressed blobs, one JSONL
+index per file and a `labels.jsonl` of project-wide markers. Only the active
+generation records. Its worker thread watches each local project root
+recursively with `notify`, waits 500 ms of quiet per file, and skips `.git`,
+gitignored paths (`git check-ignore`), swap files, binary or non-UTF-8 text,
+files over 1 MiB, and content equal to the newest snapshot. SSH projects are
+not watched. When a file without history changes, its Git index version is
+saved first as a "Git index" baseline, so the timeline starts before the
+change; files outside Git start at their first observed change. A hook event
+that moves an agent into Running adds a "Before agent run" label (hook
+lifecycle only, never terminal text). `LocalHistoryLabel` adds labels
+explicitly; "before git checkout" labels are not recorded yet. Settings →
+History → Local History days (default 7, 0 stops recording) sets retention;
+the worker prunes expired entries and unused blobs once a day.
+
+The GUI opens Local History from the Explorer file menu or the native editor
+header, only when the daemon advertises the capability. The page fills the
+main pane like Settings (not a layout tab): a timeline, and the native diff of
+the selected snapshot against the file on disk. Revert asks for confirmation;
+the daemon then saves the current content as "Before revert" and writes the
+snapshot back. Snapshot ids are hashes that must belong to the requested
+file's timeline, so requests cannot read or write outside the store.
 
 ## Platform boundaries
 

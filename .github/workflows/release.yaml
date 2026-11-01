@@ -175,8 +175,50 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
+      # #68: Buildx layer cache for both images, per architecture.
+      - uses: docker/setup-buildx-action@v3
+      - name: Build portable toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: scripts
+          file: scripts/portable-linux.Dockerfile
+          target: toolchain
+          tags: terminator-portable-build
+          load: true
+          cache-from: type=gha,scope=portable-toolchain-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=portable-toolchain-${{ matrix.target }}
+      - name: Build portable runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: scripts
+          file: scripts/portable-linux.Dockerfile
+          target: runtime
+          tags: terminator-portable-run
+          load: true
+          cache-from: type=gha,scope=portable-runtime-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=portable-runtime-${{ matrix.target }}
+      # The Docker layer cache does not keep the Cargo target directory.
+      # Each release bumps Cargo.lock, so the exact key changes and the new
+      # target is saved; restore-keys reuse the previous one.
+      - name: Restore portable Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/portable-cache
+          key: portable-cargo-${{ matrix.target }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock', 'scripts/portable-linux.Dockerfile') }}
+          restore-keys: |
+            portable-cargo-${{ matrix.target }}-${{ env.RUST_VERSION }}-
       - name: Build on AlmaLinux 8 and verify glibc and libraries
-        run: sh scripts/portable-linux.sh
+        env:
+          PORTABLE_IMAGES_BUILT: '1'
+          PORTABLE_CACHE_DIR: ${{ runner.temp }}/portable-cache
+          TARGET: ${{ matrix.target }}
+        run: |
+          start=$SECONDS
+          sh scripts/portable-linux.sh
+          echo "Portable build ($TARGET): $((SECONDS - start)) s, cache size $(du -sh "$PORTABLE_CACHE_DIR" | cut -f1)." >> "$GITHUB_STEP_SUMMARY"
+      - name: Make the Cargo cache readable for saving
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/portable-cache" || true
       - name: Name the archive
         env:
           TAG: ${{ needs.prepare.outputs.tag }}

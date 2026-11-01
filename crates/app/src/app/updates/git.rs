@@ -91,6 +91,24 @@ impl App {
         }
     }
 
+    /// A gutter Stage finished: report it, then refresh markers, open
+    /// diffs of the file, and the Git sidebar.
+    pub(super) fn handle_gutter_staged(
+        &mut self,
+        path: &std::path::Path,
+        result: Result<String, String>,
+    ) {
+        match result {
+            Ok(message) => self.info = Some(message),
+            Err(error) => self.error = Some(format!("Stage failed: {error}")),
+        }
+        self.git_base_generation = self.git_base_generation.wrapping_add(1);
+        if let Some(cwd) = self.gutter_diff_cwd(path) {
+            self.reload_open_diffs(&cwd, path);
+        }
+        self.refresh_request = None;
+    }
+
     /// Reloads the staged and unstaged diffs of a file that are open.
     fn reload_open_diffs(&mut self, cwd: &std::path::Path, path: &std::path::Path) {
         for staged in [false, true] {

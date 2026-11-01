@@ -233,6 +233,9 @@ pub struct Settings {
     pub ssh_connect_timeout_seconds: u32,
     /// Limit for one SSH batch call (`ssh-command-timeout-v1`).
     pub ssh_command_timeout_seconds: u32,
+    /// Keep Local History file snapshots this many days; 0 turns
+    /// recording off (`local-history-v1`).
+    pub local_history_days: u32,
 }
 mod error;
 mod hooks;

@@ -1,4 +1,5 @@
 mod context;
+mod links;
 mod listing;
 
 pub use context::{ContextAsyncInput, context_async};
@@ -325,15 +326,8 @@ pub fn resolve_target(text: &str, cwd: &Path) -> Result<Target> {
         !cwd.starts_with("/__terminator_remote__"),
         "Remote paths must be opened through the SSH project explorer"
     );
-    let (path, line) = resolve_path(text, cwd)?;
+    let (path, line, column) = resolve_location(text, cwd)?;
     ensure!(path.is_file(), "Target is not a file");
-    let mut pieces = text.rsplit(':');
-    let last = pieces.next().and_then(|n| n.parse::<u32>().ok());
-    let column = if line.is_some() && pieces.next().is_some_and(|n| n.parse::<u32>().is_ok()) {
-        last
-    } else {
-        None
-    };
     Ok(Target::File(path, line, column))
 }
 fn target_path(text: &str, cwd: &Path) -> PathBuf {
@@ -352,32 +346,23 @@ fn target_path(text: &str, cwd: &Path) -> PathBuf {
     }
 }
 
-pub fn resolve_path(text: &str, cwd: &Path) -> Result<(PathBuf, Option<u32>)> {
+/// The first link-filter candidate that names an existing path. The
+/// untouched token is tried first so names containing `:` still open.
+pub fn resolve_location(text: &str, cwd: &Path) -> Result<(PathBuf, Option<u32>, Option<u32>)> {
     let text = text.trim().trim_matches(['\'', '"', '`']);
     let exact = target_path(text, cwd);
     if exact.exists() {
-        return Ok((exact.canonicalize()?, None));
+        return Ok((exact.canonicalize()?, None, None));
     }
-    let mut pieces = text.rsplitn(3, ':');
-    let last = pieces.next().unwrap_or("");
-    let rest = pieces.next();
-    let earlier = pieces.next();
-    if last.parse::<u32>().is_ok() {
-        let (line, file) = if let Some(earlier) = earlier {
-            if let Some(column) = rest.filter(|value| value.parse::<u32>().is_ok()) {
-                (column.parse().ok(), earlier.to_owned())
-            } else {
-                (
-                    last.parse().ok(),
-                    format!("{}:{}", earlier, rest.unwrap_or("")),
-                )
-            }
+    for candidate in links::candidates(text) {
+        let path = target_path(&candidate.path, cwd);
+        let usable = if candidate.line.is_some() {
+            path.is_file()
         } else {
-            (last.parse().ok(), rest.unwrap_or("").to_owned())
+            path.exists()
         };
-        let p = target_path(&file, cwd);
-        if p.is_file() {
-            return Ok((p.canonicalize()?, line));
+        if usable {
+            return Ok((path.canonicalize()?, candidate.line, candidate.column));
         }
     }
     anyhow::bail!("File not found: {text}")

@@ -184,6 +184,7 @@ impl App {
             && !self.rename_blocks_input()
             && !self.open_path
             && !self.search_open
+            && self.commands_session.is_none()
     }
 
     /// Terminals docked in the IDE strip stay interactive while a center-only
