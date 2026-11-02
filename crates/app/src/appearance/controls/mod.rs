@@ -2,7 +2,9 @@ use super::theme::{WIDGET_RADIUS, icon_color};
 use eframe::egui::{self, Color32, FontId};
 
 mod menus;
+mod popup_list;
 pub use menus::*;
+pub use popup_list::*;
 
 /// Title-bar sidebar glyph. Resting state has no frame; hover fills only.
 pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {

@@ -30,7 +30,7 @@ fn python_function_spans() {
 
 #[test]
 fn rust_query_captures_constants_attributes_and_fields() {
-    let theme = crate::highlight::theme(true).expect("darcula");
+    let theme = crate::highlight::theme(true).expect("islands dark");
     let text = "#[derive(Debug)]\npub const SCALE: u64 = 1_000_000;\nstruct S { a: u64 }\nfn f(s: &S) -> u64 { s.a }\npub enum E {\n    Variant,\n}\n";
     let lines = highlight_text(Language::Rust, text, theme).expect("spans");
     let plain = theme.settings.foreground.expect("foreground");
@@ -50,18 +50,25 @@ fn rust_query_captures_constants_attributes_and_fields() {
         span_at(1, 10).is_some_and(|span| span.color != plain),
         "const"
     );
-    // User-defined type tints and italicizes; primitives stay upright.
-    let user_type = span_at(2, 7).expect("type span");
-    assert!(user_type.style.italic, "type italic");
-    assert_ne!(user_type.color, plain, "type tint");
+    // As in `IntelliJ` Islands Dark: user types keep the plain color,
+    // primitives take the keyword color, both upright.
+    let user_type = span_at(2, 7).map_or(plain, |span| span.color);
+    assert_eq!(user_type, plain, "user type stays plain");
+    assert!(
+        span_at(2, 7).is_none_or(|span| !span.style.italic),
+        "user type upright"
+    );
     let primitive = span_at(2, 14).expect("primitive span");
-    assert_ne!(primitive.color, plain, "primitive tint");
-    assert_ne!(primitive.color, user_type.color, "type vs primitive");
+    assert_eq!(
+        primitive.color,
+        [0xCF, 0x8E, 0x6D],
+        "primitive keyword color"
+    );
     assert!(!primitive.style.italic, "primitives are upright");
-    // Enum variants are italic, like `IntelliJ`.
+    // Enum variants are italic in the plain color, like `IntelliJ`.
     let variant = span_at(5, 4).expect("variant span");
     assert!(variant.style.italic, "enum variant italic");
-    assert_ne!(variant.color, plain, "enum variant tint");
+    assert_eq!(variant.color, plain, "enum variant plain color");
     // Field access `s.a`, not the struct declaration.
     let field_line = "fn f(s: &S) -> u64 { s.a }";
     assert_eq!(text.split('\n').nth(3), Some(field_line));

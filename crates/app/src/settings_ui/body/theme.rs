@@ -2,7 +2,18 @@ use crate::*;
 
 /// Preset slots shown by the Theme segmented control; `CUSTOM` is never selectable.
 const SAVED: usize = 0;
-const CUSTOM: usize = 5;
+const CUSTOM: usize = PRESETS.len() + 1;
+
+/// Built-in presets in control order; slot `index + 1` picks `PRESETS[index]`.
+type Preset = (&'static str, fn() -> AppearanceConfig);
+
+const PRESETS: [Preset; 5] = [
+    ("Islands dark", AppearanceConfig::islands_dark),
+    ("IntelliJ dark", AppearanceConfig::intellij_dark),
+    ("High contrast", AppearanceConfig::high_contrast),
+    ("Terminator dark", AppearanceConfig::terminator_dark),
+    ("IntelliJ light", AppearanceConfig::intellij_light),
+];
 
 impl App {
     pub(super) fn appearance_settings(&mut self, ui: &mut egui::Ui) {
@@ -44,17 +55,15 @@ impl App {
             description: "Presets fill colors. Advanced hex stays available below.",
             add_control: |ui| {
                 let mut choice = self.theme_preset_choice();
-                if settings_controls::segmented(
-                    ui,
-                    &mut choice,
-                    &[
-                        ("Current saved", SAVED),
-                        ("IntelliJ dark", 1),
-                        ("High contrast", 2),
-                        ("Terminator dark", 3),
-                        ("IntelliJ light", 4),
-                    ],
-                ) {
+                let options: Vec<(&str, usize)> = std::iter::once(("Current saved", SAVED))
+                    .chain(
+                        PRESETS
+                            .iter()
+                            .enumerate()
+                            .map(|(index, (label, _))| (*label, index.saturating_add(1))),
+                    )
+                    .collect();
+                if settings_controls::segmented(ui, &mut choice, &options) {
                     self.apply_theme_preset(choice);
                 }
                 if choice == CUSTOM {
@@ -69,15 +78,10 @@ impl App {
         if self.theme_draft.colors_match(&self.theme_committed) {
             return SAVED;
         }
-        [
-            AppearanceConfig::intellij_dark(),
-            AppearanceConfig::high_contrast(),
-            AppearanceConfig::terminator_dark(),
-            AppearanceConfig::intellij_light(),
-        ]
-        .iter()
-        .position(|preset| self.theme_draft.colors_match(preset))
-        .map_or(CUSTOM, |index| index.saturating_add(1))
+        PRESETS
+            .iter()
+            .position(|(_, preset)| self.theme_draft.colors_match(&preset()))
+            .map_or(CUSTOM, |index| index.saturating_add(1))
     }
 
     /// Replace the draft colors with a preset, keeping the sizing fields.
@@ -86,13 +90,10 @@ impl App {
         let divider = self.theme_draft.pane_divider_width;
         let border = self.theme_draft.border_width;
         let editor = self.theme_draft.editor;
-        self.theme_draft = match choice {
-            1 => AppearanceConfig::intellij_dark(),
-            2 => AppearanceConfig::high_contrast(),
-            3 => AppearanceConfig::terminator_dark(),
-            4 => AppearanceConfig::intellij_light(),
-            _ => self.theme_committed.clone(),
-        };
+        self.theme_draft = choice
+            .checked_sub(1)
+            .and_then(|index| PRESETS.get(index))
+            .map_or_else(|| self.theme_committed.clone(), |(_, preset)| preset());
         self.theme_draft.density = density;
         self.theme_draft.pane_divider_width = divider;
         self.theme_draft.border_width = border;

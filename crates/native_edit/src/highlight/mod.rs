@@ -189,13 +189,14 @@ pub fn syntax_for_path(path: &str) -> &'static syntect::parsing::SyntaxReference
         .unwrap_or_else(|| set.find_syntax_plain_text())
 }
 
-/// `IntelliJ` Darcula's syntax palette, bundled so code colors match the
-/// IDE chrome instead of a third-party scheme.
-fn darcula() -> Option<&'static syntect::highlighting::Theme> {
-    static DARCULA: OnceLock<Option<syntect::highlighting::Theme>> = OnceLock::new();
-    DARCULA
+/// `IntelliJ` "Islands Dark" syntax palette, bundled so code colors match
+/// the IDE chrome instead of a third-party scheme.
+fn islands_dark() -> Option<&'static syntect::highlighting::Theme> {
+    static ISLANDS_DARK: OnceLock<Option<syntect::highlighting::Theme>> = OnceLock::new();
+    ISLANDS_DARK
         .get_or_init(|| {
-            let mut reader = std::io::Cursor::new(include_bytes!("../../assets/Darcula.tmTheme"));
+            let mut reader =
+                std::io::Cursor::new(include_bytes!("../../assets/IslandsDark.tmTheme"));
             ThemeSet::load_from_reader(&mut reader).ok()
         })
         .as_ref()
@@ -206,7 +207,7 @@ fn darcula() -> Option<&'static syntect::highlighting::Theme> {
 /// no themes at all (then the caller falls back to syntect-or-plain).
 pub fn theme(dark: bool) -> Option<&'static syntect::highlighting::Theme> {
     if dark {
-        return darcula();
+        return islands_dark();
     }
     let (_, themes) = assets();
     themes

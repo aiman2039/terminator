@@ -84,21 +84,50 @@ pub fn file_icon(path: &std::path::Path) -> &'static str {
         .unwrap_or("File")
 }
 
+/// `IntelliJ` project-tree role of a folder, guessed from common names:
+/// a source root, a test root, or an excluded (ignored or build output)
+/// folder. Each role has its own folder color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderRole {
+    Source,
+    Test,
+    Excluded,
+    Plain,
+}
+
+fn folder_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase()
+}
+
+/// The folder's role in the project tree.
+pub fn folder_role(path: &std::path::Path, ignored: bool) -> FolderRole {
+    match folder_name(path).as_str() {
+        _ if ignored => FolderRole::Excluded,
+        "target" | "node_modules" | "dist" | "build" | "out" | ".venv" | "__pycache__" => {
+            FolderRole::Excluded
+        }
+        "src" | "lib" | "source" => FolderRole::Source,
+        "test" | "tests" | "spec" | "__tests__" | "e2e" => FolderRole::Test,
+        _ => FolderRole::Plain,
+    }
+}
+
 /// Folder icon by role (`IntelliJ` source/test/excluded roots, guessed from
 /// common names): code, tests, Git metadata, build output or ignored, or a
 /// plain open/closed folder.
 pub fn folder_icon(path: &std::path::Path, open: bool, ignored: bool) -> &'static str {
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
-    match name.as_str() {
-        _ if ignored => "FolderX",
-        "target" | "node_modules" | "dist" | "build" | "out" | ".venv" | "__pycache__" => "FolderX",
+    match folder_role(path, ignored) {
+        FolderRole::Excluded => return "FolderX",
+        FolderRole::Source => return "FolderCode",
+        FolderRole::Test => return "FolderCheck",
+        FolderRole::Plain => {}
+    }
+    match folder_name(path).as_str() {
         ".git" | ".github" | ".gitlab" => "FolderGit",
-        "src" | "lib" | "source" | "crates" | "packages" => "FolderCode",
-        "test" | "tests" | "spec" | "__tests__" | "e2e" => "FolderCheck",
+        "crates" | "packages" => "FolderCode",
         _ if open => "FolderOpen",
         _ => "Folder",
     }
@@ -127,6 +156,17 @@ mod tests {
         assert_eq!(icon("notes.zzz"), "File");
         assert_eq!(icon(".hidden"), "File");
         assert!(matches!(source("Play"), egui::ImageSource::Bytes { .. }));
+    }
+
+    #[test]
+    fn folder_role_marks_source_test_and_excluded_roots() {
+        let role = |name: &str, ignored| folder_role(std::path::Path::new(name), ignored);
+        assert_eq!(role("repo/src", false), FolderRole::Source);
+        assert_eq!(role("repo/Tests", false), FolderRole::Test);
+        assert_eq!(role("repo/target", false), FolderRole::Excluded);
+        assert_eq!(role("repo/src", true), FolderRole::Excluded);
+        assert_eq!(role("repo/crates", false), FolderRole::Plain);
+        assert_eq!(role("repo/docs", false), FolderRole::Plain);
     }
 
     #[test]

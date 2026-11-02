@@ -168,6 +168,7 @@ impl App {
                 visible: Vec::new(),
                 selected: 0,
                 anchor: requests.caret_rect,
+                prefix: String::new(),
             });
         }
         if let Some(results) = self.lsp.take_completion()

@@ -15,7 +15,7 @@ pub(crate) use explorer_select::ExplorerKeysInput;
 mod git_panel;
 mod perforce_panel;
 mod problems;
-mod structure;
+pub(crate) mod structure;
 pub(crate) use structure::StructureState;
 #[cfg(test)]
 mod sidebar_tests;

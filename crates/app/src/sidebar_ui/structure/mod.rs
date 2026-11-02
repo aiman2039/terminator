@@ -110,7 +110,7 @@ pub(crate) fn outline_matches(name: &str, query: &str) -> bool {
 }
 
 /// `IntelliJ`-style kind badge: a letter on a colored disc.
-fn kind_badge(kind: &str) -> (char, egui::Color32) {
+pub(crate) fn kind_badge(kind: &str) -> (char, egui::Color32) {
     let rgb = |r, g, b| egui::Color32::from_rgb(r, g, b);
     match kind {
         "Function" => ('f', rgb(0xD0, 0x8B, 0x3A)),

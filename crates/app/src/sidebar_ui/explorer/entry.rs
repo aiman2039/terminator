@@ -39,14 +39,18 @@ impl App {
         } else {
             git_color(&self.theme, status)
         };
-        let folder = appearance::file_row(appearance::FileRowInput {
-            ui,
-            label,
-            icon: crate::icons::folder_icon(&entry.path, expanded, entry.ignored),
-            selected: self.explorer_selected(&entry.path, None),
-            height: 22.0,
-            trailing: &status.to_string(),
-            tint: color,
+        let role = crate::icons::folder_role(&entry.path, entry.ignored);
+        let folder = appearance::folder_row(appearance::FolderRowInput {
+            row: appearance::FileRowInput {
+                ui,
+                label,
+                icon: crate::icons::folder_icon(&entry.path, expanded, entry.ignored),
+                selected: self.explorer_selected(&entry.path, None),
+                height: 22.0,
+                trailing: &status.to_string(),
+                tint: color,
+            },
+            folder: appearance::folder_tint(role, self.theme.is_light()),
         })
         .interact(egui::Sense::drag());
         self.explorer_row_dnd(ExplorerRowDndInput {

@@ -141,7 +141,7 @@ const CAPTURES: &[&str] = &[
 fn scope_for_capture(capture: &str) -> Option<&'static str> {
     match capture {
         "comment" => Some("comment"),
-        // The bundled Darcula/OneHalf themes style concrete TextMate
+        // The bundled Islands Dark/OneHalf themes style concrete TextMate
         // scopes. Generic `string` and `keyword` resolve to their default
         // foreground.
         "string" => Some("string.quoted.double"),
