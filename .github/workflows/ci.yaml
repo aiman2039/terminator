@@ -15,6 +15,12 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
   CARGO_HUSKY_DONT_INSTALL_HOOKS: 'true'
+  # sccache on Cloudflare R2 (.github/actions/sccache). Empty without the
+  # secrets; builds then run without sccache.
+  SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+  SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
 jobs:
   checks:
@@ -77,8 +83,11 @@ jobs:
           # restore it but must not save an incomplete cache first.
           shared-key: dev-${{ matrix.os }}
           cache-bin: false
+          # sccache holds compiled crates; this cache keeps the registry only.
+          cache-targets: false
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/master' }}
+      - uses: ./.github/actions/sccache
       - name: Formatting
         run: sh scripts/check.sh fmt
       # No separate compiler-check or build step: clippy type-checks every
@@ -152,7 +161,10 @@ jobs:
           # Shared with the checks and native-gui jobs (same dev profile).
           shared-key: dev-${{ matrix.os }}
           cache-bin: false
+          # sccache holds compiled crates; this cache keeps the registry only.
+          cache-targets: false
           save-if: false
+      - uses: ./.github/actions/sccache
       # cargo test does not refresh target/debug binaries. xtask launches those.
       - name: Build E2E binaries together
         run: cargo build --locked -p terminator-daemon -p terminator-hook -p xtask --bins
@@ -220,7 +232,10 @@ jobs:
           # Shared with the checks and e2e jobs (same dev profile).
           shared-key: dev-${{ matrix.os }}
           cache-bin: false
+          # sccache holds compiled crates; this cache keeps the registry only.
+          cache-targets: false
           save-if: false
+      - uses: ./.github/actions/sccache
       - name: Build native fixture binaries
         id: native_build
         run: |
@@ -266,10 +281,13 @@ jobs:
           tags: terminator-release-linux:ci
           cache-from: type=gha,scope=release-linux
           cache-to: type=gha,mode=max,scope=release-linux
+      - uses: ./.github/actions/sccache
       - name: Release checks (host Linux, same steps as the local Docker stage)
         run: |
           mkdir -p "$RUNNER_TEMP/linux-release-check"
-          docker run --rm --init \
+          sccache="$(sh scripts/sccache-docker-args.sh)"
+          # shellcheck disable=SC2086 # docker arguments without spaces in paths.
+          docker run --rm --init $sccache \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src" \
             --mount "type=bind,src=$RUNNER_TEMP/linux-release-check,dst=/artifacts" \
             -e CARGO_TARGET_DIR=/build -e RUNNER_TEMP=/artifacts -e CARGO_TERM_COLOR \
@@ -322,7 +340,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: coverage
+          # sccache holds compiled crates; this cache keeps the registry only.
+          cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/master' }}
+      - uses: ./.github/actions/sccache
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov

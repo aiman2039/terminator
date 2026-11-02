@@ -52,8 +52,12 @@ runs:
         # crate rebuilds anyway (docs/VALIDATION.md, 2026-11-02). Caching
         # them only adds size to a repository cache that is at its limit.
         cache-workspace-crates: false
+        # sccache (.github/actions/sccache) holds compiled crates; this cache
+        # keeps the registry only.
+        cache-targets: false
         cache-on-failure: true
         save-if: ${{ github.ref == 'refs/heads/master' }}
+    - uses: ./.github/actions/sccache
     - name: Remove legacy cached package output
       shell: bash
       run: |

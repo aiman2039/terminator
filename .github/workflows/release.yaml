@@ -96,6 +96,8 @@ jobs:
     uses: ./.github/workflows/ci.yaml
     permissions:
       contents: read
+    # R2 credentials for sccache.
+    secrets: inherit
 
   security:
     needs: prepare
@@ -120,6 +122,12 @@ jobs:
     name: Build aarch64-apple-darwin
     runs-on: macos-15
     timeout-minutes: 90
+    env:
+      # sccache on Cloudflare R2 (.github/actions/sccache).
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -145,6 +153,12 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      # sccache on Cloudflare R2 (.github/actions/sccache).
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -170,6 +184,12 @@ jobs:
     name: Build portable ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      # sccache on Cloudflare R2 (.github/actions/sccache).
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -197,16 +217,19 @@ jobs:
           load: true
           cache-from: type=gha,scope=portable-runtime-${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=portable-runtime-${{ matrix.target }}
-      # The Docker layer cache does not keep the Cargo target directory.
+      # sccache holds compiled crates; this cache keeps the registry only.
       # Each release bumps Cargo.lock, so the exact key changes and the new
-      # target is saved; restore-keys reuse the previous one.
-      - name: Restore portable Cargo cache
+      # registry is saved; restore-keys reuse the previous one.
+      - name: Restore portable Cargo registry cache
         uses: actions/cache@v5
         with:
-          path: ${{ runner.temp }}/portable-cache
+          path: |
+            ${{ runner.temp }}/portable-cache/registry
+            ${{ runner.temp }}/portable-cache/git
           key: portable-cargo-${{ matrix.target }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock', 'scripts/portable-linux.Dockerfile') }}
           restore-keys: |
             portable-cargo-${{ matrix.target }}-${{ env.RUST_VERSION }}-
+      - uses: ./.github/actions/sccache
       - name: Build on AlmaLinux 8 and verify glibc and libraries
         env:
           PORTABLE_IMAGES_BUILT: '1'
@@ -240,6 +263,12 @@ jobs:
     name: Build x86_64-pc-windows-msvc
     runs-on: windows-2025
     timeout-minutes: 90
+    env:
+      # sccache on Cloudflare R2 (.github/actions/sccache).
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v6
         with:

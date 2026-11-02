@@ -17,8 +17,9 @@ if [ -n "${PORTABLE_CACHE_DIR:-}" ]; then
 else
     cache="-v terminator-portable-target:/target"
 fi
-# shellcheck disable=SC2086 # $cache is a list of docker arguments without spaces in paths.
-docker run --rm -v "$PWD":/src -v "$out":/out $cache \
+sccache="$(sh scripts/sccache-docker-args.sh)"
+# shellcheck disable=SC2086 # $cache and $sccache are docker arguments without spaces in paths.
+docker run --rm -v "$PWD":/src -v "$out":/out $cache $sccache \
     -e CARGO_TARGET_DIR=/target -e TERMINATOR_DATA_DIR=/tmp/terminator-data \
     terminator-portable-build cargo run --locked -p xtask -- package --portable --output /out
 rm -rf "$out/verify"
