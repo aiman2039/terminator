@@ -113,6 +113,7 @@ mod controller;
 mod eq;
 #[cfg(test)]
 mod player_tests;
+mod shuffle;
 pub(crate) use controller::{Controller, PlayStationInput, PlaylistConfirm, PollInput, Skip};
 #[cfg(test)]
 #[cfg(unix)]

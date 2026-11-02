@@ -272,6 +272,7 @@ fn relay_attach_output(
         }
     }
     if relock(rt).ended {
+        write_frame(stream, &Response::End)?;
         return Ok(());
     }
     loop {
@@ -279,16 +280,19 @@ fn relay_attach_output(
             Ok(frame) => {
                 write_frame(stream, &frame)?;
                 if matches!(frame, Response::End) {
-                    break;
+                    return Ok(());
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 write_frame(stream, &Response::Ok)?;
             }
-            Err(_) => break,
+            // The session ended but its End frame did not fit the queue.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                write_frame(stream, &Response::End)?;
+                return Ok(());
+            }
         }
     }
-    Ok(())
 }
 pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Result<()> {
     stream.set_nonblocking(false)?;

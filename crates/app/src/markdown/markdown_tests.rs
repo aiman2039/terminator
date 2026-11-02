@@ -589,6 +589,13 @@ mod tests {
     }
 
     #[test]
+    fn links_inside_raw_html_blocks_get_the_scheme_allowlist() {
+        let doc = prepare(snapshot("<div>\n[docs](smb://host/share)\n</div>\n"));
+        assert!(doc.text.contains("smb://host/share"));
+        assert_eq!(doc.links["smb://host/share"], None);
+    }
+
+    #[test]
     fn bare_web_urls_become_links_outside_code_and_existing_links() {
         let doc = prepare(snapshot(
             "See https://example.com/a_b__c+d now.\n\n[x](https://example.com/y) `https://example.com/code`\n\n```\nhttps://example.com/block\n```\n\nftp://example.com/file",

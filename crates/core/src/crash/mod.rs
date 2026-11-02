@@ -190,7 +190,7 @@ fn write_report(data_dir: &Path, binary: &str, report: &Report) -> Option<PathBu
         return None;
     }
     let stamp = crate::now();
-    let path = unique_path(&dir, &format!("{binary}-{stamp}.log"));
+    let path = unique_path(&dir, &format!("{binary}-{stamp}"));
     crate::atomic_write(&path, report.render().as_bytes()).ok()?;
     Some(path)
 }
@@ -207,18 +207,30 @@ fn prepare_crash_dir(dir: &Path) -> bool {
     true
 }
 
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let path = dir.join(name);
+/// `{stem}.log`, or `{stem}-{n}.log` when that exists, so every dump keeps
+/// the `.log` extension that pruning looks for.
+fn unique_path(dir: &Path, stem: &str) -> PathBuf {
+    let path = dir.join(format!("{stem}.log"));
     if !path.exists() {
         return path;
     }
     for n in 1..100 {
-        let candidate = dir.join(format!("{name}.{n}"));
+        let candidate = dir.join(format!("{stem}-{n}.log"));
         if !candidate.exists() {
             return candidate;
         }
     }
-    dir.join(format!("{name}.{}", crate::id()))
+    dir.join(format!("{stem}-{}.log", crate::id()))
+}
+
+/// Crash dumps, including `*.log.N` names written by older versions.
+fn is_crash_dump(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "log")
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.rsplit_once(".log."))
+            .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn prune_old(dir: &Path) {
@@ -228,7 +240,7 @@ fn prune_old(dir: &Path) {
         .flatten()
         .filter_map(|entry| {
             let entry = entry.ok()?;
-            (entry.path().extension()? == "log").then_some(entry)
+            is_crash_dump(&entry.path()).then_some(entry)
         })
         .collect();
     if files.len() <= KEEP {

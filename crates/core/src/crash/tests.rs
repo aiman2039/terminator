@@ -162,11 +162,28 @@ fn unique_path_disambiguates_an_existing_log_name() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(tmp.path().join("terminator-1.log"), b"x").unwrap();
     assert_eq!(
-        unique_path(tmp.path(), "terminator-1.log")
-            .file_name()
-            .unwrap(),
-        "terminator-1.log.1"
+        unique_path(tmp.path(), "terminator-1").file_name().unwrap(),
+        "terminator-1-1.log"
     );
+}
+
+#[test]
+fn prune_removes_old_same_second_dumps_from_older_versions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(CRASHES);
+    fs::create_dir_all(&dir).unwrap();
+    for i in 0..=KEEP {
+        let path = dir.join(format!("terminator-1.log.{}", i + 1));
+        fs::write(&path, b"x").unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(i as u64))
+            .unwrap();
+    }
+    fs::write(dir.join("notes.log.txt"), b"keep").unwrap();
+    prune_old(&dir);
+    assert!(!dir.join("terminator-1.log.1").exists());
+    assert!(dir.join(format!("terminator-1.log.{}", KEEP + 1)).exists());
+    assert!(dir.join("notes.log.txt").exists());
 }
 
 #[test]

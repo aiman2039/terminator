@@ -4,9 +4,13 @@
 use crate::*;
 
 impl App {
-    pub(super) fn save_changed_preferences(&mut self) {
+    pub(crate) fn save_changed_preferences(&mut self) {
+        let backing_off = self
+            .preferences_retry_at
+            .is_some_and(|at| Instant::now() < at && !self.exit.active());
         if self.preferences_writable
             && !self.preferences_pending
+            && !backing_off
             && self.preferences != self.preferences_saved
         {
             let _ = self.jobs.send(Job::Preferences(self.preferences.clone()));

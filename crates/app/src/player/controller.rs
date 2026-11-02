@@ -35,6 +35,7 @@ pub(crate) enum PlaylistConfirm {
     DeleteList,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Skip<'a> {
     pub project: &'a str,
     pub playlist: &'a [PathBuf],
@@ -83,6 +84,10 @@ pub(crate) struct Controller {
     pub(crate) remaining_time: bool,
     pub(crate) url_prompt: bool,
     pub(crate) shuffle_bag: Vec<usize>,
+    /// Tracks played in the current shuffle round, oldest first.
+    pub(crate) shuffle_history: Vec<usize>,
+    /// The bag was filled, so an empty bag means the round is over.
+    pub(crate) shuffle_round: bool,
     pub(crate) rng: u64,
     pub(crate) current_path: Option<PathBuf>,
     pub(crate) durations: HashMap<PathBuf, Duration>,
@@ -126,6 +131,8 @@ impl Controller {
             remaining_time: false,
             url_prompt: false,
             shuffle_bag: Vec::new(),
+            shuffle_history: Vec::new(),
+            shuffle_round: false,
             rng,
             current_path: None,
             durations: HashMap::new(),
@@ -336,6 +343,12 @@ impl Controller {
         self.station_index = None;
         self.current_path = Some(path.clone());
         self.shuffle_bag.retain(|item| *item != index);
+        if self.shuffle_history.last() != Some(&index) {
+            if self.shuffle_history.len() >= super::shuffle::HISTORY_LIMIT {
+                self.shuffle_history.remove(0);
+            }
+            self.shuffle_history.push(index);
+        }
         self.engine.volume(self.volume);
         self.status = Status::Loading {
             title: title.clone(),
@@ -379,7 +392,7 @@ impl Controller {
             return None;
         }
         if shuffle {
-            return self.play_shuffled(project, playlist, repeat);
+            return self.play_shuffled(skip);
         }
         self.play_sequential(PlaySequentialInput {
             project,
@@ -421,36 +434,6 @@ impl Controller {
         let path = playlist.get(index).cloned()?;
         self.play_file(project, path, index);
         Some(index)
-    }
-
-    pub(super) fn play_shuffled(
-        &mut self,
-        project: &str,
-        playlist: &[PathBuf],
-        repeat: bool,
-    ) -> Option<usize> {
-        let current = self.file_index.unwrap_or(0);
-        if self.shuffle_bag.is_empty() {
-            self.refill_bag(playlist.len(), current);
-        }
-        let Some(index) = self.shuffle_bag.pop() else {
-            if repeat {
-                let path = playlist.get(current).cloned()?;
-                self.play_file(project, path, current);
-                return Some(current);
-            }
-            self.stop();
-            return None;
-        };
-        let index = index.min(playlist.len().saturating_sub(1));
-        let path = playlist.get(index).cloned()?;
-        self.play_file(project, path, index);
-        Some(index)
-    }
-
-    pub(super) fn refill_bag(&mut self, len: usize, current: usize) {
-        self.shuffle_bag = (0..len).filter(|index| *index != current).collect();
-        playlist::fisher_yates(&mut self.shuffle_bag, &mut self.rng);
     }
 
     pub fn seek_fraction(&mut self, fraction: f32, duration: Duration) {

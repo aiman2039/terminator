@@ -75,6 +75,8 @@ pub struct App {
     pub(crate) preferences_saved: UiPreferences,
     pub(crate) preferences_writable: bool,
     pub(crate) preferences_pending: bool,
+    /// After a failed save, the next save waits until this time.
+    pub(crate) preferences_retry_at: Option<Instant>,
     pub(crate) project_width: f32,
     pub(crate) migration_requested: bool,
     pub(crate) attention_requested: Option<Instant>,

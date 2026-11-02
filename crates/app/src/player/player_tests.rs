@@ -96,6 +96,47 @@ mod tests {
         assert!(next.is_some());
     }
 
+    fn shuffle_skip(player: &mut Controller, delta: isize, repeat: bool) -> Option<usize> {
+        player.play_offset(Skip {
+            project: "a",
+            playlist: &tracks(),
+            delta,
+            shuffle: true,
+            repeat,
+        })
+    }
+
+    #[test]
+    fn shuffle_without_repeat_stops_after_every_track_played_once() {
+        let mut player = Controller::finished_fixture("a", Some(0));
+        player.rng = 7;
+        let first = shuffle_skip(&mut player, 1, false).unwrap();
+        let second = shuffle_skip(&mut player, 1, false).unwrap();
+        let played = HashSet::from([0, first, second]);
+        assert_eq!(played.len(), 3);
+        assert!(shuffle_skip(&mut player, 1, false).is_none());
+        assert!(matches!(player.status, Status::Stopped));
+    }
+
+    #[test]
+    fn shuffle_with_repeat_starts_a_new_round() {
+        let mut player = Controller::finished_fixture("a", Some(0));
+        player.rng = 7;
+        for _ in 0..5 {
+            assert!(shuffle_skip(&mut player, 1, true).is_some());
+        }
+    }
+
+    #[test]
+    fn shuffle_previous_returns_to_the_track_played_before() {
+        let mut player = Controller::finished_fixture("a", Some(0));
+        player.rng = 7;
+        let first = shuffle_skip(&mut player, 1, false).unwrap();
+        let second = shuffle_skip(&mut player, 1, false).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(shuffle_skip(&mut player, -1, false), Some(first));
+    }
+
     #[test]
     fn shift_click_selects_a_range() {
         let mut player = Controller::finished_fixture("a", Some(0));

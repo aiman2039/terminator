@@ -84,8 +84,7 @@ impl App {
         if let Some(sid) = sid {
             self.rename_action(ui, sid, RenameSurface::Workspace);
         }
-        let toggle_pin =
-            click_menu_item(ui, if pinned { "Unpin tab" } else { "Pin tab" }, "FileCode");
+        let toggle_pin = click_menu_item(ui, if pinned { "Unpin tab" } else { "Pin tab" }, "Pin");
         let close = click_menu_item(ui, "Close tab…", "X");
         ui.separator();
         let close_all = click_enabled_menu_item(ClickEnabledMenuItemInput {

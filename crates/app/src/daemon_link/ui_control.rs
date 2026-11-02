@@ -47,7 +47,11 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
             tokio::select! {
                 () = token.cancelled() => break,
                 accepted = listener.accept(), if clients.len() < 16 => {
-                    let (stream, _) = accepted?;
+                    // EMFILE / ECONNABORTED are transient: keep serving.
+                    let Ok((stream, _)) = accepted else {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    };
                     let service = service.clone(); let paths = paths.clone();
                     clients.push(async move { serve(stream, service, paths).await }.boxed());
                 }
