@@ -319,7 +319,10 @@ impl App {
             PaletteItem::ToggleIdeSidebarHeight => self.toggle_ide_sidebar_height(),
             PaletteItem::SaveLayout => self.save_layout_dialog(),
             PaletteItem::ApplyLayout(name) => {
-                self.preferences.apply_layout(&name);
+                if let Some(preset) = self.preferences.apply_layout(&name) {
+                    self.pending_left_width =
+                        Some(crate::preferences::clamp_left_width(preset.left_width));
+                }
             }
         }
     }

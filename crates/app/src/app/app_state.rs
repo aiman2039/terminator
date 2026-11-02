@@ -78,6 +78,8 @@ pub struct App {
     /// After a failed save, the next save waits until this time.
     pub(crate) preferences_retry_at: Option<Instant>,
     pub(crate) project_width: f32,
+    /// Left sidebar width a layout preset applies on the next frame.
+    pub(crate) pending_left_width: Option<f32>,
     pub(crate) migration_requested: bool,
     pub(crate) attention_requested: Option<Instant>,
     pub(crate) attention_pending: bool,

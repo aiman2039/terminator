@@ -5,7 +5,7 @@ mod type_ahead;
 
 pub use persistence::{
     AgentsTab, ExplorerSearchMode, ExplorerView, RadioStation, SidebarTool, UiPreferences,
-    VncPasteShortcut,
+    VncPasteShortcut, clamp_left_width,
 };
 pub use type_ahead::TypeAhead;
 // `Playlist` is only named by `lib.rs` tests; keep its old path for them

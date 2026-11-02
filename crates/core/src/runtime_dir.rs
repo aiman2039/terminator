@@ -32,7 +32,8 @@ pub(crate) fn default_runtime(home: &Path) -> PathBuf {
     let base = std::env::temp_dir();
     let legacy = base.join(format!("terminator-{:x}", legacy_hash(home)));
     let shared = base.join(format!("terminator-{:x}", home_hash(home)));
-    choose(legacy, private_runtime(), shared)
+    let private = private_runtime().or_else(|| foreign_fallback(&shared, home));
+    choose(legacy, private, shared)
 }
 
 fn choose(legacy: PathBuf, private: Option<PathBuf>, shared: PathBuf) -> PathBuf {
@@ -40,6 +41,23 @@ fn choose(legacy: PathBuf, private: Option<PathBuf>, shared: PathBuf) -> PathBuf
         return legacy;
     }
     private.unwrap_or(shared)
+}
+
+/// When another user already holds the predictable shared directory
+/// (#199), use a private one in the home directory. Every process of this
+/// user sees the same foreign directory, so all of them pick the same
+/// fallback.
+fn foreign_fallback(shared: &Path, home: &Path) -> Option<PathBuf> {
+    let meta = std::fs::symlink_metadata(shared).ok()?;
+    if meta.is_dir() && owned(&meta) {
+        return None;
+    }
+    Some(home.join(".terminator-run")).filter(|dir| socket_fits(dir))
+}
+
+/// True when a generation subdirectory and its socket fit under `dir`.
+fn socket_fits(dir: &Path) -> bool {
+    dir.join("12345678/daemon.sock").as_os_str().len() < crate::SOCKET_PATH_LIMIT
 }
 
 /// A per-user runtime directory that other users cannot pre-create.
@@ -56,7 +74,7 @@ fn private_runtime() -> Option<PathBuf> {
     .filter(|dir| dir.is_absolute() && owned_dir(dir))
     .map(|dir| dir.join("terminator"))
     // Room for a generation subdirectory and its socket.
-    .find(|dir| dir.join("12345678/daemon.sock").as_os_str().len() < crate::SOCKET_PATH_LIMIT)
+    .find(|dir| socket_fits(dir))
 }
 #[cfg(not(target_os = "linux"))]
 fn private_runtime() -> Option<PathBuf> {
@@ -108,6 +126,30 @@ mod tests {
             root.path().join("shared"),
         );
         assert_eq!(chosen, private);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreign_shared_directory_falls_back_to_home() {
+        let root = tempfile::tempdir().unwrap();
+        // Short, like a real home; the temp root is too long for a socket.
+        let home = Path::new("/h");
+        // Missing or owned shared directories keep the shared path.
+        assert_eq!(foreign_fallback(&root.path().join("missing"), home), None);
+        assert_eq!(foreign_fallback(root.path(), home), None);
+        // A plain file (or a directory of another user) cannot be used.
+        let file = root.path().join("taken");
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(
+            foreign_fallback(&file, home),
+            Some(home.join(".terminator-run"))
+        );
+        if !rustix::process::geteuid().is_root() {
+            assert_eq!(
+                foreign_fallback(Path::new("/"), home),
+                Some(home.join(".terminator-run"))
+            );
+        }
     }
 
     #[cfg(unix)]

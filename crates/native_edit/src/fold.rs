@@ -14,24 +14,36 @@ pub struct Folds {
     /// Foldable `(first, last)` line ranges, by first line.
     ranges: Vec<(usize, usize)>,
     folded: BTreeSet<usize>,
+    /// Line count at `revision`, to shift folds by the lines an edit added.
+    lines: usize,
     /// Bumped on every change, so row layouts know to rebuild.
     generation: u64,
 }
 
 impl Folds {
-    /// Recompute regions for a new buffer revision, dropping folds whose
-    /// region no longer starts on the same line.
+    /// Recompute regions for a new buffer revision. A folded region
+    /// follows lines added or removed above or inside it; folds whose
+    /// region cannot be found again are dropped.
     pub fn ensure<B: Buffer>(&mut self, doc: &B, language: Language) {
         if self.revision == Some(doc.revision()) {
             return;
         }
         self.revision = Some(doc.revision());
+        let lines = doc.line_count();
+        let delta = lines.cast_signed().saturating_sub(self.lines.cast_signed());
+        self.lines = lines;
         let ranges = fold_ranges(doc, language);
-        let before = self.folded.len();
-        self.folded
-            .retain(|start| ranges.iter().any(|(first, _)| first == start));
-        if ranges != self.ranges || before != self.folded.len() {
+        let folded: BTreeSet<usize> = self
+            .folded
+            .iter()
+            .filter_map(|start| {
+                let old = self.region_at(*start)?;
+                moved_region(old, delta, &ranges)
+            })
+            .collect();
+        if ranges != self.ranges || folded != self.folded {
             self.ranges = ranges;
+            self.folded = folded;
             self.bump();
         }
     }
@@ -140,6 +152,26 @@ impl Folds {
             self.bump();
         }
     }
+}
+
+/// Where the folded region `old` is after an edit that changed the line
+/// count by `delta`: unchanged (edit below), grown or shrunk (edit
+/// inside), or shifted (edit above). Falls back to any region on the
+/// same first line.
+fn moved_region(old: (usize, usize), delta: isize, ranges: &[(usize, usize)]) -> Option<usize> {
+    let (first, last) = old;
+    let shift = |line: usize| line.checked_add_signed(delta);
+    let candidates = [
+        Some((first, last)),
+        shift(last).map(|last| (first, last)),
+        shift(first).zip(shift(last)),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|candidate| ranges.contains(candidate))
+        .map(|(first, _)| first)
+        .or_else(|| ranges.iter().any(|(f, _)| *f == first).then_some(first))
 }
 
 /// Foldable regions: brackets opened on one line and closed on a later
@@ -323,6 +355,26 @@ mod tests {
         assert!(folds.hidden(4));
         folds.unfold_all();
         assert!(!folds.hidden(4));
+    }
+
+    #[test]
+    fn fold_follows_lines_inserted_or_removed_above() {
+        let mut doc = Doc::new("fn a() {\n    x();\n}\nfn b() {\n    y();\n}\n");
+        let mut folds = Folds::default();
+        folds.ensure(&doc, Language::Rust);
+        folds.toggle(3);
+        assert!(folds.is_folded(3) && folds.hidden(4));
+        // Enter inside `fn a`, above the folded `fn b`.
+        let at = doc.char_at_line_col(1, 8);
+        doc.insert(at, "\n");
+        folds.ensure(&doc, Language::Rust);
+        assert!(folds.is_folded(4) && !folds.is_folded(3) && !folds.is_folded(0));
+        assert!(folds.hidden(5) && !folds.hidden(1));
+        // Removing the line again moves the fold back.
+        let start = doc.char_at_line_col(1, 8);
+        doc.delete(start..start + 1);
+        folds.ensure(&doc, Language::Rust);
+        assert!(folds.is_folded(3) && !folds.is_folded(0));
     }
 
     #[test]

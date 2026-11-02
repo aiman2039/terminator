@@ -120,6 +120,7 @@ impl App {
             preferences_pending: false,
             preferences_retry_at: None,
             project_width: 225.0,
+            pending_left_width: None,
             migration_requested: false,
             attention_requested: None,
             attention_pending: false,
