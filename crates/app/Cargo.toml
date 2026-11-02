@@ -29,7 +29,7 @@ rfd = "0.17"
 fs2 = "0.4"
 notify = "8"
 file-id = "0.2"
-resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 egui_extras = { version = "0.37", default-features = false, features = ["svg", "image"] }
 egui_commonmark = { version = "0.25", default-features = false, features = ["better_syntax_highlighting"] }
 merman = { version = "0.9", default-features = false, features = ["all-diagrams", "svg", "layout-cytoscape"] }
