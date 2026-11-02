@@ -157,6 +157,20 @@ mod tests {
     }
 
     #[test]
+    fn notification_search_hides_unrelated_rows() {
+        let (mut app, ctx, _dir) = app();
+        app.settings_section = SettingsSection::Notifications;
+        app.settings_search = "ntfy".into();
+        assert!(!app.field_visible("Place notifications at the side", "position side corner"));
+        assert!(!app.field_visible("Terminal notifications", "osc terminal desktop"));
+        app.settings_search = "osc".into();
+        assert!(app.field_visible("Terminal notifications", "osc terminal desktop"));
+        // Searching still paints the section without panicking.
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.settings_center(ui));
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn search_narrows_the_visible_sections_to_matches() {
         let (mut app, _ctx, _dir) = app();
         app.settings_search = "notifications".into();

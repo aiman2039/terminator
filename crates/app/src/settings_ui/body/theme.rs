@@ -152,9 +152,12 @@ impl App {
             if !self.field_visible(title, keywords) && !self.settings_search.is_empty() {
                 continue;
             }
+            // A search that kept this group open shows its fields.
+            let searching = !self.settings_search.trim().is_empty();
             egui::CollapsingHeader::new(title)
                 .id_salt(("appearance-group", group))
                 .default_open(false)
+                .open(searching.then_some(true))
                 .show(ui, |ui| {
                     egui::Grid::new(("appearance-fields", group))
                         .num_columns(2)

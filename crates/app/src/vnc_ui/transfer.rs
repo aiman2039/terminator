@@ -84,7 +84,7 @@ pub(super) fn drop_upload(input: DropInput<'_>) {
     if view.draft_options.transport != Transport::Ssh || busy {
         return;
     }
-    let over = ui.rect_contains_pointer(area) || ui.input(|i| i.pointer.hover_pos().is_none());
+    let over = ui.input(|i| drop_over(area, i.pointer.hover_pos(), i.pointer.latest_pos()));
     let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
     if hovering && over {
         let text = if view.upload_dir.starts_with('/') {
@@ -122,6 +122,18 @@ pub(super) fn drop_upload(input: DropInput<'_>) {
         }
         Err(error) => app.error = Some(error.into()),
     }
+}
+
+/// True when an OS file drag is over `area`. The hover position is often
+/// missing during an OS drag, so fall back to the last known pointer
+/// position; with no position at all, no pane claims the drop (a split
+/// must not hand it to whichever pane draws first).
+pub(super) fn drop_over(
+    area: egui::Rect,
+    hover: Option<egui::Pos2>,
+    latest: Option<egui::Pos2>,
+) -> bool {
+    hover.or(latest).is_some_and(|pos| area.contains(pos))
 }
 
 fn paint_drop_hint(ui: &egui::Ui, area: egui::Rect, text: &str) {

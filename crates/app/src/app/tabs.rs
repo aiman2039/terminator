@@ -165,6 +165,7 @@ impl App {
                 self.non_terminal_selected = self.active_session.is_none();
             }
         }
+        self.forget_tab_expanded(project, tab_id);
         self.prune_native_docs();
         self.prune_diff_docs();
         // An idle close finishing late must not drop a newer close request.

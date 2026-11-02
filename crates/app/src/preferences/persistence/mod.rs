@@ -1,3 +1,4 @@
+mod expanded;
 mod playlists;
 #[cfg(test)]
 mod tests;
@@ -415,6 +416,7 @@ impl UiPreferences {
             0.8
         };
         prefs.migrate_playlists();
+        prefs.prune_expanded_tabs();
         prefs
             .ide_strip_docks
             .0

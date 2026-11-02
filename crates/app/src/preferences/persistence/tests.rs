@@ -227,6 +227,20 @@ fn old_preferences_request_attention_migration_once() {
 }
 
 #[test]
+fn load_drops_default_expanded_tab_keys_and_keeps_collapsed_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = UiPreferences::default();
+    p.expanded.insert("workspace-tab:p:open".into(), true);
+    p.expanded.insert("workspace-tab:p:shut".into(), false);
+    p.expanded.insert("project".into(), true);
+    p.save(dir.path()).unwrap();
+    let loaded = UiPreferences::load(dir.path()).unwrap();
+    assert!(!loaded.expanded.contains_key("workspace-tab:p:open"));
+    assert_eq!(loaded.expanded.get("workspace-tab:p:shut"), Some(&false));
+    assert_eq!(loaded.expanded.get("project"), Some(&true));
+}
+
+#[test]
 fn restart_preserves_independent_expansion_sidebar_and_migration() {
     let dir = tempfile::tempdir().unwrap();
     let mut p = UiPreferences::default();
