@@ -27,6 +27,20 @@ impl App {
         self.texts.insert(key, text);
     }
 
+    /// A History or CommandBlocks request failed. Store a terminal result
+    /// so the pane stops showing Loading and does not re-request every
+    /// frame; Refresh clears it and asks again.
+    pub(crate) fn handle_load_failed(&mut self, key: String, error: String) {
+        self.loading.remove(&key);
+        if let Some(sid) = key.strip_prefix("commands:") {
+            self.command_blocks.entry(sid.to_owned()).or_default();
+        } else {
+            self.texts
+                .insert(key, format!("Could not load scrollback: {error}"));
+        }
+        self.handle_error(error);
+    }
+
     pub(super) fn handle_open_native_editor(
         &mut self,
         project: String,

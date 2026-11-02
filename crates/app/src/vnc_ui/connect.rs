@@ -193,12 +193,19 @@ impl PasswordPrompt {
             &mut view.draft_show_password,
             false,
         );
-        if !field.has_focus() && view.draft_password.is_empty() {
+        // Focus the field once when the prompt opens; later frames must not
+        // take focus back from the username field or other panes.
+        let focused_once = field.id.with("autofocus");
+        if !ui.data(|d| d.get_temp::<bool>(focused_once).unwrap_or(false)) {
             field.request_focus();
+            ui.data_mut(|d| d.insert_temp(focused_once, true));
         }
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.checkbox(&mut view.draft_remember, "Remember password")
             .on_hover_text("Saved in the OS keychain");
+        if let Some(error) = &view.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
         ui.add_space(8.0);
         ui.separator();
         let (connect, back) = ui
@@ -211,15 +218,25 @@ impl PasswordPrompt {
         if back {
             view.save_profile = true;
             view.draft_password.clear();
+            ui.data_mut(|d| d.remove::<bool>(focused_once));
             return None;
         }
         if !(connect || enter) {
             return None;
         }
-        Self::draft_request(view)
+        let request = Self::draft_request(view);
+        if request.is_some() {
+            ui.data_mut(|d| d.remove::<bool>(focused_once));
+        }
+        request
     }
 
     fn draft_request(view: &mut VncViewState) -> Option<PendingVncConnect> {
+        // Never send an empty VNC password.
+        if view.draft_password.is_empty() {
+            view.error = Some("Enter the VNC password to connect".into());
+            return None;
+        }
         let (parsed_host, parsed_port) =
             match connection_endpoint(&view.draft_host, &view.draft_port) {
                 Ok(endpoint) => endpoint,
@@ -245,5 +262,24 @@ impl PasswordPrompt {
             save_profile: false,
             options: view.draft_options.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_prompt_never_sends_an_empty_password() {
+        let mut view = VncViewState {
+            draft_host: "server".into(),
+            draft_port: "5900".into(),
+            ..VncViewState::default()
+        };
+        assert!(PasswordPrompt::draft_request(&mut view).is_none());
+        assert!(view.error.is_some());
+        view.draft_password = "secret".into();
+        let request = PasswordPrompt::draft_request(&mut view).unwrap();
+        assert_eq!(request.password, "secret");
     }
 }

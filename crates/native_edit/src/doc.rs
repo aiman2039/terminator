@@ -261,7 +261,13 @@ impl Buffer for Doc {
 
     fn char_at_line_col(&self, line: usize, col: usize) -> usize {
         let line = line.min(self.line_count().saturating_sub(1));
-        let len = self.raw_line(line).chars().count();
+        // Count chars in place: copying the line is O(line) per call.
+        let slice = self.rope.line(line);
+        let total = slice.len_chars();
+        let len = match total.checked_sub(1) {
+            Some(last) if slice.char(last) == '\n' => last,
+            _ => total,
+        };
         self.rope
             .line_to_char(line)
             .checked_add(col.min(len))

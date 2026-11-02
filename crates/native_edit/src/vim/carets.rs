@@ -86,6 +86,70 @@ fn cursor_at<B: Buffer>(doc: &B, offset: usize) -> Cursor {
     Cursor { line, col }
 }
 
+/// The buffer as chars plus the selection to match, for scanning ahead.
+struct OccurrenceSearch {
+    text: Vec<char>,
+    needle: Vec<char>,
+    /// Start offsets that already hold a selection.
+    taken: std::collections::HashSet<usize>,
+    /// Where the next scan starts.
+    next: usize,
+    /// Positions already scanned (stops after one wrap).
+    scanned: usize,
+}
+
+impl OccurrenceSearch {
+    fn new<B: Buffer>(engine: &VimEngine, doc: &B, from: usize, to: usize) -> Option<Self> {
+        if from >= to {
+            return None;
+        }
+        let count = doc.line_count();
+        let mut text: Vec<char> = Vec::with_capacity(doc.len_chars());
+        for line in 0..count {
+            text.extend(doc.line_text(line).chars());
+            if line.saturating_add(1) < count {
+                text.push('\n');
+            }
+        }
+        let needle = text.get(from..to).unwrap_or_default().to_vec();
+        if needle.is_empty() {
+            return None;
+        }
+        let mut taken: std::collections::HashSet<usize> = engine
+            .carets()
+            .iter()
+            .filter_map(Caret::selection)
+            .map(|(start, _)| offset(doc, start))
+            .collect();
+        taken.insert(from);
+        Some(Self {
+            text,
+            needle,
+            taken,
+            next: to,
+            scanned: 0,
+        })
+    }
+
+    /// The next untaken match after the last one, wrapping to the top once.
+    fn next_hit(&mut self) -> Option<usize> {
+        let total = self.text.len();
+        let len = self.needle.len();
+        while self.scanned < total {
+            let at = self.next.checked_rem(total).unwrap_or(0);
+            self.next = at.saturating_add(1);
+            self.scanned = self.scanned.saturating_add(1);
+            if !self.taken.contains(&at)
+                && self.text.get(at..at.saturating_add(len)) == Some(self.needle.as_slice())
+            {
+                self.taken.insert(at);
+                return Some(at);
+            }
+        }
+        None
+    }
+}
+
 impl VimEngine {
     fn current_caret(&self) -> Caret {
         Caret {
@@ -209,47 +273,27 @@ impl VimEngine {
             self.preferred_col = to;
             return true;
         };
-        let (from, to) = (offset(doc, start), offset(doc, end));
-        if from >= to {
-            return false;
-        }
-        let text: Vec<char> = (0..doc.line_count())
-            .flat_map(|line| {
-                let mut chars: Vec<char> = doc.line_text(line).chars().collect();
-                if line.saturating_add(1) < doc.line_count() {
-                    chars.push('\n');
-                }
-                chars
-            })
-            .collect();
-        let needle = text.get(from..to).unwrap_or_default().to_vec();
-        let taken: Vec<usize> = self
-            .carets()
-            .iter()
-            .filter_map(Caret::selection)
-            .map(|(start, _)| offset(doc, start))
-            .collect();
-        let len = needle.len();
-        let total = text.len();
-        // Scan forward from the selection's end, wrapping to the top.
-        let hit = (0..total)
-            .map(|step| to.saturating_add(step).checked_rem(total).unwrap_or(0))
-            .find(|at| {
-                *at != from
-                    && !taken.contains(at)
-                    && text.get(*at..at.saturating_add(len)) == Some(needle.as_slice())
-            });
-        let Some(at) = hit else {
+        let Some(mut search) =
+            OccurrenceSearch::new(self, doc, offset(doc, start), offset(doc, end))
+        else {
             return false;
         };
+        let Some(at) = search.next_hit() else {
+            return false;
+        };
+        self.push_occurrence(doc, at, search.needle.len());
+        self.request_scroll();
+        true
+    }
+
+    /// Make the match at char offset `at` the new primary selection.
+    fn push_occurrence<B: Buffer>(&mut self, doc: &B, at: usize, len: usize) {
         let previous = self.current_caret();
         self.extra_carets.push(previous);
         self.mode = Mode::Visual;
         self.anchor = cursor_at(doc, at);
         self.cursor = cursor_at(doc, at.saturating_add(len));
         self.preferred_col = self.cursor.col;
-        self.request_scroll();
-        true
     }
 
     /// Unselect Occurrence: drop the newest caret (the primary), making
@@ -265,11 +309,23 @@ impl VimEngine {
         if self.current_caret().selection().is_none() && !self.add_next_occurrence(doc) {
             return;
         }
-        // Bounded: never more carets than chars in the buffer.
-        for _ in 0..doc.len_chars() {
-            if !self.add_next_occurrence(doc) {
-                break;
-            }
+        let Some((start, end)) = self.current_caret().selection() else {
+            return;
+        };
+        // One buffer copy and one forward scan for every match.
+        let Some(mut search) =
+            OccurrenceSearch::new(self, doc, offset(doc, start), offset(doc, end))
+        else {
+            return;
+        };
+        let len = search.needle.len();
+        let mut added = false;
+        while let Some(at) = search.next_hit() {
+            self.push_occurrence(doc, at, len);
+            added = true;
+        }
+        if added {
+            self.request_scroll();
         }
     }
 

@@ -86,6 +86,9 @@ impl eframe::App for App {
             // Install and Relaunch up with a process that never exits.
             self.accept_app_quit(ctx);
         }
+        // The status item must follow agents while the window is hidden or
+        // minimized, when eframe calls only `logic`.
+        self.sync_menu_bar(ctx);
         self.continue_app_quit(ctx);
         self.advance_exit(ctx);
         if !self.exit.active() && self.last_heartbeat.elapsed() > Duration::from_secs(1) {
@@ -151,7 +154,6 @@ impl eframe::App for App {
         self.paint_windows(&ctx, frame);
         self.popups.end_frame();
         self.dismiss_stale_hover_popup(&ctx);
-        self.sync_menu_bar(&ctx);
         appearance::click_cursor(&ctx);
         #[cfg(feature = "test-support")]
         self.diagnostics.capture(&ctx);

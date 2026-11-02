@@ -974,3 +974,17 @@ fn delayed_reply_from_a_previous_owner_cannot_replace_the_new_catalog() {
     assert_eq!(app.state.generation, "new-owner");
     assert_eq!(app.state.catalog_revision, 8);
 }
+
+#[test]
+fn failed_history_and_commands_requests_stop_loading() {
+    let (mut app, _ctx, _dir) = support::fixture();
+    app.loading.insert("history:s1".into());
+    app.loading.insert("commands:s1".into());
+    app.handle_load_failed("history:s1".into(), "boom".into());
+    app.handle_load_failed("commands:s1".into(), "boom".into());
+    assert!(!app.loading.contains("history:s1"));
+    assert!(!app.loading.contains("commands:s1"));
+    // A stored result stops the pane from re-requesting every frame.
+    assert!(app.texts["history:s1"].contains("boom"));
+    assert!(app.command_blocks["s1"].is_empty());
+}

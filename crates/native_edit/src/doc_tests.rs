@@ -167,3 +167,14 @@ fn only_lsp_line_breaks_split_lines() {
     assert_eq!(doc.line_count(), 4);
     assert_eq!(doc.line_text(0), "a\u{c}b\u{2028}c\u{85}d");
 }
+
+#[test]
+fn char_at_line_col_clamps_to_line_end_without_the_newline() {
+    let doc = Doc::new("ab\ncdé\nlast");
+    assert_eq!(doc.char_at_line_col(0, 99), 2);
+    assert_eq!(doc.char_at_line_col(1, 99), 6);
+    assert_eq!(doc.char_at_line_col(2, 99), doc.len_chars());
+    let crlf = Doc::new("ab\r\ncd");
+    // Same as the line text: the `\r` stays a column.
+    assert_eq!(crlf.char_at_line_col(0, 99), 3);
+}

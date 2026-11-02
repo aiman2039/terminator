@@ -191,7 +191,24 @@ impl Services {
         updates: &mut Vec<Update>,
     ) -> Result<()> {
         let client = self.client();
-        match client.rpc(*request).await? {
+        // A History or CommandBlocks pane waits on this key; a failure
+        // must clear it, or the pane shows Loading forever.
+        let loading_key = match &after {
+            After::Text(key) => Some(key.clone()),
+            After::CommandBlocks(sid) => Some(format!("commands:{sid}")),
+            _ => None,
+        };
+        let response = match client.rpc(*request).await {
+            Ok(response) => response,
+            Err(error) => {
+                let Some(key) = loading_key else {
+                    return Err(error.into());
+                };
+                updates.push(Update::LoadFailed(key, format!("{error:#}")));
+                return Ok(());
+            }
+        };
+        match response {
             Response::Created(session) => {
                 if let Ok(Response::State(state)) = client.rpc(Request::Snapshot).await {
                     updates.push(Update::State(state));
@@ -234,7 +251,15 @@ impl Services {
                     updates.push(Update::CommandBlocks(sid, blocks));
                 }
             }
-            _ => {}
+            other => {
+                if let Some(key) = loading_key {
+                    let error = match other {
+                        Response::Error(error) => error,
+                        _ => "Unexpected daemon response".into(),
+                    };
+                    updates.push(Update::LoadFailed(key, error));
+                }
+            }
         }
         Ok(())
     }

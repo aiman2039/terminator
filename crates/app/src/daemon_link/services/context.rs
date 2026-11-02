@@ -47,7 +47,7 @@ pub async fn context_async(input: ContextAsyncInput<'_>) -> ContextData {
         .run(cancel, move || anyhow::Ok(root.canonicalize()?))
         .await
         .unwrap_or_else(|_| cwd.clone());
-    result.git_dirs = git.git_dirs(&root, &cwd).await;
+    result.git_dirs = git.git_dirs(&root).await;
     result.root = Some(root.clone());
     if !include_stats {
         return result;
@@ -98,7 +98,7 @@ impl GitRunner<'_> {
         .await
     }
 
-    async fn git_dirs(&self, root: &Path, cwd: &Path) -> Vec<PathBuf> {
+    async fn git_dirs(&self, root: &Path) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         for arg in ["--absolute-git-dir", "--git-common-dir"] {
             if let Ok(bytes) = self.run(root, &["rev-parse", arg]).await {
@@ -106,7 +106,7 @@ impl GitRunner<'_> {
                 dirs.push(if path.is_absolute() {
                     path
                 } else {
-                    cwd.join(path)
+                    root.join(path)
                 });
             }
         }
@@ -155,5 +155,45 @@ impl GitRunner<'_> {
             })
             .await
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gui_services::Services;
+
+    #[tokio::test]
+    async fn git_dirs_resolve_against_repo_root_from_subfolder() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path().canonicalize().unwrap();
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let sub = root.join("src");
+        std::fs::create_dir(&sub).unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let (tx, _) = std::sync::mpsc::channel();
+        let (service, _owner) = Services::new(
+            terminator_core::Paths::at(state.path().into()),
+            eframe::egui::Context::default(),
+            tx,
+        )
+        .unwrap();
+        let cancel = CancellationToken::new();
+        let context = context_async(ContextAsyncInput {
+            service: &service,
+            cwd: sub,
+            include_stats: false,
+            cancel: &cancel,
+        })
+        .await;
+        assert!(!context.git_dirs.is_empty());
+        for dir in &context.git_dirs {
+            assert_eq!(dir.canonicalize().unwrap(), root.join(".git"));
+        }
     }
 }

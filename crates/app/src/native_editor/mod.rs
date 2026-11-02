@@ -21,7 +21,7 @@ mod navigation;
 mod rename;
 mod view;
 pub(crate) use actions::ActionsPopup;
-pub(crate) use blame::EditorBlame;
+pub(crate) use blame::{EditorBlame, ymd};
 use close::CloseIssuerInput;
 pub(super) use close::{CloseIssuer, NativeCloseChoice};
 use close_copies::{RemoveCopyFromFloatDockInput, RemoveCopyFromTabInput};
