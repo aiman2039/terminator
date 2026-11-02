@@ -490,3 +490,29 @@ fn late_idle_close_completion_keeps_a_newer_close_request() {
     app.close_workspace_tab_now("a", "t0");
     assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
 }
+
+#[test]
+fn collapsed_state_of_a_tab_closed_any_way_is_pruned() {
+    let (mut app, _, _dir) = fixture();
+    app.layouts
+        .get_mut("a")
+        .unwrap()
+        .add("t1".into(), Tab::Terminal("s1".into()));
+    let expanded = &mut app.preferences.expanded;
+    expanded.insert("workspace-tab:a:t1".into(), false);
+    expanded.insert("workspace-tab:a:gone".into(), false);
+    expanded.insert("workspace-tab:unloaded:t9".into(), false);
+    expanded.insert("folder:/x".into(), true);
+    app.prune_closed_tab_expanded();
+    let keys: std::collections::BTreeSet<_> = app.preferences.expanded.keys().cloned().collect();
+    assert_eq!(
+        keys,
+        [
+            "folder:/x",
+            "workspace-tab:a:t1",
+            "workspace-tab:unloaded:t9"
+        ]
+        .map(String::from)
+        .into()
+    );
+}

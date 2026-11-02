@@ -118,6 +118,8 @@ pub(crate) struct View {
     pub branch: String,
     pub changes: Vec<Change>,
     pub file_error: Option<String>,
+    /// Why the listing is incomplete (cut at the limit or names skipped).
+    pub file_note: Option<String>,
     pub git_error: Option<String>,
     /// A batch call failed authentication: a terminal must sign in first.
     pub sign_in: bool,
@@ -301,12 +303,15 @@ impl App {
                 Ok(Reply::Directory {
                     path: actual,
                     entries,
+                    truncated,
+                    skipped,
                 }),
             ) if view.pending_path.as_ref() == Some(path) && path == &actual => {
                 view.files_loading = false;
                 view.pending_path = None;
                 view.files_polled = Some(Instant::now());
                 if path == &view.path {
+                    view.file_note = listing_note(entries.len(), truncated, skipped);
                     view.entries = entries;
                     view.file_error = None;
                 }
@@ -331,5 +336,43 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+/// The note shown above an incomplete remote listing, if any.
+pub(crate) fn listing_note(shown: usize, truncated: bool, skipped: usize) -> Option<String> {
+    let mut parts = Vec::new();
+    if truncated {
+        parts.push(format!("Showing the first {shown} entries"));
+    }
+    if skipped > 0 {
+        let what = if skipped == 1 {
+            "entry with an unsupported name"
+        } else {
+            "entries with unsupported names"
+        };
+        parts.push(format!("{skipped} {what} hidden"));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listing_note;
+    #[test]
+    fn incomplete_remote_listing_explains_what_is_missing() {
+        assert_eq!(listing_note(5, false, 0), None);
+        assert_eq!(
+            listing_note(1000, true, 0).as_deref(),
+            Some("Showing the first 1000 entries")
+        );
+        assert_eq!(
+            listing_note(3, false, 1).as_deref(),
+            Some("1 entry with an unsupported name hidden")
+        );
+        assert_eq!(
+            listing_note(1000, true, 2).as_deref(),
+            Some("Showing the first 1000 entries; 2 entries with unsupported names hidden")
+        );
     }
 }

@@ -36,6 +36,25 @@ impl App {
             .remove(&tab_expanded_key(project_id, tab_id));
     }
 
+    /// Drops collapsed state of tabs that no longer exist in a loaded
+    /// project, whatever path closed them (#209). Projects without a loaded
+    /// layout keep their keys.
+    pub(crate) fn prune_closed_tab_expanded(&mut self) {
+        let layouts = &self.layouts;
+        self.preferences.expanded.retain(|key, _| {
+            let Some(rest) = key.strip_prefix("workspace-tab:") else {
+                return true;
+            };
+            let mut owners = layouts.iter().filter_map(|(project, workspace)| {
+                let tab = rest.strip_prefix(project.as_str())?.strip_prefix(':')?;
+                Some(workspace.tabs.iter().any(|t| t.id == tab))
+            });
+            // Keep the key when no loaded project owns it, or when one of the
+            // owners (ids may contain ':') still has the tab.
+            owners.clone().next().is_none() || owners.any(|live| live)
+        });
+    }
+
     /// Live terminal sessions under one project, grouped as a tree per
     /// top-level workspace tab in layout order. Single-tab projects keep the
     /// historic flat list. Multi-tab projects render one expandable tab node

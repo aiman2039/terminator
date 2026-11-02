@@ -133,19 +133,28 @@ pub(super) fn operation(
 
 /// Lists at most `MAX_ENTRIES` children. Names that are not UTF-8 or not a
 /// valid single path component are skipped, so one odd name or a huge
-/// folder does not make the whole directory unbrowsable (#239).
+/// folder does not make the whole directory unbrowsable (#239). The reply
+/// says when entries were cut or skipped, so the GUI can tell the user.
 async fn list_directory(fs: &mut Fs, project: &RemoteProject, path: String) -> Result<Reply> {
     let actual = contained(fs, project, &path).await?;
     let directory = fs.open_dir(actual).await?;
     let mut stream = Box::pin(directory.read_dir());
     let mut entries = Vec::new();
-    while entries.len() < MAX_ENTRIES
-        && let Some(entry) = stream.next().await
-    {
+    let mut skipped: usize = 0;
+    let mut truncated = false;
+    while let Some(entry) = stream.next().await {
         let entry = entry?;
+        if matches!(entry.filename().to_str(), Some("." | "..")) {
+            continue;
+        }
         let Some((name, child)) = child_path(&path, entry.filename().to_str()) else {
+            skipped = skipped.saturating_add(1);
             continue;
         };
+        if entries.len() == MAX_ENTRIES {
+            truncated = true;
+            break;
+        }
         entries.push(Entry {
             name,
             path: child,
@@ -155,7 +164,12 @@ async fn list_directory(fs: &mut Fs, project: &RemoteProject, path: String) -> R
         });
     }
     entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.name.cmp(&b.name)));
-    Ok(Reply::Directory { path, entries })
+    Ok(Reply::Directory {
+        path,
+        entries,
+        truncated,
+        skipped,
+    })
 }
 /// The name and project-relative path of a listed child, or `None` when
 /// the entry must be skipped.

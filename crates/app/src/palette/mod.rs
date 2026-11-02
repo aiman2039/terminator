@@ -16,6 +16,9 @@ const FILE_RESULTS: usize = 40;
 /// Recent files shown before sessions when the field is empty.
 const RECENT_RESULTS: usize = 8;
 const SYMBOL_QUERY_DELAY: Duration = Duration::from_millis(180);
+/// Minimum age of the palette rows before a daemon state change alone
+/// rebuilds them.
+const STATE_REFRESH: Duration = Duration::from_secs(1);
 
 pub(crate) const FILTER_FILES: u8 = 1 << 0;
 pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
@@ -64,6 +67,7 @@ pub(crate) struct PaletteCache {
     filters: u8,
     project: Option<String>,
     scope: Option<PathBuf>,
+    built_at: Instant,
     /// Shared so a frame borrows rows without a per-frame clone (#177).
     items: std::sync::Arc<[PaletteItem]>,
     /// Row details, computed once per cache build instead of per frame.

@@ -106,7 +106,7 @@ impl App {
             windows_updates: windows_updates::WindowsUpdateCheck::new(),
             #[cfg(all(not(test), target_os = "macos"))]
             status_waiting_shown: None,
-            #[cfg(all(not(test), target_os = "macos"))]
+            #[cfg(any(test, target_os = "macos"))]
             status_menu_index: None,
             installation_error: None,
             repair_pending: false,

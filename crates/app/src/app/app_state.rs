@@ -69,7 +69,7 @@ pub struct App {
     #[cfg(all(not(test), target_os = "macos"))]
     pub(crate) status_waiting_shown: Option<usize>,
     /// Sidebar index the macOS status menu was last built from.
-    #[cfg(all(not(test), target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos"))]
     pub(crate) status_menu_index: Option<std::sync::Arc<crate::chrome::sidebar_cache::Index>>,
     #[cfg(feature = "test-support")]
     pub(crate) diagnostics: diagnostics::Diagnostics,
