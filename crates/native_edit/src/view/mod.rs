@@ -1,4 +1,6 @@
 //! Embeddable native source view over [`crate::doc::Buffer`].
+#[cfg(test)]
+mod clipboard_tests;
 mod keys;
 mod render;
 #[cfg(test)]

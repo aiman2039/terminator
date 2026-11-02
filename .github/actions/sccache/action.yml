@@ -1,8 +1,8 @@
 name: sccache on Cloudflare R2
 description: >-
   Install sccache and route rustc through it when the job environment has the
-  R2 bucket and credentials. Without them (for example a fork), builds run
-  without sccache.
+  R2 bucket and credentials. Without them (for example a fork), or when the
+  server cannot reach the bucket, builds run without sccache.
 runs:
   using: composite
   steps:
@@ -12,6 +12,13 @@ runs:
         version: v0.19.0
     - if: env.SCCACHE_BUCKET != '' && env.AWS_ACCESS_KEY_ID != ''
       shell: bash
+      env:
+        SCCACHE_REGION: auto
       run: |
+        # A cache failure must not fail the build: probe the bucket first.
+        if ! sccache --start-server; then
+          echo "::warning::sccache cannot use the R2 bucket; building without sccache."
+          exit 0
+        fi
         echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
         echo "SCCACHE_REGION=auto" >> "$GITHUB_ENV"

@@ -113,6 +113,7 @@ impl<B: Buffer> SourceView<'_, B> {
 
     fn read_shortcuts(&self, canvas: &Canvas<'_>) -> ShortcutBatch {
         let mut batch = ShortcutBatch::default();
+        let mut clipboard = Vec::new();
         canvas.ui.input(|input| {
             for event in &input.events {
                 match event {
@@ -123,9 +124,28 @@ impl<B: Buffer> SourceView<'_, B> {
                         ..
                     } => self.classify_shortcut((*key, *modifiers), &mut batch),
                     egui::Event::Paste(text) => batch.pastes.push(text.clone()),
+                    // egui-winit turns Cmd/Ctrl+C and +X into these events
+                    // without a key event.
+                    egui::Event::Copy => clipboard.push(IdeAction::Copy),
+                    egui::Event::Cut => clipboard.push(IdeAction::Cut),
                     _ => {}
                 }
             }
+        });
+        for action in clipboard {
+            if !batch.actions.iter().any(|(_, _, queued)| *queued == action) {
+                let key = if action == IdeAction::Copy {
+                    egui::Key::C
+                } else {
+                    egui::Key::X
+                };
+                batch.actions.push((key, egui::Modifiers::COMMAND, action));
+            }
+        }
+        canvas.ui.input_mut(|input| {
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Copy | egui::Event::Cut));
         });
         batch
     }
