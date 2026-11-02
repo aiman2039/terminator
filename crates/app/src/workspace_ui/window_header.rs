@@ -308,14 +308,15 @@ impl App {
         if ui.available_width() < 220.0 {
             return;
         }
-        if let Some(metadata) = self.metadata.clone()
-            && let Some(branch) = metadata.branch.clone()
-        {
-            let label = if metadata.worktree {
+        let label = self.metadata.as_ref().and_then(|metadata| {
+            let branch = metadata.branch.as_ref()?;
+            Some(if metadata.worktree {
                 format!("Worktree · {branch}")
             } else {
-                branch
-            };
+                branch.clone()
+            })
+        });
+        if let Some(label) = label {
             let branch_button = ui.add(
                 egui::Button::image_and_text(
                     egui::Image::new(crate::icons::source("GitBranch"))

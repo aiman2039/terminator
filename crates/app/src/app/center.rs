@@ -155,11 +155,9 @@ impl App {
         if submit {
             self.submit_worktree(&clone);
         }
-        if submit || cancel {
-            self.worktree_draft = None;
-        } else {
-            self.worktree_draft = Some(clone);
-        }
+        // Keep the form after Create until the worker reports success, so a
+        // failed creation can be corrected and retried.
+        self.worktree_draft = (!cancel).then_some(clone);
         ui.add_space(12.0);
         ui.separator();
         ui.add_space(4.0);

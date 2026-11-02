@@ -49,7 +49,10 @@ impl Shared {
                 now_ms: local_history::now_ms(),
             })?;
         }
-        std::fs::write(path, text).with_context(|| format!("Writing {}", path.display()))?;
+        // Rename a complete temp file into place so a crash never leaves a
+        // half-written file; a symlink keeps pointing at the reverted file.
+        atomic_replace(path, text.as_bytes())
+            .with_context(|| format!("Writing {}", path.display()))?;
         Ok(Outcome::Reply(Response::Ok))
     }
 

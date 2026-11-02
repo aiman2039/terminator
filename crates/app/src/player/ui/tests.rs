@@ -174,3 +174,22 @@ fn eq_presets_only_match_their_own_bands() {
     assert!(!eq_matches(&app, &eq_flat()));
     assert!(!eq_matches(&app, &eq_treble()));
 }
+
+#[test]
+fn sample_tones_seed_default_even_when_another_playlist_is_selected() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.preferences.ensure_default_playlist();
+    with_list(&mut app, "Work", &["/x"]);
+    app.apply_player_samples(vec!["/tone.wav".into()]);
+    let default = app
+        .preferences
+        .playlists
+        .iter()
+        .find(|list| list.name == "Default")
+        .unwrap();
+    assert_eq!(default.tracks, [std::path::PathBuf::from("/tone.wav")]);
+    assert_eq!(
+        app.preferences.selected_tracks(),
+        [std::path::PathBuf::from("/x")]
+    );
+}

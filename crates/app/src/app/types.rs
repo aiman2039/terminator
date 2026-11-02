@@ -212,6 +212,7 @@ pub(crate) enum Job {
     RestartSessionService(recovery::RestartInventory),
     StartSessionService,
     CreateWorktree(worktree_ui::WorktreeDraft),
+    WorktreeProbe(PathBuf, worktree_ui::WorktreeDraft),
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
     Preferences(UiPreferences),
@@ -475,6 +476,7 @@ pub(crate) enum Update {
     GutterStaged(PathBuf, Result<String, String>),
     EditorBlame(PathBuf, u64, Result<git_log::BlameData, String>),
     CommitFiles(String, Result<Vec<(char, PathBuf)>, String>),
+    WorktreeProbe(worktree_ui::WorktreeDraft, bool),
     GitView(String, GitView),
     LocalHistory(crate::local_history::Reply),
     DirectoryPreview(

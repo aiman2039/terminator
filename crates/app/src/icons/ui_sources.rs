@@ -64,6 +64,14 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/square-dashed.svg"),
     ),
     (
+        "Maximize",
+        egui::include_image!("../../assets/icons/maximize.svg"),
+    ),
+    (
+        "ZoomIn",
+        egui::include_image!("../../assets/icons/zoom-in.svg"),
+    ),
+    (
         "ExternalLink",
         egui::include_image!("../../assets/icons/external-link.svg"),
     ),

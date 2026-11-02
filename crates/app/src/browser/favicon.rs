@@ -3,6 +3,7 @@
 use crate::{App, Job};
 use eframe::egui;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Icons above this size are ignored; real favicons are a few KiB.
@@ -28,7 +29,7 @@ pub(crate) async fn download(url: &str) -> Option<Vec<u8>> {
                 .ok()
         })
         .as_ref()?;
-    let response = client.get(url).send().await.ok()?;
+    let mut response = client.get(url).send().await.ok()?;
     let html = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -42,8 +43,23 @@ pub(crate) async fn download(url: &str) -> Option<Vec<u8>> {
     {
         return None;
     }
-    let bytes = response.bytes().await.ok()?;
-    (bytes.len() <= MAX_BYTES && decodable(&bytes)).then(|| bytes.to_vec())
+    // Chunked replies have no length: stop reading past the cap.
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if !append_capped(&mut bytes, &chunk) {
+            return None;
+        }
+    }
+    decodable(&bytes).then_some(bytes)
+}
+
+/// Appends `chunk` unless that would pass `MAX_BYTES`.
+fn append_capped(bytes: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if bytes.len().saturating_add(chunk.len()) > MAX_BYTES {
+        return false;
+    }
+    bytes.extend_from_slice(chunk);
+    true
 }
 
 /// Only keep bytes egui can paint, so a tab never shows a load-error glyph.
@@ -88,7 +104,10 @@ impl App {
     pub(crate) fn apply_favicon(&mut self, url: String, bytes: Option<Vec<u8>>) {
         let state = match bytes {
             Some(bytes) => {
-                let uri = image_uri(self.favicons.len(), &bytes);
+                // A process-wide counter: entries are inserted as Loading
+                // first, so the map length repeats across downloads.
+                static NEXT: AtomicUsize = AtomicUsize::new(0);
+                let uri = image_uri(NEXT.fetch_add(1, Ordering::Relaxed), &bytes);
                 Favicon::Ready(uri, bytes.into())
             }
             None => Favicon::Failed,
@@ -99,7 +118,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::image_uri;
+    use super::{MAX_BYTES, append_capped, image_uri};
 
     #[test]
     fn svg_icons_keep_an_svg_uri() {
@@ -108,5 +127,17 @@ mod tests {
             "bytes://favicon/3.svg"
         );
         assert_eq!(image_uri(4, b"\0\0\x01\0"), "bytes://favicon/4");
+    }
+
+    #[test]
+    fn oversized_icon_stream_stops_at_the_cap() {
+        let mut bytes = Vec::new();
+        assert!(append_capped(
+            &mut bytes,
+            &vec![0; MAX_BYTES.saturating_sub(1)]
+        ));
+        assert!(append_capped(&mut bytes, &[0]));
+        assert!(!append_capped(&mut bytes, &[0]));
+        assert_eq!(bytes.len(), MAX_BYTES);
     }
 }

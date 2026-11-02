@@ -50,12 +50,13 @@ impl App {
         }
     }
 
-    pub(super) fn handle_worktree_created(
+    pub(in crate::app) fn handle_worktree_created(
         &mut self,
         state: State,
         project: String,
         open_terminal: bool,
     ) {
+        self.worktree_draft = None;
         self.missing_projects.remove(&project);
         self.apply_state(state);
         self.reveal_project(project);

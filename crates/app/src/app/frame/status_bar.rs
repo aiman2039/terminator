@@ -69,7 +69,7 @@ impl App {
             ui.horizontal_wrapped(|ui| self.service_unreachable_banner(ui));
         } else if let Some(error) = self.error.clone() {
             ui.horizontal_wrapped(|ui| {
-                if ui.small_button("Dismiss").clicked() {
+                if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
                     self.dismiss_status_error();
                 }
                 ui.colored_label(appearance::color(&self.theme.status_failed), error);

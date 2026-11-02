@@ -48,6 +48,11 @@ impl App {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
+        // A large file's first live diff builds on a worker.
+        if buffer.live_loading() {
+            ui.put(panes.body, egui::Spinner::new());
+            return Vec::new();
+        }
         let marks = buffer.editor_marks(&live, mark_colors(panes.colors));
         let options = diff_editor_options(DiffEditorOptionsInput {
             vim: self.state.settings.native_vim,

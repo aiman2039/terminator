@@ -30,6 +30,8 @@ pub(super) async fn run(input: RunInput) {
         mut input_rx,
     } = input;
     let mut attempt = 0u8;
+    // Detach time counts from the session start, not from each reconnect.
+    let session_started = Instant::now();
     loop {
         // Never replay keys queued for a previous connection.
         while input_rx.try_recv().is_ok() {}
@@ -40,6 +42,7 @@ pub(super) async fn run(input: RunInput) {
             sid: &sid,
             spec: &spec,
             input_rx: &mut input_rx,
+            session_started,
         })
         .await;
         match result {

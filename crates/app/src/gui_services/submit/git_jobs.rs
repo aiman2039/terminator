@@ -45,6 +45,11 @@ impl Services {
             }
             Job::Diff(tab) => self.diff(tab, cancel, updates).await,
             Job::CreateWorktree(draft) => self.create_worktree(draft, cancel, updates).await,
+            Job::WorktreeProbe(path, draft) => {
+                let git = self.is_git_checkout(path, &cancel).await;
+                updates.push(Update::WorktreeProbe(draft, git));
+                Ok(())
+            }
             Job::CommitFiles(cwd, hash) => {
                 self.commit_files(CommitFilesInput {
                     cwd,
@@ -76,6 +81,16 @@ impl Services {
             Job::GitView(tab) => self.git_view(tab, cancel, updates).await,
             _ => anyhow::bail!(MISROUTED),
         }
+    }
+
+    /// `git rev-parse --git-common-dir` succeeds in `path`.
+    async fn is_git_checkout(&self, path: PathBuf, cancel: &CancellationToken) -> bool {
+        self.fs()
+            .run(cancel, move || {
+                anyhow::Ok(terminator_core::worktrees::common_dir(&path).is_ok())
+            })
+            .await
+            .unwrap_or(false)
     }
 
     async fn stage_gutter_block(

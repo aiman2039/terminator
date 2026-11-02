@@ -35,6 +35,21 @@ fn installers_preserve_unrelated_hooks_and_are_idempotent() {
     }
 }
 #[test]
+fn remove_without_config_creates_no_files() {
+    for kind in ["claude", "grok", "muse", "codex", "cursor", "opencode"] {
+        let home = tempfile::tempdir().unwrap();
+        let path = install(InstallInput {
+            home: home.path(),
+            kind,
+            helper: Path::new("/tmp/hook"),
+            remove: true,
+        })
+        .unwrap();
+        assert!(!path.exists(), "{kind} created {}", path.display());
+        assert!(!muse_settings_path(home.path()).exists());
+    }
+}
+#[test]
 fn backups_within_one_second_do_not_overwrite_each_other() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("settings.json");

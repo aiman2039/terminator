@@ -161,6 +161,11 @@ impl JobRouting {
             Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
             Job::LocalHistory(op) => crate::local_history::route(op),
             Job::LinePreviews(..) => ("files", "line-previews".into(), Policy::ReplaceableRead),
+            Job::WorktreeProbe(path, _) => (
+                "git",
+                format!("worktree-probe:{}", path.display()),
+                Policy::ReplaceableRead,
+            ),
             Job::CommitFiles(_, hash) => (
                 "git",
                 format!("commit-files:{hash}"),

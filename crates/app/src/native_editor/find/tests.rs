@@ -118,3 +118,41 @@ fn a_multi_line_selection_sets_the_scope() {
     assert!(!find.scope_to_selection(&plain, &doc));
     assert!(!find.in_selection);
 }
+
+#[test]
+fn replace_all_reaches_matches_past_the_highlight_cap() {
+    let line = "x ".repeat(MAX_MATCHES.saturating_add(5));
+    let mut doc = Doc::new(format!("{line}\n"));
+    let mut engine = VimEngine::new();
+    let mut find = bar("x");
+    assert_eq!(find.matches(&doc).len(), MAX_MATCHES);
+    find.replacement = "y".into();
+    let request = ReplaceRequest {
+        one: false,
+        all: true,
+    };
+    assert!(!find.apply_replace(&mut doc, &mut engine, request));
+    assert!(!doc.text().contains('x'));
+}
+
+#[test]
+fn regex_replace_keeps_line_context_for_groups() {
+    // `\Bb` matches the "b" inside "ab" but not a lone "b": the
+    // replacement must see the whole line, not the matched text alone.
+    let mut doc = Doc::new("ab b\n");
+    let mut engine = VimEngine::new();
+    let mut find = bar(r"\B(b)");
+    find.regex = true;
+    let matches = find.matches(&doc);
+    assert_eq!(matches.len(), 1);
+    let pattern = find.pattern().unwrap();
+    replace_matches(ReplaceMatchesInput {
+        buffer: &mut doc,
+        engine: &mut engine,
+        pattern: &pattern,
+        replacement: "[$1]",
+        matches: &matches,
+        regex: true,
+    });
+    assert_eq!(doc.text(), "a[b] b\n");
+}
