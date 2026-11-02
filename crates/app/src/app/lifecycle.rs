@@ -135,6 +135,7 @@ impl App {
             layout_readonly: HashSet::new(),
             close_workspace: None,
             close_workspace_queue: Vec::new(),
+            close_workspace_prompted: None,
             workspace_insert: HashMap::new(),
             workspace_visible: None,
             layout_saved: HashMap::new(),

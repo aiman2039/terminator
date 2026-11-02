@@ -85,9 +85,6 @@ mod other {
     pub fn termination_requested() -> bool {
         false
     }
-    pub fn termination_cancelled() -> bool {
-        false
-    }
     pub fn cancel_termination() {}
     pub fn complete_termination(ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);

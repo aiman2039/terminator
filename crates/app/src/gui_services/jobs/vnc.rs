@@ -39,26 +39,24 @@ impl Services {
         } = input;
         let client = self.client();
         let upload = direction == terminator_core::vnc::TransferDirection::Upload;
-        let picked = self
-            .fs()
-            .run(&cancel, move || {
-                if local.is_some() {
-                    return anyhow::Ok(local);
-                }
-                let dialog = rfd::FileDialog::new().set_title(if upload {
-                    "Upload via SFTP"
-                } else {
-                    "Save SFTP download to a new file"
-                });
-                anyhow::Ok(if upload {
-                    dialog.pick_file()
-                } else {
-                    dialog.save_file()
-                })
-            })
-            .await;
-        let result = match picked {
-            Ok(Some(local)) => {
+        let picked = if let Some(local) = local {
+            Some(local)
+        } else {
+            // The async picker holds no file-pool worker while it is open.
+            let dialog = rfd::AsyncFileDialog::new().set_title(if upload {
+                "Upload via SFTP"
+            } else {
+                "Save SFTP download to a new file"
+            });
+            let handle = if upload {
+                dialog.pick_file().await
+            } else {
+                dialog.save_file().await
+            };
+            handle.map(|handle| handle.path().to_path_buf())
+        };
+        let result = match picked.filter(|_| !cancel.is_cancelled()) {
+            Some(local) => {
                 let id = terminator_core::id();
                 let request = Request::VncTransfer {
                     session: session.clone(),
@@ -80,8 +78,7 @@ impl Services {
                     Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
                 }
             }
-            Ok(None) => Ok(None),
-            Err(e) => Err(format!("{e:#}")),
+            None => Ok(None),
         };
         updates.push(Update::VncTransfer(session, result));
         Ok(())

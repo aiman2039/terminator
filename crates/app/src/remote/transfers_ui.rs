@@ -1,5 +1,6 @@
-//! SSH project uploads and downloads. Native pickers run on the worker
-//! pool; the transfer itself runs in the daemon and is polled every 500 ms.
+//! SSH project uploads and downloads. Native pickers are awaited
+//! asynchronously so they hold no worker thread; the transfer itself runs
+//! in the daemon and is polled every 500 ms.
 use crate::{App, Job, appearance, remote_ui::Failure};
 use eframe::egui;
 use std::{
@@ -24,18 +25,26 @@ pub(crate) enum Pick {
 }
 impl Pick {
     /// Shows the native picker, if any. `None` when the user cancelled.
-    pub(crate) fn resolve(self) -> Option<Operation> {
+    pub(crate) async fn resolve(self) -> Option<Operation> {
         match self {
             Self::Dropped { local, remote_dir } => Some(Operation::Upload { local, remote_dir }),
-            Self::Upload { remote_dir } => rfd::FileDialog::new()
+            Self::Upload { remote_dir } => rfd::AsyncFileDialog::new()
                 .set_title("Upload to SSH project")
                 .pick_file()
-                .map(|local| Operation::Upload { local, remote_dir }),
-            Self::Download { path, name } => rfd::FileDialog::new()
+                .await
+                .map(|local| Operation::Upload {
+                    local: local.path().to_path_buf(),
+                    remote_dir,
+                }),
+            Self::Download { path, name } => rfd::AsyncFileDialog::new()
                 .set_title("Save download to a new file")
                 .set_file_name(name)
                 .save_file()
-                .map(|local| Operation::Download { path, local }),
+                .await
+                .map(|local| Operation::Download {
+                    path,
+                    local: local.path().to_path_buf(),
+                }),
         }
     }
 }
@@ -264,5 +273,17 @@ mod tests {
         }
         assert_eq!(transfers.list.len(), KEEP);
         assert!(transfers.list.iter().all(|s| s.id != "a"));
+    }
+    #[tokio::test]
+    async fn dropped_file_resolves_without_a_picker() {
+        let pick = Pick::Dropped {
+            local: PathBuf::from("/tmp/a.txt"),
+            remote_dir: "dir".into(),
+        };
+        assert!(matches!(
+            pick.resolve().await,
+            Some(Operation::Upload { local, remote_dir })
+                if local == std::path::Path::new("/tmp/a.txt") && remote_dir == "dir"
+        ));
     }
 }

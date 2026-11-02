@@ -75,9 +75,6 @@ impl eframe::App for App {
         // A terminal tab whose session record was pruned (an ended shell or
         // editor with no resume handle) should disappear on its own.
         self.prune_unavailable_tabs();
-        if updater::termination_cancelled() {
-            self.native_installation_cancelled();
-        }
         if (updater::termination_requested() || ctx.input(|i| i.viewport().close_requested()))
             && !matches!(self.exit, exit::Exit::Ready)
         {

@@ -93,6 +93,8 @@ pub struct App {
     pub(crate) layout_readonly: HashSet<String>,
     pub(crate) close_workspace: Option<(String, String)>,
     pub(crate) close_workspace_queue: Vec<String>,
+    /// Dirty native buffer the current workspace close already asked about.
+    pub(crate) close_workspace_prompted: Option<PathBuf>,
     pub(crate) workspace_insert: HashMap<String, usize>,
     pub(crate) workspace_visible: Option<(String, String)>,
     pub(crate) layout_saved: HashMap<String, String>,

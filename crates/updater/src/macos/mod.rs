@@ -96,9 +96,7 @@ use status_button::keep_sparkle_status_button_in_layout;
 #[cfg(feature = "test-support")]
 pub use termination::fixture_native_quit;
 use termination::{CONTEXT, ORIGINAL, terminate};
-pub use termination::{
-    cancel_termination, complete_termination, termination_cancelled, termination_requested,
-};
+pub use termination::{cancel_termination, complete_termination, termination_requested};
 
 pub struct Updater {
     controller: Option<Retained<AnyObject>>,

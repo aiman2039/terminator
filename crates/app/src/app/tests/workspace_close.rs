@@ -433,3 +433,58 @@ fn editor_close_keeps_tab_with_a_session_split_in_during_the_check() {
     assert!(app.layouts["a"].contains(&Tab::Terminal("new-shell".into())));
     assert_eq!(app.close_workspace, Some(("a".into(), tab)));
 }
+
+fn dirty_file_then_shell(app: &mut App, dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("dirty.rs");
+    std::fs::write(&path, "source").unwrap();
+    let workspace = app.layouts.get_mut("a").unwrap();
+    workspace.add("t0".into(), Tab::NativeEditor { path: path.clone() });
+    workspace.add("t1".into(), Tab::Terminal("s1".into()));
+    app.native_docs.insert(
+        path.clone(),
+        crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+    );
+    app.begin_workspace_close_tabs("a", vec!["t0".into(), "t1".into()]);
+    path
+}
+
+#[test]
+fn bulk_close_continues_after_the_dirty_file_is_discarded() {
+    use crate::native_editor::NativeCloseChoice;
+    let (mut app, ctx, dir) = fixture();
+    let path = dirty_file_then_shell(&mut app, dir.path());
+    app.poll_workspace_close(&ctx);
+    assert!(matches!(&app.native_close_prompt, Some((p, None)) if *p == path));
+    assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+    app.native_close_prompt = None;
+    app.apply_native_close_choice(&path, NativeCloseChoice::Discard, None);
+    app.poll_workspace_close(&ctx);
+    assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t0"));
+    assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t1"));
+    assert!(app.close_workspace.is_none());
+}
+
+#[test]
+fn cancelling_the_dirty_file_prompt_stops_bulk_close_with_a_message() {
+    let (mut app, ctx, dir) = fixture();
+    dirty_file_then_shell(&mut app, dir.path());
+    app.poll_workspace_close(&ctx);
+    app.native_close_prompt = None;
+    app.poll_workspace_close(&ctx);
+    assert!(app.close_workspace.is_none());
+    assert!(app.close_workspace_queue.is_empty());
+    assert!(app.info.as_ref().unwrap().contains("dirty.rs"));
+    assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == "t1"));
+}
+
+#[test]
+fn late_idle_close_completion_keeps_a_newer_close_request() {
+    let (mut app, _, _dir) = fixture();
+    let workspace = app.layouts.get_mut("a").unwrap();
+    workspace.add("t0".into(), Tab::Terminal("s0".into()));
+    workspace.add("t1".into(), Tab::Terminal("s1".into()));
+    // Closing t1 was requested while t0's idle preflight was pending.
+    app.close_workspace = Some(("a".into(), "t1".into()));
+    app.close_workspace_tab_now("a", "t0");
+    assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
+}

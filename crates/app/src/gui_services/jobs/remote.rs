@@ -117,14 +117,11 @@ impl Services {
             cancel,
             updates,
         } = input;
-        let picked = self
-            .fs()
-            .run(&cancel, move || anyhow::Ok(pick.resolve()))
-            .await;
+        // The async picker holds no file-pool worker while it is open.
+        let picked = pick.resolve().await.filter(|_| !cancel.is_cancelled());
         let result = match picked {
-            Ok(Some(operation)) => self.remote_transfer_rpc(&project, operation).await,
-            Ok(None) => Ok(None),
-            Err(e) => Err(format!("{e:#}").into()),
+            Some(operation) => self.remote_transfer_rpc(&project, operation).await,
+            None => Ok(None),
         };
         updates.push(Update::RemoteTransfer(project, None, result));
         Ok(())

@@ -8,7 +8,6 @@ use std::sync::{
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 pub(super) static ORIGINAL: OnceLock<Imp> = OnceLock::new();
-static CANCELLED: AtomicBool = AtomicBool::new(false);
 pub(super) static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
 
 pub(super) unsafe extern "C-unwind" fn terminate(
@@ -34,9 +33,6 @@ pub fn fixture_native_quit() {
 }
 pub fn termination_requested() -> bool {
     REQUESTED.swap(false, Ordering::AcqRel)
-}
-pub fn termination_cancelled() -> bool {
-    CANCELLED.swap(false, Ordering::AcqRel)
 }
 pub fn cancel_termination() {
     REQUESTED.store(false, Ordering::Release);

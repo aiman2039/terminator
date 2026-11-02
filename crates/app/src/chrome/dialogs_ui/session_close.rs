@@ -112,10 +112,7 @@ impl App {
             };
             // Native buffers die with the tab and bypass the dock close hook,
             // so guard them before the session checks below.
-            let dirty = self.dirty_native_in_tab(&project, &tab_id);
-            if let Some(path) = dirty.first() {
-                self.native_close_prompt = Some((path.clone(), None));
-                self.abort_workspace_close();
+            if self.workspace_close_waits_on_native(&project, &tab_id) {
                 return;
             }
             let live = self.live_workspace_sessions(&project, &tab_id);
@@ -148,6 +145,44 @@ impl App {
             });
             return;
         }
+    }
+
+    /// A dirty native buffer pauses the close on its prompt. Save or Discard
+    /// resumes the queue; Cancel (prompt gone, buffer still dirty) stops it
+    /// and says why. Returns true while the close must not proceed.
+    fn workspace_close_waits_on_native(&mut self, project: &str, tab_id: &str) -> bool {
+        if self.native_close_prompt.is_some()
+            || self.native_close_after_save.is_some()
+            || !self.pending_native_close.is_empty()
+        {
+            return true;
+        }
+        let Some(path) = self.dirty_native_in_tab(project, tab_id).into_iter().next() else {
+            self.close_workspace_prompted = None;
+            return false;
+        };
+        if self.close_workspace_prompted.take().as_ref() == Some(&path) {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            self.info = Some(format!(
+                "Stopped closing tabs: {name} still has unsaved changes."
+            ));
+            self.abort_workspace_close();
+            return true;
+        }
+        self.prompt_workspace_close(project, tab_id, path);
+        true
+    }
+
+    /// Ask about one dirty native buffer and keep this tab's close pending,
+    /// so the rest of a bulk close continues after Save or Discard.
+    pub(crate) fn prompt_workspace_close(&mut self, project: &str, tab_id: &str, path: PathBuf) {
+        // Save and close settles while the view renders, so show the tab.
+        if let Some(workspace) = self.layouts.get_mut(project) {
+            tab_id.clone_into(&mut workspace.active);
+        }
+        self.native_close_prompt = Some((path.clone(), None));
+        self.close_workspace_prompted = Some(path);
+        self.close_workspace = Some((project.to_owned(), tab_id.to_owned()));
     }
 
     pub(crate) fn live_workspace_sessions(&self, project: &str, tab_id: &str) -> Vec<String> {

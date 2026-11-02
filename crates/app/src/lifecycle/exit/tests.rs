@@ -491,21 +491,6 @@ fn follow_up_jobs_require_another_drain() {
     assert!(matches!(app.exit, Exit::Draining(..)));
 }
 #[test]
-fn cancelled_native_installation_allows_another_checkpoint() {
-    let (mut app, ctx, _dir, requests) = fixture();
-    app.exit_attempt = 1;
-    app.exit = Exit::Ready;
-    app.native_installation_cancelled();
-    app.begin_exit();
-    app.advance_exit(&ctx);
-    assert_eq!(app.exit_attempt, 2);
-    assert!(matches!(requests.recv().unwrap(), Job::ExitDrain(2, _)));
-    // A late success from the cancelled installation cannot close the retry.
-    app.update_tx.send(Update::ExitSaved(1, Ok(()))).unwrap();
-    drain_updates(&mut app, &ctx);
-    assert!(matches!(app.exit, Exit::Draining(_, 2)));
-}
-#[test]
 fn timed_out_exit_can_be_retried() {
     let (mut app, ctx, _dir, _) = fixture();
     app.exit = Exit::Saving(
@@ -725,4 +710,22 @@ fn quit_without_a_dirty_native_buffer_starts_the_checkpoint() {
     app.accept_app_quit(&ctx);
     assert!(!app.pending_app_quit);
     assert!(matches!(app.exit, Exit::Waiting(_)));
+}
+#[test]
+fn cancelled_exit_keeps_the_player_loaded() {
+    let (mut app, _ctx, _dir, _) = fixture();
+    app.player.current_path = Some(PathBuf::from("/tmp/song.mp3"));
+    app.begin_exit();
+    app.cancel_exit("disk full".into());
+    assert!(app.player.current_path.is_some());
+}
+#[test]
+fn saved_exit_stops_the_player() {
+    let (mut app, ctx, _dir, _) = fixture();
+    app.player.current_path = Some(PathBuf::from("/tmp/song.mp3"));
+    app.exit = Exit::Saving(Instant::now(), 1);
+    app.update_tx.send(Update::ExitSaved(1, Ok(()))).unwrap();
+    drain_updates(&mut app, &ctx);
+    assert!(matches!(app.exit, Exit::Ready));
+    assert!(app.player.current_path.is_none());
 }
