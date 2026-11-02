@@ -350,10 +350,12 @@ fn rewatch_records_targets_in_shared_state_for_later_unwatch() {
     let second = dir.path().join("second");
     std::fs::create_dir_all(&first).unwrap();
     std::fs::create_dir_all(&second).unwrap();
-    let Ok(watcher) = notify::recommended_watcher(|_: notify::Result<notify::Event>| {}) else {
+    let state = std::sync::Mutex::new(live::WatchState::new(Box::new(|| {
+        notify::recommended_watcher(|_: notify::Result<notify::Event>| {}).ok()
+    })));
+    if state.lock().unwrap().watcher.is_none() {
         return;
-    };
-    let state = std::sync::Mutex::new(live::WatchState::new(Some(watcher)));
+    }
     // A pass whose result is dropped (cancelled refresh) still updates state.
     let _ = live::rewatch(&state, vec![(first.clone(), RecursiveMode::Recursive)]);
     assert_eq!(

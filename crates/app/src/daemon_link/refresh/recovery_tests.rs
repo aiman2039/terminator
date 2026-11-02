@@ -133,6 +133,7 @@ fn rescan_flag_and_watch_errors_relist_every_visible_folder() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn symlink_seen_dangling_mid_retarget_relists_its_folder() {
     let dir = tempfile::tempdir().unwrap();
@@ -157,12 +158,16 @@ fn recreated_root_is_watched_again_under_the_same_path() {
     let root = dir.path().canonicalize().unwrap().join("root");
     std::fs::create_dir(&root).unwrap();
     let (tx, rx) = mpsc::channel();
-    let Ok(watcher) = notify::recommended_watcher(move |event| {
-        let _ = tx.send(event);
-    }) else {
+    let state = std::sync::Mutex::new(live::WatchState::new(Box::new(move || {
+        let tx = tx.clone();
+        notify::recommended_watcher(move |event| {
+            let _ = tx.send(event);
+        })
+        .ok()
+    })));
+    if state.lock().unwrap().watcher.is_none() {
         return;
-    };
-    let state = std::sync::Mutex::new(live::WatchState::new(Some(watcher)));
+    }
     let targets = vec![(root.clone(), RecursiveMode::NonRecursive)];
     assert!(!live::rewatch(&state, targets.clone()));
     std::fs::remove_dir(&root).unwrap();
@@ -187,10 +192,12 @@ fn recreated_root_is_watched_again_under_the_same_path() {
 fn failed_watch_keeps_polling_until_the_path_returns() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().canonicalize().unwrap().join("missing");
-    let Ok(watcher) = notify::recommended_watcher(|_: notify::Result<notify::Event>| {}) else {
+    let state = std::sync::Mutex::new(live::WatchState::new(Box::new(|| {
+        notify::recommended_watcher(|_: notify::Result<notify::Event>| {}).ok()
+    })));
+    if state.lock().unwrap().watcher.is_none() {
         return;
-    };
-    let state = std::sync::Mutex::new(live::WatchState::new(Some(watcher)));
+    }
     let targets = vec![(missing.clone(), RecursiveMode::NonRecursive)];
     assert!(live::rewatch(&state, targets.clone()));
     assert!(
@@ -241,6 +248,7 @@ async fn deleted_and_recreated_root_refreshes_and_keeps_watching() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn symlinked_folder_follows_retarget_removal_and_recreation() {
     let dir = tempfile::tempdir().unwrap();

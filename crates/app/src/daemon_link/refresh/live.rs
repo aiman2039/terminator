@@ -1,10 +1,10 @@
 //! Production refresh worker: watcher-driven, cancellable, partial re-listing.
+pub(super) use super::watch_state::{WatchState, WatcherFactory, rewatch};
 use super::{
     DirectoriesToListInput, Dirty, Request, Wake, directories_to_list, ignore_rules_changed,
     normalize, watch_targets,
 };
 use crate::{Update, gui_services::Services, services};
-use notify::{RecursiveMode, Watcher};
 use std::{
     collections::{HashMap, HashSet},
     ops::ControlFlow,
@@ -15,33 +15,7 @@ use std::{
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use tokio::sync::watch;
 
-pub(super) type Watches = Vec<(PathBuf, RecursiveMode)>;
 type SharedWatcher = Arc<Mutex<WatchState>>;
-
-/// The watcher and the paths it really watches, under one lock. `rewatch`
-/// updates both on the fs pool, so a refresh cancelled after it ran cannot
-/// leave watched paths that no later pass unwatches.
-pub(super) struct WatchState {
-    pub(super) watcher: Option<notify::RecommendedWatcher>,
-    pub(super) watched: Watches,
-    /// Device and inode of each watched path when it was added. inotify
-    /// drops the watch of a deleted root, so a recreated or retargeted
-    /// path with the same name must be watched again.
-    identities: Vec<Option<(u64, u64)>>,
-    /// A watch failed; polling continues until the targets change.
-    failed: bool,
-}
-
-impl WatchState {
-    pub(super) fn new(watcher: Option<notify::RecommendedWatcher>) -> Self {
-        Self {
-            watcher,
-            watched: Vec::new(),
-            identities: Vec::new(),
-            failed: false,
-        }
-    }
-}
 
 /// Selection and filesystem notifications are latest-value channels: no event backlog.
 pub fn spawn_async(service: Services) -> watch::Sender<Option<Request>> {
@@ -101,18 +75,19 @@ impl RefreshWorker {
         requests: watch::Receiver<Option<Request>>,
     ) -> anyhow::Result<Self> {
         let (events, changed) = watch::channel(0_u64);
+        let events = Arc::new(events);
         let dirty = Arc::new(Mutex::new(Dirty::default()));
         let recorder = Arc::clone(&dirty);
+        let make: WatcherFactory = Box::new(move || {
+            let (recorder, events) = (Arc::clone(&recorder), Arc::clone(&events));
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                record_event(&recorder, &events, event);
+            })
+            .ok()
+        });
         let watcher = service
             .fs()
-            .run(&token, move || {
-                anyhow::Ok(
-                    notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                        record_event(&recorder, &events, event);
-                    })
-                    .ok(),
-                )
-            })
+            .run(&token, move || anyhow::Ok(WatchState::new(make)))
             .await?;
         Ok(Self {
             service,
@@ -120,7 +95,7 @@ impl RefreshWorker {
             requests,
             changed,
             dirty,
-            watcher: Arc::new(Mutex::new(WatchState::new(watcher))),
+            watcher: Arc::new(Mutex::new(watcher)),
             missing_path: crate::retry_budget::RetryBudget::default(),
             listed: HashMap::new(),
             listed_for: None,
@@ -437,43 +412,4 @@ async fn load(input: LoadInput<'_>) -> anyhow::Result<Loaded> {
         context,
         directories,
     })
-}
-
-/// Swaps watched paths when the targets or their identities changed and
-/// records them in the shared state. Returns whether watching fell back to
-/// polling; a failed watch keeps polling until a later swap succeeds.
-pub(super) fn rewatch(state: &Mutex<WatchState>, targets: Watches) -> bool {
-    let identities: Vec<_> = targets.iter().map(|(path, _)| identity(path)).collect();
-    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-    let WatchState {
-        watcher,
-        watched,
-        identities: current,
-        failed,
-    } = &mut *state;
-    let Some(watcher) = watcher.as_mut() else {
-        return true;
-    };
-    if *watched == targets && *current == identities {
-        return *failed;
-    }
-    for (path, _) in watched.drain(..) {
-        let _ = watcher.unwatch(&path);
-    }
-    *failed = false;
-    for (path, mode) in &targets {
-        if watcher.watch(path, *mode).is_err() {
-            *failed = true;
-        }
-    }
-    *watched = targets;
-    *current = identities;
-    *failed
-}
-
-fn identity(path: &std::path::Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(path)
-        .ok()
-        .map(|metadata| (metadata.dev(), metadata.ino()))
 }
