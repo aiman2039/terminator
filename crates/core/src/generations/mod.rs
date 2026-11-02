@@ -4,6 +4,7 @@ mod error;
 #[cfg(test)]
 mod generations_tests;
 mod migration;
+mod owner_index;
 mod ownership;
 mod recovery;
 

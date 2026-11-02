@@ -72,22 +72,31 @@ impl Client {
     }
 
     /// Wraps a request for a retired owner's session in `Request::Archived`.
-    pub(super) async fn route_archived(&self, request: Request) -> Result<Request> {
+    /// Also returns the owner resolved for an unwrapped request, so routing
+    /// reads the owners' stores once per request rather than twice.
+    pub(super) async fn route_archived(
+        &self,
+        request: Request,
+    ) -> Result<(Request, Option<Paths>)> {
         let paths = self.paths.clone();
         self.catalog
             .run(&CancellationToken::new(), move || {
-                if let Some(owner) = archived_generation(&paths, &request)?
+                let catalog = generations::Catalog::open(&paths)?;
+                let active = catalog.active()?;
+                let target = generations::owner_for(&paths, &request)?;
+                if let Some(owner) = archived_owner(&catalog, active.as_deref(), &target)?
                     && !matches!(
                         request,
                         Request::Archived { .. } | Request::Shutdown | Request::ShutdownIfIdle
                     )
                 {
-                    return Ok(Request::Archived {
+                    let archived = Request::Archived {
                         generation: owner,
                         request: Box::new(request),
-                    });
+                    };
+                    return Ok((archived, None));
                 }
-                Ok(request)
+                Ok((request, Some(target)))
             })
             .await
     }

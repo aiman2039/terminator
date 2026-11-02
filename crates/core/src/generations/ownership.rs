@@ -5,7 +5,7 @@ use fs2::FileExt;
 use std::os::unix::fs::OpenOptionsExt;
 
 use super::catalog::{Catalog, Generation, Status, exists};
-use super::recovery::saved;
+use super::owner_index::owner_index;
 
 pub(super) fn process_alive(pid: u32) -> bool {
     crate::signals::process_alive(pid)
@@ -162,30 +162,24 @@ fn find_session_owner(input: FindSessionOwnerInput<'_>) -> Result<Option<Paths>>
         if owner.status == Status::Prepared {
             continue;
         }
-        let state = match saved(&owner.paths()) {
-            Ok(state) => state,
+        let index = match owner_index(&owner.paths()) {
+            Ok(index) => index,
             Err(error) => {
                 unreadable.get_or_insert((owner.id.clone(), error));
                 continue;
             }
         };
         let matches = match request {
-            Request::Notice { id, .. } => state.notifications.iter().any(|n| &n.id == id),
-            Request::DismissTerminalNotice { id } => {
-                state.terminal_notices.iter().any(|n| &n.id == id)
-            }
+            Request::Notice { id, .. } => index.notifications.contains(id),
+            Request::DismissTerminalNotice { id } => index.terminal_notices.contains(id),
             Request::VncDisconnect { .. }
             | Request::VncInput { .. }
             | Request::VncFrame { .. }
             | Request::VncTransfer { .. }
-            | Request::VncTransferStatus { .. } => state
-                .vnc_sessions
-                .iter()
-                .any(|s| Some(s.id.as_str()) == vnc_session),
-            _ => state
-                .sessions
-                .iter()
-                .any(|s| Some(s.id.as_str()) == session),
+            | Request::VncTransferStatus { .. } => {
+                vnc_session.is_some_and(|id| index.vnc_sessions.contains(id))
+            }
+            _ => session.is_some_and(|id| index.sessions.contains(id)),
         };
         if matches {
             return Ok(Some(owner.paths()));

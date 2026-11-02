@@ -470,6 +470,40 @@ mod tests {
         assert!(preserved.sessions[0].lifecycle.live());
     }
 
+    /// Backdate the store so the routing index treats it as settled and caches it.
+    fn settle(g: &Generation) {
+        let old = std::time::SystemTime::UNIX_EPOCH;
+        for name in ["state.sqlite3", "state.sqlite3-wal"] {
+            if let Ok(file) = fs::File::options().write(true).open(g.data.join(name)) {
+                file.set_modified(old).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn routing_sees_a_session_saved_after_the_owner_index_was_cached() {
+        let (_dir, paths, mut catalog) = fixture();
+        let a = owner(&paths, &catalog);
+        catalog.activate(&a.id).unwrap();
+        let first = session(&a.id, Lifecycle::Running);
+        let mut state = State {
+            generation: a.id.clone(),
+            sessions: vec![first.clone()],
+            ..Default::default()
+        };
+        save(&a, &state);
+        settle(&a);
+        let stop = |id: &str| Request::Stop { session: id.into() };
+        assert_eq!(owner_for(&paths, &stop(&first.id)).unwrap().data, a.data);
+        let second = session(&a.id, Lifecycle::Running);
+        state.sessions.push(second.clone());
+        save(&a, &state);
+        assert_eq!(owner_for(&paths, &stop(&second.id)).unwrap().data, a.data);
+        settle(&a);
+        assert_eq!(owner_for(&paths, &stop(&second.id)).unwrap().data, a.data);
+        assert_eq!(owner_for(&paths, &stop(&first.id)).unwrap().data, a.data);
+    }
+
     #[test]
     fn draining_owner_cannot_overwrite_shared_workspace() {
         let (_dir, paths, mut catalog) = fixture();

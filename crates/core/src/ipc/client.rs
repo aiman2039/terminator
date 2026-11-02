@@ -181,14 +181,23 @@ fn fanout_owners(paths: &Paths, request: &Request) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn archived_generation(paths: &Paths, request: &Request) -> Result<Option<String>> {
+fn archived_generation(paths: &Paths, request: &Request) -> Result<Option<String>> {
     let catalog = generations::Catalog::open(paths)?;
     let active = catalog.active()?;
     let target = generations::owner_for(paths, request)?;
+    archived_owner(&catalog, active.as_deref(), &target)
+}
+
+/// The retired generation whose data directory is `target`, if any.
+pub(crate) fn archived_owner(
+    catalog: &generations::Catalog,
+    active: Option<&str>,
+    target: &Paths,
+) -> Result<Option<String>> {
     Ok(catalog
         .generations()?
         .into_iter()
-        .find(|g| g.data == target.data && generations::historical(g, active.as_deref()))
+        .find(|g| g.data == target.data && generations::historical(g, active))
         .map(|g| g.id))
 }
 

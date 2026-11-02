@@ -13,6 +13,50 @@ use terminator_core::async_client::AsyncClientError;
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use terminator_core::generations::Health;
 use terminator_core::{Response, SnapshotHint, State};
+use tokio::sync::oneshot;
+
+/// Project availability: (id, path, is an available directory).
+type Directories = Vec<(String, PathBuf, bool)>;
+
+/// Project paths may sit on a hung network mount, so each stat runs on its
+/// own thread and is polled without waiting. A stuck stat must not occupy
+/// the catalog worker that routes every daemon request, nor stall snapshot
+/// polling. At most one probe runs; a hung one blocks only later probes.
+#[derive(Default)]
+struct DirectoryProbe(Option<oneshot::Receiver<Directories>>);
+
+impl DirectoryProbe {
+    fn pending(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// The finished probe's result, without blocking.
+    fn finished(&mut self) -> Option<Directories> {
+        let result = self.0.as_mut()?.try_recv();
+        match result {
+            Ok(directories) => {
+                self.0 = None;
+                Some(directories)
+            }
+            Err(oneshot::error::TryRecvError::Empty) => None,
+            Err(oneshot::error::TryRecvError::Closed) => {
+                self.0 = None;
+                None
+            }
+        }
+    }
+
+    fn start(&mut self, probe: impl FnOnce() -> Directories + Send + 'static) -> Result<()> {
+        let (sender, receiver) = oneshot::channel();
+        std::thread::Builder::new()
+            .name("gui-project-stat".into())
+            .spawn(move || {
+                let _ = sender.send(probe());
+            })?;
+        self.0 = Some(receiver);
+        Ok(())
+    }
+}
 
 /// One snapshot poll reply.
 type SnapshotResult = std::result::Result<Response, AsyncClientError>;
@@ -28,6 +72,7 @@ struct SnapshotPoller {
     projects: Vec<(String, PathBuf)>,
     previous_directories: Vec<(String, PathBuf, bool)>,
     directory_check: Instant,
+    directory_probe: DirectoryProbe,
     appearance_source: Option<String>,
     config_check: Instant,
 }
@@ -62,6 +107,7 @@ impl SnapshotPoller {
             projects: Vec::new(),
             previous_directories: Vec::new(),
             directory_check: Instant::now(),
+            directory_probe: DirectoryProbe::default(),
             appearance_source: None,
             config_check: Instant::now()
                 .checked_sub(Duration::from_secs(3))
@@ -233,17 +279,17 @@ impl SnapshotPoller {
     }
 
     async fn check_directories(&mut self) -> Result<ControlFlow<()>> {
-        if self.directory_check.elapsed() < Duration::from_secs(1) {
+        let Some(directories) = self.directory_probe.finished() else {
+            if !self.directory_probe.pending()
+                && self.directory_check.elapsed() >= Duration::from_secs(1)
+            {
+                self.directory_check = Instant::now();
+                let paths = self.projects.clone();
+                self.directory_probe
+                    .start(move || project_directories(paths))?;
+            }
             return Ok(ControlFlow::Continue(()));
-        }
-        self.directory_check = Instant::now();
-        let paths = self.projects.clone();
-        let directories = self
-            .service
-            .client()
-            .catalog
-            .run(&self.token, move || anyhow::Ok(project_directories(paths)))
-            .await?;
+        };
         if directories == self.previous_directories {
             return Ok(ControlFlow::Continue(()));
         }
@@ -304,5 +350,35 @@ impl SnapshotPoller {
             Err(error) => Update::Error(format!("Appearance: {error:#}")),
         };
         Ok(self.emit_event(update).await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hung_project_stat_does_not_block_the_poller() {
+        let mut probe = DirectoryProbe::default();
+        let (release, hung) = std::sync::mpsc::channel::<()>();
+        probe
+            .start(move || {
+                let _ = hung.recv();
+                vec![("a".into(), "/a".into(), true)]
+            })
+            .unwrap();
+        assert!(probe.pending());
+        assert_eq!(probe.finished(), None);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let directories = loop {
+            if let Some(directories) = probe.finished() {
+                break directories;
+            }
+            assert!(Instant::now() < deadline, "probe never finished");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(directories, vec![("a".into(), "/a".into(), true)]);
+        assert!(!probe.pending());
     }
 }
