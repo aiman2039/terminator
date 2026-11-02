@@ -440,6 +440,8 @@ fn dirty_file_then_shell(app: &mut App, dir: &std::path::Path) -> PathBuf {
     let workspace = app.layouts.get_mut("a").unwrap();
     workspace.add("t0".into(), Tab::NativeEditor { path: path.clone() });
     workspace.add("t1".into(), Tab::Terminal("s1".into()));
+    // A workspace keeps its last tab; this one stays open.
+    workspace.add("t2".into(), Tab::Terminal("s2".into()));
     app.native_docs.insert(
         path.clone(),
         crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
