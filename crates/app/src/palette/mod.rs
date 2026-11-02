@@ -64,7 +64,10 @@ pub(crate) struct PaletteCache {
     filters: u8,
     project: Option<String>,
     scope: Option<PathBuf>,
-    items: Vec<PaletteItem>,
+    /// Shared so a frame borrows rows without a per-frame clone (#177).
+    items: std::sync::Arc<[PaletteItem]>,
+    /// Row details, computed once per cache build instead of per frame.
+    details: std::sync::Arc<[String]>,
 }
 
 #[derive(Clone, Debug)]

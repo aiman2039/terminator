@@ -551,3 +551,22 @@ fn file_structure_lists_the_scoped_outline_in_order() {
     app.palette.query = "pa".into();
     assert_eq!(symbol_names(&app.filtered_palette()), ["parse"]);
 }
+
+#[test]
+fn palette_frames_share_cached_rows_and_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+    app.palette.open = true;
+    app.refresh_palette_cache();
+    let first = std::sync::Arc::clone(&app.palette.cache.as_ref().unwrap().items);
+    app.refresh_palette_cache();
+    let cache = app.palette.cache.as_ref().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &cache.items));
+    assert_eq!(cache.details.len(), first.len());
+}
+
+#[test]
+fn keyboard_selection_scrolls_the_row_to_the_viewport_center() {
+    assert_eq!(center::palette_scroll_offset(0, 20.0, 200.0), 0.0);
+    assert_eq!(center::palette_scroll_offset(50, 20.0, 200.0), 910.0);
+}

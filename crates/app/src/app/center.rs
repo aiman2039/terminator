@@ -51,54 +51,6 @@ impl App {
         self.ssh_page_or_vnc_center(ui);
     }
 
-    pub(crate) fn search_history_center(&mut self, ui: &mut egui::Ui) {
-        let Some(sid) = self.search_session.clone() else {
-            self.close_scrollback_search();
-            return;
-        };
-        ui.set_min_size(ui.available_size());
-        ui.horizontal(|ui| {
-            ui.strong("Search session history");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if appearance::sidebar_action(ui, "X", "Close").clicked() {
-                    self.close_scrollback_search();
-                }
-            });
-        });
-        ui.add_space(6.0);
-        ui.add(
-            appearance::singleline(&mut self.search)
-                .id(egui::Id::unique("scrollback-search"))
-                .hint_text("Search scrollback…")
-                .desired_width(400.0),
-        );
-        ui.add_space(8.0);
-        let key = format!("history:{sid}");
-        if !self.texts.contains_key(&key) && self.loading.insert(key.clone()) {
-            let _ = self.jobs.send(Job::rpc(
-                Request::History {
-                    session: sid.clone(),
-                },
-                After::Text(key.clone()),
-            ));
-        }
-        egui::ScrollArea::both().show(ui, |ui| {
-            if let Some(text) = self.texts.get(&key) {
-                let needle = self.search.to_lowercase();
-                for (line, text) in text
-                    .lines()
-                    .enumerate()
-                    .filter(|(_, l)| l.to_lowercase().contains(&needle))
-                    .take(2000)
-                {
-                    ui.monospace(format!("{}  {}", line.saturating_add(1), text));
-                }
-            } else {
-                ui.weak("Loading scrollback…");
-            }
-        });
-    }
-
     pub(crate) fn worktree_management_center(&mut self, ui: &mut egui::Ui) {
         ui.set_min_size(ui.available_size());
         ui.horizontal(|ui| {

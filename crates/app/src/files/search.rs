@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use terminator_core::async_service::CancellationToken;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Query {
@@ -128,8 +129,14 @@ pub(crate) fn truncate(line: &str) -> String {
 }
 
 /// Search `root` for `query.text`. `show_ignored` disables Git ignore rules,
-/// matching the Explorer's ignored-file toggle.
-pub fn run(root: &Path, query: &Query, show_ignored: bool) -> Result<Vec<Hit>, String> {
+/// matching the Explorer's ignored-file toggle. A newer query cancels
+/// `cancel`, and the walk stops before its next file (#175).
+pub fn run(
+    root: &Path,
+    query: &Query,
+    show_ignored: bool,
+    cancel: &CancellationToken,
+) -> Result<Vec<Hit>, String> {
     let regex = build_regex(query)?;
     let include = build_set(&split_patterns(&query.include));
     let exclude = build_set(&split_patterns(&query.exclude));
@@ -153,7 +160,10 @@ pub fn run(root: &Path, query: &Query, show_ignored: bool) -> Result<Vec<Hit>, S
         });
     }
     let mut hits = Vec::new();
-    'outer: for entry in walker.build() {
+    for entry in walker.build() {
+        if cancel.is_cancelled() {
+            return Err("Search cancelled".into());
+        }
         let Ok(entry) = entry else {
             continue;
         };
@@ -165,33 +175,39 @@ pub fn run(root: &Path, query: &Query, show_ignored: bool) -> Result<Vec<Hit>, S
         if !matches(&include, &exclude, relative) {
             continue;
         }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.len() > MAX_FILE_BYTES {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(path) else {
-            continue;
-        };
-        if bytes.contains(&0) {
-            continue;
-        }
-        let text = String::from_utf8_lossy(&bytes);
-        for (index, line) in text.lines().enumerate() {
-            if regex.is_match(line) {
-                hits.push(Hit {
-                    path: path.to_path_buf(),
-                    line: u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1),
-                    text: truncate(line),
-                });
-                if hits.len() >= MAX_HITS {
-                    break 'outer;
-                }
-            }
+        if entry
+            .metadata()
+            .is_ok_and(|meta| meta.len() <= MAX_FILE_BYTES)
+            && search_file(path, &regex, &mut hits)
+        {
+            break;
         }
     }
     Ok(hits)
+}
+
+/// Appends the matching lines of one text file; true when `MAX_HITS` is full.
+fn search_file(path: &Path, regex: &Regex, hits: &mut Vec<Hit>) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    if bytes.contains(&0) {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    for (index, line) in text.lines().enumerate() {
+        if regex.is_match(line) {
+            hits.push(Hit {
+                path: path.to_path_buf(),
+                line: u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1),
+                text: truncate(line),
+            });
+            if hits.len() >= MAX_HITS {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -215,7 +231,7 @@ mod tests {
             text: "find.me".into(),
             ..Default::default()
         };
-        let hits = run(dir.path(), &query, false).unwrap();
+        let hits = run(dir.path(), &query, false, &CancellationToken::new()).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].line, 2);
         assert_eq!(hits[0].text, "find.me here");
@@ -230,19 +246,34 @@ mod tests {
             match_case: true,
             ..Default::default()
         };
-        assert_eq!(run(dir.path(), &query, false).unwrap().len(), 1);
+        assert_eq!(
+            run(dir.path(), &query, false, &CancellationToken::new())
+                .unwrap()
+                .len(),
+            1
+        );
         let query = Query {
             text: "find".into(),
             whole_word: true,
             ..Default::default()
         };
-        assert_eq!(run(dir.path(), &query, false).unwrap().len(), 2);
+        assert_eq!(
+            run(dir.path(), &query, false, &CancellationToken::new())
+                .unwrap()
+                .len(),
+            2
+        );
         let query = Query {
             text: "f.n.".into(),
             use_regex: true,
             ..Default::default()
         };
-        assert_eq!(run(dir.path(), &query, false).unwrap().len(), 3);
+        assert_eq!(
+            run(dir.path(), &query, false, &CancellationToken::new())
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -257,7 +288,7 @@ mod tests {
             exclude: "dist/**".into(),
             ..Default::default()
         };
-        let hits = run(dir.path(), &query, false).unwrap();
+        let hits = run(dir.path(), &query, false, &CancellationToken::new()).unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].path.ends_with("src/a.ts"));
     }
@@ -270,6 +301,23 @@ mod tests {
             text: "nee".into(),
             ..Default::default()
         };
-        assert!(run(dir.path(), &query, false).unwrap().is_empty());
+        assert!(
+            run(dir.path(), &query, false, &CancellationToken::new())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cancelled_search_stops_without_results() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.txt", "needle\n");
+        let query = Query {
+            text: "needle".into(),
+            ..Default::default()
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert!(run(dir.path(), &query, false, &cancel).is_err());
     }
 }

@@ -305,6 +305,9 @@ pub struct App {
     pub(crate) rename_group_focus: bool,
     pub(crate) editor_origins: HashMap<String, Vec<Tab>>,
     pub(crate) search: String,
+    pub(crate) scrollback_hits: crate::app::ScrollbackHits,
+    /// Commands page filter; separate from the scrollback query (#201).
+    pub(crate) commands_filter: String,
     pub(crate) search_session: Option<String>,
     pub(crate) search_open: bool,
     /// Terminal whose shell integration commands fill the main pane.

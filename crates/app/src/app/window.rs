@@ -156,7 +156,7 @@ pub(crate) struct PaneIndex {
 }
 /// Live in-terminal find state for one session. Matches reference live grid
 /// coordinates and go stale as output streams; the view recomputes them on a
-/// throttle (see `terminal_view`).
+/// throttle when new output arrives (see `terminal_find_bar`).
 #[derive(Default)]
 pub struct TerminalFind {
     pub query: String,
@@ -166,11 +166,32 @@ pub struct TerminalFind {
     pub searched_query: String,
     pub searched_case: bool,
     pub last_search: Option<Instant>,
+    /// Terminal output arrived after the last search.
+    pub content_stale: bool,
 }
+
+/// Shortest gap between two rescans caused by streaming output.
+pub const TERMINAL_FIND_RESCAN: std::time::Duration = std::time::Duration::from_millis(250);
 
 impl TerminalFind {
     pub fn dirty(&self) -> bool {
         self.query != self.searched_query || self.case_insensitive != self.searched_case
+    }
+
+    /// `None` when the matches are current; otherwise the wait before the
+    /// next rescan (zero means now). New output rescans at most every
+    /// `TERMINAL_FIND_RESCAN`; query or option edits rescan at once.
+    pub fn rescan_in(&self, now: Instant) -> Option<std::time::Duration> {
+        if self.dirty() {
+            return Some(std::time::Duration::ZERO);
+        }
+        if self.query.is_empty() || !self.content_stale {
+            return None;
+        }
+        let elapsed = self
+            .last_search
+            .map_or(TERMINAL_FIND_RESCAN, |at| now.saturating_duration_since(at));
+        Some(TERMINAL_FIND_RESCAN.saturating_sub(elapsed))
     }
 
     pub fn step(&mut self, delta: isize) {

@@ -280,6 +280,8 @@ impl App {
             rename_group_focus: false,
             editor_origins: HashMap::new(),
             search: String::new(),
+            scrollback_hits: crate::app::ScrollbackHits::default(),
+            commands_filter: String::new(),
             search_session: None,
             search_open: false,
             commands_session: None,

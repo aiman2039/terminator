@@ -248,11 +248,9 @@ impl Viewer<'_> {
     }
 
     /// In-terminal find bar. Search runs GUI-side over the live grid plus
-    /// retained scrollback and never writes to the PTY.
+    /// retained scrollback and never writes to the PTY. It rescans only when
+    /// the query or case option changes, or when new output arrived (#176).
     pub(super) fn terminal_find_bar(&mut self, ui: &mut egui::Ui, sid: &str) {
-        if !self.app.terminal_find.contains_key(sid) {
-            return;
-        }
         let mut close = false;
         let mut reveal: Option<i32> = None;
         {
@@ -273,41 +271,13 @@ impl Viewer<'_> {
                 if response.changed() {
                     find.current = 0;
                 }
-                let case_label = if find.case_insensitive { "aa" } else { "Aa" };
-                if ui
-                    .small_button(case_label)
-                    .on_hover_text("Match case")
-                    .clicked()
-                {
-                    find.case_insensitive = !find.case_insensitive;
-                    find.current = 0;
-                }
-                let now = Instant::now();
-                let stale = find
-                    .last_search
-                    .is_none_or(|t| now.duration_since(t).as_millis() > 250);
-                if find.dirty() || (stale && !find.query.is_empty()) {
-                    let was_dirty = find.dirty();
-                    find.outcome = backend.find(&find.query, find.case_insensitive);
-                    find.searched_query.clone_from(&find.query);
-                    find.searched_case = find.case_insensitive;
-                    find.last_search = Some(now);
-                    if was_dirty {
-                        find.current = 0;
-                    } else {
-                        find.current = find
-                            .current
-                            .min(find.outcome.matches.len().saturating_sub(1));
-                    }
-                    if let Some(hit) = find.outcome.matches.get(find.current) {
-                        reveal = Some(hit.line);
-                    }
-                }
+                Self::find_case_toggle(ui, find);
+                reveal = Self::find_rescan(ui, find, backend);
                 let (nav_reveal, nav_close) = Self::find_bar_nav(ui, find, &response);
                 if nav_reveal.is_some() {
                     reveal = nav_reveal;
                 }
-                close = close || nav_close;
+                close = nav_close;
             });
         }
         if let Some(line) = reveal
@@ -320,13 +290,54 @@ impl Viewer<'_> {
         }
     }
 
+    /// Frameless toggle that shows its selected state while matching case.
+    fn find_case_toggle(ui: &mut egui::Ui, find: &mut TerminalFind) {
+        if appearance::selectable_icon(appearance::SelectableIconInput {
+            ui,
+            icon: "CaseSensitive",
+            tip: "Match case",
+            selected: !find.case_insensitive,
+        })
+        .clicked()
+        {
+            find.case_insensitive = !find.case_insensitive;
+            find.current = 0;
+        }
+    }
+
+    /// Re-runs find when due; returns the line of the current hit to reveal.
+    fn find_rescan(
+        ui: &egui::Ui,
+        find: &mut TerminalFind,
+        backend: &egui_term::TerminalBackend,
+    ) -> Option<i32> {
+        let now = Instant::now();
+        let wait = find.rescan_in(now)?;
+        if !wait.is_zero() {
+            ui.ctx().request_repaint_after(wait);
+            return None;
+        }
+        let was_dirty = find.dirty();
+        find.outcome = backend.find(&find.query, find.case_insensitive);
+        find.searched_query.clone_from(&find.query);
+        find.searched_case = find.case_insensitive;
+        find.last_search = Some(now);
+        find.content_stale = false;
+        find.current = if was_dirty {
+            0
+        } else {
+            find.current
+                .min(find.outcome.matches.len().saturating_sub(1))
+        };
+        find.outcome.matches.get(find.current).map(|hit| hit.line)
+    }
+
     fn find_bar_nav(
         ui: &mut egui::Ui,
         find: &mut TerminalFind,
         response: &egui::Response,
     ) -> (Option<i32>, bool) {
         let mut reveal = None;
-        let mut close = false;
         let total = find.outcome.matches.len();
         let label = if find.query.is_empty() {
             String::new()
@@ -341,32 +352,22 @@ impl Viewer<'_> {
         };
         ui.monospace(label);
         let shift = ui.input(|i| i.modifiers.shift);
-        if ui
-            .small_button("↑")
-            .on_hover_text("Previous (Shift+Enter)")
-            .clicked()
-            || (response.has_focus() && shift && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+        let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if appearance::sidebar_action(ui, "ArrowUp", "Previous (Shift+Enter)").clicked()
+            || (enter && shift)
         {
             find.step(-1);
             reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
         }
-        if ui.small_button("↓").on_hover_text("Next (Enter)").clicked()
-            || (response.has_focus() && !shift && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+        if appearance::sidebar_action(ui, "ArrowDown", "Next (Enter)").clicked()
+            || (enter && !shift)
         {
             find.step(1);
             reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
         }
-        if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {
-            close = true;
-        }
-        if response.has_focus()
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            close = true;
-        }
-        if response.has_focus() {
-            ui.ctx().request_repaint_after(Duration::from_millis(250));
-        }
+        let close = appearance::sidebar_action(ui, "X", "Close (Esc)").clicked()
+            || (response.has_focus()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)));
         (reveal, close)
     }
 }
