@@ -131,35 +131,21 @@ pub(super) fn operation(
     })
 }
 
+/// Lists at most `MAX_ENTRIES` children. Names that are not UTF-8 or not a
+/// valid single path component are skipped, so one odd name or a huge
+/// folder does not make the whole directory unbrowsable (#239).
 async fn list_directory(fs: &mut Fs, project: &RemoteProject, path: String) -> Result<Reply> {
     let actual = contained(fs, project, &path).await?;
     let directory = fs.open_dir(actual).await?;
     let mut stream = Box::pin(directory.read_dir());
     let mut entries = Vec::new();
-    while let Some(entry) = stream.next().await {
+    while entries.len() < MAX_ENTRIES
+        && let Some(entry) = stream.next().await
+    {
         let entry = entry?;
-        let name = entry
-            .filename()
-            .to_str()
-            .context("Remote file names must be UTF-8")?
-            .to_owned();
-        if name == "." || name == ".." {
+        let Some((name, child)) = child_path(&path, entry.filename().to_str()) else {
             continue;
-        }
-        ensure!(
-            !name.contains('/'),
-            "Remote server returned a non-child directory entry"
-        );
-        let child = if path.is_empty() {
-            name.clone()
-        } else {
-            format!("{path}/{name}")
         };
-        terminator_core::remote::validate_relative(&child)?;
-        ensure!(
-            entries.len() < MAX_ENTRIES,
-            "Remote directory exceeds 1000 entries"
-        );
         entries.push(Entry {
             name,
             path: child,
@@ -170,6 +156,18 @@ async fn list_directory(fs: &mut Fs, project: &RemoteProject, path: String) -> R
     }
     entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.name.cmp(&b.name)));
     Ok(Reply::Directory { path, entries })
+}
+/// The name and project-relative path of a listed child, or `None` when
+/// the entry must be skipped.
+fn child_path(parent: &str, name: Option<&str>) -> Option<(String, String)> {
+    let name = name.filter(|n| !matches!(*n, "" | "." | "..") && !n.contains('/'))?;
+    let child = if parent.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{parent}/{name}")
+    };
+    terminator_core::remote::validate_relative(&child).ok()?;
+    Some((name.to_owned(), child))
 }
 struct DispatchOperationInput<'a> {
     sftp: &'a Sftp,
@@ -206,7 +204,19 @@ async fn dispatch_operation(input: DispatchOperationInput<'_>) -> Result<Reply> 
 
 #[cfg(test)]
 mod tests {
-    use super::within;
+    use super::{child_path, within};
+    #[test]
+    fn listing_skips_non_utf8_and_invalid_names() {
+        assert_eq!(
+            child_path("src", Some("main.rs")),
+            Some(("main.rs".into(), "src/main.rs".into()))
+        );
+        assert_eq!(child_path("", Some("a")), Some(("a".into(), "a".into())));
+        assert_eq!(child_path("src", None), None);
+        assert_eq!(child_path("src", Some("..")), None);
+        assert_eq!(child_path("src", Some("a/b")), None);
+        assert_eq!(child_path("src", Some("bad\nname")), None);
+    }
     #[test]
     fn resolved_paths_must_stay_under_the_project_root() {
         assert!(within("/srv/app", "/srv/app"));

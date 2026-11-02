@@ -654,5 +654,6 @@ fn async_close_completion_keeps_a_buffer_that_became_dirty() {
     assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == tab_id));
     assert!(app.native_dirty(&path));
     assert!(matches!(&app.native_close_prompt, Some((p, None)) if *p == path));
-    assert!(app.close_workspace.is_none());
+    // The close waits on the prompt instead of being dropped.
+    assert_eq!(app.close_workspace, Some(("a".into(), tab_id)));
 }

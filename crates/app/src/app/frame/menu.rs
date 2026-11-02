@@ -56,7 +56,17 @@ impl App {
                 self.open_agents_inbox();
             }
         }
-        updater::sync_status_menu(&self.status_menu_items());
+        // The cached sidebar index is rebuilt only when notices or
+        // sessions change; rebuild the menu items only then.
+        let index = self.sidebar_index();
+        let seen = self
+            .status_menu_index
+            .as_ref()
+            .is_some_and(|shown| std::sync::Arc::ptr_eq(shown, &index));
+        if !seen {
+            updater::sync_status_menu(&self.status_menu_items());
+            self.status_menu_index = Some(index);
+        }
         if let Some(id) = updater::take_status_selection() {
             self.focus_status_notice(ctx, &id);
         }

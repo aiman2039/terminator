@@ -161,6 +161,34 @@ fn a_missing_server_stops_per_frame_resubmits() {
 }
 
 #[test]
+fn tracked_doc_reuses_its_root_without_walking_again() {
+    let mut manager = LspManager::trusting();
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "rust".to_owned(),
+        "/nonexistent/terminator-test-rust-analyzer".to_owned(),
+    );
+    manager.set_server_overrides(&overrides);
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
+    let path = dir.path().join("src/main.rs");
+    let submit = |manager: &mut LspManager, revision| {
+        manager.submit_text(SubmitTextInput {
+            path: &path,
+            language: Language::Rust,
+            revision,
+            text: "fn main() {}",
+        });
+    };
+    submit(&mut manager, 1);
+    let first = manager.docs[&path].server.root.clone();
+    // A new marker would change a fresh walk; the cached root must stay.
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]").expect("manifest");
+    submit(&mut manager, 2);
+    assert_eq!(manager.docs[&path].server.root, first);
+}
+
+#[test]
 fn debounce_fires_without_further_edits() {
     let mut manager = LspManager::trusting();
     let path = crate::test_path("/tmp/debounced.rs");

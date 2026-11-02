@@ -247,6 +247,26 @@ impl SpectrumWindow {
     }
 }
 
+/// Samples decoded between control checks in the decode loop.
+const DECODE_BATCH: usize = 1024;
+/// Status and spectrum report interval while playing.
+const REPORT_INTERVAL: Duration = Duration::from_millis(50);
+/// Idle wait with a full ring while paused: nothing drains the ring and
+/// the reports do not change, so wake rarely. The ring holds two seconds,
+/// so resume plays from it before the decoder wakes.
+const PAUSED_WAIT: Duration = Duration::from_millis(250);
+const MIN_WAIT: Duration = Duration::from_millis(5);
+
+/// How long the decoder sleeps when the ring is full (or at end of
+/// input): until the next report while playing, longer while paused.
+fn idle_wait(paused: bool, since_report: Duration) -> Duration {
+    if paused {
+        PAUSED_WAIT
+    } else {
+        REPORT_INTERVAL.saturating_sub(since_report).max(MIN_WAIT)
+    }
+}
+
 /// Decoder-side state for one playback: fills the PCM ring, starts output
 /// once enough is buffered, and reports status and spectrum.
 struct DecodeLoop<'a> {
@@ -287,20 +307,32 @@ impl DecodeLoop<'_> {
             {
                 break;
             }
-            self.decode_next();
+            self.decode_batch();
             self.start_output_when_buffered()?;
-            if self.tick.elapsed() >= Duration::from_millis(50) && !self.report() {
+            if self.tick.elapsed() >= REPORT_INTERVAL && !self.report() {
                 continue;
             }
             if self.eof && self.counters.drained.load(Ordering::Acquire) {
                 break;
             }
             if self.next.is_some() || self.eof {
-                std::thread::sleep(Duration::from_millis(5));
+                let paused = self.controls.paused.load(Ordering::Acquire);
+                std::thread::sleep(idle_wait(paused, self.tick.elapsed()));
             }
         }
         drop(self.output);
         Ok(())
+    }
+
+    /// Decode up to [`DECODE_BATCH`] samples, so the loop's control
+    /// checks run per batch, not per sample. Stops when the ring is full.
+    fn decode_batch(&mut self) {
+        for _ in 0..DECODE_BATCH {
+            self.decode_next();
+            if self.next.is_some() || self.eof {
+                break;
+            }
+        }
     }
 
     /// Pull the next sample (unless one is pending) and push it to the ring.
@@ -392,5 +424,25 @@ impl DecodeLoop<'_> {
                 seekable,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paused_full_ring_wakes_rarely() {
+        assert!(idle_wait(true, Duration::ZERO) >= Duration::from_millis(200));
+    }
+
+    #[test]
+    fn playing_full_ring_waits_until_the_next_report() {
+        assert_eq!(idle_wait(false, Duration::ZERO), REPORT_INTERVAL);
+        assert_eq!(
+            idle_wait(false, Duration::from_millis(30)),
+            Duration::from_millis(20)
+        );
+        assert_eq!(idle_wait(false, Duration::from_secs(1)), MIN_WAIT);
     }
 }

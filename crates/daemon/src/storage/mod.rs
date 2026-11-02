@@ -158,6 +158,7 @@ struct Writer {
     file: std::io::BufWriter<fs::File>,
     path: PathBuf,
     opened: std::time::Instant,
+    written: std::time::Instant,
 }
 /// All retained-file mutations are owned by the history worker.
 pub struct History {
@@ -244,11 +245,12 @@ impl History {
         let chunk = data
             .get(..n)
             .ok_or_else(|| anyhow!("History write is out of range"))?;
-        self.writers
+        let writer = self
+            .writers
             .get_mut(session)
-            .ok_or_else(|| anyhow!("Missing history writer"))?
-            .file
-            .write_all(chunk)?;
+            .ok_or_else(|| anyhow!("Missing history writer"))?;
+        writer.file.write_all(chunk)?;
+        writer.written = std::time::Instant::now();
         let bytes = u64::try_from(n).map_err(|_| anyhow!("History write does not fit"))?;
         let segment = self
             .segments
@@ -311,14 +313,21 @@ impl History {
                 file: std::io::BufWriter::with_capacity(65536, file),
                 path,
                 opened: std::time::Instant::now(),
+                written: std::time::Instant::now(),
             },
         );
         Ok(())
     }
+    /// Flushes all writers and closes those idle for 30 s, so ended
+    /// sessions do not keep a file and buffer open (#238).
     pub fn flush(&mut self) -> Result<()> {
+        self.flush_closing_idle(std::time::Duration::from_secs(30))
+    }
+    fn flush_closing_idle(&mut self, idle: std::time::Duration) -> Result<()> {
         for writer in self.writers.values_mut() {
             writer.file.flush()?;
         }
+        self.writers.retain(|_, w| w.written.elapsed() < idle);
         Ok(())
     }
     pub fn exceeds(&self, settings: &Settings) -> bool {
@@ -461,10 +470,9 @@ pub fn text(paths: &Paths, session: &Session) -> Result<String> {
             parser.process(chunk);
         }
     }
-    Ok(screen_text(parser.screen(), 10_000))
+    Ok(screen_text(parser.screen().clone(), 10_000))
 }
-pub fn screen_text(screen: &vt100::Screen, limit: usize) -> String {
-    let mut screen = screen.clone();
+pub fn screen_text(mut screen: vt100::Screen, limit: usize) -> String {
     screen.set_scrollback(limit);
     let max = screen.scrollback();
     let (rows, cols) = screen.size();

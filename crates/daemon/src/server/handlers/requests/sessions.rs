@@ -190,7 +190,9 @@ impl Shared {
             .cloned()
             .context("Unknown session")?;
         let text = if let Ok(rt) = self.runtime(session) {
-            storage::screen_text(relock(&rt).parser.screen(), 10_000)
+            // Copy under the lock; walk scrollback after releasing it (#237).
+            let screen = relock(&rt).parser.screen().clone();
+            storage::screen_text(screen, 10_000)
         } else {
             self.flush_history()?;
             storage::text(&self.paths, &record)?

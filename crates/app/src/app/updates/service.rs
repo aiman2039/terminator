@@ -124,7 +124,7 @@ impl App {
         }
         match result {
             Ok(()) => {
-                self.exit = exit::Exit::Ready;
+                self.finish_exit();
                 updater::complete_termination(ctx);
             }
             Err(e) => self.cancel_exit(e),

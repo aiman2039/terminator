@@ -28,6 +28,8 @@ mod projects;
 pub(crate) use projects::InsertFloatInput;
 #[cfg(test)]
 mod repaint_tests;
+mod scrollback_search;
+pub(crate) use scrollback_search::ScrollbackHits;
 mod strip;
 pub(crate) use strip::LandStripShellOnLeafInput;
 mod tabs;

@@ -68,6 +68,9 @@ pub struct App {
     /// Last waiting count painted on the macOS menu-bar icon.
     #[cfg(all(not(test), target_os = "macos"))]
     pub(crate) status_waiting_shown: Option<usize>,
+    /// Sidebar index the macOS status menu was last built from.
+    #[cfg(all(not(test), target_os = "macos"))]
+    pub(crate) status_menu_index: Option<std::sync::Arc<crate::chrome::sidebar_cache::Index>>,
     #[cfg(feature = "test-support")]
     pub(crate) diagnostics: diagnostics::Diagnostics,
     pub(crate) paths: Paths,
@@ -93,6 +96,8 @@ pub struct App {
     pub(crate) layout_readonly: HashSet<String>,
     pub(crate) close_workspace: Option<(String, String)>,
     pub(crate) close_workspace_queue: Vec<String>,
+    /// Dirty native buffer the current workspace close already asked about.
+    pub(crate) close_workspace_prompted: Option<PathBuf>,
     pub(crate) workspace_insert: HashMap<String, usize>,
     pub(crate) workspace_visible: Option<(String, String)>,
     pub(crate) layout_saved: HashMap<String, String>,
@@ -300,6 +305,9 @@ pub struct App {
     pub(crate) rename_group_focus: bool,
     pub(crate) editor_origins: HashMap<String, Vec<Tab>>,
     pub(crate) search: String,
+    pub(crate) scrollback_hits: crate::app::ScrollbackHits,
+    /// Commands page filter; separate from the scrollback query (#201).
+    pub(crate) commands_filter: String,
     pub(crate) search_session: Option<String>,
     pub(crate) search_open: bool,
     /// Terminal whose shell integration commands fill the main pane.

@@ -200,10 +200,11 @@ impl JobRouting {
                 root.display().to_string(),
                 Policy::OrderedMutation,
             ),
+            // A newer query cancels the queued or running walk (#175).
             Job::Search { root, .. } => (
                 "search",
                 root.display().to_string(),
-                Policy::OrderedMutation,
+                Policy::ReplaceableRead,
             ),
             Job::Favicon(url) => ("favicon", url.clone(), Policy::OrderedMutation),
             Job::PasteClipboard(_) => ("platform", "clipboard".into(), Policy::OrderedMutation),

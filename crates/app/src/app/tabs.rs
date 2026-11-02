@@ -113,11 +113,13 @@ impl App {
             return;
         };
         self.close_workspace_queue = ids.collect();
+        self.close_workspace_prompted = None;
         self.close_workspace = Some((project.to_owned(), first));
     }
     pub(crate) fn abort_workspace_close(&mut self) {
         self.close_workspace = None;
         self.close_workspace_queue.clear();
+        self.close_workspace_prompted = None;
     }
     pub(crate) fn close_workspace_tab_now(&mut self, project: &str, tab_id: &str) {
         let keys: Vec<_> = self
@@ -139,8 +141,17 @@ impl App {
         // GUI stayed usable, so a native buffer may have become dirty since
         // `poll_workspace_close` checked it.
         if let Some(path) = self.dirty_native_in_tab(project, tab_id).into_iter().next() {
-            self.native_close_prompt = Some((path, None));
-            self.abort_workspace_close();
+            // Another close requested meanwhile keeps its place; this tab
+            // only gets the prompt.
+            if self
+                .close_workspace
+                .as_ref()
+                .is_none_or(|(p, t)| p == project && t == tab_id)
+            {
+                self.prompt_workspace_close(project, tab_id, path);
+            } else {
+                self.native_close_prompt = Some((path, None));
+            }
             return;
         }
         if let Some(workspace) = self.layouts.get_mut(project) {
@@ -154,9 +165,17 @@ impl App {
                 self.non_terminal_selected = self.active_session.is_none();
             }
         }
+        self.forget_tab_expanded(project, tab_id);
         self.prune_native_docs();
         self.prune_diff_docs();
-        self.advance_workspace_close(project);
+        // An idle close finishing late must not drop a newer close request.
+        if self
+            .close_workspace
+            .as_ref()
+            .is_none_or(|(p, t)| p == project && t == tab_id)
+        {
+            self.advance_workspace_close(project);
+        }
     }
     /// Drop cached split-pane scroll for diffs with no live tab. Data-level tab
     /// removal bypasses per-document cleanup, so call it after tabs close.

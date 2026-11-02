@@ -480,6 +480,20 @@ fn dropped_files_upload_into_an_absolute_folder_only() {
 }
 
 #[test]
+fn file_drop_goes_only_to_the_pane_under_the_pointer() {
+    use super::transfer::drop_over;
+    let left = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
+    let right = egui::Rect::from_min_max(egui::pos2(100.0, 0.0), egui::pos2(200.0, 100.0));
+    let pointer = Some(egui::pos2(150.0, 50.0));
+    assert!(!drop_over(left, None, pointer));
+    assert!(drop_over(right, None, pointer));
+    assert!(drop_over(right, pointer, None));
+    // No pointer position at all: no pane claims the drop.
+    assert!(!drop_over(left, None, None));
+    assert!(!drop_over(right, None, None));
+}
+
+#[test]
 fn ctrl_and_cmd_chords_reach_the_remote_as_ctrl_chords() {
     let ctx = egui::Context::default();
     let mut view = VncViewState {

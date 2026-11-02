@@ -106,6 +106,8 @@ impl App {
             windows_updates: windows_updates::WindowsUpdateCheck::new(),
             #[cfg(all(not(test), target_os = "macos"))]
             status_waiting_shown: None,
+            #[cfg(all(not(test), target_os = "macos"))]
+            status_menu_index: None,
             installation_error: None,
             repair_pending: false,
             restart_pending: false,
@@ -135,6 +137,7 @@ impl App {
             layout_readonly: HashSet::new(),
             close_workspace: None,
             close_workspace_queue: Vec::new(),
+            close_workspace_prompted: None,
             workspace_insert: HashMap::new(),
             workspace_visible: None,
             layout_saved: HashMap::new(),
@@ -277,6 +280,8 @@ impl App {
             rename_group_focus: false,
             editor_origins: HashMap::new(),
             search: String::new(),
+            scrollback_hits: crate::app::ScrollbackHits::default(),
+            commands_filter: String::new(),
             search_session: None,
             search_open: false,
             commands_session: None,

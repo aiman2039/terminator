@@ -16,28 +16,44 @@ pub(super) struct MarkMovedInput<'a> {
     pub(super) options: DiffOptions,
 }
 
-/// Sets `moved` on each deleted and inserted row that is part of a moved
-/// block. Lines compare under the document's compare options.
-pub(super) fn mark_moved(doc: &mut DiffDocument, input: MarkMovedInput<'_>) {
-    let MarkMovedInput { old, new, options } = input;
-    let key = |lines: &[&str], index: usize| {
+/// Interned compare key per line index: equal ids mean equal lines
+/// under the compare options. Lines too short to be a move get no id.
+type LineIds = HashMap<usize, usize>;
+
+/// Computes each line key once (one allocation per line), so the block
+/// scan below compares integers instead of rebuilding strings per step.
+fn line_ids(
+    lines: &[&str],
+    indices: &HashSet<usize>,
+    options: DiffOptions,
+    interned: &mut HashMap<String, usize>,
+) -> LineIds {
+    let mut ids = HashMap::with_capacity(indices.len());
+    for &index in indices {
         let text = lines
             .get(index)
             .map_or("", |line| line.trim_end_matches(['\n', '\r']));
-        let alnum = text.chars().filter(|c| c.is_alphanumeric()).count();
-        (alnum >= MIN_ALNUM).then(|| options.normalize_line(text))
-    };
-    let deleted: HashSet<usize> = doc.hunks.iter().flat_map(|h| h.old.clone()).collect();
-    let inserted: HashSet<usize> = doc.hunks.iter().flat_map(|h| h.new.clone()).collect();
-    let mut inserts_by_key: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut new_keys: Vec<usize> = inserted.iter().copied().collect();
-    new_keys.sort_unstable();
-    for index in new_keys {
-        if let Some(text) = key(new, index) {
-            inserts_by_key.entry(text).or_default().push(index);
+        if text.chars().filter(|c| c.is_alphanumeric()).count() < MIN_ALNUM {
+            continue;
         }
+        let next = interned.len();
+        let id = *interned.entry(options.normalize_line(text)).or_insert(next);
+        ids.insert(index, id);
     }
-    let mut old_order: Vec<usize> = deleted.iter().copied().collect();
+    ids
+}
+
+/// Old and new line indices that belong to a moved block of at least
+/// [`MIN_BLOCK`] lines, scanning deleted lines in order.
+fn find_moved(old_ids: &LineIds, new_ids: &LineIds) -> (HashSet<usize>, HashSet<usize>) {
+    let mut inserts_by_id: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (&index, &id) in new_ids {
+        inserts_by_id.entry(id).or_default().push(index);
+    }
+    for targets in inserts_by_id.values_mut() {
+        targets.sort_unstable();
+    }
+    let mut old_order: Vec<usize> = old_ids.keys().copied().collect();
     old_order.sort_unstable();
     let mut moved_old = HashSet::new();
     let mut moved_new = HashSet::new();
@@ -45,10 +61,7 @@ pub(super) fn mark_moved(doc: &mut DiffDocument, input: MarkMovedInput<'_>) {
         if moved_old.contains(&start) {
             continue;
         }
-        let Some(first) = key(old, start) else {
-            continue;
-        };
-        let Some(targets) = inserts_by_key.get(&first) else {
+        let Some(targets) = old_ids.get(&start).and_then(|id| inserts_by_id.get(id)) else {
             continue;
         };
         for &target in targets {
@@ -58,10 +71,10 @@ pub(super) fn mark_moved(doc: &mut DiffDocument, input: MarkMovedInput<'_>) {
             let mut len = 1;
             loop {
                 let (o, n) = (start.saturating_add(len), target.saturating_add(len));
-                let same = deleted.contains(&o)
-                    && inserted.contains(&n)
-                    && !moved_new.contains(&n)
-                    && key(old, o).is_some_and(|k| key(new, n).as_ref() == Some(&k));
+                let same = !moved_new.contains(&n)
+                    && old_ids
+                        .get(&o)
+                        .is_some_and(|id| new_ids.get(&n) == Some(id));
                 if !same {
                     break;
                 }
@@ -74,6 +87,19 @@ pub(super) fn mark_moved(doc: &mut DiffDocument, input: MarkMovedInput<'_>) {
             }
         }
     }
+    (moved_old, moved_new)
+}
+
+/// Sets `moved` on each deleted and inserted row that is part of a moved
+/// block. Lines compare under the document's compare options.
+pub(super) fn mark_moved(doc: &mut DiffDocument, input: MarkMovedInput<'_>) {
+    let MarkMovedInput { old, new, options } = input;
+    let deleted: HashSet<usize> = doc.hunks.iter().flat_map(|h| h.old.clone()).collect();
+    let inserted: HashSet<usize> = doc.hunks.iter().flat_map(|h| h.new.clone()).collect();
+    let mut interned = HashMap::new();
+    let old_ids = line_ids(old, &deleted, options, &mut interned);
+    let new_ids = line_ids(new, &inserted, options, &mut interned);
+    let (moved_old, moved_new) = find_moved(&old_ids, &new_ids);
     if moved_old.is_empty() {
         return;
     }
@@ -134,6 +160,17 @@ mod tests {
                 .iter()
                 .any(|row| row.left.as_ref().is_some_and(|l| l.moved))
         );
+    }
+
+    #[test]
+    fn repeated_identical_lines_pair_each_target_once() {
+        // Many identical long lines: every old line pairs with a distinct
+        // new line, and no new line is claimed twice.
+        let old_ids: LineIds = (0..200).map(|i| (i, 7)).collect();
+        let new_ids: LineIds = (300..500).map(|i| (i, 7)).collect();
+        let (moved_old, moved_new) = find_moved(&old_ids, &new_ids);
+        assert_eq!(moved_old.len(), 200);
+        assert_eq!(moved_new.len(), 200);
     }
 
     #[test]

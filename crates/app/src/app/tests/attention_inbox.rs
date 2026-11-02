@@ -627,6 +627,23 @@ fn status_menu_lists_pending_notices_in_inbox_order() {
 }
 
 #[test]
+fn status_menu_source_is_reused_until_notices_change() {
+    // The macOS status menu rebuilds its items only when the cached
+    // sidebar index is a new one.
+    let (mut app, _ctx, _dir) = fixture();
+    app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+    let first = app.sidebar_index();
+    assert!(std::sync::Arc::ptr_eq(&first, &app.sidebar_index()));
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingInput,
+        created: now(),
+    })];
+    assert!(!std::sync::Arc::ptr_eq(&first, &app.sidebar_index()));
+}
+
+#[test]
 fn status_menu_skips_settled_notices_and_caps_single_line_titles() {
     let (mut app, _ctx, _dir) = fixture();
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];

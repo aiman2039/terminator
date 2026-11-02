@@ -10,11 +10,13 @@ use std::{
 use terminator_core::{CommandOptions, async_service::CancellationToken};
 
 mod block;
+mod clean;
 mod execute;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use block::{StageBlockInput, stage_block};
+pub(crate) use clean::{WorktreeInput, worktree};
 pub(crate) use execute::{ExecuteInput, execute};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

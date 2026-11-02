@@ -10,10 +10,12 @@ impl App {
         self.notification_events_grid(ui);
         self.ntfy_settings(ui);
         self.dismissal_row(ui);
-        ui.checkbox(
-            &mut self.settings_draft.notifications_side,
-            "Place notifications at the side",
-        );
+        if self.field_visible("Place notifications at the side", "position side corner") {
+            ui.checkbox(
+                &mut self.settings_draft.notifications_side,
+                "Place notifications at the side",
+            );
+        }
         self.notification_sound_row(ui);
         self.terminal_notice_toggles(ui);
     }
@@ -155,6 +157,9 @@ impl App {
     }
 
     fn terminal_notice_toggles(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible("Terminal notifications", "osc terminal desktop") {
+            return;
+        }
         let enabled = self
             .state
             .capabilities

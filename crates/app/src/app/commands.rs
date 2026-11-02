@@ -415,6 +415,7 @@ impl App {
     pub(crate) fn open_scrollback_search(&mut self, ctx: &egui::Context, sid: &str) {
         self.search_session = Some(sid.to_string());
         self.search_open = true;
+        self.scrollback_hits = crate::app::ScrollbackHits::default();
         self.texts.remove(&format!("history:{sid}"));
         ctx.memory_mut(|memory| {
             memory.request_focus(egui::Id::unique("scrollback-search"));

@@ -57,11 +57,7 @@ impl LspManager {
         let Some(protocol_id) = L::language_id_for_path(path, language) else {
             return;
         };
-        let root = project_root(path, language);
-        let key = ServerKey {
-            language: language_id,
-            root,
-        };
+        let key = self.server_key(path, language, language_id);
         let Some(uri) = L::file_uri(path) else {
             return;
         };
@@ -121,6 +117,19 @@ impl LspManager {
             doc.version = doc.version.saturating_add(1);
             let bytes = L::did_change(&doc.uri, doc.version, text);
             let _ = inbox.send(bytes);
+        }
+    }
+
+    /// Server for one document. A tracked doc keeps its root: walking up
+    /// to 20 ancestors per sync stalls typing on slow (network) disks.
+    fn server_key(&self, path: &Path, language: Language, language_id: &'static str) -> ServerKey {
+        let root = match self.docs.get(path) {
+            Some(doc) if doc.server.language == language_id => doc.server.root.clone(),
+            _ => project_root(path, language),
+        };
+        ServerKey {
+            language: language_id,
+            root,
         }
     }
 

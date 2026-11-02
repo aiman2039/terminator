@@ -452,7 +452,7 @@ pub use client::{
     SnapshotHint, conditional_snapshot, connect, read_frame, rpc, sanitize_layout, write_frame,
 };
 #[cfg(feature = "async-client")]
-pub(crate) use client::{archived_generation, redirect_allowed};
+pub(crate) use client::{archived_owner, redirect_allowed};
 
 #[cfg(test)]
 mod tests;

@@ -145,14 +145,15 @@ impl GitSnapshots<'_> {
         .await?)
     }
 
+    /// The worktree side in index form, like the blob it is compared with.
     async fn worktree(self, root: &Path, relative: &Path) -> Result<Vec<u8>> {
-        let path = root.join(relative);
-        self.service
-            .fs()
-            .run(self.cancel, move || {
-                terminator_git::worktree_file(&path).map_err(anyhow::Error::from)
-            })
-            .await
+        actions::worktree(actions::WorktreeInput {
+            service: self.service,
+            root,
+            path: relative,
+            cancel: self.cancel,
+        })
+        .await
     }
 
     /// Left and right bytes: HEAD to index when `staged`, else index to

@@ -32,6 +32,9 @@ impl App {
         if self.idle_close_fallback.as_ref() == Some(&target) {
             return false;
         }
+        // One preflight at a time. A different target waits: its caller
+        // keeps the request (`close_session` / `close_workspace`) and asks
+        // again each frame, so it starts once the pending one completes.
         if self.idle_close_pending.is_some() {
             return true;
         }

@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 impl App {
     pub(crate) fn palette_center(&mut self, ui: &mut egui::Ui) {
@@ -24,11 +25,10 @@ impl App {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
         self.refresh_palette_cache();
-        let items = self
-            .palette
-            .cache
-            .as_ref()
-            .map_or_else(Vec::new, |cache| cache.items.clone());
+        let (items, details) = self.palette.cache.as_ref().map_or_else(
+            || (Arc::from([]), Arc::from([])),
+            |cache| (Arc::clone(&cache.items), Arc::clone(&cache.details)),
+        );
         if items.is_empty() {
             ui.weak(if self.lsp.workspace_symbols_pending() {
                 "Searching symbols…"
@@ -38,7 +38,12 @@ impl App {
             return;
         }
         let keyboard_moved = self.palette_keyboard_nav(ui, items.len());
-        let mut chosen = self.palette_result_list(ui, &items, keyboard_moved);
+        let mut chosen = self.palette_result_list(PaletteRowsInput {
+            ui,
+            items: &items,
+            details: &details,
+            keyboard_moved,
+        });
         if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
             chosen = Some(self.palette.index);
         }
@@ -160,7 +165,7 @@ impl App {
         }
     }
 
-    fn refresh_palette_cache(&mut self) {
+    pub(super) fn refresh_palette_cache(&mut self) {
         let project_id = self.selected_project().map(|project| project.id.clone());
         let stale = self.palette.cache.as_ref().is_none_or(|cache| {
             cache.query != self.palette.query
@@ -174,6 +179,8 @@ impl App {
         if !stale {
             return;
         }
+        let items: std::sync::Arc<[PaletteItem]> = self.filtered_palette().into();
+        let details = items.iter().map(|item| item.detail(self)).collect();
         self.palette.cache = Some(PaletteCache {
             query: self.palette.query.clone(),
             state_revision: self.state.revision,
@@ -182,7 +189,8 @@ impl App {
             filters: self.palette.filters,
             project: project_id,
             scope: self.palette.file_scope.clone(),
-            items: self.filtered_palette(),
+            items,
+            details,
         });
     }
 
@@ -211,43 +219,48 @@ impl App {
         keyboard_moved
     }
 
-    /// The result rows; returns the clicked index.
-    fn palette_result_list(
-        &self,
-        ui: &mut egui::Ui,
-        items: &[PaletteItem],
-        keyboard_moved: bool,
-    ) -> Option<usize> {
+    /// The result rows, laid out only while visible; returns the clicked index.
+    fn palette_result_list(&self, input: PaletteRowsInput<'_>) -> Option<usize> {
+        let PaletteRowsInput {
+            ui,
+            items,
+            details,
+            keyboard_moved,
+        } = input;
         let mut chosen = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (index, item) in items.iter().enumerate() {
-                    let selected = index == self.palette.index;
-                    let response = ui
-                        .horizontal(|ui| {
-                            let response = ui.selectable_label(selected, item.label());
-                            let detail = item.detail(self);
-                            if !detail.is_empty() {
-                                ui.weak(egui::RichText::new(detail).small());
-                            }
-                            response
-                        })
-                        .inner;
-                    if selected && keyboard_moved {
-                        response.scroll_to_me(Some(egui::Align::Center));
-                    }
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(
-                        ui.ctx(),
-                        &format!("palette-item:{}", item.label()),
-                        response.rect,
-                    );
-                    if response.clicked() {
-                        chosen = Some(index);
-                    }
+        let row_height = ui.spacing().interact_size.y;
+        let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+        if keyboard_moved {
+            area = area.vertical_scroll_offset(palette_scroll_offset(
+                self.palette.index,
+                row_height + ui.spacing().item_spacing.y,
+                ui.available_height(),
+            ));
+        }
+        area.show_rows(ui, row_height, items.len(), |ui, range| {
+            for (index, item) in items.iter().enumerate().take(range.end).skip(range.start) {
+                let selected = index == self.palette.index;
+                let response = ui
+                    .horizontal(|ui| {
+                        ui.set_height(row_height);
+                        let response = ui.selectable_label(selected, item.label());
+                        if let Some(detail) = details.get(index).filter(|d| !d.is_empty()) {
+                            ui.weak(egui::RichText::new(detail).small());
+                        }
+                        response
+                    })
+                    .inner;
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("palette-item:{}", item.label()),
+                    response.rect,
+                );
+                if response.clicked() {
+                    chosen = Some(index);
                 }
-            });
+            }
+        });
         chosen
     }
 
@@ -326,4 +339,17 @@ impl App {
             }
         }
     }
+}
+
+struct PaletteRowsInput<'a> {
+    ui: &'a mut egui::Ui,
+    items: &'a [PaletteItem],
+    details: &'a [String],
+    keyboard_moved: bool,
+}
+
+/// Scroll offset that centers row `index` in a viewport of `viewport` height.
+pub(super) fn palette_scroll_offset(index: usize, row_stride: f32, viewport: f32) -> f32 {
+    let top = f32::from(u16::try_from(index).unwrap_or(u16::MAX)) * row_stride;
+    (top - (viewport - row_stride) / 2.0).max(0.0)
 }

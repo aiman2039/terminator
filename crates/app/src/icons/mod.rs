@@ -50,7 +50,10 @@ impl IconTables {
     fn extension(name: &str) -> &str {
         ["tar.bz2", "tar.gz", "tar.xz"]
             .into_iter()
-            .find(|ext| name.ends_with(&format!(".{ext}")))
+            .find(|ext| {
+                name.strip_suffix(ext)
+                    .is_some_and(|stem| stem.ends_with('.'))
+            })
             .unwrap_or_else(|| {
                 name.rsplit_once('.')
                     .filter(|(stem, _)| !stem.is_empty())
@@ -71,12 +74,18 @@ pub fn is_language(icon: &str) -> bool {
     icon.starts_with("lang:")
 }
 
+/// Lowercased name, borrowed when it is already lowercase (most files),
+/// so per-row icon lookups do not allocate every frame.
+fn lowercase(name: std::borrow::Cow<'_, str>) -> std::borrow::Cow<'_, str> {
+    if name.chars().any(char::is_uppercase) {
+        std::borrow::Cow::Owned(name.to_lowercase())
+    } else {
+        name
+    }
+}
+
 pub fn file_icon(path: &std::path::Path) -> &'static str {
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
+    let name = lowercase(path.file_name().unwrap_or_default().to_string_lossy());
     langs::by_name(&name)
         .or_else(|| IconTables::icon(file_tables::NAME_ICONS, &name))
         .or_else(|| IconTables::by_name_pattern(&name))
@@ -95,16 +104,13 @@ pub enum FolderRole {
     Plain,
 }
 
-fn folder_name(path: &std::path::Path) -> String {
-    path.file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase()
+fn folder_name(path: &std::path::Path) -> std::borrow::Cow<'_, str> {
+    lowercase(path.file_name().unwrap_or_default().to_string_lossy())
 }
 
 /// The folder's role in the project tree.
 pub fn folder_role(path: &std::path::Path, ignored: bool) -> FolderRole {
-    match folder_name(path).as_str() {
+    match &*folder_name(path) {
         _ if ignored => FolderRole::Excluded,
         "target" | "node_modules" | "dist" | "build" | "out" | ".venv" | "__pycache__" => {
             FolderRole::Excluded
@@ -125,7 +131,7 @@ pub fn folder_icon(path: &std::path::Path, open: bool, ignored: bool) -> &'stati
         FolderRole::Test => return "FolderCheck",
         FolderRole::Plain => {}
     }
-    match folder_name(path).as_str() {
+    match &*folder_name(path) {
         ".git" | ".github" | ".gitlab" => "FolderGit",
         "crates" | "packages" => "FolderCode",
         _ if open => "FolderOpen",
@@ -162,6 +168,18 @@ mod tests {
         assert_eq!(icon("notes.zzz"), "File");
         assert_eq!(icon(".hidden"), "File");
         assert!(matches!(source("Play"), egui::ImageSource::Bytes { .. }));
+    }
+
+    #[test]
+    fn lowercase_names_are_borrowed_and_tarball_needs_a_dot() {
+        use std::borrow::Cow;
+        assert!(matches!(
+            lowercase(Cow::Borrowed("main.rs")),
+            Cow::Borrowed(_)
+        ));
+        assert_eq!(lowercase(Cow::Borrowed("README.MD")), "readme.md");
+        assert_eq!(IconTables::extension("backup.tar.gz"), "tar.gz");
+        assert_eq!(IconTables::extension("backuptar.gz"), "gz");
     }
 
     #[test]

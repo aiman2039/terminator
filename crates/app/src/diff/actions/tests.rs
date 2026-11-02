@@ -571,3 +571,52 @@ async fn whitespace_display_policy_stages_and_discards_exact_source_text() {
     );
     assert_eq!(fixture.index(), original());
 }
+
+/// A CRLF worktree file committed under `core.autocrlf=true`.
+fn autocrlf_fixture() -> Fixture {
+    let fixture = Fixture::new("file.txt", None);
+    fixture.git(&["config", "core.autocrlf", "true"]);
+    std::fs::write(fixture.absolute(), "a\r\nb\r\nc\r\n").unwrap();
+    fixture.git(&["add", "--", "file.txt"]);
+    fixture.git(&["commit", "-qm", "fixture"]);
+    std::fs::write(fixture.absolute(), "a\r\nB\r\nc\r\n").unwrap();
+    fixture
+}
+
+#[tokio::test]
+async fn autocrlf_diff_shows_only_real_changes_and_stages_lf_lines() {
+    let fixture = autocrlf_fixture();
+    let doc = fixture.doc(false).await;
+    assert_eq!(doc.right_text, "a\nB\nc\n");
+    assert_eq!(doc.hunks.len(), 1);
+    assert_eq!(doc.hunks[0].old, 1..2);
+    fixture.change(doc, 0, Kind::Stage).await.unwrap();
+    assert_eq!(fixture.index(), "a\nB\nc\n");
+}
+
+#[tokio::test]
+async fn autocrlf_discard_restores_crlf_worktree_lines() {
+    let fixture = autocrlf_fixture();
+    let doc = fixture.doc(false).await;
+    fixture.change(doc, 0, Kind::Discard).await.unwrap();
+    assert_eq!(
+        std::fs::read(fixture.absolute()).unwrap(),
+        b"a\r\nb\r\nc\r\n"
+    );
+    assert_eq!(fixture.index(), "a\nb\nc\n");
+}
+
+#[tokio::test]
+async fn filtered_file_refuses_hunk_staging_and_keeps_the_index() {
+    let fixture = Fixture::new("file.txt", Some("pointer\n"));
+    std::fs::write(
+        fixture.dir.path().join(".gitattributes"),
+        "file.txt filter=lfs\n",
+    )
+    .unwrap();
+    std::fs::write(fixture.absolute(), "content\n").unwrap();
+    let doc = fixture.doc(false).await;
+    let error = fixture.change(doc, 0, Kind::Stage).await.unwrap_err();
+    assert!(error.to_string().contains("Git filter"));
+    assert_eq!(fixture.index(), "pointer\n");
+}

@@ -22,7 +22,20 @@ struct TabGroupHeader<'a> {
     count: usize,
 }
 
+/// Preferences key of a workspace tab's sidebar node; present (false)
+/// only while the node is collapsed.
+fn tab_expanded_key(project_id: &str, tab_id: &str) -> String {
+    format!("workspace-tab:{project_id}:{tab_id}")
+}
+
 impl App {
+    /// Drops a closed tab's collapsed state from the preferences.
+    pub(crate) fn forget_tab_expanded(&mut self, project_id: &str, tab_id: &str) {
+        self.preferences
+            .expanded
+            .remove(&tab_expanded_key(project_id, tab_id));
+    }
+
     /// Live terminal sessions under one project, grouped as a tree per
     /// top-level workspace tab in layout order. Single-tab projects keep the
     /// historic flat list. Multi-tab projects render one expandable tab node
@@ -167,8 +180,8 @@ impl App {
             return;
         }
         let group_label = crate::workspace::group_display_name(group_name.as_deref(), group_index);
-        let key = format!("workspace-tab:{project_id}:{tab_id}");
-        let mut tab_expanded = *self.preferences.expanded.entry(key.clone()).or_insert(true);
+        let key = tab_expanded_key(project_id, tab_id);
+        let mut tab_expanded = self.preferences.expanded.get(&key).copied().unwrap_or(true);
         let active_tab = workspace_active == Some(tab_id.as_str());
         let header = TabGroupHeader {
             project_id,
@@ -209,9 +222,15 @@ impl App {
         if self.sidebar_chevron(ui, *tab_expanded, "Expand or collapse tab") {
             self.finish_rename(true);
             *tab_expanded = !*tab_expanded;
-            self.preferences
-                .expanded
-                .insert(header.key.to_owned(), *tab_expanded);
+            // Expanded is the default: keep only collapsed tabs, so the
+            // preferences do not gain a key per tab ever shown.
+            if *tab_expanded {
+                self.preferences.expanded.remove(header.key);
+            } else {
+                self.preferences
+                    .expanded
+                    .insert(header.key.to_owned(), false);
+            }
         }
         if header.renaming {
             self.tab_group_rename_field(ui, header)

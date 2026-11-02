@@ -124,7 +124,7 @@ impl App {
         });
         ui.add_space(6.0);
         ui.add(
-            appearance::singleline(&mut self.search)
+            appearance::singleline(&mut self.commands_filter)
                 .hint_text("Filter commands…")
                 .desired_width(400.0),
         );
@@ -142,7 +142,7 @@ impl App {
             return;
         }
         let failed = appearance::color(&self.theme.status_failed);
-        let needle = self.search.to_lowercase();
+        let needle = self.commands_filter.to_lowercase();
         let mut reveal = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (index, block) in blocks.iter().enumerate().rev() {

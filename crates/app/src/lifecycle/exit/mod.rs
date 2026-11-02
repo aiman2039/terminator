@@ -121,10 +121,10 @@ impl App {
             crate::updater::cancel_termination();
             return;
         }
+        // Player and browsers stop only once the checkpoint is saved; a
+        // cancelled exit must leave them as they were.
         if !self.exit.active() {
-            self.player.stop();
             self.services.pause_reads(true);
-            self.browser_host.shutdown();
             self.exit_attempt = self.exit_attempt.wrapping_add(1);
             self.exit = Exit::Waiting(Instant::now());
         }
@@ -193,10 +193,11 @@ impl App {
         self.native_close_after_save_issuer = None;
         crate::updater::cancel_termination();
     }
-    pub(crate) fn native_installation_cancelled(&mut self) {
-        self.exit = Exit::Idle;
-        self.services.pause_reads(false);
-        self.services.handle().reopen_admission();
+    /// Destructive shutdown steps run only after the exit is certain.
+    pub(crate) fn finish_exit(&mut self) {
+        self.exit = Exit::Ready;
+        self.player.stop();
+        self.browser_host.shutdown();
     }
     pub(crate) fn cancel_exit(&mut self, error: String) {
         self.vnc_quit_confirmed = false;

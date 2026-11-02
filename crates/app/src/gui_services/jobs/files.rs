@@ -155,10 +155,11 @@ impl Services {
             cancel,
             updates,
         } = input;
+        let walk_cancel = cancel.clone();
         let result = self
             .fs()
             .run(&cancel, move || {
-                anyhow::Ok(search::run(&root, &query, show_ignored))
+                anyhow::Ok(search::run(&root, &query, show_ignored, &walk_cancel))
             })
             .await;
         let result = match result {

@@ -3,7 +3,7 @@ use crate::{
     IpcError, PathBuf, Paths, Request, Response, State,
     async_service::{CancellationToken, NativePool},
     generations,
-    ipc::{archived_generation, redirect_allowed},
+    ipc::{archived_owner, redirect_allowed},
 };
 use std::{
     collections::HashMap,
@@ -87,9 +87,12 @@ impl Client {
         ) {
             return self.broadcast(request).await;
         }
-        let request = self.route_archived(request).await?;
+        let (request, mut resolved) = self.route_archived(request).await?;
         for _ in 0..3 {
-            let target = self.owner(&request).await?;
+            let target = match resolved.take() {
+                Some(target) => target,
+                None => self.owner(&request).await?,
+            };
             let response = self.direct(target, request.clone(), None).await?;
             if let Response::Redirect { generation } = &response
                 && redirect_allowed(&request)
