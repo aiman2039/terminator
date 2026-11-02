@@ -166,3 +166,15 @@ fn alternate_screen_snapshot_keeps_modes_without_adding_history_or_replaying_not
     process(&mut parser, b"\x1b[?1049l");
     assert_eq!(history_rows(parser.screen()), primary);
 }
+
+#[test]
+fn snapshot_source_renders_state_from_capture_time() {
+    let mut parser = vt100::Parser::new_with_callbacks(4, 32, 100, Events::default());
+    process(&mut parser, b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix");
+    let expected = attachment_snapshot(&parser);
+    let source = snapshot_source(&parser);
+    process(&mut parser, b"\r\nlater output");
+    let rendered = source.render();
+    assert_eq!(rendered, expected);
+    assert!(!String::from_utf8_lossy(&rendered).contains("later"));
+}

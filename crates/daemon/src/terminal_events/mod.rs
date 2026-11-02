@@ -72,34 +72,57 @@ pub fn process(parser: &mut vt100::Parser<Events>, bytes: &[u8]) {
     parser.callbacks_mut().escape_pending = escaped;
 }
 
+/// Screen state copied under the runtime lock; rendering it walks up to
+/// 10k scrollback rows, so that runs after the lock is released (#237).
+pub struct SnapshotSource {
+    screen: vt100::Screen,
+    modes: Vec<u8>,
+}
+
+/// Cheap copy of the state `attachment_snapshot` needs.
+pub fn snapshot_source(parser: &vt100::Parser<Events>) -> SnapshotSource {
+    SnapshotSource {
+        screen: parser.screen().clone(),
+        modes: parser.callbacks().modes_formatted(),
+    }
+}
+
 /// Replay retained rows before restoring the visible screen. Only generated
 /// screen state is sent; observational OSC effects are never replayed.
+#[cfg(test)]
 pub fn attachment_snapshot(parser: &vt100::Parser<Events>) -> Vec<u8> {
-    let screen = parser.screen();
-    let (rows, cols) = screen.size();
-    let mut snapshot = Vec::new();
-    let mut history = screen.clone();
-    history.set_scrollback(10_000);
-    if history.scrollback() > 0 {
-        for offset in (1..=history.scrollback()).rev() {
-            history.set_scrollback(offset);
-            if let Some(row) = history.rows(0, cols).next() {
+    snapshot_source(parser).render()
+}
+
+impl SnapshotSource {
+    pub fn render(self) -> Vec<u8> {
+        let Self { mut screen, modes } = self;
+        let (rows, cols) = screen.size();
+        let mut snapshot = Vec::new();
+        screen.set_scrollback(10_000);
+        let retained = screen.scrollback();
+        for offset in (1..=retained).rev() {
+            screen.set_scrollback(offset);
+            if let Some(row) = screen.rows(0, cols).next() {
                 snapshot.extend_from_slice(row.as_bytes());
                 snapshot.extend_from_slice(b"\r\n");
             }
         }
-        // The last screenful is still visible. Push it into history before
-        // state_formatted() clears and replaces those rows.
-        for _ in 1..rows {
-            snapshot.extend_from_slice(b"\r\n");
+        screen.set_scrollback(0);
+        if retained > 0 {
+            // The last screenful is still visible. Push it into history before
+            // state_formatted() clears and replaces those rows.
+            for _ in 1..rows {
+                snapshot.extend_from_slice(b"\r\n");
+            }
         }
+        if screen.alternate_screen() {
+            snapshot.extend_from_slice(b"\x1b[?1049h");
+        }
+        snapshot.extend(screen.state_formatted());
+        snapshot.extend(modes);
+        snapshot
     }
-    if screen.alternate_screen() {
-        snapshot.extend_from_slice(b"\x1b[?1049h");
-    }
-    snapshot.extend(screen.state_formatted());
-    snapshot.extend(parser.callbacks().modes_formatted());
-    snapshot
 }
 
 fn text(bytes: &[u8], limit: usize) -> String {

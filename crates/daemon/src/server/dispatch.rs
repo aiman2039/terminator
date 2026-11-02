@@ -67,8 +67,9 @@ struct AttachSetupInput<'a> {
 }
 
 /// Validate an attach, resize the terminal, and register the subscriber.
-/// The snapshot is captured under the runtime lock with the subscriber so no
-/// output is lost between them, but it is written after the lock is released.
+/// The snapshot state is copied under the runtime lock with the subscriber so
+/// no output is lost between them, but it is rendered and written after the
+/// lock is released.
 fn attach_setup(input: AttachSetupInput<'_>) -> Result<Attached> {
     let AttachSetupInput {
         shared,
@@ -82,7 +83,7 @@ fn attach_setup(input: AttachSetupInput<'_>) -> Result<Attached> {
     );
     let rt = shared.runtime(session)?;
     let (tx, rx) = mpsc::sync_channel(128);
-    let snapshot = {
+    let source = {
         let mut r = relock(&rt);
         r.master.resize(PtySize {
             rows,
@@ -91,11 +92,11 @@ fn attach_setup(input: AttachSetupInput<'_>) -> Result<Attached> {
             pixel_height: 0,
         })?;
         r.parser.screen_mut().set_size(rows, cols);
-        let snapshot = crate::terminal_events::attachment_snapshot(&r.parser);
+        let source = crate::terminal_events::snapshot_source(&r.parser);
         r.subscribers.push(tx);
-        snapshot
+        source
     };
-    Ok((rt, rx, snapshot))
+    Ok((rt, rx, source.render()))
 }
 
 /// Split an attach snapshot into `Data` frames that each fit `MAX_FRAME`.

@@ -35,6 +35,26 @@ fn rotation_retention_clear_and_remove_ordering() {
     assert!(history_files(&paths, Some(&sid)).is_empty());
 }
 #[test]
+fn idle_writer_of_ended_session_is_closed_on_flush() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path().into());
+    paths.init().unwrap();
+    let sid = id();
+    let mut history = History::new(paths.clone()).unwrap();
+    history.append(&sid, b"bye").unwrap();
+    history.flush().unwrap();
+    assert!(history.writers.contains_key(&sid));
+    history
+        .flush_closing_idle(std::time::Duration::ZERO)
+        .unwrap();
+    assert!(history.writers.is_empty());
+    let files = history_files(&paths, Some(&sid));
+    assert_eq!(fs::read(&files[0]).unwrap(), b"bye");
+    history.append(&sid, b"again").unwrap();
+    history.flush().unwrap();
+    assert_eq!(history_files(&paths, Some(&sid)).len(), 2);
+}
+#[test]
 fn age_rotation_and_existing_segments() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::at(dir.path().into());

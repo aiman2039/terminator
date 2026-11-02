@@ -1,6 +1,6 @@
 //! Which changed paths Local History records, and the recording itself.
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     ffi::OsStr,
     path::{Component, Path, PathBuf},
     time::Duration,
@@ -58,9 +58,26 @@ pub(super) fn eligible_path(path: &Path) -> bool {
         || name == "4913")
 }
 
+/// Build output folders skipped in roots that are not Git repositories,
+/// where `.gitignore` cannot be asked (#192).
+const BUILD_DIRS: &[&str] = &[
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    ".tox",
+    ".next",
+    ".gradle",
+];
+/// Upper bound on Git index text read for one batch of baselines.
+const BASELINE_BUDGET: u64 = 16 * 1024 * 1024;
+
 /// Records each changed text file under one of `roots`. Gitignored files
-/// are skipped. A file's first snapshot is preceded by its Git index
-/// version when that differs, so the timeline starts before the change.
+/// (or build outputs outside Git) are skipped. A file's first snapshot is
+/// preceded by its Git index version when that differs, so the timeline
+/// starts before the change. Baselines come from one `git cat-file` pass.
 pub(super) fn record_batch(
     store: &local_history::Store,
     roots: &BTreeSet<PathBuf>,
@@ -76,36 +93,65 @@ pub(super) fn record_batch(
         }
     }
     for (root, paths) in by_root {
-        let ignored = ignored(root, &paths);
-        for path in paths.iter().filter(|path| !ignored.contains(*path)) {
-            let Ok(bytes) = std::fs::read(path) else {
-                continue;
-            };
-            if !local_history::recordable(&bytes) {
-                continue;
-            }
-            let now_ms = local_history::now_ms();
-            if !store.has_history(path)
-                && let Some(base) = index_text(root, path)
-                && base != bytes
-            {
-                let _ = store.record(local_history::Record {
-                    path,
-                    bytes: &base,
-                    source: local_history::Source::Open,
-                    label: Some(GIT_INDEX),
-                    now_ms: now_ms.saturating_sub(1),
-                });
-            }
-            let _ = store.record(local_history::Record {
-                path,
-                bytes: &bytes,
-                source: local_history::Source::External,
-                label: None,
-                now_ms,
-            });
+        let paths: Vec<PathBuf> = match ignored(root, &paths) {
+            Some(ignored) => paths
+                .into_iter()
+                .filter(|path| !ignored.contains(path))
+                .collect(),
+            None => paths
+                .into_iter()
+                .filter(|path| !build_output(root, path))
+                .collect(),
+        };
+        let first: Vec<&Path> = paths
+            .iter()
+            .filter(|path| !store.has_history(path))
+            .map(PathBuf::as_path)
+            .collect();
+        let baselines = index_texts(root, &first);
+        for path in &paths {
+            record_one(store, path, baselines.get(path));
         }
     }
+}
+
+fn record_one(store: &local_history::Store, path: &Path, base: Option<&Vec<u8>>) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    if !local_history::recordable(&bytes) {
+        return;
+    }
+    let now_ms = local_history::now_ms();
+    if let Some(base) = base
+        && *base != bytes
+        && !store.has_history(path)
+    {
+        let _ = store.record(local_history::Record {
+            path,
+            bytes: base,
+            source: local_history::Source::Open,
+            label: Some(GIT_INDEX),
+            now_ms: now_ms.saturating_sub(1),
+        });
+    }
+    let _ = store.record(local_history::Record {
+        path,
+        bytes: &bytes,
+        source: local_history::Source::External,
+        label: None,
+        now_ms,
+    });
+}
+
+/// Whether `path` lies in a common build output folder below `root`.
+fn build_output(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|relative| {
+        relative.components().any(|part| {
+            matches!(part, Component::Normal(name)
+                if name.to_str().is_some_and(|name| BUILD_DIRS.contains(&name)))
+        })
+    })
 }
 
 fn small_file(path: &Path) -> bool {
@@ -125,8 +171,8 @@ fn options(input: Option<Vec<u8>>) -> CommandOptions {
     }
 }
 
-/// The subset of `paths` Git ignores. Outside a repository nothing is.
-fn ignored(root: &Path, paths: &[PathBuf]) -> HashSet<PathBuf> {
+/// The subset of `paths` Git ignores, or `None` outside a repository.
+fn ignored(root: &Path, paths: &[PathBuf]) -> Option<HashSet<PathBuf>> {
     let mut input = Vec::new();
     for path in paths {
         if let Ok(relative) = path.strip_prefix(root) {
@@ -146,17 +192,97 @@ fn ignored(root: &Path, paths: &[PathBuf]) -> HashSet<PathBuf> {
             .map(|path| root.join(path))
             .collect()
     })
-    .unwrap_or_default()
+    .ok()
 }
 
-/// The staged (index) text of `path`, if Git tracks it.
-fn index_text(root: &Path, path: &Path) -> Option<Vec<u8>> {
-    let relative = path.strip_prefix(root).ok()?;
-    let spec = format!(":./{}", relative.to_str()?);
-    let mut opts = options(None);
+/// The staged (index) text of each tracked path, read with one
+/// `cat-file --batch-check` and one `cat-file --batch` process. Blobs over
+/// `MAX_BYTES` or past `BASELINE_BUDGET` are left out.
+fn index_texts(root: &Path, paths: &[&Path]) -> HashMap<PathBuf, Vec<u8>> {
+    let specs: Vec<(&Path, String)> = paths
+        .iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(root).ok()?.to_str()?;
+            (!relative.contains('\n')).then(|| (*path, format!(":./{relative}")))
+        })
+        .collect();
+    if specs.is_empty() {
+        return HashMap::new();
+    }
+    let input = specs
+        .iter()
+        .flat_map(|(_, spec)| format!("{spec}\n").into_bytes());
+    let Ok(check) = git::run_blocking(
+        root,
+        &["cat-file", "--batch-check"],
+        options(Some(input.collect())),
+    ) else {
+        return HashMap::new();
+    };
+    let mut budget = BASELINE_BUDGET;
+    let mut wanted: Vec<(&Path, String)> = Vec::new();
+    for ((path, _), line) in specs.iter().zip(check.split(|byte| *byte == b'\n')) {
+        if let Some((oid, size)) = blob_header(line)
+            && size <= local_history::MAX_BYTES as u64
+            && let Some(left) = budget.checked_sub(size)
+        {
+            budget = left;
+            wanted.push((path, oid));
+        }
+    }
+    let blobs = blobs(root, &wanted, BASELINE_BUDGET.saturating_sub(budget));
+    wanted
+        .into_iter()
+        .filter_map(|(path, oid)| Some((path.to_path_buf(), blobs.get(&oid)?.clone())))
+        .collect()
+}
+
+/// `(oid, size)` from a `cat-file` header line naming a blob.
+fn blob_header(line: &[u8]) -> Option<(String, u64)> {
+    let line = std::str::from_utf8(line).ok()?;
+    let parts: Vec<&str> = line.split(' ').collect();
+    match parts.as_slice() {
+        [oid, "blob", size] => Some(((*oid).to_owned(), size.parse().ok()?)),
+        _ => None,
+    }
+}
+
+/// Contents of the blobs `wanted` names, keyed by object id.
+fn blobs(root: &Path, wanted: &[(&Path, String)], bytes: u64) -> HashMap<String, Vec<u8>> {
+    if wanted.is_empty() {
+        return HashMap::new();
+    }
+    let input: Vec<u8> = wanted
+        .iter()
+        .flat_map(|(_, oid)| format!("{oid}\n").into_bytes())
+        .collect();
+    let mut opts = options(Some(input));
     opts.accepted_exit_codes = Some(vec![0]);
-    opts.stdout_limit = local_history::MAX_BYTES.saturating_add(1);
-    git::run_blocking(root, &["show", spec.as_str()], opts).ok()
+    opts.stdout_limit = usize::try_from(bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_add(wanted.len().saturating_mul(128));
+    let Ok(out) = git::run_blocking(root, &["cat-file", "--batch"], opts) else {
+        return HashMap::new();
+    };
+    parse_batch(&out)
+}
+
+/// Splits `cat-file --batch` output into object id and contents.
+fn parse_batch(mut out: &[u8]) -> HashMap<String, Vec<u8>> {
+    let mut blobs = HashMap::new();
+    while let Some(end) = out.iter().position(|byte| *byte == b'\n') {
+        let (header, rest) = out.split_at(end);
+        let rest = rest.get(1..).unwrap_or_default();
+        let Some((oid, size)) = blob_header(header) else {
+            break;
+        };
+        let Some(body) = usize::try_from(size).ok().and_then(|n| rest.get(..n)) else {
+            break;
+        };
+        blobs.insert(oid, body.to_vec());
+        out = rest.get(body.len().saturating_add(1)..).unwrap_or_default();
+    }
+    blobs
 }
 
 #[cfg(test)]
@@ -203,5 +329,31 @@ mod tests {
         record_batch(&store, &roots, vec![text.clone()]);
         assert_eq!(store.list(&text).unwrap().len(), 1);
         assert!(!store.has_history(&large));
+    }
+
+    #[test]
+    fn build_outputs_outside_git_are_not_recorded() {
+        let data = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let store = local_history::Store::in_data(data.path());
+        let roots = BTreeSet::from([project.path().to_path_buf()]);
+        std::fs::create_dir_all(project.path().join("target/debug")).unwrap();
+        let output = project.path().join("target/debug/out.txt");
+        let source = project.path().join("main.rs");
+        std::fs::write(&output, "built").unwrap();
+        std::fs::write(&source, "fn main() {}").unwrap();
+        record_batch(&store, &roots, vec![output.clone(), source.clone()]);
+        assert!(!store.has_history(&output));
+        assert!(store.has_history(&source));
+    }
+
+    #[test]
+    fn batch_output_is_split_into_blobs_by_object_id() {
+        let out = b"aaa blob 5\nhello\nbbb blob 0\n\nccc tree 3\nxyz\n";
+        let blobs = parse_batch(out);
+        assert_eq!(blobs.get("aaa").unwrap(), b"hello");
+        assert_eq!(blobs.get("bbb").unwrap(), b"");
+        assert!(!blobs.contains_key("ccc"));
+        assert_eq!(blob_header(b":./gone missing"), None);
     }
 }

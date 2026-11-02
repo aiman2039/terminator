@@ -26,6 +26,8 @@ pub(crate) enum LocalHistoryJob {
 const QUIET: Duration = Duration::from_millis(500);
 const ROOTS_EVERY: Duration = Duration::from_secs(5);
 const PRUNE_EVERY: Duration = Duration::from_hours(24);
+/// Files recorded per tick; the rest stay pending for later ticks (#192).
+const MAX_BATCH: usize = 256;
 
 pub(crate) struct LocalHistoryWorker {
     store: local_history::Store,
@@ -192,6 +194,7 @@ impl LocalHistoryWorker {
             .iter()
             .filter(|(_, at)| at.elapsed() >= QUIET)
             .map(|(path, _)| path.clone())
+            .take(MAX_BATCH)
             .collect();
         if ready.is_empty() {
             return;
