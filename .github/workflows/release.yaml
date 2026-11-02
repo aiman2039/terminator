@@ -510,7 +510,8 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 5
+          # dmg + appcast, 2 Linux, 2 portable Linux, Windows zip.
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 7
           sha256sum ./*.dmg ./*.tar.gz ./*.zip appcast.xml > SHA256SUMS.txt
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             prerelease=()
