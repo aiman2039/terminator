@@ -366,6 +366,6 @@ const BADGE_FONT: f32 = 10.0;
 
 pub(super) const ATTENTION_ACTION_SIZE: f32 = 22.0;
 
-pub(super) const ATTENTION_ACTION_COUNT: f32 = 3.0;
+pub(super) const ATTENTION_ACTION_COUNT: f32 = 4.0;
 
-pub(super) const ATTENTION_ACTION_READ_COUNT: f32 = 4.0;
+pub(super) const ATTENTION_ACTION_READ_COUNT: f32 = 5.0;

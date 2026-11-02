@@ -133,6 +133,12 @@ pub(super) fn attention_actions(
             let mut buttons = vec![
                 ("ArrowRight", "Go to context", "go", AttentionAction::Go),
                 (
+                    "GitCompareArrows",
+                    "Review changes",
+                    "review",
+                    AttentionAction::Review,
+                ),
+                (
                     "Moon",
                     "Snooze 10 minutes",
                     "snooze",
@@ -142,7 +148,7 @@ pub(super) fn attention_actions(
             ];
             if show_read {
                 buttons.insert(
-                    1,
+                    2,
                     (
                         "CircleCheck",
                         "Mark read (keeps agent state)",

@@ -210,19 +210,19 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
         },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
-            icon: "LayoutDashboard",
+            icon: Action::ToggleIdeMode.icon(),
             #[cfg(feature = "test-support")]
             target: "tool-ide-mode",
         },
         HeaderAction::Settings => HeaderActionView {
-            label: "Settings",
-            icon: "Settings",
+            label: Action::OpenSettings.label(),
+            icon: Action::OpenSettings.icon(),
             #[cfg(feature = "test-support")]
             target: "settings",
         },
         HeaderAction::Palette => HeaderActionView {
-            label: "Search Everywhere",
-            icon: "Search",
+            label: Action::OpenPalette.label(),
+            icon: Action::OpenPalette.icon(),
             #[cfg(feature = "test-support")]
             target: "palette",
         },

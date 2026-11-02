@@ -19,8 +19,8 @@ impl App {
     pub(super) fn workspace_new_tab_menu(&mut self, ui: &mut egui::Ui) {
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            label: "New Terminal",
-            icon: "Terminal",
+            label: Action::NewTerminal.label(),
+            icon: Action::NewTerminal.icon(),
             shortcut: &self.shortcut_label(Action::NewTerminal),
         })
         .clicked()
@@ -30,8 +30,8 @@ impl App {
         }
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            label: "New Browser Tab",
-            icon: "Globe",
+            label: Action::NewBrowser.label(),
+            icon: Action::NewBrowser.icon(),
             shortcut: &self.shortcut_label(Action::NewBrowser),
         })
         .clicked()
@@ -41,8 +41,8 @@ impl App {
         }
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            label: "New VNC Viewer",
-            icon: "Monitor",
+            label: Action::NewVnc.label(),
+            icon: Action::NewVnc.icon(),
             shortcut: &self.shortcut_label(Action::NewVnc),
         })
         .clicked()
@@ -137,8 +137,8 @@ impl App {
             ui.separator();
             if appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                label: "New Browser Tab",
-                icon: "Globe",
+                label: Action::NewBrowser.label(),
+                icon: Action::NewBrowser.icon(),
                 shortcut: &self.shortcut_label(Action::NewBrowser),
             })
             .clicked()
@@ -148,8 +148,8 @@ impl App {
             }
             if appearance::menu_item(appearance::MenuItemInput {
                 ui,
-                label: "New VNC Viewer",
-                icon: "Monitor",
+                label: Action::NewVnc.label(),
+                icon: Action::NewVnc.icon(),
                 shortcut: &self.shortcut_label(Action::NewVnc),
             })
             .clicked()
@@ -181,12 +181,10 @@ impl App {
             ("Split right", Some("right")),
         ] {
             let action = split_action(split);
-            let icon = match split {
-                Some("up") => "PanelTopClose",
-                Some("down") => "PanelBottomClose",
-                Some("left") => "PanelLeftClose",
-                Some("right") => "PanelRightClose",
-                _ => "Plus",
+            let icon = if split.is_some() {
+                action.icon()
+            } else {
+                "Plus"
             };
             let shortcut = self.shortcut_label(action);
             if appearance::menu_item(appearance::MenuItemInput {

@@ -6,9 +6,10 @@ use eframe::egui::{self, Key, Modifiers};
 use std::collections::{BTreeMap, HashMap};
 
 macro_rules! actions {
-    ($($variant:ident => $id:literal, $label:literal;)*) => {
+    ($($variant:ident => $id:literal, $label:literal, $icon:literal;)*) => {
         /// A shortcut or palette command. `id` is the persisted
-        /// keybinding key; Settings stay string-keyed.
+        /// keybinding key; Settings stay string-keyed. `label` and `icon`
+        /// are the shared presentation for menus, toolbars and the palette.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum Action {
             $($variant,)*
@@ -29,50 +30,57 @@ macro_rules! actions {
                     $(Action::$variant => $label,)*
                 }
             }
+
+            /// Lucide icon name from the shared UI icon table.
+            pub const fn icon(self) -> &'static str {
+                match self {
+                    $(Action::$variant => $icon,)*
+                }
+            }
         }
     };
 }
 
 actions! {
-    NewTerminal => "new_terminal", "New terminal";
-    OpenFile => "open_file", "Open file";
-    SplitUp => "split_up", "Split up";
-    SplitDown => "split_down", "Split down";
-    SplitLeft => "split_left", "Split left";
-    SplitRight => "split_right", "Split right";
-    NextPane => "next_pane", "Next pane";
-    SelectAll => "select_all", "Select all";
-    FindInTerminal => "find_in_terminal", "Find in terminal";
-    SearchScrollback => "search_scrollback", "Search scrollback";
-    CopyWorkingDirectory => "copy_working_directory", "Copy working directory";
-    RenameTerminal => "rename_terminal", "Rename terminal";
-    CloseSession => "close_session", "Close session";
-    ClearScrollback => "clear_scrollback", "Clear saved scrollback";
-    EditorSave => "editor_save", "Save all";
-    CompareDisk => "compare_disk", "Compare disk";
-    ToggleLeftSidebar => "toggle_left_sidebar", "Toggle left sidebar";
-    ToggleRightSidebar => "toggle_right_sidebar", "Toggle right sidebar";
-    ToggleIdeMode => "toggle_ide_mode", "Toggle IDE mode";
-    MoveToMain => "move_to_main", "Move terminal to main pane";
-    MoveToStrip => "move_to_strip", "Move terminal to lower pane";
-    OpenSettings => "open_settings", "Settings";
-    OpenPalette => "open_palette", "Search Everywhere";
-    GotoSymbol => "goto_symbol", "Go to symbol";
-    FileStructure => "file_structure", "File structure";
-    NavigateBack => "navigate_back", "Back";
-    NavigateForward => "navigate_forward", "Forward";
-    RecentFiles => "recent_files", "Recent files";
-    NextAttention => "next_attention", "Next agent needing attention";
-    NewBrowser => "new_browser", "New browser tab";
-    NewVnc => "new_vnc", "New VNC viewer";
-    DiffNextChange => "diff_next_change", "Diff: next change";
-    DiffPrevChange => "diff_prev_change", "Diff: previous change";
-    DiffNextFile => "diff_next_file", "Diff: next file";
-    DiffPrevFile => "diff_prev_file", "Diff: previous file";
+    NewTerminal => "new_terminal", "New terminal", "Terminal";
+    OpenFile => "open_file", "Open file", "File";
+    SplitUp => "split_up", "Split up", "PanelTopClose";
+    SplitDown => "split_down", "Split down", "PanelBottomClose";
+    SplitLeft => "split_left", "Split left", "PanelLeftClose";
+    SplitRight => "split_right", "Split right", "PanelRightClose";
+    NextPane => "next_pane", "Next pane", "ArrowRight";
+    SelectAll => "select_all", "Select all", "TextSelect";
+    FindInTerminal => "find_in_terminal", "Find in terminal", "Search";
+    SearchScrollback => "search_scrollback", "Search scrollback", "Search";
+    CopyWorkingDirectory => "copy_working_directory", "Copy working directory", "Folder";
+    RenameTerminal => "rename_terminal", "Rename terminal", "Pencil";
+    CloseSession => "close_session", "Close session", "X";
+    ClearScrollback => "clear_scrollback", "Clear saved scrollback", "Eraser";
+    EditorSave => "editor_save", "Save all", "Save";
+    CompareDisk => "compare_disk", "Compare disk", "FileDiff";
+    ToggleLeftSidebar => "toggle_left_sidebar", "Toggle left sidebar", "PanelLeft";
+    ToggleRightSidebar => "toggle_right_sidebar", "Toggle right sidebar", "PanelRight";
+    ToggleIdeMode => "toggle_ide_mode", "Toggle IDE mode", "LayoutDashboard";
+    MoveToMain => "move_to_main", "Move terminal to main pane", "ArrowUp";
+    MoveToStrip => "move_to_strip", "Move terminal to lower pane", "ArrowDown";
+    OpenSettings => "open_settings", "Settings", "Settings";
+    OpenPalette => "open_palette", "Search Everywhere", "Search";
+    GotoSymbol => "goto_symbol", "Go to symbol", "ListTree";
+    FileStructure => "file_structure", "File structure", "ListTree";
+    NavigateBack => "navigate_back", "Back", "ArrowLeft";
+    NavigateForward => "navigate_forward", "Forward", "ArrowRight";
+    RecentFiles => "recent_files", "Recent files", "History";
+    NextAttention => "next_attention", "Next agent needing attention", "Bell";
+    NewBrowser => "new_browser", "New browser tab", "Globe";
+    NewVnc => "new_vnc", "New VNC viewer", "Monitor";
+    DiffNextChange => "diff_next_change", "Diff: next change", "ArrowDown";
+    DiffPrevChange => "diff_prev_change", "Diff: previous change", "ArrowUp";
+    DiffNextFile => "diff_next_file", "Diff: next file", "ArrowRight";
+    DiffPrevFile => "diff_prev_file", "Diff: previous file", "ArrowLeft";
     // Backward first: egui ignores extra Shift, so Ctrl+Tab would also
     // consume Ctrl+Shift+Tab.
-    SwitcherBack => "tab_switcher_back", "Recent tab switcher (backward)";
-    SwitcherNext => "tab_switcher", "Recent tab switcher";
+    SwitcherBack => "tab_switcher_back", "Recent tab switcher (backward)", "Files";
+    SwitcherNext => "tab_switcher", "Recent tab switcher", "Files";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

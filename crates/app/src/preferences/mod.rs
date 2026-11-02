@@ -1,11 +1,13 @@
 mod persistence;
 mod sorting;
 mod strip;
+mod type_ahead;
 
 pub use persistence::{
     AgentsTab, ExplorerSearchMode, ExplorerView, RadioStation, SidebarTool, UiPreferences,
     VncPasteShortcut,
 };
+pub use type_ahead::TypeAhead;
 // `Playlist` is only named by `lib.rs` tests; keep its old path for them
 // without tripping `unused_imports` on normal builds.
 #[cfg(test)]

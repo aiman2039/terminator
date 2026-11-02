@@ -266,8 +266,10 @@ impl Viewer<'_> {
         gates: TerminalGates,
     ) -> Option<egui::Response> {
         let find_paint = self.find_paint_for(sid);
+        let type_ahead = self.app.type_ahead_mode(sid);
         let backend = self.app.backends.get_mut(sid)?;
         backend.set_painted(true);
+        backend.set_type_ahead(type_ahead);
         let font = egui_term::TerminalFont::new(egui_term::FontSettings {
             font_type: egui::FontId::monospace(self.app.state.settings.font_size),
         });

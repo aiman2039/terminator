@@ -73,7 +73,7 @@ impl SettingsSection {
             Self::Appearance => "theme accent density color hex font",
             Self::Terminal => {
                 "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout lsp language server \
-                 markdown html css scss less json toml yaml"
+                 markdown html css scss less json toml yaml type-ahead typeahead prediction latency echo"
             }
             Self::Editor => "native font size line spacing height caret blink cursor",
             Self::Notifications => "alert os desktop dismiss sound ntfy channel machine test",

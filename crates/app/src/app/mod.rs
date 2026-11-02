@@ -1,6 +1,7 @@
 mod actions;
 pub(crate) use actions::FileActionInput;
 pub(crate) use actions::TerminalActionInput;
+pub(crate) use commands::{copy_directory_label, session_directory};
 pub(crate) mod app_state;
 mod apply_state;
 mod center;

@@ -24,8 +24,10 @@ libc = "0.2"
 [profile.dev]
 debug = 1
 [profile.release]
-lto = "thin"
-codegen-units = 8
+# #71: thin LTO made the warm release rebuild about 5x slower for a small
+# size gain (docs/VALIDATION.md, 2026-11-02).
+lto = false
+codegen-units = 16
 
 [patch.crates-io]
 vnc-rs = { path = "vendor/vnc-rs" }

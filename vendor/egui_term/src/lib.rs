@@ -8,6 +8,7 @@ mod types;
 mod view;
 
 pub use backend::settings::BackendSettings;
+pub use backend::typeahead::TypeAheadMode;
 pub use backend::{
     BackendCommand, FindOutcome, FoundMatch, LinkTarget, PtyEvent, SearchRow, TerminalBackend,
     TerminalMode, TerminalSize,

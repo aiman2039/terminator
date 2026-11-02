@@ -164,6 +164,9 @@ pub struct UiPreferences {
     /// Terminal title colors and icons, keyed by persistent session ID.
     pub terminal_styles: HashMap<String, TerminalStyle>,
     pub vnc_paste_shortcut: VncPasteShortcut,
+    /// Shell terminal type-ahead prediction (#83).
+    #[serde(default)]
+    pub type_ahead: super::TypeAhead,
     #[serde(deserialize_with = "lenient_tool")]
     pub tool: SidebarTool,
     pub visible: bool,
@@ -312,6 +315,7 @@ impl Default for UiPreferences {
             history_expanded: HashMap::new(),
             terminal_styles: HashMap::new(),
             vnc_paste_shortcut: VncPasteShortcut::default(),
+            type_ahead: super::TypeAhead::default(),
             tool: SidebarTool::Explorer,
             visible: true,
             ide_mode: true,

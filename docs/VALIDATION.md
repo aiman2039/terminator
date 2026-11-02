@@ -1,5 +1,86 @@
 # Validation evidence — 2026-09-08
 
+## Release build time (#67, #69, #71) — 2026-11-02
+
+Source: Cargo timing reports from release runs 41310177079 (0.141.0) and
+41352468095 (0.143.0), plus a local profile comparison.
+
+| Package build (`xtask package`) | macOS arm64 | Linux x64 | Linux arm64 | Windows x64 |
+| --- | ---: | ---: | ---: | ---: |
+| 0.141.0, total | 502 s | 397 s | 279 s | 727 s |
+| 0.143.0, total | 305 s | 428 s | 285 s | 1255 s |
+| 0.143.0, dirty units | 32 of 741 | 31 of 948 | 31 of 944 | 752 of 767 |
+| 0.143.0, `terminator` bin unit | 186 s | 286 s | 191 s | 496 s |
+
+- Every release bumps the workspace version, so all about 30 workspace units
+  rebuild in every release. `cache-workspace-crates` cannot reuse them; it
+  only adds cache size.
+- The bin units (`terminator`, `terminator-daemon`, `terminator-hook`) hold
+  thin LTO and the final link. They are 75–85% of the warm package build.
+- Windows 0.143.0 restored a 1.1 GB cache from a restore key, but 752 of 767
+  units were dirty (a full rebuild, 21 min). The repository Actions cache was
+  9.98 GB of its 10 GB limit, so release caches are evicted often. The cause
+  of the Windows miss is not proven.
+
+Local warm rebuild after a workspace change (Apple Silicon, macOS, release
+binaries for the package, two rounds; the first full builds were disturbed by
+other load and are not used):
+
+| Profile | Rebuild | `terminator` | daemon | hook |
+| --- | ---: | ---: | ---: | ---: |
+| thin LTO, 8 CGU (current) | 93 s, 83 s | 81.6 MB | 14.1 MB | 7.95 MB |
+| no LTO, 16 CGU | 19 s, 15 s | 82.0 MB | 15.0 MB | 8.13 MB |
+| thin LTO, 16 CGU | 88 s, 86 s | 83.1 MB | 14.3 MB | 8.17 MB |
+
+Decision: LTO, not codegen units, is the cost. The release profile is now
+`lto = false`, `codegen-units = 16`: the warm release rebuild is about 5×
+faster for +0.5% to +7% binary size. Runtime performance without LTO was not
+measured; the GUI work is mostly drawing, PTY and I/O, so the expected loss
+is small. `cache-workspace-crates` is now `false` for
+release builds: it gave no reuse and only added cache size.
+
+## Syntax-aware diff (#77) — 2026-11-02
+
+No-go for now. See `docs/SYNTAX-DIFF-EVALUATION.md`.
+
+## Shared action rules, alert review, type-ahead (#78, #79, #83) — 2026-11-02
+
+#78: `App::shortcut_applies` and `App::session_action_applies` are the one
+availability rule for shortcuts, the palette and the terminal context menu.
+Pinned palette actions now use it (Move terminal to main/lower pane were
+listed when they did nothing). `SESSION_ACTIONS` moved out of the palette, so
+shortcuts follow it too. Copy working directory copies the remote project
+root for SSH sessions from every entry point. `Action::icon()` gives each
+action one Lucide icon; menus, the header and the split menu reuse
+`Action::label()`/`icon()` where the meaning is the same. Pane menus keep
+local strip/window checks because the docks are checked out while they
+paint. Check for Updates in the palette opens the Updates page, so it was
+not gated. Action IDs and keybindings did not change.
+
+#79: alert to first diff was 4–6 actions. Now:
+
+| Path | Before | After |
+| --- | ---: | ---: |
+| OS notification click to agent terminal | 2 (click, modal Go) | 1 |
+| Agents card to changed files | 2–3 (Go, Git tool, maybe sidebar) | 1 (Review changes) |
+| Alert to first diff | 4–6 | 2–3 |
+
+The notice card stays for an agent whose session has ended. Review changes
+is read-only. Not changed (recorded): Search Everywhere previews (cost more
+than the benefit now); keyboard navigation in the Git file list and commit
+log (follow-up; diff tabs already have F7/Alt+F7); `context_session` keeps
+its live-session rule because agent worktrees are their own projects.
+
+#83: type-ahead in `vendor/egui_term/src/backend/typeahead.rs` with 8 unit
+tests from the JediTerm behavior. Settings → Terminal & Editor →
+Type-ahead (Auto, On, Off), stored in `ui-preferences.json`; editors are
+always Off. Not run: a manual SSH session with added delay, and native GUI
+fixtures.
+
+macOS: `cargo fmt`, `cargo clippy --workspace --all-targets --all-features
+-D warnings`, `cargo test --workspace --all-features --locked` and
+`sh scripts/check.sh sarah` passed. `cargo xtask gui` fixtures were not run.
+
 ## Shell integration, Local History, gutter staging, link filters (#81, #82, #84, #87) — 2026-11-02
 
 macOS: `sh scripts/check.sh all` (async-boundary, fmt, build, clippy, audit,

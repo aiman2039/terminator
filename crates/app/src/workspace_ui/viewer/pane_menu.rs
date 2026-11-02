@@ -108,7 +108,7 @@ impl Viewer<'_> {
             && appearance::menu_item(appearance::MenuItemInput {
                 ui,
                 label: "Move to main pane",
-                icon: "ArrowUp",
+                icon: Action::MoveToMain.icon(),
                 shortcut: &self.app.shortcut_label(Action::MoveToMain),
             })
             .clicked()
@@ -116,7 +116,9 @@ impl Viewer<'_> {
             self.app.queue_strip_move(sid);
             ui.close();
         }
-        // Main/strip moves have no meaning inside a floating window.
+        // The docks are checked out while they paint, so the location test
+        // stays local; `App::session_action_applies` is the same rule for
+        // shortcuts and the palette.
         if !self.strip
             && shell
             && self.window.is_none()
@@ -124,7 +126,7 @@ impl Viewer<'_> {
             && appearance::menu_item(appearance::MenuItemInput {
                 ui,
                 label: "Move to lower pane",
-                icon: "ArrowDown",
+                icon: Action::MoveToStrip.icon(),
                 shortcut: &self.app.shortcut_label(Action::MoveToStrip),
             })
             .clicked()
@@ -134,8 +136,8 @@ impl Viewer<'_> {
         }
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            label: "Search scrollback",
-            icon: "Search",
+            label: Action::SearchScrollback.label(),
+            icon: Action::SearchScrollback.icon(),
             shortcut: &self.app.shortcut_label(Action::SearchScrollback),
         })
         .clicked()
@@ -145,8 +147,8 @@ impl Viewer<'_> {
         }
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
-            label: "Clear saved scrollback",
-            icon: "Eraser",
+            label: Action::ClearScrollback.label(),
+            icon: Action::ClearScrollback.icon(),
             shortcut: &self.app.shortcut_label(Action::ClearScrollback),
         })
         .clicked()

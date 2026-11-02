@@ -15,6 +15,7 @@ impl App {
         self.shell_override_row(ui, &shells, &mut browse);
         self.pr_metadata_row(ui);
         self.font_size_row(ui);
+        self.type_ahead_row(ui);
         self.editor_mode_row(ui);
         self.native_editor_rows(ui);
         self.lsp_server_rows(ui, &mut browse);
@@ -119,6 +120,29 @@ impl App {
                     &mut self.settings_draft.font_size,
                     9.0..=32.0,
                 ));
+            },
+        });
+    }
+
+    /// GUI preference: saved with navigation preferences, not the daemon.
+    fn type_ahead_row(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible("Type-ahead", "type ahead prediction latency ssh echo") {
+            return;
+        }
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Type-ahead",
+            description: "Show typed keys at once, dimmed, until the shell echoes them. Auto turns on when the echo takes more than 100 ms.",
+            add_control: |ui| {
+                settings_controls::segmented(
+                    ui,
+                    &mut self.preferences.type_ahead,
+                    &[
+                        ("Auto", crate::preferences::TypeAhead::Auto),
+                        ("On", crate::preferences::TypeAhead::On),
+                        ("Off", crate::preferences::TypeAhead::Off),
+                    ],
+                );
             },
         });
     }

@@ -119,17 +119,6 @@ const HIDDEN_ACTIONS: &[Action] = &[
     Action::SwitcherNext,
     Action::SwitcherBack,
 ];
-/// Shortcut actions listed only while a session is active.
-const SESSION_ACTIONS: &[Action] = &[
-    Action::SelectAll,
-    Action::FindInTerminal,
-    Action::SearchScrollback,
-    Action::CopyWorkingDirectory,
-    Action::RenameTerminal,
-    Action::CloseSession,
-    Action::ClearScrollback,
-];
-
 fn pinned_action(action: Action) -> bool {
     PINNED_ACTIONS.contains(&action) || PINNED_IDE_ACTIONS.contains(&action)
 }

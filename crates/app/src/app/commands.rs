@@ -6,6 +6,37 @@ use std::collections::{HashMap, HashSet};
 use terminator_core::*;
 
 use super::super::*;
+
+/// Actions that need a focused session. Shortcuts, the palette and menus
+/// share this list through [`App::shortcut_applies`].
+pub(crate) const SESSION_ACTIONS: &[Action] = &[
+    Action::SelectAll,
+    Action::FindInTerminal,
+    Action::SearchScrollback,
+    Action::CopyWorkingDirectory,
+    Action::RenameTerminal,
+    Action::CloseSession,
+    Action::ClearScrollback,
+];
+
+/// Directory that "Copy working directory" copies: the remote project root
+/// for SSH sessions, the local working directory otherwise.
+pub(crate) fn session_directory(session: &Session) -> String {
+    session.remote.as_ref().map_or_else(
+        || session.cwd.display().to_string(),
+        |remote| remote.root.clone(),
+    )
+}
+
+/// Context label for [`Action::CopyWorkingDirectory`].
+pub(crate) const fn copy_directory_label(session: &Session) -> &'static str {
+    if session.remote.is_some() {
+        "Copy project directory"
+    } else {
+        Action::CopyWorkingDirectory.label()
+    }
+}
+
 impl App {
     pub(crate) fn shortcut_allowed(&self, action: Action) -> bool {
         if self.command_dialog_open()
@@ -29,18 +60,55 @@ impl App {
         true
     }
 
+    /// One availability rule for every entry point: shortcuts, the
+    /// palette and context menus. Cheap; no I/O.
     pub(crate) fn shortcut_applies(&self, action: Action) -> bool {
         match action {
-            Action::EditorSave | Action::CompareDisk => self.active_editor_id().is_some(),
             Action::FileStructure => self.active_editor_path().is_some(),
-            Action::MoveToMain => self.focused_strip_shell().is_some(),
-            Action::MoveToStrip => self.preferences.ide_mode && self.focused_main_shell().is_some(),
             Action::DiffNextChange
             | Action::DiffPrevChange
             | Action::DiffNextFile
             | Action::DiffPrevFile => self.active_diff_tab(),
+            Action::EditorSave | Action::CompareDisk | Action::MoveToMain | Action::MoveToStrip => {
+                self.active_session_record()
+                    .is_some_and(|session| self.session_action_applies(action, session))
+            }
+            action if SESSION_ACTIONS.contains(&action) => self.active_session.is_some(),
             _ => true,
         }
+    }
+
+    /// Availability of a session-scoped action for `session`, which may be
+    /// the focused session or the target of a context menu.
+    pub(crate) fn session_action_applies(&self, action: Action, session: &Session) -> bool {
+        let shell = session.kind == SessionKind::Shell;
+        match action {
+            Action::EditorSave | Action::CompareDisk => {
+                session.kind == SessionKind::Editor && !session.review
+            }
+            Action::MoveToMain => shell && self.is_strip_session(&session.project_id, &session.id),
+            // Floating windows are outside `layouts`, so they never match.
+            Action::MoveToStrip => {
+                shell
+                    && self.preferences.ide_mode
+                    && !self.is_strip_session(&session.project_id, &session.id)
+                    && self
+                        .layouts
+                        .get(&session.project_id)
+                        .is_some_and(|workspace| {
+                            workspace.contains(&Tab::Terminal(session.id.clone()))
+                        })
+            }
+            _ => true,
+        }
+    }
+
+    fn active_session_record(&self) -> Option<&Session> {
+        let sid = self.active_session.as_ref()?;
+        self.state
+            .sessions
+            .iter()
+            .find(|session| &session.id == sid)
     }
 
     /// The selected project's active pane is a native working-tree diff.
@@ -54,32 +122,17 @@ impl App {
     /// Live or ended shell whose tab is in the strip and which currently has
     /// keyboard focus. Main-pane shells stay put.
     pub(crate) fn focused_strip_shell(&self) -> Option<String> {
-        let sid = self.active_session.as_ref()?;
-        let session = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| &session.id == sid)?;
-        (session.kind == SessionKind::Shell && self.is_strip_session(&session.project_id, sid))
-            .then(|| sid.clone())
+        self.active_session_record()
+            .filter(|session| self.session_action_applies(Action::MoveToMain, session))
+            .map(|session| session.id.clone())
     }
 
-    /// Shell that is open in the main pane, not the IDE strip.
+    /// Focused shell in the main pane (not the IDE strip or a floating
+    /// window) that can move to the strip.
     pub(crate) fn focused_main_shell(&self) -> Option<String> {
-        let sid = self.active_session.as_ref()?;
-        let session = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| &session.id == sid)?;
-        if session.kind != SessionKind::Shell || self.is_strip_session(&session.project_id, sid) {
-            return None;
-        }
-        let pane = Tab::Terminal(sid.clone());
-        self.layouts
-            .get(&session.project_id)
-            .is_some_and(|workspace| workspace.contains(&pane))
-            .then(|| sid.clone())
+        self.active_session_record()
+            .filter(|session| self.session_action_applies(Action::MoveToStrip, session))
+            .map(|session| session.id.clone())
     }
 
     pub(crate) fn active_editor_id(&self) -> Option<String> {
@@ -88,6 +141,21 @@ impl App {
             (session.id == *sid && session.kind == SessionKind::Editor && !session.review)
                 .then(|| session.id.clone())
         })
+    }
+
+    /// Type-ahead applies to shell sessions only; editors draw their own
+    /// cursor and buffer.
+    pub(crate) fn type_ahead_mode(&self, sid: &str) -> egui_term::TypeAheadMode {
+        let shell = self
+            .state
+            .sessions
+            .iter()
+            .any(|session| session.id == sid && session.kind == SessionKind::Shell);
+        if shell {
+            self.preferences.type_ahead.terminal_mode()
+        } else {
+            egui_term::TypeAheadMode::Off
+        }
     }
 
     pub(crate) fn shortcut_label(&self, action: Action) -> String {
@@ -131,9 +199,7 @@ impl App {
                 }
             }
             Action::MoveToStrip => {
-                if self.preferences.ide_mode
-                    && let Some(sid) = self.focused_main_shell()
-                {
+                if let Some(sid) = self.focused_main_shell() {
                     self.move_main_session_to_strip(&sid);
                 }
             }
@@ -363,21 +429,14 @@ impl App {
     }
 
     pub(crate) fn copy_active_working_directory(&self, ctx: &egui::Context) {
-        let cwd = self
-            .active_session
-            .as_ref()
-            .and_then(|sid| {
-                self.state
-                    .sessions
-                    .iter()
-                    .find(|session| &session.id == sid)
-            })
-            .map(|session| session.cwd.clone())
-            .or_else(|| self.cwd());
-        let Some(cwd) = cwd else {
+        let directory = self
+            .active_session_record()
+            .map(session_directory)
+            .or_else(|| self.cwd().map(|cwd| cwd.display().to_string()));
+        let Some(directory) = directory else {
             return;
         };
-        ctx.copy_text(cwd.display().to_string());
+        ctx.copy_text(directory);
     }
 
     pub(crate) fn rename_active_terminal(&mut self) {
