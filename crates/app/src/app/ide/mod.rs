@@ -21,23 +21,27 @@ impl App {
         self.tool_stripe(ui, false);
         self.tool_stripe(ui, true);
         if self.preferences.left_visible {
-            let projects_response = egui::Panel::left("projects")
+            let mut panel = egui::Panel::left("projects")
                 .frame(appearance::panel_frame(&self.theme))
                 .resizable(true)
                 .default_size(225.0)
-                .size_range(170.0..=420.0)
-                .show(ui, |ui| {
-                    self.agent_bar(ui);
-                    ui.push_id("left-sidebar-content", |ui| {
-                        if let Some(tool) = self.preferences.left_tool {
-                            self.sidebar_tool(tool, ui);
-                        } else if self.preferences.left_agents {
-                            self.agents_view(ui);
-                        } else {
-                            self.projects(ui);
-                        }
-                    });
+                .size_range(170.0..=420.0);
+            // A layout preset sets the width once; dragging works after.
+            if let Some(width) = self.pending_left_width.take() {
+                panel = panel.exact_size(width);
+            }
+            let projects_response = panel.show(ui, |ui| {
+                self.agent_bar(ui);
+                ui.push_id("left-sidebar-content", |ui| {
+                    if let Some(tool) = self.preferences.left_tool {
+                        self.sidebar_tool(tool, ui);
+                    } else if self.preferences.left_agents {
+                        self.agents_view(ui);
+                    } else {
+                        self.projects(ui);
+                    }
                 });
+            });
             self.project_width = projects_response.response.rect.width();
             #[cfg(feature = "test-support")]
             diagnostics::record(

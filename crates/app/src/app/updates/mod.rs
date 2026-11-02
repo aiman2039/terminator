@@ -25,6 +25,7 @@ impl App {
         let processing_started = Instant::now();
         self.drain_updates(ctx);
         self.drain_pty_events(ctx);
+        self.poll_merge_saves();
         self.ui_service_peak_ms = self
             .ui_service_peak_ms
             .max(processing_started.elapsed().as_secs_f64() * 1000.0);

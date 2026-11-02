@@ -14,6 +14,9 @@ pub(crate) struct HistoryWorker {
     last_flush: Instant,
     last_prune: Instant,
     previous_settings: Option<(u64, u64, u64)>,
+    /// History limits only; refreshed when they change so appends do not
+    /// clone the full Settings under the state lock (#236).
+    limits: terminator_core::Settings,
 }
 
 impl HistoryWorker {
@@ -41,6 +44,7 @@ impl HistoryWorker {
             last_flush: Instant::now(),
             last_prune: Instant::now(),
             previous_settings: None,
+            limits: terminator_core::Settings::default(),
         })
     }
 
@@ -103,24 +107,35 @@ impl HistoryWorker {
             }
             self.last_flush = Instant::now();
         }
-        let settings = relock(&s.state).settings.clone();
-        let limits = (
-            settings.history_days,
-            settings.session_mib,
-            settings.total_mib,
-        );
-        if self.history.exceeds(&settings)
-            || self.previous_settings != Some(limits)
+        let limits = {
+            let state = relock(&s.state);
+            let settings = &state.settings;
+            (
+                settings.history_days,
+                settings.session_mib,
+                settings.total_mib,
+            )
+        };
+        let changed = self.previous_settings != Some(limits);
+        if changed {
+            (
+                self.limits.history_days,
+                self.limits.session_mib,
+                self.limits.total_mib,
+            ) = limits;
+        }
+        if changed
+            || self.history.exceeds(&self.limits)
             || self.last_prune.elapsed() >= Duration::from_secs(30)
         {
-            self.prune(s, &settings);
+            self.prune(s);
             self.previous_settings = Some(limits);
             self.last_prune = Instant::now();
         }
     }
 
-    fn prune(&mut self, s: &Shared, settings: &terminator_core::Settings) {
-        match self.history.prune(settings) {
+    fn prune(&mut self, s: &Shared) {
+        match self.history.prune(&self.limits) {
             Ok(ids) if !ids.is_empty() => {
                 let mut state = relock(&s.state);
                 for record in &mut state.sessions {

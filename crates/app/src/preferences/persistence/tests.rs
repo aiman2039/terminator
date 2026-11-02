@@ -45,7 +45,7 @@ fn per_side_tools_round_trip_and_default_to_native_views() {
     assert!(loaded.right_projects);
     // Layout presets carry the per-side assignment too.
     let mut saved = loaded;
-    saved.save_current_layout("both-sides");
+    saved.save_current_layout("both-sides", 300.0);
     assert_eq!(
         saved.named_layouts["both-sides"].left_tool,
         Some(SidebarTool::Git)
@@ -153,7 +153,7 @@ fn ide_sidebar_height_defaults_full_and_round_trips() {
     let mut prefs = prefs;
     prefs.ide_mode = true;
     prefs.ide_sidebars_full_height = false;
-    prefs.save_current_layout("wide");
+    prefs.save_current_layout("wide", 225.0);
     prefs.ide_sidebars_full_height = true;
     prefs.apply_layout("wide").unwrap();
     assert!(!prefs.ide_sidebars_full_height);
@@ -313,4 +313,25 @@ fn language_server_trust_answers_survive_restart() {
     prefs.save(dir.path()).unwrap();
     let loaded = UiPreferences::load(dir.path()).unwrap();
     assert_eq!(loaded.lsp_trust, prefs.lsp_trust);
+}
+
+#[test]
+fn layout_preset_keeps_left_width_and_clamps_widths() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut prefs = UiPreferences::load(dir.path()).unwrap();
+    prefs.save_current_layout("wide-left", 400.0);
+    assert_eq!(prefs.named_layouts["wide-left"].left_width, 400.0);
+    prefs.save_current_layout("nan-left", f32::NAN);
+    assert_eq!(prefs.named_layouts["nan-left"].left_width, 225.0);
+    let preset = prefs.named_layouts.get_mut("wide-left").unwrap();
+    preset.sidebar_width = 9000.0;
+    prefs.apply_layout("wide-left").unwrap();
+    assert_eq!(prefs.width, 480.0);
+    prefs
+        .named_layouts
+        .get_mut("wide-left")
+        .unwrap()
+        .sidebar_width = f32::NAN;
+    prefs.apply_layout("wide-left").unwrap();
+    assert!(prefs.width.is_finite());
 }

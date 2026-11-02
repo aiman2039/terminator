@@ -408,11 +408,7 @@ impl UiPreferences {
             prefs.ide_mode = false;
             prefs.version = 2;
         }
-        prefs.width = if prefs.width.is_finite() {
-            prefs.width.clamp(220.0, 480.0)
-        } else {
-            DEFAULT_SIDEBAR_WIDTH
-        };
+        prefs.width = clamp_sidebar_width(prefs.width);
         prefs.player_volume = if prefs.player_volume.is_finite() {
             prefs.player_volume.clamp(0.0, 1.0)
         } else {
@@ -427,7 +423,8 @@ impl UiPreferences {
     }
 
     /// Save the current UI state as a named layout preset.
-    pub fn save_current_layout(&mut self, name: &str) {
+    /// `left_width` is the left sidebar width the GUI shows now.
+    pub fn save_current_layout(&mut self, name: &str, left_width: f32) {
         let name = name.trim().to_string();
         if name.is_empty() {
             return;
@@ -443,7 +440,7 @@ impl UiPreferences {
             left_tool: self.left_tool,
             right_projects: self.right_projects,
             sidebar_width: self.width,
-            left_width: 225.0,
+            left_width: clamp_left_width(left_width),
         };
         self.named_layouts.insert(name.clone(), preset);
         self.active_layout = Some(name);
@@ -461,7 +458,7 @@ impl UiPreferences {
         self.left_agents = preset.left_agents;
         self.left_tool = preset.left_tool;
         self.right_projects = preset.right_projects;
-        self.width = preset.sidebar_width;
+        self.width = clamp_sidebar_width(preset.sidebar_width);
         self.active_layout = Some(name.to_string());
         Some(preset)
     }
@@ -477,5 +474,25 @@ impl UiPreferences {
     pub fn toggle(&mut self, tool: SidebarTool) {
         self.visible = self.tool != tool || !self.visible;
         self.tool = tool;
+    }
+}
+
+/// Right sidebar width in its allowed range; NaN or infinity gives the default.
+#[must_use]
+fn clamp_sidebar_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(220.0, 480.0)
+    } else {
+        DEFAULT_SIDEBAR_WIDTH
+    }
+}
+
+/// Left sidebar width in its panel's range; NaN or infinity gives 225.
+#[must_use]
+pub fn clamp_left_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(170.0, 420.0)
+    } else {
+        225.0
     }
 }

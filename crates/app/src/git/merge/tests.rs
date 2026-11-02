@@ -180,6 +180,45 @@ fn mark_resolved_stages_only_on_explicit_request() {
     assert!(staged(&received), "Mark resolved stages the file");
 }
 
+/// Mark resolved still stages when the merge tab is no longer drawn (#184).
+#[test]
+fn mark_resolved_stages_after_tab_is_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = eframe::egui::Context::default();
+    let mut app =
+        crate::App::with_context(&ctx, terminator_core::Paths::at(dir.path().join("state")));
+    let (jobs, received) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.projects.push(terminator_core::Project {
+        id: "p".into(),
+        name: "p".into(),
+        path: dir.path().into(),
+        layout: serde_json::Value::Null,
+    });
+    app.selected = Some("p".into());
+    let path = dir.path().join("conflicted.txt");
+    std::fs::write(&path, "markers\n").unwrap();
+    let key = tab(dir.path().into(), path.clone()).key();
+    let mut state = MergeTab::default();
+    let mut merge = doc("a\n", "b\n", "c\n");
+    merge.accept(0, Pick::Theirs);
+    state.doc = Some(merge);
+    state.dirty = true;
+    app.merge.insert(key.clone(), state);
+    app.save_merge(&key, &path, true);
+    let start = std::time::Instant::now();
+    while app.merge.get(&key).is_some_and(MergeTab::busy) {
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        app.poll_merge_saves();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "c\n");
+    assert!(received.try_iter().any(|job| matches!(
+        job,
+        crate::Job::Workspace(_, crate::workspace_ops::Op::Stage(ref staged)) if *staged == path
+    )));
+}
+
 #[test]
 fn unsaved_merge_result_blocks_closing_and_quit() {
     let dir = tempfile::tempdir().unwrap();

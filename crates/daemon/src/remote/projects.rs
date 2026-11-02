@@ -50,6 +50,9 @@ impl Shared {
     /// stops unless something else shares it.
     pub(crate) fn update_remote_project(&self, project: RemoteProject) -> Result<()> {
         project.validate()?;
+        // Session creation holds this lock from target resolution to
+        // registration, so an edit cannot slip between them (#198).
+        let _creation_guard = relock(&self.worktree_operations);
         let control = {
             let mut state = relock(&self.state);
             let id = project.id.clone();

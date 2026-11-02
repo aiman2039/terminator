@@ -14,8 +14,8 @@ type Done<T> = tokio::sync::mpsc::UnboundedReceiver<Result<T, String>>;
 
 enum Pending {
     Load(Done<MergeDoc>),
-    /// A save; `true` stages the file once it lands.
-    Save(Done<()>, bool),
+    /// A save of the file at the path; `true` stages it once it lands.
+    Save(Done<()>, bool, PathBuf),
 }
 
 /// One merge tab: the document being resolved and its pending I/O.
@@ -83,7 +83,12 @@ impl App {
             .as_ref()
             .and_then(|project| self.layouts.get(project))
             .is_some_and(|workspace| workspace.contains(&tab));
-        if !showing {
+        // A pending save must still land (and stage) after the tab is left.
+        let saving = self
+            .merge
+            .get(&tab.key())
+            .is_some_and(|state| matches!(state.pending, Some(Pending::Save(..))));
+        if !showing && !saving {
             self.merge.remove(&tab.key());
         }
         self.open_git_tab(tab);
@@ -147,14 +152,34 @@ impl App {
                     }
                 }
             }
-            Some(Pending::Save(rx, stage)) => {
-                let stage = *stage;
-                if let Ok(result) = rx.try_recv() {
-                    state.pending = None;
-                    self.merge_saved(&key, path, (stage, result));
-                }
+            Some(Pending::Save(..)) | None => {}
+        }
+        self.poll_merge_saves();
+    }
+
+    /// Take finished merge saves of every tab, drawn or not, so a
+    /// Mark resolved still stages and errors still show after the tab
+    /// is left.
+    pub(crate) fn poll_merge_saves(&mut self) {
+        let mut done = Vec::new();
+        for (key, state) in &mut self.merge {
+            if let Some(Pending::Save(rx, stage, path)) = state.pending.as_mut() {
+                let result = match rx.try_recv() {
+                    Ok(result) => result,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => continue,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        Err("The file operation stopped before it finished".into())
+                    }
+                };
+                done.push((key.clone(), path.clone(), *stage, result));
+                state.pending = None;
             }
-            None => {}
+        }
+        for (key, path, stage, result) in done {
+            if let Err(error) = &result {
+                self.error = Some(error.clone());
+            }
+            self.merge_saved(&key, &path, (stage, result));
         }
     }
 
@@ -189,7 +214,7 @@ impl App {
                 .map_err(|error| format!("Write {}: {error}", writing.display()))
         });
         if let (Some(state), Some(rx)) = (self.merge.get_mut(key), rx) {
-            state.pending = Some(Pending::Save(rx, stage));
+            state.pending = Some(Pending::Save(rx, stage, path.to_path_buf()));
             state.message = None;
         }
     }

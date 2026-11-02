@@ -222,7 +222,8 @@ impl App {
                     if save {
                         let trimmed = name.trim().to_string();
                         if !trimmed.is_empty() {
-                            self.preferences.save_current_layout(&trimmed);
+                            self.preferences
+                                .save_current_layout(&trimmed, self.project_width);
                         }
                     }
                     ui.close();

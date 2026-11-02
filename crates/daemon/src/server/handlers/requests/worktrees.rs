@@ -27,7 +27,9 @@ impl Shared {
             branch,
             start,
         } = input;
-        let _worktree_guard = relock(&self.worktree_operations);
+        // No worktree lock here: a long `git worktree add` must not block
+        // Create and Cwd (#190). Removal only acts on registered checkouts,
+        // and this one registers after git finishes.
         let source = self.project_path(&project)?;
         let common_dir = worktrees::common_dir(&source)?;
         let revision = worktrees::resolve_start(&source, &start)?;
