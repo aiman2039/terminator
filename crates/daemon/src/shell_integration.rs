@@ -80,6 +80,8 @@ mod tests {
         );
     }
 
+    // Windows `bash` can be the WSL launcher, which has no distribution on CI.
+    #[cfg(unix)]
     #[test]
     fn bash_prompt_command_keeps_the_exit_status() {
         let script = format!("{BASH}\nfalse\n_terminator_si_prompt\necho \"|$?|$PS0\"");
