@@ -160,3 +160,30 @@ fn remove_refuses_a_checkout_with_ignored_files() {
     remove(&common, &path).unwrap();
     assert!(!path.exists());
 }
+
+#[test]
+fn remove_succeeds_when_checkout_folder_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["config", "user.name", "Fixture"]);
+    git(&repo, &["config", "user.email", "fixture@example.invalid"]);
+    std::fs::write(repo.join("file"), "base").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let common = common_dir(&repo).unwrap().canonicalize().unwrap();
+    let path = dunce::canonicalize(dir.path()).unwrap().join("gone");
+    add(AddInput {
+        common: &common,
+        path: &path,
+        branch: Some("gone-fixture"),
+        start: "HEAD",
+    })
+    .unwrap();
+    std::fs::remove_dir_all(&path).unwrap();
+    ensure_unused(&path, "other-project", &[]).unwrap();
+    remove(&common, &path).unwrap();
+    assert!(!list(&common).unwrap().iter().any(|w| w.path == path));
+    git(&repo, &["show-ref", "--verify", "refs/heads/gone-fixture"]);
+}

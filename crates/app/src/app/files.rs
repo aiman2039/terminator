@@ -467,6 +467,7 @@ impl App {
         self.close_scrollback_search();
         self.close_command_blocks();
         self.worktree_open = false;
+        self.worktree_draft = None;
         self.local_history = None;
         self.shortcut_capture = None;
         if self.palette.open {

@@ -68,7 +68,7 @@ impl App {
         ui.spacing_mut().interact_size.y = 22.0;
         ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
         let current = self.preferences.history_sort;
-        let menu = appearance::menu_button(ui, "Sort", |ui| {
+        let menu = appearance::text_menu_button(ui, "Sort", |ui| {
             for (sort, icon, target) in [
                 (
                     HistorySort::LatestActivity,
@@ -142,7 +142,7 @@ impl App {
         let _ = menu;
     }
 
-    pub(super) fn op_root(&self) -> Option<std::path::PathBuf> {
+    pub(crate) fn op_root(&self) -> Option<std::path::PathBuf> {
         if self.selected_remote_project().is_some() {
             return None;
         }

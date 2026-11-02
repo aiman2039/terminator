@@ -3,7 +3,7 @@ use super::git_panel::git_color;
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
 use crate::{appearance, file_actions::FileAction, icons, preferences::ExplorerSearchMode};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
 use std::path::Path;
 use terminator_core::appearance::AppearanceConfig;
 
@@ -81,12 +81,8 @@ pub(super) fn explorer_toggle(input: ExplorerToggleInput<'_>) -> egui::Response 
         selected,
         target,
     } = input;
-    let response = ui
-        .add_sized(
-            [22.0, 22.0],
-            egui::Button::new(RichText::new(text).small()).frame(false),
-        )
-        .on_hover_text(tip);
+    // Exact-size frameless square: paint the fill first, then the glyph on top.
+    let response = appearance::toolbar_button(ui).on_hover_text(tip);
     if selected || response.hovered() {
         ui.painter().rect_filled(
             response.rect,
@@ -98,6 +94,13 @@ pub(super) fn explorer_toggle(input: ExplorerToggleInput<'_>) -> egui::Response 
             },
         );
     }
+    ui.painter().text(
+        response.rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::TextStyle::Small.resolve(ui.style()),
+        ui.visuals().text_color(),
+    );
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tip));
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), target, response.rect);

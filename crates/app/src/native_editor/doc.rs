@@ -139,6 +139,13 @@ impl NativeDoc {
         self.doc.as_ref()
     }
 
+    /// Loaded buffer text with the file's original line endings (what a
+    /// save writes to disk).
+    pub(super) fn disk_text(&self) -> Option<String> {
+        let doc = self.doc.as_ref()?;
+        Some(with_line_endings(doc.text(), self.crlf))
+    }
+
     /// Caret line of a loaded buffer.
     pub(crate) fn caret_line(&self) -> Option<usize> {
         self.doc.as_ref().map(|_| self.engine.cursor().line)
@@ -398,11 +405,7 @@ impl NativeDoc {
         let text = doc.text();
         self.save_revision = doc.revision();
         self.save_hash = NativeFileIo::text_hash(&text);
-        let text = if self.crlf {
-            text.replace('\n', "\r\n")
-        } else {
-            text
-        };
+        let text = with_line_endings(text, self.crlf);
         let expected = self.loaded_mtime;
         let force = self.force_save;
         let service = services.clone();
@@ -443,6 +446,15 @@ impl NativeDoc {
 
 pub(super) type GutterCache = gutter::GutterState;
 
+/// Turn an LF-only buffer text back into the file's line endings.
+pub(super) fn with_line_endings(text: String, crlf: bool) -> String {
+    if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text
+    }
+}
+
 #[cfg(test)]
 impl NativeDoc {
     pub(crate) fn dirty_for_test(path: PathBuf) -> Self {
@@ -452,5 +464,23 @@ impl NativeDoc {
         buffer.insert(7, " edit");
         doc.doc = Some(buffer);
         doc
+    }
+}
+
+#[cfg(test)]
+mod line_ending_tests {
+    use super::*;
+
+    #[test]
+    fn crlf_document_disk_text_matches_crlf_file_bytes() {
+        let mut doc = NativeDoc::loaded(PathBuf::from("crlf.txt"), "one\ntwo\n");
+        doc.crlf = true;
+        assert_eq!(doc.disk_text().as_deref(), Some("one\r\ntwo\r\n"));
+    }
+
+    #[test]
+    fn lf_document_disk_text_keeps_lf() {
+        let doc = NativeDoc::loaded(PathBuf::from("lf.txt"), "one\ntwo\n");
+        assert_eq!(doc.disk_text().as_deref(), Some("one\ntwo\n"));
     }
 }

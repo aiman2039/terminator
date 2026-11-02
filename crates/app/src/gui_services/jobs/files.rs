@@ -124,6 +124,7 @@ impl Services {
             updates,
         } = input;
         let reply = op.clone();
+        let reply_root = root.clone();
         let result = match op {
             workspace_ops::Op::Perforce(op) => {
                 crate::perforce::perform(crate::perforce::PerformInput {
@@ -141,7 +142,7 @@ impl Services {
             }
         }
         .map_err(|error| format!("{error:#}"));
-        updates.push(Update::Workspace(reply, result));
+        updates.push(Update::Workspace(reply_root, reply, result));
         Ok(())
     }
 

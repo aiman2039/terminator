@@ -296,6 +296,7 @@ impl App {
 #[derive(Default)]
 pub(crate) struct Probes {
     executables: std::collections::HashMap<String, Option<std::path::PathBuf>>,
+    agents: std::collections::HashMap<String, Option<std::path::PathBuf>>,
     options: Option<(
         Vec<settings_controls::BinaryOption>,
         Vec<settings_controls::BinaryOption>,
@@ -305,6 +306,18 @@ pub(crate) struct Probes {
 impl Probes {
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// Agent binary for `kind`, probed once per Settings session.
+    fn agent(
+        &mut self,
+        kind: &str,
+        probe: impl FnOnce(&str) -> Option<std::path::PathBuf>,
+    ) -> Option<std::path::PathBuf> {
+        self.agents
+            .entry(kind.to_owned())
+            .or_insert_with(|| probe(kind))
+            .clone()
     }
 }
 
@@ -317,6 +330,13 @@ impl App {
             .entry(name.to_owned())
             .or_insert_with(|| terminator_core::find_executable(name))
             .clone()
+    }
+
+    /// Installed agent binary, probed once per kind for the Settings session.
+    pub(super) fn settings_agent_binary(&self, kind: &str) -> Option<std::path::PathBuf> {
+        self.settings_probes
+            .borrow_mut()
+            .agent(kind, settings_controls::agent_binary)
     }
 
     /// Detected shell and editor choices, probed once per Settings session.
@@ -336,5 +356,29 @@ impl App {
                 )
             })
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Probes;
+
+    #[test]
+    fn agent_binary_probe_runs_once_per_settings_session() {
+        let mut probes = Probes::default();
+        let mut calls = 0;
+        for _ in 0..3 {
+            probes.agent("codex", |_| {
+                calls += 1;
+                Some("/bin/codex".into())
+            });
+        }
+        assert_eq!(calls, 1);
+        probes.clear();
+        probes.agent("codex", |_| {
+            calls += 1;
+            None
+        });
+        assert_eq!(calls, 2);
     }
 }

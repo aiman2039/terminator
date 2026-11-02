@@ -40,6 +40,8 @@ pub(crate) struct VncViewState {
     /// Remote folder for files dropped on the screen (absolute path).
     pub(crate) upload_dir: String,
     pub(crate) last_pointer: Option<(u16, u16, u8)>,
+    /// Wheel lines not yet sent to the remote (a partial notch).
+    pub(crate) wheel_lines: f32,
     /// Ask the next frame request for the whole screen: set when the
     /// texture cannot take an incremental update (missing, wrong size, or
     /// a decode that produced nothing).
@@ -113,6 +115,7 @@ impl Default for VncViewState {
             confirm_ctrl_alt_del: false,
             upload_dir: String::new(),
             last_pointer: None,
+            wheel_lines: 0.0,
             force_full: false,
             focused: false,
             modifier_bits: 0,

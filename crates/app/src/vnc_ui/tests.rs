@@ -589,3 +589,25 @@ fn empty_host_list_says_the_filter_matched_nothing() {
     );
     assert_eq!(empty_hosts_hint("lab"), "No hosts match the filter.");
 }
+
+#[test]
+fn one_wheel_notch_sends_one_remote_scroll_step() {
+    use super::display::{wheel_lines, wheel_steps};
+    let mut pending = 0.0;
+    let notch = wheel_lines(egui::MouseWheelUnit::Line, 1.0, 40.0);
+    assert_eq!(wheel_steps(&mut pending, notch), 1);
+    assert_eq!(wheel_steps(&mut pending, 0.0), 0);
+    let down = wheel_lines(egui::MouseWheelUnit::Line, -1.0, 40.0);
+    assert_eq!(wheel_steps(&mut pending, down), -1);
+}
+
+#[test]
+fn small_trackpad_deltas_accumulate_into_one_remote_step() {
+    use super::display::{wheel_lines, wheel_steps};
+    let mut pending = 0.0;
+    let small = wheel_lines(egui::MouseWheelUnit::Point, 15.0, 40.0);
+    assert_eq!(wheel_steps(&mut pending, small), 0);
+    assert_eq!(wheel_steps(&mut pending, small), 0);
+    assert_eq!(wheel_steps(&mut pending, small), 1);
+    assert!((pending - 0.125).abs() < 1e-4);
+}

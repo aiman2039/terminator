@@ -652,3 +652,32 @@ fn caption_menu_floats_pane() {
     combined_frame(&mut app, &ctx, vec![frame_press(item, false)]);
     assert_eq!(app.float_pane, Some(Tab::Terminal("one".into())));
 }
+
+#[test]
+fn gui_show_session_focuses_floated_terminal_without_main_duplicate() {
+    let (mut app, ctx, _dir) = fixture();
+    let mut session = session_fixture("float-shown", SessionKind::Shell);
+    session.project_id = "a".into();
+    app.state.sessions.push(session);
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-shown",
+        project: "a",
+        home: "home",
+        tabs: vec![Tab::Terminal("float-shown".into())],
+    }));
+    app.ui_request(
+        &ctx,
+        terminator_core::ui_control::Request::ShowSession {
+            session: "float-shown".into(),
+            anchor: None,
+            split: None,
+        },
+    )
+    .unwrap();
+    assert!(app.layouts.get("a").is_none_or(|workspace| {
+        workspace
+            .find_tab(&Tab::Terminal("float-shown".into()))
+            .is_none()
+    }));
+    assert_eq!(app.active_session.as_deref(), Some("float-shown"));
+}

@@ -19,7 +19,7 @@ impl App {
 
     fn hook_row(&mut self, ui: &mut egui::Ui, kind: &str) {
         let installed = self.hook_status.get(kind).copied();
-        let binary = settings_controls::agent_binary(kind);
+        let binary = self.settings_agent_binary(kind);
         ui.label(kind);
         match binary {
             Some(path) => {

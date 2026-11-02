@@ -94,3 +94,7 @@ adaptation.
 
 `lock.svg` and `ellipsis-vertical.svg` are Lucide 0.468.0 icons with the same
 license and white-stroke adaptation, for the browser address bar and menu.
+
+`download.svg`, `upload.svg` and `archive-restore.svg` come from Lucide 0.577.0
+with the same license and white-stroke adaptation, for the Perforce sync,
+submit and unshelve actions.
