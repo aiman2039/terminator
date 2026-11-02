@@ -226,20 +226,7 @@ fn relative_date(timestamp: i64) -> String {
     } else if diff < 7 * 86400 {
         format!("{}d ago", diff / 86400)
     } else {
-        // Format as YYYY-MM-DD
-        let days = secs / 86400;
-        let span = 146_097_i64;
-        let year = days
-            .checked_div(span)
-            .and_then(|quotient| quotient.checked_mul(span))
-            .and_then(|product| days.checked_sub(product))
-            .and_then(|remainder| remainder.checked_add(719_468))
-            .and_then(|shifted| shifted.checked_div(span))
-            .and_then(|era| era.checked_add(1970))
-            .unwrap_or(1970);
-        let month = 1;
-        let day = 1;
-        format!("{year}-{month:02}-{day:02}")
+        crate::native_editor::ymd(secs)
     }
 }
 

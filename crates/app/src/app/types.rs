@@ -456,6 +456,8 @@ pub(crate) enum Update {
     FloatCreated(Session, egui::ViewportId, Option<String>, Vec<Tab>),
     Text(String, String),
     CommandBlocks(String, Vec<terminator_core::command_blocks::CommandBlock>),
+    /// A Text or CommandBlocks request failed: clear its `loading` key.
+    LoadFailed(String, String),
     Diff(String, Result<diff::DiffDocument, String>),
     DiffAction(Tab, bool, Result<diff::actions::Outcome, String>),
     DiffActionFailed(String, String),

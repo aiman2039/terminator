@@ -184,6 +184,7 @@ impl App {
             }
             Update::Text(key, text) => self.handle_text(key, text),
             Update::CommandBlocks(sid, blocks) => self.handle_command_blocks(sid, blocks),
+            Update::LoadFailed(key, error) => self.handle_load_failed(key, error),
             Update::Diff(key, result) => self.handle_diff(key, result),
             Update::DiffActionFailed(key, error) => self.handle_diff_action_failed(key, error),
             Update::DiffAction(tab, undoing, result) => {

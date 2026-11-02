@@ -33,7 +33,7 @@ pub(crate) struct EditorBlame {
     clippy::arithmetic_side_effects,
     reason = "`doe` < 146097 bounds every step."
 )]
-fn ymd(seconds: i64) -> String {
+pub(crate) fn ymd(seconds: i64) -> String {
     let days = seconds.div_euclid(86_400);
     // Howard Hinnant's civil_from_days.
     let z = days.saturating_add(719_468);

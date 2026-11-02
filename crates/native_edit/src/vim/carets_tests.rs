@@ -132,3 +132,19 @@ fn next_occurrence_selects_matches_and_typing_replaces_them_all() {
     engine.clear_extra_carets();
     assert_eq!(engine.carets().len(), 1);
 }
+
+#[test]
+fn select_all_occurrences_takes_every_match_in_a_large_buffer() {
+    let text = "self.x = 1;\n".repeat(5_000);
+    let mut doc = Doc::new(&text);
+    let mut engine = modeless(&mut doc, 0, 1);
+    let started = std::time::Instant::now();
+    engine.add_all_occurrences(&doc);
+    assert_eq!(engine.carets().len(), 5_000);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert!(engine.caret_texts(&doc).iter().all(|text| text == "self"));
+}

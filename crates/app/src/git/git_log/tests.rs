@@ -251,3 +251,10 @@ fn revision_diffs_before_a_rename_read_the_old_name() {
     assert!(moved.left_label.ends_with("old.txt"));
     assert!(!moved.right_label.contains("old.txt"));
 }
+
+#[test]
+fn old_commit_date_shows_real_calendar_day() {
+    // 2024-03-15 12:00:00 UTC.
+    assert_eq!(relative_date(1_710_504_000), "2024-03-15");
+    assert_eq!(relative_date(0), "");
+}
