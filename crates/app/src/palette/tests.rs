@@ -566,6 +566,34 @@ fn palette_frames_share_cached_rows_and_details() {
 }
 
 #[test]
+fn state_change_alone_waits_before_reranking_but_a_query_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+    app.palette.open = true;
+    assert_eq!(app.refresh_palette_cache(), None);
+    let first = std::sync::Arc::clone(&app.palette.cache.as_ref().unwrap().items);
+    app.state.revision += 1;
+    assert!(app.refresh_palette_cache().is_some());
+    assert!(std::sync::Arc::ptr_eq(
+        &first,
+        &app.palette.cache.as_ref().unwrap().items
+    ));
+    app.palette.query = "x".into();
+    assert_eq!(app.refresh_palette_cache(), None);
+    let cache = app.palette.cache.as_ref().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &cache.items));
+    assert_eq!(cache.state_revision, app.state.revision);
+    let built = cache.built_at;
+    app.palette.cache.as_mut().unwrap().built_at = built.checked_sub(STATE_REFRESH).unwrap();
+    app.state.revision += 1;
+    assert_eq!(app.refresh_palette_cache(), None);
+    assert_eq!(
+        app.palette.cache.as_ref().unwrap().state_revision,
+        app.state.revision
+    );
+}
+
+#[test]
 fn keyboard_selection_scrolls_the_row_to_the_viewport_center() {
     assert_eq!(center::palette_scroll_offset(0, 20.0, 200.0), 0.0);
     assert_eq!(center::palette_scroll_offset(50, 20.0, 200.0), 910.0);

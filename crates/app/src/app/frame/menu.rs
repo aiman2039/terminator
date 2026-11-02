@@ -48,6 +48,22 @@ impl App {
         }
         self.detail = None;
     }
+    /// The status menu items, only when they may differ from the ones last
+    /// returned. The cached sidebar index is rebuilt only when notices or
+    /// sessions change, so the items are built only then (#211).
+    #[cfg(any(test, target_os = "macos"))]
+    pub(crate) fn changed_status_menu_items(&mut self) -> Option<Vec<updater::StatusMenuItem>> {
+        let index = self.sidebar_index();
+        if self
+            .status_menu_index
+            .as_ref()
+            .is_some_and(|shown| std::sync::Arc::ptr_eq(shown, &index))
+        {
+            return None;
+        }
+        self.status_menu_index = Some(index);
+        Some(self.status_menu_items())
+    }
     #[cfg(all(not(test), target_os = "macos"))]
     pub(crate) fn sync_menu_bar(&mut self, ctx: &egui::Context) {
         if updater::take_status_click() {
@@ -56,16 +72,8 @@ impl App {
                 self.open_agents_inbox();
             }
         }
-        // The cached sidebar index is rebuilt only when notices or
-        // sessions change; rebuild the menu items only then.
-        let index = self.sidebar_index();
-        let seen = self
-            .status_menu_index
-            .as_ref()
-            .is_some_and(|shown| std::sync::Arc::ptr_eq(shown, &index));
-        if !seen {
-            updater::sync_status_menu(&self.status_menu_items());
-            self.status_menu_index = Some(index);
+        if let Some(items) = self.changed_status_menu_items() {
+            updater::sync_status_menu(&items);
         }
         if let Some(id) = updater::take_status_selection() {
             self.focus_status_notice(ctx, &id);

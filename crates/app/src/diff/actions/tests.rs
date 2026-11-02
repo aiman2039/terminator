@@ -595,6 +595,15 @@ async fn autocrlf_diff_shows_only_real_changes_and_stages_lf_lines() {
 }
 
 #[tokio::test]
+async fn autocrlf_diff_load_writes_no_git_objects() {
+    let fixture = autocrlf_fixture();
+    let before = fixture.git(&["count-objects"]);
+    let doc = fixture.doc(false).await;
+    assert_eq!(doc.right_text, "a\nB\nc\n");
+    assert_eq!(fixture.git(&["count-objects"]), before);
+}
+
+#[tokio::test]
 async fn autocrlf_discard_restores_crlf_worktree_lines() {
     let fixture = autocrlf_fixture();
     let doc = fixture.doc(false).await;

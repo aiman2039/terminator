@@ -243,6 +243,9 @@ impl SidebarPass<'_> {
         if let Some(error) = &view.file_error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if let Some(note) = &view.file_note {
+            ui.weak(note);
+        }
         if self.upload {
             self.actions.picks.push(Pick::Upload {
                 remote_dir: view.path.clone(),

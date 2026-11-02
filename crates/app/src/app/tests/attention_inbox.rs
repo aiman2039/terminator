@@ -644,6 +644,27 @@ fn status_menu_source_is_reused_until_notices_change() {
 }
 
 #[test]
+fn status_menu_items_are_rebuilt_only_after_notices_change() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+    assert_eq!(
+        app.changed_status_menu_items().map(|items| items.len()),
+        Some(0)
+    );
+    assert!(app.changed_status_menu_items().is_none());
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingInput,
+        created: now(),
+    })];
+    let items = app.changed_status_menu_items().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, "wait");
+    assert!(app.changed_status_menu_items().is_none());
+}
+
+#[test]
 fn status_menu_skips_settled_notices_and_caps_single_line_titles() {
     let (mut app, _ctx, _dir) = fixture();
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];

@@ -24,7 +24,9 @@ impl App {
         if self.lsp.workspace_symbols_pending() {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
-        self.refresh_palette_cache();
+        if let Some(wait) = self.refresh_palette_cache() {
+            ui.ctx().request_repaint_after(wait);
+        }
         let (items, details) = self.palette.cache.as_ref().map_or_else(
             || (Arc::from([]), Arc::from([])),
             |cache| (Arc::clone(&cache.items), Arc::clone(&cache.details)),
@@ -165,19 +167,29 @@ impl App {
         }
     }
 
-    pub(super) fn refresh_palette_cache(&mut self) {
+    /// Rebuilds the ranked rows when the palette input changed. A daemon
+    /// state change alone rebuilds at most once per [`STATE_REFRESH`], so
+    /// frequent snapshots do not re-rank on every frame (#177). Returns how
+    /// long to wait before a deferred rebuild is due.
+    pub(super) fn refresh_palette_cache(&mut self) -> Option<Duration> {
         let project_id = self.selected_project().map(|project| project.id.clone());
-        let stale = self.palette.cache.as_ref().is_none_or(|cache| {
+        let input_changed = self.palette.cache.as_ref().is_none_or(|cache| {
             cache.query != self.palette.query
-                || cache.state_revision != self.state.revision
                 || cache.file_index_at != self.file_index_at
                 || cache.lsp_revision != self.lsp.search_revision()
                 || cache.filters != self.palette.filters
                 || cache.project != project_id
                 || cache.scope != self.palette.file_scope
         });
-        if !stale {
-            return;
+        if !input_changed {
+            let cache = self.palette.cache.as_ref()?;
+            if cache.state_revision == self.state.revision {
+                return None;
+            }
+            let age = cache.built_at.elapsed();
+            if age < STATE_REFRESH {
+                return STATE_REFRESH.checked_sub(age);
+            }
         }
         let items: std::sync::Arc<[PaletteItem]> = self.filtered_palette().into();
         let details = items.iter().map(|item| item.detail(self)).collect();
@@ -189,9 +201,11 @@ impl App {
             filters: self.palette.filters,
             project: project_id,
             scope: self.palette.file_scope.clone(),
+            built_at: Instant::now(),
             items,
             details,
         });
+        None
     }
 
     /// Arrow keys move the selection, wrapping; returns whether it moved.

@@ -286,6 +286,14 @@ pub enum Reply {
     Directory {
         path: String,
         entries: Vec<Entry>,
+        /// More than the listing limit exist; only the first ones are sent.
+        /// Older daemons omit it.
+        #[serde(default)]
+        truncated: bool,
+        /// Entries left out because their name is not UTF-8 or not a single
+        /// path component. Older daemons omit it.
+        #[serde(default)]
+        skipped: usize,
     },
     File {
         path: String,
@@ -307,6 +315,20 @@ pub enum Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn directory_reply_from_older_daemon_is_complete() {
+        let old = r#"{"Directory":{"path":"src","entries":[]}}"#;
+        let reply: Reply = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            reply,
+            Reply::Directory {
+                path: "src".into(),
+                entries: Vec::new(),
+                truncated: false,
+                skipped: 0,
+            }
+        );
+    }
     #[test]
     fn remote_paths_cannot_escape_or_become_local_roots() {
         for path in [
