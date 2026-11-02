@@ -16,6 +16,10 @@ pub const MAX_BLOCKS: usize = 500;
 pub const MAX_OUTPUT: usize = 64 * 1024;
 /// Command line length kept per block.
 const MAX_COMMAND: usize = 4096;
+/// Raw text bytes per [`Tracker::reply_blocks`] reply (see there).
+pub const REPLY_BUDGET: usize = crate::MAX_FRAME / 8;
+/// Assumed JSON size of one block's fields other than its text.
+const REPLY_BLOCK_OVERHEAD: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mark {
@@ -224,6 +228,46 @@ impl Tracker {
 
     pub fn cwd(&self) -> Option<&PathBuf> {
         self.cwd.as_ref()
+    }
+
+    /// Blocks newer than `since` for one IPC reply, oldest first. JSON can
+    /// escape a byte into six, so raw text stays within [`REPLY_BUDGET`]
+    /// to keep the frame under [`crate::MAX_FRAME`]. The newest blocks keep
+    /// their output; older ones are sent with empty, truncated output, and
+    /// the oldest are left out once even their metadata does not fit.
+    pub fn reply_blocks(&self, since: u64) -> Vec<CommandBlock> {
+        let mut budget = REPLY_BUDGET;
+        let mut out = Vec::new();
+        for block in self.blocks.iter().rev().take_while(|b| b.id > since) {
+            let meta = REPLY_BLOCK_OVERHEAD
+                .saturating_add(block.command.len())
+                .saturating_add(block.cwd.as_ref().map_or(0, |c| c.as_os_str().len()));
+            let Some(rest) = budget.checked_sub(meta) else {
+                break;
+            };
+            budget = rest;
+            let rest = budget.checked_sub(block.output.len());
+            let keep_output = rest.is_some();
+            if let Some(rest) = rest {
+                budget = rest;
+            }
+            out.push(CommandBlock {
+                id: block.id,
+                command: block.command.clone(),
+                cwd: block.cwd.clone(),
+                exit_code: block.exit_code,
+                started_ms: block.started_ms,
+                finished_ms: block.finished_ms,
+                output: if keep_output {
+                    block.output.clone()
+                } else {
+                    String::new()
+                },
+                output_truncated: block.output_truncated || !keep_output,
+            });
+        }
+        out.reverse();
+        out
     }
 
     /// Apply one mark. Returns the block that just finished, if any.

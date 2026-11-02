@@ -132,7 +132,10 @@ impl App {
     /// Ask for blame once the buffer has been quiet for a moment (right
     /// away for the first answer). Runs every frame the editor paints.
     pub(crate) fn request_editor_blame(&mut self, ctx: &egui::Context, path: &Path) {
-        let Some(buffer) = self.native_docs.get(path).and_then(|doc| doc.doc.as_ref()) else {
+        let Some(native) = self.native_docs.get(path) else {
+            return;
+        };
+        let Some(buffer) = native.doc.as_ref() else {
             return;
         };
         let revision = buffer.revision();
@@ -151,7 +154,9 @@ impl App {
             return;
         }
         blame.pending = Some(revision);
-        let text = buffer.text();
+        // `git blame --contents` matches lines against the committed bytes:
+        // send the file's own line endings, not the LF-only buffer.
+        let text = super::doc::with_line_endings(buffer.text(), native.crlf);
         let _ = self
             .jobs
             .send(Job::EditorBlame(path.to_owned(), revision, text));

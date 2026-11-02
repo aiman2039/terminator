@@ -333,13 +333,7 @@ impl App {
             let pane = Tab::Terminal(sid.into());
             // A session already visible in a floating window stays there:
             // adopting it into the main dock as well would duplicate it.
-            let floated = self.floating.iter().any(|window| {
-                window
-                    .dock
-                    .as_ref()
-                    .is_some_and(|dock| dock.find_tab(&pane).is_some())
-            });
-            if !floated {
+            if !self.is_floated_session(sid) {
                 let workspace = self
                     .layouts
                     .entry(s.project_id.clone())
@@ -355,6 +349,26 @@ impl App {
             });
             self.send(Request::Focus { session: s.id });
         }
+    }
+    /// True when a floating window already shows `sid`.
+    pub(crate) fn is_floated_session(&self, sid: &str) -> bool {
+        let pane = Tab::Terminal(sid.into());
+        self.floating.iter().any(|window| {
+            window
+                .dock
+                .as_ref()
+                .is_some_and(|dock| dock.find_tab(&pane).is_some())
+        })
+    }
+    /// True when `sid` already has a view: the project dock, a floating
+    /// window or the IDE terminal strip. `go_session` focuses that view.
+    pub(crate) fn session_view_exists(&self, project: &str, sid: &str) -> bool {
+        let pane = Tab::Terminal(sid.into());
+        self.layouts
+            .get(project)
+            .is_some_and(|dock| dock.contains(&pane))
+            || self.is_floated_session(sid)
+            || self.is_strip_session(project, sid)
     }
     pub(crate) fn has_project(&self, project: &str) -> bool {
         self.state.projects.iter().any(|p| p.id == project)

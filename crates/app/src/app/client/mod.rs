@@ -103,11 +103,9 @@ impl App {
             "Project has an unsupported layout version"
         );
         let tab = Tab::Terminal(session.clone());
-        if self
-            .layouts
-            .get(&record.project_id)
-            .is_some_and(|d| d.contains(&tab))
-        {
+        // Focus an existing view (dock, floating window or IDE strip)
+        // instead of adding a second pane, like `go_session`.
+        if self.session_view_exists(&record.project_id, &session) {
             self.go_session(&session);
             return Ok(Some(serde_json::json!({"accepted":true,"existing":true})));
         }

@@ -200,7 +200,7 @@ impl App {
         } else {
             terminator_core::agents::display_name(&current).to_string()
         };
-        let menu = appearance::menu_button(ui, &label, |ui| {
+        let menu = appearance::text_menu_button(ui, &label, |ui| {
             let mut kinds: Vec<String> = self
                 .state
                 .agents

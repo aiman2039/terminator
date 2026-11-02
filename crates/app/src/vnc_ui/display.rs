@@ -277,19 +277,49 @@ impl ScreenPane<'_> {
             self.view.last_pointer = Some(next);
             self.events.push(VncInputEvent::Pointer { x, y, buttons });
         }
-        // Wheel: forwarded only when the remote fills the pane; at
-        // 100% the local scroll bars own the wheel.
-        let scroll_delta = ui.input(|input| input.smooth_scroll_delta);
-        if self.view.scale.fills_pane() && scroll_delta.y.abs() > 1.0 {
-            let wheel_bit = if scroll_delta.y > 0.0 { 8u8 } else { 16u8 };
-            self.events.push(VncInputEvent::Pointer {
-                x,
-                y,
-                buttons: buttons | wheel_bit,
-            });
-            self.events.push(VncInputEvent::Pointer { x, y, buttons });
+        // Wheel: forwarded only when the remote fills the pane (at 100% the
+        // local scroll bars own it); one click per line, partials carry over.
+        if !self.view.scale.fills_pane() {
+            return;
+        }
+        let speed = ui.ctx().options(|o| o.input_options.line_scroll_speed);
+        let lines: f32 = ui.input(|input| {
+            let wheel = |event: &egui::Event| match event {
+                egui::Event::MouseWheel { unit, delta, .. } => wheel_lines(*unit, delta.y, speed),
+                _ => 0.0,
+            };
+            input.events.iter().map(wheel).sum()
+        });
+        let steps = wheel_steps(&mut self.view.wheel_lines, lines);
+        let pressed = buttons | if steps > 0 { 8u8 } else { 16u8 };
+        for _ in 0..steps.unsigned_abs() {
+            for buttons in [pressed, buttons] {
+                self.events.push(VncInputEvent::Pointer { x, y, buttons });
+            }
         }
     }
+}
+
+/// A wheel event's size in lines (a page counts as a few lines).
+pub(super) fn wheel_lines(unit: egui::MouseWheelUnit, delta_y: f32, line_speed: f32) -> f32 {
+    match unit {
+        egui::MouseWheelUnit::Line => delta_y,
+        egui::MouseWheelUnit::Page => delta_y * 3.0,
+        egui::MouseWheelUnit::Point => delta_y / line_speed.max(1.0),
+    }
+}
+
+/// Whole remote wheel steps in `pending + lines`; the remainder stays pending.
+pub(super) fn wheel_steps(pending: &mut f32, lines: f32) -> i32 {
+    if !lines.is_finite() {
+        return 0;
+    }
+    *pending += lines;
+    let steps = pending.trunc().clamp(-20.0, 20.0);
+    *pending -= pending.trunc();
+    #[expect(clippy::cast_possible_truncation, reason = "clamped to ±20")]
+    let steps = steps as i32;
+    steps
 }
 
 struct ScreenKeysInput<'a> {

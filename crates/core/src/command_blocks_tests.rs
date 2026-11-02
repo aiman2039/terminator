@@ -184,3 +184,53 @@ fn backspace_edits_the_echoed_command() {
     let done = run(&mut tracker, &["133;C", "133;D;0"]);
     assert_eq!(done[0].command, "ls");
 }
+
+#[test]
+fn command_blocks_reply_stays_under_frame_limit() {
+    let mut tracker = Tracker::default();
+    // Control bytes escape to six JSON bytes each: the worst case.
+    let output = "\u{1}".repeat(MAX_OUTPUT);
+    for id in 1..=MAX_BLOCKS as u64 {
+        tracker.blocks.push_back(CommandBlock {
+            id,
+            command: "\u{1}".repeat(MAX_COMMAND),
+            output: output.clone(),
+            ..CommandBlock::default()
+        });
+    }
+    let reply = tracker.reply_blocks(0);
+    let bytes = serde_json::to_vec(&crate::Response::CommandBlocks(reply.clone())).unwrap();
+    assert!(bytes.len() < crate::MAX_FRAME, "{} bytes", bytes.len());
+    let newest = reply.last().unwrap();
+    assert_eq!(newest.id, MAX_BLOCKS as u64);
+    assert_eq!(newest.output, output);
+    assert!(reply.windows(2).all(|w| w[0].id < w[1].id));
+    assert!(
+        reply
+            .iter()
+            .all(|b| b.output == output || (b.output.is_empty() && b.output_truncated))
+    );
+    assert!(tracker.reply_blocks(MAX_BLOCKS as u64).is_empty());
+}
+
+#[test]
+fn command_blocks_reply_keeps_old_commands_without_output() {
+    let mut tracker = Tracker::default();
+    let output = "x".repeat(MAX_OUTPUT);
+    for id in 1..=MAX_BLOCKS as u64 {
+        tracker.blocks.push_back(CommandBlock {
+            id,
+            command: "ls".into(),
+            output: output.clone(),
+            ..CommandBlock::default()
+        });
+    }
+    let reply = tracker.reply_blocks(0);
+    // Far more blocks than full outputs fit; the newest are kept.
+    assert!(reply.len() > 100, "{}", reply.len());
+    assert_eq!(reply.last().unwrap().id, MAX_BLOCKS as u64);
+    assert_eq!(reply.last().unwrap().output, output);
+    let oldest = reply.first().unwrap();
+    assert_eq!(oldest.command, "ls");
+    assert!(oldest.output.is_empty() && oldest.output_truncated);
+}

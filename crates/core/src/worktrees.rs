@@ -255,7 +255,11 @@ pub fn remove(common: &Path, path: &Path) -> Result<()> {
     if record.bare || record.locked {
         return Err(WorktreeError::BareOrLocked { path: path.into() });
     }
-    ensure_no_ignored(path)?;
+    // A checkout folder the user already deleted has nothing left to lose;
+    // `git worktree remove` (without --force) then only drops the registration.
+    if !folder_missing(path)? {
+        ensure_no_ignored(path)?;
+    }
     run(
         common,
         &[
@@ -266,6 +270,13 @@ pub fn remove(common: &Path, path: &Path) -> Result<()> {
         ],
     )?;
     Ok(())
+}
+fn folder_missing(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.into()),
+    }
 }
 /// `git worktree remove` refuses dirty and untracked content but deletes
 /// ignored files (`.env`, local databases) silently, so refuse those too.
@@ -296,7 +307,12 @@ fn ensure_no_ignored(path: &Path) -> Result<()> {
 /// in descendants, so check both recorded paths and owned process directories.
 pub fn ensure_unused(path: &Path, project: &str, sessions: &[crate::Session]) -> Result<()> {
     use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System, UpdateKind};
-    let path = path.canonicalize()?;
+    // A deleted checkout cannot be canonicalized; compare the recorded path.
+    let path = if folder_missing(path)? {
+        path.to_path_buf()
+    } else {
+        path.canonicalize()?
+    };
     let inside = |candidate: &Path| {
         candidate.starts_with(&path) || candidate.canonicalize().is_ok_and(|p| p.starts_with(&path))
     };

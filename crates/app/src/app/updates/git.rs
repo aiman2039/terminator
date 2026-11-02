@@ -225,10 +225,20 @@ impl App {
 
     pub(super) fn handle_workspace(
         &mut self,
+        root: &std::path::Path,
         op: workspace_ops::Op,
         result: Result<workspace_ops::Report, String>,
     ) {
+        // A list reply for a repository the panel no longer shows is stale.
+        // Compare with the root new jobs run in (Perforce uses its command root).
+        let stale = self.op_root().as_deref() != Some(root);
         match result {
+            Ok(
+                workspace_ops::Report::Branches(_)
+                | workspace_ops::Report::Shelves(_)
+                | workspace_ops::Report::Log(_)
+                | workspace_ops::Report::Compare(_),
+            ) if stale => {}
             Ok(workspace_ops::Report::Message(text)) => self.workspace_op_succeeded(&op, text),
             Ok(workspace_ops::Report::Branches(names)) => self.git.branches = names,
             // Amend edits the last message; only fill a draft the

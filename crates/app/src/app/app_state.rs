@@ -302,7 +302,9 @@ pub struct App {
     pub(crate) search_open: bool,
     /// Terminal whose shell integration commands fill the main pane.
     pub(crate) commands_session: Option<String>,
-    pub(crate) command_blocks: HashMap<String, Vec<terminator_core::command_blocks::CommandBlock>>,
+    /// Shared so the Commands page borrows them without a per-frame clone.
+    pub(crate) command_blocks:
+        HashMap<String, std::sync::Arc<[terminator_core::command_blocks::CommandBlock]>>,
     pub(crate) worktree_open: bool,
     /// The Local History page fills the main pane (same pattern as Player).
     pub(crate) local_history: Option<crate::local_history::Page>,

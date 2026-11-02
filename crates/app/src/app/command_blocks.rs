@@ -79,7 +79,7 @@ impl App {
 
     pub(crate) fn handle_command_blocks(&mut self, sid: String, blocks: Vec<CommandBlock>) {
         self.loading.remove(&format!("commands:{sid}"));
-        self.command_blocks.insert(sid, blocks);
+        self.command_blocks.insert(sid, blocks.into());
     }
 
     /// Scroll the terminal to the command's line and show it.
@@ -129,6 +129,7 @@ impl App {
                 .desired_width(400.0),
         );
         ui.add_space(8.0);
+        // Arc clone: no per-frame copy of block output (#174).
         let Some(blocks) = self.command_blocks.get(&sid).cloned() else {
             ui.weak("Loading commands…");
             return;

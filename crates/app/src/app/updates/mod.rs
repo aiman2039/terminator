@@ -215,7 +215,7 @@ impl App {
             Update::ServiceStarted(result) => self.handle_service_started(result),
             Update::Error(e) => self.handle_error(e),
             Update::Info(i) => self.info = Some(i),
-            Update::Workspace(op, result) => self.handle_workspace(op, result),
+            Update::Workspace(root, op, result) => self.handle_workspace(&root, op, result),
             Update::GitView(key, view) => self.handle_git_view(&key, view),
             Update::LocalHistory(reply) => self.handle_local_history(reply),
             Update::CommitFiles(hash, files) => {

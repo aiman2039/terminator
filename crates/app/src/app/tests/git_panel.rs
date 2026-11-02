@@ -334,6 +334,7 @@ fn commit_switch_and_refresh_invalidate_git_lists() {
     app.git.list_root = Some(root.clone());
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             workspace_ops::Op::Stage(root.join("a.txt")),
             Ok(workspace_ops::Report::Message("Staged".into())),
         ))
@@ -342,6 +343,7 @@ fn commit_switch_and_refresh_invalidate_git_lists() {
     assert_eq!(app.git.list_root, Some(root.clone()));
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             workspace_ops::Op::Commit {
                 message: "nope".into(),
                 amend: false,
@@ -355,6 +357,7 @@ fn commit_switch_and_refresh_invalidate_git_lists() {
     assert_eq!(app.git.list_root, Some(root.clone()));
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             workspace_ops::Op::Commit {
                 message: "yes".into(),
                 amend: false,
@@ -369,6 +372,7 @@ fn commit_switch_and_refresh_invalidate_git_lists() {
     app.git.list_root = Some(root.clone());
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             workspace_ops::Op::Switch("feature".into()),
             Ok(workspace_ops::Report::Message("Switched".into())),
         ))
@@ -437,6 +441,7 @@ fn git_views_load_asynchronously_and_reload_after_a_commit() {
     assert!(!app.git_views.contains_key("closed"));
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             workspace_ops::Op::Commit {
                 message: "m".into(),
                 amend: false,
@@ -509,6 +514,7 @@ fn failed_commit_restores_the_draft_but_failed_push_does_not() {
     assert_eq!(app.git.commit_inflight.as_deref(), Some("msg"));
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             commit(false),
             Err("hook rejected".into()),
         ))
@@ -521,6 +527,7 @@ fn failed_commit_restores_the_draft_but_failed_push_does_not() {
     app.git.commit_inflight = Some("msg".into());
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             commit(true),
             Err(format!("{}: rejected", workspace_ops::PUSH_FAILED)),
         ))
@@ -532,6 +539,7 @@ fn failed_commit_restores_the_draft_but_failed_push_does_not() {
     app.git.commit_inflight = Some("msg".into());
     app.update_tx
         .send(Update::Workspace(
+            PathBuf::from("/repo"),
             commit(false),
             Ok(workspace_ops::Report::Message("Committed".into())),
         ))
@@ -628,4 +636,54 @@ fn diff_navigation_shortcuts_apply_only_to_an_active_diff() {
         app.run_shortcut(&ctx, action);
         assert_eq!(app.diff_nav.take(), Some(action));
     }
+}
+
+#[test]
+fn stale_git_list_replies_do_not_overwrite_the_current_repo() {
+    let (mut app, ctx, _dir) = fixture();
+    let current = PathBuf::from("/current");
+    app.context = Some(services::ContextData {
+        cwd: current.clone(),
+        root: Some(current.clone()),
+        perforce: None,
+        git_dirs: vec![],
+        branch: "main".into(),
+        changes: vec![],
+        decorations: HashMap::default(),
+        stats: HashMap::default(),
+        error: None,
+    });
+    app.git.list_root = Some(current.clone());
+    for (root, branch) in [("/old", "old-branch"), ("/current", "main")] {
+        app.update_tx
+            .send(Update::Workspace(
+                PathBuf::from(root),
+                workspace_ops::Op::Branches,
+                Ok(workspace_ops::Report::Branches(vec![branch.into()])),
+            ))
+            .unwrap();
+        app.update_tx
+            .send(Update::Workspace(
+                PathBuf::from(root),
+                workspace_ops::Op::Log,
+                Ok(workspace_ops::Report::Log(vec![(
+                    branch.into(),
+                    "msg".into(),
+                )])),
+            ))
+            .unwrap();
+    }
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.git.branches, vec!["main".to_string()]);
+    assert_eq!(app.git.log, vec![("main".to_string(), "msg".to_string())]);
+    app.update_tx
+        .send(Update::Workspace(
+            PathBuf::from("/old"),
+            workspace_ops::Op::Branches,
+            Ok(workspace_ops::Report::Branches(vec!["late".into()])),
+        ))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.git.branches, vec!["main".to_string()]);
+    assert_eq!(app.git.list_root, Some(current));
 }

@@ -94,16 +94,16 @@ impl App {
                     .copied()
                     .unwrap_or(true)
             });
+        let (icon, tip) = if all_expanded {
+            ("ChevronsDownUp", "Collapse all History projects")
+        } else {
+            ("ChevronDown", "Expand all History projects")
+        };
         let toggle = ui
-            .add_enabled(
-                !groups.is_empty(),
-                egui::Button::new(if all_expanded {
-                    "Collapse all"
-                } else {
-                    "Expand all"
-                }),
-            )
-            .on_hover_text("Collapse or expand all History projects");
+            .add_enabled_ui(!groups.is_empty(), |ui| {
+                appearance::sidebar_action(ui, icon, tip)
+            })
+            .inner;
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "history-toggle-all", toggle.rect);
         if toggle.clicked() {

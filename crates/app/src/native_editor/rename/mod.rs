@@ -100,8 +100,8 @@ impl App {
                 ));
             }
             if let Some(doc) = self.native_docs.get(&file.path)
-                && let Some(buffer) = doc.doc.as_ref()
-                && buffer.text().as_bytes() != file.original.as_slice()
+                && let Some(text) = doc.disk_text()
+                && text.as_bytes() != file.original.as_slice()
             {
                 return Err(format!(
                     "{} differs from the loaded editor. Reload it and try again.",

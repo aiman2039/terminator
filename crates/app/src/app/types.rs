@@ -461,7 +461,12 @@ pub(crate) enum Update {
     Diff(String, Result<diff::DiffDocument, String>),
     DiffAction(Tab, bool, Result<diff::actions::Outcome, String>),
     DiffActionFailed(String, String),
-    Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
+    /// A workspace op finished in the repository root it ran in.
+    Workspace(
+        PathBuf,
+        workspace_ops::Op,
+        Result<workspace_ops::Report, String>,
+    ),
     Search(u64, Result<Vec<search::Hit>, String>),
     Favicon(String, Option<Vec<u8>>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),

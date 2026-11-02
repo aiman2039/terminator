@@ -61,13 +61,8 @@ impl Shared {
 
     pub(super) fn on_command_blocks(&self, session: &str, since: u64) -> Result<Outcome> {
         let runtime = self.runtime(session)?;
-        let blocks = relock(&runtime)
-            .commands
-            .tracker()
-            .blocks()
-            .filter(|block| block.id > since)
-            .cloned()
-            .collect();
+        // Bounded so the reply fits one IPC frame (#191).
+        let blocks = relock(&runtime).commands.tracker().reply_blocks(since);
         Ok(Outcome::Reply(Response::CommandBlocks(blocks)))
     }
 

@@ -136,6 +136,18 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/archive.svg"),
     ),
     (
+        "ArchiveRestore",
+        egui::include_image!("../../assets/icons/archive-restore.svg"),
+    ),
+    (
+        "Download",
+        egui::include_image!("../../assets/icons/download.svg"),
+    ),
+    (
+        "Upload",
+        egui::include_image!("../../assets/icons/upload.svg"),
+    ),
+    (
         "ListTree",
         egui::include_image!("../../assets/icons/list-tree.svg"),
     ),

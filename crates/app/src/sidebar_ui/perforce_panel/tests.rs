@@ -118,3 +118,20 @@ fn perforce_panel_renders_changelists_and_confirms_submit() {
     );
     assert!(matches!(outcome.perforce.as_slice(), [Op::Submit(number)] if number == "42"));
 }
+
+#[test]
+
+fn perforce_actions_use_bundled_icons() {
+    for name in [
+        "RefreshCw",
+        "Download",
+        "Upload",
+        "Archive",
+        "ArchiveRestore",
+    ] {
+        assert!(
+            crate::icons::is_ui_icon(name),
+            "{name} falls back to file.svg"
+        );
+    }
+}

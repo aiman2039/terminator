@@ -165,3 +165,18 @@ fn escape_closes_command_palette() {
     output.textures_delta.clear();
     assert!(!app.palette.open);
 }
+
+#[test]
+fn navigation_closes_worktree_draft_form() {
+    let (mut app, _, _dir) = fixture();
+    app.worktree_draft = Some(worktree_ui::WorktreeDraft {
+        source: "a".into(),
+        start: "HEAD".into(),
+        branch: "task".into(),
+        dest: "/tmp/task".into(),
+        open_terminal: true,
+    });
+    app.hide_center_overlay();
+    assert!(app.worktree_draft.is_none());
+    assert!(app.terminal_input_enabled("shell"));
+}
