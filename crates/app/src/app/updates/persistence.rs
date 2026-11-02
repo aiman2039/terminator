@@ -3,6 +3,9 @@
 
 use crate::*;
 
+/// Wait after a failed preferences save before writing again.
+const PREFERENCES_RETRY_DELAY: Duration = Duration::from_secs(5);
+
 impl App {
     pub(super) fn handle_layouts_prepared(
         &mut self,
@@ -49,11 +52,15 @@ impl App {
         }
     }
 
-    pub(super) fn handle_preferences_saved(&mut self, result: Result<UiPreferences, String>) {
+    pub(crate) fn handle_preferences_saved(&mut self, result: Result<UiPreferences, String>) {
         self.preferences_pending = false;
         match result {
-            Ok(prefs) => self.preferences_saved = prefs,
+            Ok(prefs) => {
+                self.preferences_saved = prefs;
+                self.preferences_retry_at = None;
+            }
             Err(error) => {
+                self.preferences_retry_at = Instant::now().checked_add(PREFERENCES_RETRY_DELAY);
                 if self.exit.active() {
                     self.cancel_exit(error);
                 } else {

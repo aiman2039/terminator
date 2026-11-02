@@ -290,6 +290,7 @@ pub(super) static UI_SOURCES: SourceTable = &[
         "FileCode",
         egui::include_image!("../../assets/icons/file-code.svg"),
     ),
+    ("Pin", egui::include_image!("../../assets/icons/pin.svg")),
     (
         "FileType",
         egui::include_image!("../../assets/icons/file-type.svg"),

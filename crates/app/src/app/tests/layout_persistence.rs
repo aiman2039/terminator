@@ -211,3 +211,20 @@ fn pane_maps_reuse_unchanged_dock_and_refresh_on_change() {
             .contains_key(&Tab::Terminal("other".into()).key())
     );
 }
+
+#[test]
+fn failed_preferences_save_waits_before_retrying() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.preferences_writable = true;
+    app.preferences.ide_mode = !app.preferences_saved.ide_mode;
+    app.save_changed_preferences();
+    assert_eq!(requests.try_iter().count(), 1);
+    app.handle_preferences_saved(Err("read-only file system".into()));
+    app.save_changed_preferences();
+    assert_eq!(requests.try_iter().count(), 0);
+    app.preferences_retry_at = Some(Instant::now());
+    app.save_changed_preferences();
+    assert_eq!(requests.try_iter().count(), 1);
+}

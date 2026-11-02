@@ -3,9 +3,10 @@ use std::{
     io::Read,
     sync::{
         Arc, Mutex,
-        mpsc::{self, SyncSender},
+        mpsc::{self, SyncSender, TrySendError},
     },
     thread,
+    time::{Duration, Instant},
 };
 use terminator_core::*;
 
@@ -27,6 +28,31 @@ fn enqueue_replies(queue: &SyncSender<String>, replies: impl IntoIterator<Item =
     for reply in replies {
         // Full (writer blocked on a stalled PTY) or closed: drop the reply.
         let _ = queue.try_send(reply);
+    }
+}
+
+/// Longest wait for a slow attach client before one output frame is given
+/// up. The relay's 3 s write timeout disconnects a stuck client sooner.
+const SUBSCRIBER_STALL: Duration = Duration::from_secs(10);
+
+/// Waits (without any lock) for a full subscriber queue to drain, so heavy
+/// output slows the PTY reader instead of detaching the pane. Returns `false`
+/// when the client went away or the stall limit passed.
+fn send_with_backpressure(tx: &SyncSender<Response>, frame: Response, limit: Duration) -> bool {
+    let start = Instant::now();
+    let mut frame = frame;
+    loop {
+        match tx.try_send(frame) {
+            Ok(()) => return true,
+            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Full(back)) => {
+                if start.elapsed() >= limit {
+                    return false;
+                }
+                frame = back;
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
     }
 }
 
@@ -101,8 +127,20 @@ impl Shared {
         let replies = std::mem::take(&mut rt.parser.callbacks_mut().replies);
         let notices = std::mem::take(&mut rt.parser.callbacks_mut().notices);
         let frame = Response::Data(B64.encode(data));
-        rt.subscribers.retain(|s| s.try_send(frame.clone()).is_ok());
+        let mut blocked = Vec::new();
+        rt.subscribers
+            .retain(|tx| match tx.try_send(frame.clone()) {
+                Ok(()) => true,
+                Err(TrySendError::Full(frame)) => {
+                    blocked.push((tx.clone(), frame));
+                    true
+                }
+                Err(TrySendError::Disconnected(_)) => false,
+            });
         drop(rt);
+        for (tx, frame) in blocked {
+            send_with_backpressure(&tx, frame, SUBSCRIBER_STALL);
+        }
         for notice in notices {
             self.raise_terminal_notice(sid, &notice.title, &notice.body);
         }
@@ -151,5 +189,34 @@ mod tests {
         let replies = (0..10).map(|i| format!("\x1b[{i};1R"));
         enqueue_replies(&tx, replies);
         assert_eq!(rx.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn full_subscriber_queue_waits_for_the_client_instead_of_dropping_output() {
+        let (tx, rx) = mpsc::sync_channel::<Response>(1);
+        tx.try_send(Response::Data("a".into())).unwrap();
+        let reader = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            rx.iter().take(2).count()
+        });
+        assert!(send_with_backpressure(
+            &tx,
+            Response::Data("b".into()),
+            Duration::from_secs(5)
+        ));
+        drop(tx);
+        assert_eq!(reader.join().unwrap(), 2);
+    }
+
+    #[test]
+    fn backpressure_stops_when_the_client_disconnects() {
+        let (tx, rx) = mpsc::sync_channel::<Response>(1);
+        tx.try_send(Response::Ok).unwrap();
+        drop(rx);
+        assert!(!send_with_backpressure(
+            &tx,
+            Response::Ok,
+            Duration::from_secs(5)
+        ));
     }
 }

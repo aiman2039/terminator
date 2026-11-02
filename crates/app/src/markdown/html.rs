@@ -329,6 +329,7 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
         text.replace_range(range, &replacement);
     }
     preserve_line_breaks(&mut text);
+    register_rendered_links(&snapshot.path, &text, &mut links);
     let words = text.split_whitespace().count();
     let headings = count_headings(&text);
     let mermaid = super::mermaid::render_fences(&text);
@@ -340,6 +341,19 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
         status: snapshot_status(snapshot.revision, snapshot.paused),
         links,
         images,
+    }
+}
+
+/// Links that appear only after raw HTML is rewritten (e.g. markdown inside a
+/// `<div>`) still need a hook, or the viewer opens them with no scheme check.
+fn register_rendered_links(path: &Path, text: &str, links: &mut HashMap<String, Option<Link>>) {
+    for event in Parser::new_ext(text, Options::all()) {
+        if let Event::Start(Tag::Link { dest_url, .. }) = event
+            && !dest_url.starts_with('#')
+            && !links.contains_key(dest_url.as_ref())
+        {
+            links.insert(dest_url.to_string(), resolve_link(path, &dest_url));
+        }
     }
 }
 

@@ -139,18 +139,19 @@ impl Attach {
     }
     fn pump_output(stream: &mut transport::Stream) -> Result<()> {
         let mut output = std::io::stdout();
-        while let Ok(frame) = read_frame::<Response>(stream) {
+        loop {
+            let frame = read_frame::<Response>(stream)
+                .context("Connection to the Terminator daemon was lost")?;
             match frame {
                 Response::Data(data) => {
                     output.write_all(&B64.decode(data)?)?;
                     output.flush()?;
                 }
-                Response::End => break,
+                Response::End => return Ok(()),
                 Response::Error(e) => bail!("{e}"),
                 _ => {}
             }
         }
-        Ok(())
     }
     #[cfg(unix)]
     fn dimensions() -> (u16, u16) {

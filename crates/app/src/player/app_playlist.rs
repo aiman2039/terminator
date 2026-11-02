@@ -28,7 +28,7 @@ impl App {
         *tracks = result.tracks;
         self.player.selected.clear();
         self.player.last_clicked = None;
-        self.player.shuffle_bag.clear();
+        self.player.reset_shuffle();
         if result.stop {
             self.player.stop();
         } else {
@@ -85,7 +85,7 @@ impl App {
         self.player.rng = rng;
         self.player.file_index = index;
         self.player.selected.clear();
-        self.player.shuffle_bag.clear();
+        self.player.reset_shuffle();
     }
 
     pub(super) fn player_sort_title(&mut self) {
@@ -115,7 +115,7 @@ impl App {
         if self.preferences.create_playlist(&name) {
             self.player.playlist_draft.clear();
             self.player.selected.clear();
-            self.player.shuffle_bag.clear();
+            self.player.reset_shuffle();
         }
     }
 
@@ -133,7 +133,7 @@ impl App {
             self.player.current_path.as_deref(),
         );
         self.player.selected.clear();
-        self.player.shuffle_bag.clear();
+        self.player.reset_shuffle();
     }
 
     pub(super) fn player_switch_list(&mut self, name: String) {
@@ -149,7 +149,7 @@ impl App {
                 self.player.current_path.as_deref(),
             );
             self.player.selected.clear();
-            self.player.shuffle_bag.clear();
+            self.player.reset_shuffle();
         }
     }
 

@@ -259,7 +259,7 @@ fn controls_row(app: &mut App, ui: &mut Ui) {
         .clicked()
         {
             app.preferences.player_shuffle = !app.preferences.player_shuffle;
-            app.player.shuffle_bag.clear();
+            app.player.reset_shuffle();
         }
         if App::player_icon_button(PlayerIconButtonInput {
             ui,
