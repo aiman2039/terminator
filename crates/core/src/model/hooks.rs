@@ -55,6 +55,12 @@ impl State {
             || e.details.len() > 65536
             || e.event_id.len() > 256
             || e.agent_invocation_id.len() > 512
+            || e.agent_kind.len() > 128
+            || e.request_id.as_ref().is_some_and(|r| r.len() > 512)
+            || e.provider_session_id
+                .as_ref()
+                .is_some_and(|p| p.len() > 512)
+            || e.resume.as_ref().is_some_and(resume_too_large)
         {
             return Err(StateError::HookTooLarge {
                 event: e.event_id.chars().take(256).collect(),
@@ -117,7 +123,11 @@ impl State {
                 process: None,
             });
         agent.state = e.state;
-        agent.sequence = e.sequence;
+        // An unsequenced event keeps the last sequence so out-of-order
+        // checks still reject older retries.
+        if e.sequence.is_some() {
+            agent.sequence = e.sequence;
+        }
         agent.updated = now();
         // Link lifecycle to a detected process only after verifying the
         // helper-supplied identity against a fresh observation of the same
@@ -196,4 +206,11 @@ impl State {
         }
         Some(nid)
     }
+}
+
+/// Bounds the resume command a hook helper may persist.
+fn resume_too_large(r: &Resume) -> bool {
+    r.program.len() > 4096
+        || r.args.len() > 64
+        || r.args.iter().map(String::len).sum::<usize>() > 16384
 }

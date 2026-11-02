@@ -31,6 +31,8 @@ pub(super) struct RunInput<'a> {
     pub sid: &'a str,
     pub spec: &'a ConnectionSpec,
     pub input_rx: &'a mut mpsc::Receiver<VncInputEvent>,
+    /// When the session first connected; reconnects keep it.
+    pub session_started: Instant,
 }
 async fn connect_client(
     shared: &Arc<Shared>,
@@ -157,6 +159,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
         sid,
         spec,
         input_rx,
+        session_started,
     } = input;
     let client = connect_client(shared, spec, input_rx).await?;
     mark_connected(shared, runtime, sid);
@@ -166,8 +169,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     let mut last_request = Instant::now()
         .checked_sub(Duration::from_secs(1))
         .unwrap_or_else(Instant::now);
-    let connected_at = Instant::now();
-    let mut detach_checked = connected_at;
+    let mut detach_checked = Instant::now();
     let mut adaptive = quality::Adaptive::default();
     let result = 'connection: loop {
         tokio::select! {
@@ -209,7 +211,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                 }
             },
             _=tick.tick()=>{
-                if detach_checked.elapsed()>=DETACH_CHECK && {detach_checked=Instant::now();detach_due(shared,runtime,connected_at)}{
+                if detach_checked.elapsed()>=DETACH_CHECK && {detach_checked=Instant::now();detach_due(shared,runtime,session_started)}{
                     // Nobody has looked at it for a long time: free the
                     // connection like an explicit Disconnect would.
                     let _=shared.vnc_disconnect(sid);
@@ -231,20 +233,20 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
     result
 }
 
-/// How long since a viewer last asked for a frame, counting from this
-/// connection's start at most.
-fn unwatched_for(runtime: &Arc<Mutex<VncRuntime>>, connected_at: Instant) -> Duration {
-    let since_connect = connected_at.elapsed();
+/// How long since a viewer last asked for a frame, counting from the
+/// session start at most. A reconnect does not reset it.
+fn unwatched_for(runtime: &Arc<Mutex<VncRuntime>>, session_started: Instant) -> Duration {
+    let since_start = session_started.elapsed();
     let since_poll = relock(runtime)
         .last_poll
-        .map_or(since_connect, |polled| polled.elapsed());
-    since_connect.min(since_poll)
+        .map_or(since_start, |polled| polled.elapsed());
+    since_start.min(since_poll)
 }
 
 /// True when no viewer has watched for longer than the Settings timeout.
 /// Settings are read only once nobody has watched for a minute.
-fn detach_due(shared: &Shared, runtime: &Arc<Mutex<VncRuntime>>, connected_at: Instant) -> bool {
-    let unwatched = unwatched_for(runtime, connected_at);
+fn detach_due(shared: &Shared, runtime: &Arc<Mutex<VncRuntime>>, session_started: Instant) -> bool {
+    let unwatched = unwatched_for(runtime, session_started);
     unwatched >= Duration::from_mins(1)
         && detach_limit(relock(&shared.state).settings.vnc_detached_timeout_minutes)
             .is_some_and(|limit| unwatched >= limit)
@@ -357,6 +359,17 @@ mod tests {
             unwatched_for(&runtime, long_ago) < limit,
             "a viewer just looked"
         );
+    }
+
+    #[test]
+    fn reconnects_do_not_reset_detached_time() {
+        let (tx, _rx) = mpsc::channel(1);
+        let runtime = Arc::new(Mutex::new(VncRuntime::new(false, tx)));
+        let limit = detach_limit(30).unwrap();
+        let session_started = Instant::now().checked_sub(limit * 2).unwrap();
+        // Last viewer poll was before the limit; a reconnect happened since.
+        relock(&runtime).last_poll = Instant::now().checked_sub(limit);
+        assert!(unwatched_for(&runtime, session_started) >= limit);
     }
 
     #[test]

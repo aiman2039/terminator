@@ -247,7 +247,7 @@ impl AppearanceFile {
             path: path.to_path_buf(),
         })?)?;
         let source = doc.to_string();
-        crate::atomic_write(path, source.as_bytes())?;
+        crate::atomic_replace(path, source.as_bytes())?;
         Ok(Self {
             config: config.clone(),
             source,

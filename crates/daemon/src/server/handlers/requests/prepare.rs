@@ -1,4 +1,5 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
+use std::sync::Arc;
 use std::time::Duration;
 use terminator_core::*;
 
@@ -61,7 +62,7 @@ impl RequestClass {
 }
 
 impl Shared {
-    pub(super) fn prepare_request(&self, request: &Request) -> Result<PreparedRequest> {
+    pub(super) fn prepare_request(self: &Arc<Self>, request: &Request) -> Result<PreparedRequest> {
         let class = RequestClass::of(request);
         let coordination = self.coordinate(class.coordinated)?;
         let early = self.admit_and_refresh(&class)?;
@@ -88,7 +89,7 @@ impl Shared {
 
     /// Rejects requests this generation may not run, then refreshes
     /// coordinated requests from the shared catalog.
-    fn admit_and_refresh(&self, class: &RequestClass) -> Result<Option<Response>> {
+    fn admit_and_refresh(self: &Arc<Self>, class: &RequestClass) -> Result<Option<Response>> {
         let Some(paths) = &self.catalog_paths else {
             return Ok(None);
         };
@@ -97,8 +98,14 @@ impl Shared {
         if let Some(early) = Self::admission_reply(&catalog, &state, class)? {
             return Ok(Some(early));
         }
-        if class.coordinated {
-            Self::refresh_from_catalog(paths, &catalog, &mut state)?;
+        if class.coordinated
+            && Self::refresh_from_catalog(&catalog, &mut state)?
+            && catalog.active()?.as_deref() == Some(&state.generation)
+        {
+            drop(state);
+            // Keychain access may wait on a user prompt: never inside this
+            // short-deadline request or under the state lock.
+            crate::vnc_session::credentials::finish_activation(Arc::downgrade(self));
         }
         Ok(None)
     }
@@ -124,27 +131,16 @@ impl Shared {
         Ok(None)
     }
 
-    fn refresh_from_catalog(
-        paths: &Paths,
-        catalog: &generations::Catalog,
-        state: &mut State,
-    ) -> Result<()> {
+    /// Refreshes `state` from the catalog. True when legacy plaintext VNC
+    /// passwords still need migration to the OS credential store.
+    fn refresh_from_catalog(catalog: &generations::Catalog, state: &mut State) -> Result<bool> {
         let mut refreshed = state.clone();
         catalog.refresh(&mut refreshed)?;
-        if refreshed
+        let legacy = refreshed
             .vnc_profiles
             .iter()
-            .any(|p| !p.password.is_empty())
-        {
-            ensure!(
-                crate::vnc_session::credentials::migrate(paths, &mut refreshed.vnc_profiles) == 0,
-                "Unlock the OS credential store to migrate legacy VNC passwords"
-            );
-            if catalog.active()?.as_deref() == Some(&refreshed.generation) {
-                catalog.save_workspace(&refreshed)?;
-            }
-        }
+            .any(|p| !p.password.is_empty());
         *state = refreshed;
-        Ok(())
+        Ok(legacy)
     }
 }

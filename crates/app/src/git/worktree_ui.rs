@@ -147,19 +147,28 @@ impl App {
             self.info = Some("Select a git project before creating a worktree.".into());
             return;
         };
-        if terminator_core::worktrees::common_dir(&project.path).is_err() {
-            self.info = Some("This folder is not a git checkout.".into());
-            return;
-        }
         let branch = default_branch(&project.name);
         let dest = default_dest(&project.path, &branch);
-        self.worktree_draft = Some(WorktreeDraft {
+        let draft = WorktreeDraft {
             source: project.id.clone(),
             start: "HEAD".into(),
             branch,
             dest,
             open_terminal: true,
-        });
+        };
+        // `git rev-parse` runs on a worker; the form opens when it answers.
+        let _ = self
+            .jobs
+            .send(Job::WorktreeProbe(project.path.clone(), draft));
+    }
+
+    /// Open the wizard once the worker confirmed a git checkout.
+    pub(crate) fn apply_worktree_probe(&mut self, draft: WorktreeDraft, git: bool) {
+        if !git {
+            self.info = Some("This folder is not a git checkout.".into());
+        } else if self.worktree_draft.is_none() {
+            self.worktree_draft = Some(draft);
+        }
     }
 
     pub(crate) fn worktree_center(&mut self, ui: &mut egui::Ui) {
@@ -192,11 +201,9 @@ impl App {
         if submit {
             self.submit_worktree(&draft);
         }
-        if submit || cancel {
-            self.worktree_draft = None;
-        } else {
-            self.worktree_draft = Some(draft);
-        }
+        // Keep the form after Create until the worker reports success, so a
+        // failed creation can be corrected and retried.
+        self.worktree_draft = (!cancel).then_some(draft);
     }
 
     pub(crate) fn worktree_form(&self, input: WorktreeFormInput<'_>) {

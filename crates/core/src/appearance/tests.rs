@@ -17,6 +17,29 @@ fn defaults_comments_unrelated_keys_and_conflict() {
     assert!(saved.source.contains("key = 42"));
     assert!(AppearanceFile::save(&p, &file.config, source).is_err());
 }
+#[cfg(unix)]
+#[test]
+fn saving_symlinked_config_keeps_link_and_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let target = d.path().join("dotfiles.toml");
+    let link = d.path().join("config.toml");
+    fs::write(&target, "[other]\nkey = 1\n").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let mut file = AppearanceFile::load(&link).unwrap();
+    file.config.text = "#123456".into();
+    AppearanceFile::save(&link, &file.config, &file.source).unwrap();
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(fs::read_to_string(&target).unwrap().contains("#123456"));
+    let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o644);
+}
 #[test]
 fn invalid_external_values_are_rejected() {
     for color in ["red", "#💥abc", "#GG0000"] {

@@ -122,20 +122,41 @@ impl App {
             .player
             .station_index
             .and_then(|index| listing.get(index).map(|station| station.url.as_str()));
-        let pos = current
-            .and_then(|url| stations.iter().position(|station| station.url == url))
-            .unwrap_or(0);
-        let len = stations.len().cast_signed();
-        let Some(sum) = pos.cast_signed().checked_add(delta) else {
+        let pos = current.and_then(|url| stations.iter().position(|station| station.url == url));
+        let Some(next) = offset_index(pos, stations.len(), delta) else {
             return;
         };
-        if len <= 0 {
-            return;
-        }
-        let next = sum.rem_euclid(len).cast_unsigned();
         let Some(station) = stations.get(next).cloned() else {
             return;
         };
         self.play_radio(project, station);
+    }
+}
+
+/// Step `delta` stations from `pos`, wrapping. A station outside the filtered
+/// list starts at the first entry going forward or the last going back.
+fn offset_index(pos: Option<usize>, len: usize, delta: isize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let Some(pos) = pos else {
+        return Some(if delta < 0 { len.saturating_sub(1) } else { 0 });
+    };
+    let len = isize::try_from(len).ok()?;
+    let sum = pos.cast_signed().checked_add(delta)?;
+    Some(sum.rem_euclid(len).cast_unsigned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::offset_index;
+
+    #[test]
+    fn station_outside_filter_steps_to_first_or_last_visible() {
+        assert_eq!(offset_index(None, 3, 1), Some(0));
+        assert_eq!(offset_index(None, 3, -1), Some(2));
+        assert_eq!(offset_index(Some(2), 3, 1), Some(0));
+        assert_eq!(offset_index(Some(0), 3, -1), Some(2));
+        assert_eq!(offset_index(None, 0, 1), None);
     }
 }

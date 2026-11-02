@@ -7,7 +7,10 @@
 //! installs automatically, and development/isolated launches never touch the
 //! feed.
 
+mod feed;
+
 use crate::*;
+use feed::{FetchError, FetchResult, Fetched, Latest};
 use std::{
     sync::mpsc,
     time::{Duration, Instant},
@@ -113,8 +116,17 @@ enum Status {
     Failed(String),
 }
 
-/// Latest-release lookup: `(tag, page URL, [(asset name, download URL)])`.
-type FetchResult = Result<(String, String, Vec<(String, String)>), String>;
+/// Normal poll cadence (AGENTS.md: once per minute).
+const POLL_INTERVAL: Duration = Duration::from_mins(1);
+/// Longest wait after repeated rate-limit replies.
+const MAX_BACKOFF: Duration = Duration::from_hours(1);
+
+/// Wait before the next poll after `streak` rate-limit replies in a row:
+/// the server's requested wait or doubling minutes, whichever is longer.
+fn rate_limit_delay(streak: u32, server_wait: Duration) -> Duration {
+    let doubling = POLL_INTERVAL.saturating_mul(1u32.checked_shl(streak.min(6)).unwrap_or(64));
+    doubling.max(server_wait).min(MAX_BACKOFF)
+}
 
 pub struct WindowsUpdateCheck {
     started: Instant,
@@ -126,6 +138,11 @@ pub struct WindowsUpdateCheck {
     status: Status,
     offered: std::collections::HashSet<String>,
     worker: Option<mpsc::Receiver<FetchResult>>,
+    /// Last release body and its `ETag`, reused on `304 Not Modified`.
+    etag: Option<String>,
+    cached: Option<Latest>,
+    /// Rate-limit replies in a row; drives the poll backoff.
+    rate_limit_streak: u32,
 }
 
 impl WindowsUpdateCheck {
@@ -138,6 +155,9 @@ impl WindowsUpdateCheck {
             status: Status::Idle,
             offered: std::collections::HashSet::new(),
             worker: None,
+            etag: None,
+            cached: None,
+            rate_limit_streak: 0,
         }
     }
 
@@ -148,8 +168,21 @@ impl WindowsUpdateCheck {
         self.probing = false;
         // The in-flight probe satisfies a click made while probing.
         self.manual = false;
+        let result = match result {
+            Ok(Fetched::Latest { latest, etag }) => {
+                self.etag = etag;
+                self.cached = Some(latest.clone());
+                Ok(latest)
+            }
+            Ok(Fetched::NotModified) => self.cached.clone().ok_or_else(|| FetchError {
+                message: "update feed: not modified without a cached release".into(),
+                rate_limited: None,
+            }),
+            Err(error) => Err(error),
+        };
         match result {
             Ok((tag, html_url, assets)) => {
+                self.rate_limit_streak = 0;
                 if newer_than(&tag) {
                     let url = download_url(&html_url, &assets, &platform_asset_suffix());
                     // One offer per version per launch, like Sparkle.
@@ -164,7 +197,15 @@ impl WindowsUpdateCheck {
                 }
             }
             Err(error) => {
-                self.status = Status::Failed(error);
+                if let Some(wait) = error.rate_limited {
+                    let delay = rate_limit_delay(self.rate_limit_streak, wait);
+                    self.rate_limit_streak = self.rate_limit_streak.saturating_add(1);
+                    self.next = self.started.elapsed().saturating_add(delay);
+                }
+                // A transient failure must not hide a known download offer.
+                if !matches!(self.status, Status::Available { .. }) {
+                    self.status = Status::Failed(error.message);
+                }
             }
         }
         true
@@ -194,15 +235,19 @@ impl WindowsUpdateCheck {
         self.next = self
             .started
             .elapsed()
-            .checked_add(Duration::from_mins(1))
+            .checked_add(POLL_INTERVAL)
             .unwrap_or(Duration::MAX);
         self.manual = false;
         self.probing = true;
-        self.status = Status::Checking;
+        // Keep a known download offer visible while re-checking.
+        if !matches!(self.status, Status::Available { .. }) {
+            self.status = Status::Checking;
+        }
         let (tx, rx) = mpsc::sync_channel(1);
         self.worker = Some(rx);
+        let etag = self.etag.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(fetch_latest());
+            let _ = tx.send(feed::fetch_latest(etag));
         });
         false
     }
@@ -274,191 +319,5 @@ impl Default for WindowsUpdateCheck {
     }
 }
 
-fn fetch_latest() -> FetchResult {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("update runtime: {e}"))?;
-    runtime.block_on(async {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(20))
-            .user_agent(format!("terminator/{}", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|e| format!("update client: {e}"))?;
-        let body = client
-            .get(format!(
-                "https://api.github.com/repos/{FEED_REPO}/releases/latest"
-            ))
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await
-            .map_err(|e| format!("update request: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("update feed: {e}"))?
-            .text()
-            .await
-            .map_err(|e| format!("update feed: {e}"))?;
-        let response: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| format!("update feed: {e}"))?;
-        let tag = response
-            .get("tag_name")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "update feed has no tag".to_string())?
-            .to_owned();
-        let html_url = response
-            .get("html_url")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("https://github.com/aiman2039/terminator/releases")
-            .to_owned();
-        let mut assets = Vec::new();
-        if let Some(list) = response.get("assets").and_then(serde_json::Value::as_array) {
-            for asset in list {
-                if let (Some(name), Some(url)) = (
-                    asset.get("name").and_then(serde_json::Value::as_str),
-                    asset
-                        .get("browser_download_url")
-                        .and_then(serde_json::Value::as_str),
-                ) {
-                    assets.push((name.to_owned(), url.to_owned()));
-                }
-            }
-        }
-        Ok((tag, html_url, assets))
-    })
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn newer_tags_win_and_garbage_is_ignored() {
-        let current = env!("CARGO_PKG_VERSION");
-        assert!(!newer_than(current));
-        assert!(!newer_than(&format!("v{current}-rc.1")));
-        assert!(!newer_than("not-a-version"));
-        assert!(!newer_than("1.2"));
-        assert!(!newer_than("v1.2.3.4"));
-        // A far-future tag is always newer than any real build.
-        assert!(newer_than("v9999.0.0"));
-        assert!(!newer_than("v0.0.0"));
-    }
-
-    #[test]
-    fn prerelease_tags_lose_to_their_own_release() {
-        assert!(parse_tag("v1.2.3-rc.1").unwrap().1);
-        assert!(!parse_tag("v1.2.3").unwrap().1);
-        assert!(parse_tag("v1.2").is_none());
-    }
-
-    #[test]
-    fn windows_asset_wins_with_release_page_fallback() {
-        let assets = vec![
-            (
-                "terminator-v9.9.9-x86_64-pc-windows-msvc.zip".into(),
-                "https://example.com/win.zip".into(),
-            ),
-            (
-                "terminator-v9.9.9-x86_64-unknown-linux-gnu.tar.gz".into(),
-                "https://example.com/linux.tgz".into(),
-            ),
-        ];
-        assert_eq!(
-            download_url("https://example.com/release", &assets, WINDOWS_ASSET_SUFFIX),
-            "https://example.com/win.zip"
-        );
-        assert_eq!(
-            download_url(
-                "https://example.com/release",
-                &assets,
-                "-x86_64-unknown-linux-gnu.tar.gz"
-            ),
-            "https://example.com/linux.tgz"
-        );
-        assert_eq!(
-            download_url("https://example.com/release", &[], WINDOWS_ASSET_SUFFIX),
-            "https://example.com/release"
-        );
-    }
-
-    #[test]
-    fn disabled_checks_stay_idle() {
-        let mut check = WindowsUpdateCheck::new();
-        assert!(!check.poll(false));
-        // Disabled checks never probe.
-        assert!(matches!(check.status, Status::Idle));
-    }
-
-    #[test]
-    fn manual_check_runs_once_while_automatic_checks_are_off() {
-        // `eligible` stands in for `feed_eligible()`, which is always false
-        // in development builds; the worker thread it spawns is fire-and-
-        // forget and never blocks these assertions.
-        let mut check = WindowsUpdateCheck::new();
-        assert!(!check.poll_with(false, true));
-        assert!(matches!(check.status, Status::Idle));
-        // The Settings button requests a one-shot check.
-        check.check_now();
-        assert!(!check.poll_with(false, true));
-        assert!(matches!(check.status, Status::Checking));
-        assert!(check.finish(Ok((
-            "v9999.0.0".into(),
-            "https://example.com/release".into(),
-            Vec::new()
-        ))));
-        assert!(matches!(&check.status, Status::Available { version, .. }
-                if version == "v9999.0.0"));
-        // One-shot: later polls stay quiet without re-enabling automation.
-        assert!(!check.poll_with(false, true));
-        assert!(matches!(&check.status, Status::Available { .. }));
-    }
-
-    #[test]
-    fn newer_release_is_offered_once() {
-        let mut check = WindowsUpdateCheck::new();
-        let assets = vec![(
-            format!("terminator-v9999.0.0{}", platform_asset_suffix()),
-            "https://example.com/win.zip".into(),
-        )];
-        assert!(check.finish(Ok((
-            "v9999.0.0".into(),
-            "https://example.com/release".into(),
-            assets
-        ))));
-        assert!(matches!(&check.status, Status::Available { version, url }
-                if version == "v9999.0.0" && url == "https://example.com/win.zip"));
-        // Same version again: no duplicate offer, first URL kept.
-        assert!(check.finish(Ok((
-            "v9999.0.0".into(),
-            "https://example.com/release".into(),
-            Vec::new()
-        ))));
-        assert!(matches!(&check.status, Status::Available { version, url }
-                if version == "v9999.0.0" && url == "https://example.com/win.zip"));
-        assert_eq!(check.offered.len(), 1);
-        // A repeat sighting after a new poll parks at Checking while probing,
-        // then restores the download offer when the check completes.
-        check.status = Status::Checking;
-        assert!(check.finish(Ok((
-            "v9999.0.0".into(),
-            "https://example.com/release".into(),
-            Vec::new()
-        ))));
-        assert!(matches!(&check.status, Status::Available { version, .. }
-                if version == "v9999.0.0"));
-    }
-
-    #[test]
-    fn older_release_marks_current_and_errors_mark_failed() {
-        let mut check = WindowsUpdateCheck::new();
-        assert!(check.finish(Ok((
-            "v0.0.0".into(),
-            "https://example.com/release".into(),
-            Vec::new()
-        ))));
-        assert!(matches!(check.status, Status::Current));
-        assert!(check.finish(Err("boom".into())));
-        assert!(matches!(check.status, Status::Failed(_)));
-    }
-}
+mod tests;

@@ -135,3 +135,26 @@ fn editing_the_buffer_marks_unsaved_and_discard_restores() {
     assert!(!state.unsaved_edits());
     assert_eq!(review::Edit::new(document).text, "a\nb\n");
 }
+
+#[test]
+fn a_large_first_live_diff_builds_off_the_gui_thread() {
+    let left = "line\n".repeat(8192);
+    let right = format!("{left}tail\n");
+    let document = std::sync::Arc::new(build_with_context(BuildWithContextInput {
+        path: Path::new("file.rs"),
+        left: &left,
+        right: &right,
+        staged: false,
+        context: 3,
+    }));
+    let mut buffer = review::Edit::new(document);
+    let (_, waiting) = buffer.live_document(Path::new("file.rs"), 0.0);
+    assert!(waiting, "the first large build waits for its worker");
+    assert!(buffer.live_loading());
+    let started = std::time::Instant::now();
+    while buffer.live_loading() && started.elapsed() < std::time::Duration::from_secs(30) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _ = buffer.live_document(Path::new("file.rs"), 0.0);
+    }
+    assert!(!buffer.live_loading(), "the worker build is shown");
+}

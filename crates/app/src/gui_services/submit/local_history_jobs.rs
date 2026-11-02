@@ -3,7 +3,7 @@
 use super::Services;
 use crate::local_history::{Op, Reply};
 use crate::{Update, diff};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{path::PathBuf, sync::Arc};
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
@@ -71,7 +71,8 @@ impl Services {
         };
         self.fs()
             .run(&cancel, move || {
-                let current = std::fs::read_to_string(&path).unwrap_or_default();
+                let current = read_current(&path)
+                    .with_context(|| format!("Could not read {}", path.display()))?;
                 let name = path
                     .file_name()
                     .map(PathBuf::from)
@@ -90,5 +91,28 @@ impl Services {
             })
             .await
             .map_err(|error| format!("{error:#}"))
+    }
+}
+
+/// Current file text for a Local History diff. A deleted file diffs as empty;
+/// any other read failure is reported instead of showing a false deletion.
+fn read_current(path: &std::path::Path) -> std::io::Result<String> {
+    match std::fs::read_to_string(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_current;
+
+    #[test]
+    fn deleted_file_diffs_as_empty_but_unreadable_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_current(&dir.path().join("gone.txt")).unwrap(), "");
+        assert!(read_current(dir.path()).is_err());
+        std::fs::write(dir.path().join("a.txt"), "text").unwrap();
+        assert_eq!(read_current(&dir.path().join("a.txt")).unwrap(), "text");
     }
 }

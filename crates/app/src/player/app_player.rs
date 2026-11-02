@@ -4,6 +4,9 @@ use crate::player::PollInput;
 use engine::Status;
 use std::path::PathBuf;
 use std::time::Duration;
+
+/// Playlist that the first Player open seeds with bundled tones.
+const DEFAULT_PLAYLIST: &str = "Default";
 pub(super) struct PlayerIconButtonInput<'a> {
     pub(super) ui: &'a mut egui::Ui,
     pub(super) name: &'a str,
@@ -96,17 +99,22 @@ impl App {
         self.preferences.player_samples_seeded = true;
         self.apply_player_samples(samples);
     }
+    /// Seed the Default playlist (not the selected one) when it is empty.
     pub(crate) fn apply_player_samples(&mut self, samples: Vec<PathBuf>) {
         if samples.is_empty() {
             return;
         }
-        let Some(tracks) = self.preferences.selected_tracks_mut() else {
+        let Some(default) = self
+            .preferences
+            .playlists
+            .iter_mut()
+            .find(|playlist| playlist.name == DEFAULT_PLAYLIST)
+        else {
             return;
         };
-        if !tracks.is_empty() {
-            return;
+        if default.tracks.is_empty() {
+            default.tracks.extend(samples);
         }
-        tracks.extend(samples);
     }
 
     pub(super) fn dismiss_player_tabs(&mut self) {

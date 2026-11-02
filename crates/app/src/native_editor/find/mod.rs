@@ -131,7 +131,7 @@ impl FindBar {
             match self.pattern() {
                 Ok(pattern) => {
                     self.error = None;
-                    find_in(buffer, &pattern, self.active_scope())
+                    find_in(buffer, &pattern, self.active_scope(), MAX_MATCHES)
                 }
                 Err(error) => {
                     self.error = Some(error);
@@ -337,6 +337,12 @@ impl FindBar {
         let matches = self.matches(buffer);
         if request.all && !matches.is_empty() {
             if let Ok(pattern) = self.pattern() {
+                // The highlight list is capped; Replace All must not stop there.
+                let matches = if matches.len() >= MAX_MATCHES {
+                    Arc::new(find_in(buffer, &pattern, self.active_scope(), usize::MAX))
+                } else {
+                    matches
+                };
                 let before = buffer.len_chars();
                 replace_matches(ReplaceMatchesInput {
                     buffer,

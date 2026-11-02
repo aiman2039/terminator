@@ -151,7 +151,8 @@ pub fn install_at(input: InstallAtInput<'_>) -> Result<PathBuf> {
         if path.exists() {
             fs::remove_file(&path)?;
         }
-    } else if !(after.is_empty() && !path.exists()) {
+    } else if path.exists() || !(remove || after.is_empty()) {
+        // Remove on a missing file is a no-op: never create a config there.
         write_config(&path, after.as_bytes())?;
     }
     if kind == "muse" {

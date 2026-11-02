@@ -78,8 +78,9 @@ impl review::Edit {
 
     /// The left text diffed against the buffer with every line shown, for
     /// the current revision when it is ready; the previous one while a
-    /// large buffer re-diffs. `true` in the second value asks for another
-    /// frame.
+    /// large buffer re-diffs. A large buffer's first build also runs on a
+    /// worker (see [`review::Edit::live_loading`]). `true` in the second
+    /// value asks for another frame.
     pub fn live_document(&mut self, path: &Path, now: f64) -> (Arc<DiffDocument>, bool) {
         let revision = self.editor.synced;
         let live = &mut self.live;
@@ -96,14 +97,15 @@ impl review::Edit {
             .saturating_add(self.document.left_text.len())
             <= SYNC_BYTES;
         let mut waiting = false;
-        if !current && (small || live.shown.is_none()) {
+        if !current && small {
             live.pending = None;
             live.shown = Some((
                 revision,
                 Arc::new(build_live(&self.document, &self.text, path)),
             ));
         } else if !current {
-            let idle = now - self.editor.edited_at >= DEBOUNCE;
+            // Nothing shown yet: build at once, without the typing pause.
+            let idle = live.shown.is_none() || now - self.editor.edited_at >= DEBOUNCE;
             let building = live.pending.as_ref().is_some_and(|(at, _)| *at == revision);
             if idle && !building {
                 live.pending = Some((revision, spawn_build(&self.document, &self.text, path)));
@@ -115,6 +117,12 @@ impl review::Edit {
             .as_ref()
             .map_or_else(|| Arc::clone(&self.document), |(_, doc)| Arc::clone(doc));
         (shown, waiting)
+    }
+
+    /// No live document is built yet: a large buffer's first build is
+    /// still on its worker.
+    pub fn live_loading(&self) -> bool {
+        self.live.shown.is_none()
     }
 
     /// Filler rows and tints for the editor beside `doc`, cached per

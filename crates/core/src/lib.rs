@@ -382,6 +382,22 @@ impl Paths {
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AtomicWriteError> {
+    write_via_rename(path, bytes, None)
+}
+
+/// Atomically replace a user-owned file. A symlink is resolved so the link
+/// survives, and the existing file's permissions are kept.
+pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), AtomicWriteError> {
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let permissions = fs::metadata(&target).ok().map(|m| m.permissions());
+    write_via_rename(&target, bytes, permissions)
+}
+
+fn write_via_rename(
+    path: &Path,
+    bytes: &[u8],
+    permissions: Option<fs::Permissions>,
+) -> Result<(), AtomicWriteError> {
     let parent = path
         .parent()
         .ok_or_else(|| AtomicWriteError::MissingParent {
@@ -396,6 +412,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AtomicWriteError> {
         options.mode(0o600);
         let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
         file.sync_all()?;
         fs::rename(&tmp, path)?;
         Ok(())

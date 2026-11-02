@@ -164,10 +164,31 @@ pub(crate) fn migrate(paths: &Paths, profiles: &mut [VncProfile]) -> usize {
     pending
 }
 
+/// One background migration at a time; requests that see legacy
+/// passwords call [`finish_activation`] again without piling up threads.
+static MIGRATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct MigratingGuard;
+impl MigratingGuard {
+    fn claim() -> Option<Self> {
+        (!MIGRATING.swap(true, std::sync::atomic::Ordering::AcqRel)).then_some(Self)
+    }
+}
+impl Drop for MigratingGuard {
+    fn drop(&mut self) {
+        MIGRATING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// A prepared generation cannot write the shared catalog. Finish verified
 /// credential migration only after activation, under the workspace lock.
+/// Runs on its own thread so keychain prompts never block short IPC requests.
 pub(crate) fn finish_activation(weak: std::sync::Weak<crate::server::Shared>) {
+    let Some(guard) = MigratingGuard::claim() else {
+        return;
+    };
     std::thread::spawn(move || {
+        let _guard = guard;
         let started = std::time::Instant::now();
         while started.elapsed() < std::time::Duration::from_secs(30) {
             let Some(shared) = weak.upgrade() else {
@@ -233,6 +254,15 @@ mod tests {
             credential_saved: true,
             labels: Vec::new(),
         }
+    }
+
+    #[test]
+    fn background_migration_runs_once_at_a_time() {
+        let first = MigratingGuard::claim();
+        assert!(first.is_some());
+        assert!(MigratingGuard::claim().is_none());
+        drop(first);
+        assert!(MigratingGuard::claim().is_some());
     }
 
     #[test]

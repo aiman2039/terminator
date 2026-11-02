@@ -335,8 +335,10 @@ impl App {
                     })
                 })
                 .map(|(project, _)| project.clone());
-            if let Some(project) = project {
-                let _ = self.open_browser_url(&project, &url, None);
+            if let Some(project) = project
+                && let Err(error) = self.open_browser_url(&project, &url, None)
+            {
+                self.error = Some(format!("Could not open {url}: {error:#}"));
             }
         }
     }

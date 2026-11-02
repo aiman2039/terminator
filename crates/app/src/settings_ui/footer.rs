@@ -90,7 +90,9 @@ impl App {
                     .hint_text("Search settings")
                     .desired_width(280.0),
             );
-            if !self.settings_search.is_empty() && ui.small_button("Clear").clicked() {
+            if !self.settings_search.is_empty()
+                && appearance::sidebar_action(ui, "X", "Clear search").clicked()
+            {
                 self.settings_search.clear();
             }
         });
@@ -119,15 +121,19 @@ impl App {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
         }
         ui.horizontal(|ui| {
+            let accent = appearance::color(&self.theme.accent);
             let apply = egui::Button::new(
-                egui::RichText::new("Apply").color(appearance::color(&self.theme.window)),
+                egui::RichText::new("Apply").color(appearance::contrast_text(accent)),
             )
-            .fill(appearance::color(&self.theme.accent))
+            .fill(accent)
             .min_size(egui::vec2(72.0, 0.0));
-            if ui
-                .add_enabled(validation.is_ok() && !self.theme_conflict, apply)
-                .clicked()
-            {
+            let mut response = ui.add_enabled(validation.is_ok() && !self.theme_conflict, apply);
+            if self.theme_conflict {
+                response = response.on_disabled_hover_text(
+                    "Appearance changed externally. Reload it in Appearance before applying.",
+                );
+            }
+            if response.clicked() {
                 frame.apply = true;
             }
             let response = ui.button("Cancel");

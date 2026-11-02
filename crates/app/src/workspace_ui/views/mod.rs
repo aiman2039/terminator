@@ -30,11 +30,11 @@ impl App {
                     texture.size()[0],
                     texture.size()[1]
                 ));
-                let fit_btn = ui.button("Fit");
+                let fit_btn = appearance::sidebar_action(ui, "Maximize", "Fit to pane");
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "image-fit", fit_btn.rect);
                 fit = fit_btn.clicked();
-                actual = ui.button("100%").clicked();
+                actual = appearance::sidebar_action(ui, "ZoomIn", "Actual size (100%)").clicked();
             }
         });
         if as_text {

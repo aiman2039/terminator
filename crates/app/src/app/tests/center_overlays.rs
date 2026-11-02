@@ -180,3 +180,42 @@ fn navigation_closes_worktree_draft_form() {
     assert!(app.worktree_draft.is_none());
     assert!(app.terminal_input_enabled("shell"));
 }
+
+#[test]
+fn worktree_form_stays_open_until_creation_succeeds() {
+    let (mut app, _, _dir) = fixture();
+    let draft = worktree_ui::WorktreeDraft {
+        source: "a".into(),
+        start: "HEAD".into(),
+        branch: "task".into(),
+        dest: "/tmp/task".into(),
+        open_terminal: false,
+    };
+    app.worktree_draft = Some(draft.clone());
+    app.submit_worktree(&draft);
+    assert!(app.worktree_draft.is_some());
+    let state = app.state.clone();
+    app.handle_worktree_created(state, "a".into(), false);
+    assert!(app.worktree_draft.is_none());
+}
+
+#[test]
+fn worktree_wizard_opens_only_after_the_git_probe_confirms() {
+    let (mut app, _, _dir) = fixture();
+    let draft = worktree_ui::WorktreeDraft {
+        source: "a".into(),
+        start: "HEAD".into(),
+        branch: "task".into(),
+        dest: "/tmp/task".into(),
+        open_terminal: true,
+    };
+    app.apply_worktree_probe(draft.clone(), false);
+    assert!(app.worktree_draft.is_none());
+    assert!(
+        app.info
+            .as_deref()
+            .is_some_and(|info| info.contains("not a git checkout"))
+    );
+    app.apply_worktree_probe(draft, true);
+    assert!(app.worktree_draft.is_some());
+}

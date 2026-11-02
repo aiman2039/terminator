@@ -88,6 +88,7 @@ impl Services {
             | Job::DiffExpand(..)
             | Job::Diff(..)
             | Job::CreateWorktree(..)
+            | Job::WorktreeProbe(..)
             | Job::CommitFiles(..)
             | Job::EditorBlame(..)
             | Job::GitBase(..)

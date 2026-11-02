@@ -189,6 +189,42 @@ fn stale_events_and_other_invocations() {
 }
 
 #[test]
+fn unsequenced_event_keeps_previous_sequence_for_stale_checks() {
+    let mut s = setup();
+    s.apply_hook(event(5, AgentState::Running)).unwrap();
+    let mut unsequenced = event(6, AgentState::Completed);
+    unsequenced.sequence = None;
+    s.apply_hook(unsequenced).unwrap();
+    assert_eq!(s.agents[0].sequence, Some(5));
+    s.apply_hook(event(4, AgentState::Running)).unwrap();
+    assert_eq!(s.agents[0].state, AgentState::Completed);
+}
+
+#[test]
+fn oversized_hook_identity_fields_are_rejected() {
+    let mut s = setup();
+    let big = "x".repeat(100_000);
+    let mut kind = event(1, AgentState::Running);
+    kind.agent_kind.clone_from(&big);
+    let mut request = event(2, AgentState::Running);
+    request.request_id = Some(big.clone());
+    let mut provider = event(3, AgentState::Running);
+    provider.provider_session_id = Some(big.clone());
+    let mut resume = event(4, AgentState::Running);
+    resume.resume = Some(Resume {
+        program: big,
+        args: Vec::new(),
+    });
+    for e in [kind, request, provider, resume] {
+        assert!(matches!(
+            s.apply_hook(e),
+            Err(StateError::HookTooLarge { .. })
+        ));
+    }
+    assert!(s.agents.is_empty());
+}
+
+#[test]
 fn recovery_does_not_relaunch() {
     let mut s = setup();
     s.recover();
@@ -349,4 +385,29 @@ pub(crate) fn ended_session(id: &str, lifecycle: Lifecycle) -> Session {
         truncated: false,
         cwd_confirmed: true,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_replace_rewrites_symlink_target_and_keeps_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let target = d.path().join("real.txt");
+    let link = d.path().join("link.txt");
+    fs::write(&target, "old").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    atomic_replace(&link, b"new").unwrap();
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(fs::read_dir(d.path()).unwrap().count(), 2);
 }

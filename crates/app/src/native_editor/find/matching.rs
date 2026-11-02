@@ -17,12 +17,13 @@ pub(crate) fn selection_scope(engine: &VimEngine, buffer: &Doc) -> Option<(usize
 }
 
 /// Every match of `pattern`, line by line, in char columns, inside
-/// `scope` (char offsets) when given. Empty matches are skipped (they
-/// would select nothing).
+/// `scope` (char offsets) when given, stopping after `limit` matches.
+/// Empty matches are skipped (they would select nothing).
 pub(crate) fn find_in(
     buffer: &Doc,
     pattern: &regex::Regex,
     scope: Option<(usize, usize)>,
+    limit: usize,
 ) -> Vec<FindMatch> {
     let (first, last) = match scope {
         Some((from, to)) => (buffer.line_col_at(from).0, buffer.line_col_at(to).0),
@@ -46,7 +47,7 @@ pub(crate) fn find_in(
                 continue;
             }
             out.push(FindMatch { line, start, end });
-            if out.len() >= MAX_MATCHES {
+            if out.len() >= limit {
                 return out;
             }
         }
@@ -81,7 +82,8 @@ pub(super) fn step(matches: &[FindMatch], caret: (usize, usize), forward: bool) 
 
 /// Replace `matches` (sorted) with `replacement`, last first so earlier
 /// positions stay valid, as one undo step. Regex mode expands `$1`-style
-/// groups against each matched text.
+/// groups from the match found in its full line, so anchors and word
+/// boundaries see the same context as the search.
 pub(crate) struct ReplaceMatchesInput<'a> {
     pub(crate) buffer: &'a mut Doc,
     pub(crate) engine: &'a mut VimEngine,
@@ -104,14 +106,8 @@ pub(super) fn replace_matches(input: ReplaceMatchesInput<'_>) {
     for found in matches.iter().rev() {
         let from = buffer.char_at_line_col(found.line, found.start);
         let to = buffer.char_at_line_col(found.line, found.end);
-        let line = buffer.line_text(found.line);
-        let matched: String = line
-            .chars()
-            .skip(found.start)
-            .take(found.end.saturating_sub(found.start))
-            .collect();
         let text = if regex {
-            pattern.replace(&matched, replacement).into_owned()
+            expand_in_line(&buffer.line_text(found.line), pattern, *found, replacement)
         } else {
             replacement.to_owned()
         };
@@ -122,4 +118,27 @@ pub(super) fn replace_matches(input: ReplaceMatchesInput<'_>) {
     if let Some(first) = matches.first() {
         let _ = engine.place_cursor(buffer, first.line, first.start);
     }
+}
+
+/// `replacement` with groups taken from the match at `found.start` in
+/// `line`. Falls back to the literal replacement when the line no longer
+/// matches there.
+pub(super) fn expand_in_line(
+    line: &str,
+    pattern: &regex::Regex,
+    found: FindMatch,
+    replacement: &str,
+) -> String {
+    let byte_start = line
+        .char_indices()
+        .nth(found.start)
+        .map_or(line.len(), |(index, _)| index);
+    let mut out = String::new();
+    match pattern.captures_at(line, byte_start) {
+        Some(captures) if captures.get(0).is_some_and(|m| m.start() == byte_start) => {
+            captures.expand(replacement, &mut out);
+        }
+        _ => out.push_str(replacement),
+    }
+    out
 }
