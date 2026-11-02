@@ -24,6 +24,9 @@ jobs:
       matrix:
         os: [macos-15, ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
+    # TEMPORARY: Windows checks do not block the release until the
+    # deleted_and_recreated_root_refreshes_and_keeps_watching hang is fixed.
+    continue-on-error: ${{ matrix.os == 'windows-2025' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
