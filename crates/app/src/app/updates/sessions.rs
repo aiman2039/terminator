@@ -235,7 +235,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_clipboard_paste(&mut self, session: &str, text: &str) {
+    pub(crate) fn handle_clipboard_paste(&mut self, session: &str, text: &str) {
         // Resolve by captured identity, never by current focus.
         if let Some(backend) = self.backends.get_mut(session) {
             let mode = backend.last_content().terminal_mode;

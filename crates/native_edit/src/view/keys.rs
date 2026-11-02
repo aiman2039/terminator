@@ -140,6 +140,46 @@ pub fn ide_navigation_shortcut(
     }
 }
 
+/// A `JetBrains` keymap chord in a focused editor (Settings → Editor →
+/// Keymap). These shadow app chords such as Cmd+B (left sidebar).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JetBrainsKey {
+    Effect(Effect),
+    /// Go to Line: Cmd+L on macOS, Ctrl+G elsewhere.
+    GotoLine,
+    /// F2 / Shift+F2: next / previous problem.
+    Problem {
+        backward: bool,
+    },
+}
+
+/// Resolve a `JetBrains` keymap chord. `server` gates language-server
+/// actions; `mac` picks the macOS chord for Go to Line.
+#[must_use]
+pub fn jetbrains_shortcut(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    server: bool,
+    mac: bool,
+) -> Option<JetBrainsKey> {
+    let plain_command = modifiers.command && !modifiers.alt && !modifiers.shift;
+    let no_command = !modifiers.command && !modifiers.ctrl && !modifiers.alt;
+    match key {
+        egui::Key::B if plain_command && server => {
+            Some(JetBrainsKey::Effect(Effect::GotoDefinition))
+        }
+        egui::Key::F6 if no_command && modifiers.shift && server => {
+            Some(JetBrainsKey::Effect(Effect::RenameSymbol))
+        }
+        egui::Key::L if mac && plain_command => Some(JetBrainsKey::GotoLine),
+        egui::Key::G if !mac && plain_command => Some(JetBrainsKey::GotoLine),
+        egui::Key::F2 if no_command => Some(JetBrainsKey::Problem {
+            backward: modifiers.shift,
+        }),
+        _ => None,
+    }
+}
+
 /// IDE caret motion or line edit (`IntelliJ` keymap). `Move` carries the
 /// motion and whether Shift extends the selection.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

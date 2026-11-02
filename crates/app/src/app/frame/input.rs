@@ -47,6 +47,16 @@ impl App {
 
     pub(super) fn run_shortcuts(&mut self, ctx: &egui::Context) {
         let capture_vnc = self.vnc_captures_shortcuts(ctx);
+        let editor_focus = terminator_native_edit::view::source_has_focus(ctx);
+        let jetbrains = editor_focus
+            && crate::appearance::editor_style()
+                .prefs
+                .editor_jetbrains_keys;
+        if jetbrains && !capture_vnc {
+            self.run_jetbrains_shortcuts(ctx);
+        } else {
+            self.double_shift = Default::default();
+        }
         for &action in Action::ALL {
             if capture_vnc {
                 continue;
@@ -58,13 +68,43 @@ impl App {
                 continue;
             }
             let key = shortcuts::binding(&self.state.settings.keybindings, action.id());
-            if terminator_native_edit::view::source_has_focus(ctx) && shortcuts::editor_owns(&key) {
+            if editor_focus && shortcuts::editor_owns(&key, jetbrains) {
                 continue;
             }
             if key.is_empty() || !shortcuts::consume(ctx, &key) {
                 continue;
             }
             self.run_shortcut(ctx, action);
+        }
+    }
+
+    /// `JetBrains` keymap app chords and double Shift, while a native
+    /// editor has focus; they run before the normal bindings.
+    fn run_jetbrains_shortcuts(&mut self, ctx: &egui::Context) {
+        for &(chord, action) in shortcuts::jetbrains_app_chords() {
+            if shortcuts::consume(ctx, chord) {
+                self.run_shortcut(ctx, action);
+            }
+        }
+        let (shift, other) = ctx.input(|input| {
+            let m = input.modifiers;
+            (
+                m.shift && !m.command && !m.ctrl && !m.alt,
+                input.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        egui::Event::Key { .. }
+                            | egui::Event::Text(_)
+                            | egui::Event::PointerButton { .. }
+                    )
+                }),
+            )
+        });
+        if self
+            .double_shift
+            .update(shift, other, std::time::Instant::now())
+        {
+            self.run_shortcut(ctx, Action::OpenPalette);
         }
     }
 }

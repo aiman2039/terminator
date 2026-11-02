@@ -108,6 +108,8 @@ struct ViewRequests {
     references_at: Option<native_lsp::Position>,
     hierarchy_at: Option<(native_lsp::Position, native_lsp::HierarchyKind)>,
     rename_at: Option<native_lsp::Position>,
+    /// Add to agent context: 1-based first and last line.
+    agent_context: Option<(usize, usize)>,
     open_file_picker: bool,
     toggle_pin: bool,
     open_local_history: bool,

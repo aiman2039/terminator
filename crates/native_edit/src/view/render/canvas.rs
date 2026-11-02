@@ -19,8 +19,15 @@ pub(super) struct Canvas<'c> {
     pub folds: &'c Folds,
     pub highlight: &'c HighlightCache,
     pub response: egui::Response,
+    /// Text-area painter: clipped right of the gutter, so text scrolled
+    /// left slides under the line numbers instead of over them.
     pub painter: egui::Painter,
+    /// Gutter painter, over the whole visible area.
+    pub gutter_painter: egui::Painter,
     pub origin: Pos2,
+    /// Screen x of the gutter's left edge. The gutter stays at the
+    /// visible left edge while long lines pan (`IntelliJ`).
+    pub gutter_x: f32,
     pub width: f32,
     pub clip: Rect,
     /// Only the rows inside the clip rect: a long file's off-screen rows
@@ -63,6 +70,16 @@ impl<'a, B: Buffer> SourceView<'a, B> {
             snap(response.rect.min.y, geometry.ppp),
         );
         let clip = painter.clip_rect();
+        let gutter_x = snap(clip.left().max(origin.x), geometry.ppp);
+        let gutter_painter = painter.clone();
+        let painter = if geometry.rule_x > 0.0 {
+            painter.with_clip_rect(Rect::from_min_max(
+                Pos2::new(gutter_x + geometry.rule_x, clip.top()),
+                clip.max,
+            ))
+        } else {
+            painter
+        };
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -88,7 +105,9 @@ impl<'a, B: Buffer> SourceView<'a, B> {
             highlight,
             response,
             painter,
+            gutter_painter,
             origin,
+            gutter_x,
             width,
             clip,
             first_row,
@@ -115,12 +134,14 @@ impl Canvas<'_> {
             reason = "UI coordinate"
         )]
         let row_index = ((pos.y - origin.y) / row_height).floor().max(0.0) as usize;
+        // A press on the pinned gutter maps to the first visible column.
+        let x = pos.x.max(self.gutter_x + gutter);
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "UI coordinate"
         )]
-        let cells = ((pos.x - origin.x - gutter) / advance).round().max(0.0) as usize;
+        let cells = ((x - origin.x - gutter) / advance).round().max(0.0) as usize;
         // Wide chars occupy two cells: resolve the display cell back to
         // a char column on the hit row.
         let row = self.rows.get(row_index).or_else(|| self.rows.last())?;

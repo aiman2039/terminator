@@ -149,6 +149,21 @@ impl<B: Buffer> SourceView<'_, B> {
             // The host popup reads this key.
             return None;
         }
+        if self.options.jetbrains_keys
+            && let Some(chord) = crate::view::jetbrains_shortcut(
+                key,
+                modifiers,
+                crate::lsp::server_language(self.language).is_some(),
+                cfg!(target_os = "macos"),
+            )
+        {
+            match chord {
+                crate::view::JetBrainsKey::Effect(effect) => self.out.effects.push(effect),
+                crate::view::JetBrainsKey::GotoLine => self.engine.begin_ex(""),
+                crate::view::JetBrainsKey::Problem { backward } => self.jump_to_problem(backward),
+            }
+            return Some(Routed::Consumed);
+        }
         if let Some(effect) = self.shortcut_effect(key, modifiers) {
             self.out.effects.push(effect);
             return Some(Routed::Consumed);
@@ -179,9 +194,8 @@ impl<B: Buffer> SourceView<'_, B> {
         let bare = !modifiers.command && !modifiers.ctrl && !modifiers.alt;
         match key {
             // Alt+Enter: show intention actions (`IntelliJ`).
-            egui::Key::Enter if modifiers.alt && !modifiers.command && server => {
-                Some(Effect::CodeActions)
-            }
+            // Built-in items (Add to agent context) need no server.
+            egui::Key::Enter if modifiers.alt && !modifiers.command => Some(Effect::CodeActions),
             // Cmd/Ctrl+Alt+L: reformat code.
             egui::Key::L
                 if modifiers.alt && modifiers.command && server && !self.options.read_only =>

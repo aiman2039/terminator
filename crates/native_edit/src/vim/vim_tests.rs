@@ -20,6 +20,20 @@ mod tests {
     }
 
     #[test]
+    fn go_to_line_moves_to_line_and_column() {
+        let (mut eng, mut doc) = engine("one\ntwo\nthree words\n");
+        eng.begin_ex("");
+        keys(&mut eng, &mut doc, "3:4");
+        eng.press_key(&mut doc, Key::Enter);
+        assert_eq!(eng.cursor(), Cursor { line: 2, col: 3 });
+        assert_eq!(eng.mode(), Mode::Normal);
+        // A line past the end clamps to the last line.
+        keys(&mut eng, &mut doc, ":99");
+        eng.press_key(&mut doc, Key::Enter);
+        assert_eq!(eng.cursor().line, 2);
+    }
+
+    #[test]
     fn visual_outdent_handles_tabs_short_indents_and_blank_lines() {
         let (mut eng, mut doc) = engine("\tα\n  β\n\nplain\n");
         keys(&mut eng, &mut doc, "V3j<");

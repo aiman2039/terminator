@@ -305,9 +305,22 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
 /// True when a focused native editor owns this chord as an IDE caret
 /// motion or line edit (Cmd+Shift+Left selects to line start there, it
 /// does not split the pane), or project navigation. The editor wins,
-/// as in `IntelliJ`.
-pub fn editor_owns(value: &str) -> bool {
+/// as in `IntelliJ`. `jetbrains` adds the keymap's editor chords
+/// (Cmd+B declaration, Cmd+L go to line, F2 next problem).
+pub fn editor_owns(value: &str, jetbrains: bool) -> bool {
     parse(value).is_some_and(|chord| {
+        let mac = cfg!(target_os = "macos");
+        if jetbrains
+            && terminator_native_edit::view::jetbrains_shortcut(
+                chord.key,
+                chord.modifiers,
+                true,
+                mac,
+            )
+            .is_some()
+        {
+            return true;
+        }
         terminator_native_edit::view::ide_edit_key(terminator_native_edit::view::IdeEditKeyInput {
             key: chord.key,
             modifiers: chord.modifiers,
@@ -316,13 +329,73 @@ pub fn editor_owns(value: &str) -> bool {
         })
         .is_some()
             || terminator_native_edit::view::ide_shortcut(chord.key, chord.modifiers).is_some()
+            // `true`: Cmd+Alt+B is Go to Implementation in the editor,
+            // not New browser tab.
             || terminator_native_edit::view::ide_navigation_shortcut(
                 chord.key,
                 chord.modifiers,
-                false,
+                true,
             )
             .is_some()
     })
+}
+
+/// App actions the `JetBrains` keymap moves onto editor chords, checked
+/// before the normal bindings while a native editor has focus. Shift
+/// chords come first: egui ignores an extra Shift.
+pub fn jetbrains_app_chords() -> &'static [(&'static str, Action)] {
+    if cfg!(target_os = "macos") {
+        &[
+            ("command+shift+A", Action::OpenPalette),
+            ("command+E", Action::RecentFiles),
+            ("command+[", Action::NavigateBack),
+            ("command+]", Action::NavigateForward),
+        ]
+    } else {
+        &[
+            ("ctrl+shift+A", Action::OpenPalette),
+            ("ctrl+E", Action::RecentFiles),
+        ]
+    }
+}
+
+/// Double Shift (`JetBrains` Search Everywhere): two Shift taps with no
+/// other key between them, inside [`DoubleShift::WINDOW`].
+#[derive(Debug, Default)]
+pub struct DoubleShift {
+    down: bool,
+    dirty: bool,
+    last_tap: Option<std::time::Instant>,
+}
+
+impl DoubleShift {
+    pub const WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
+
+    /// Feed one frame: `shift` alone is held, `other` input arrived.
+    /// Returns true on the second tap.
+    pub fn update(&mut self, shift: bool, other: bool, now: std::time::Instant) -> bool {
+        if other {
+            self.dirty = true;
+            self.last_tap = None;
+        }
+        if shift && !self.down {
+            self.down = true;
+            self.dirty = other;
+            return false;
+        }
+        if shift || !self.down {
+            return false;
+        }
+        self.down = false;
+        if self.dirty {
+            return false;
+        }
+        let second = self
+            .last_tap
+            .is_some_and(|last| now.saturating_duration_since(last) <= Self::WINDOW);
+        self.last_tap = if second { None } else { Some(now) };
+        second
+    }
 }
 
 pub fn binding(map: &BTreeMap<String, String>, action: &str) -> String {

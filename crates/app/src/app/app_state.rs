@@ -369,6 +369,8 @@ pub struct App {
     pub(crate) signature: Option<crate::native_editor::SignaturePopup>,
     /// Alt+Enter code actions of one native editor.
     pub(crate) code_actions: Option<crate::native_editor::ActionsPopup>,
+    /// Double-Shift detector for the `JetBrains` keymap.
+    pub(crate) double_shift: crate::chrome::shortcuts::DoubleShift,
     /// Re-sent `codeAction/resolve` requests for the picked action.
     pub(crate) resolve_attempts: u8,
     /// Buffer revision the resolved action must still match.

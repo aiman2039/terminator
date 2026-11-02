@@ -31,13 +31,13 @@ fn parses_default_chords() {
     assert!(parse("not-a-key").is_none());
     assert!(parse("command+f1x").is_none());
     // Text navigation chords belong to a focused editor.
-    assert!(editor_owns("command+shift+Left"));
+    assert!(editor_owns("command+shift+Left", false));
     // Find belongs to the focused editor, not the terminal search.
-    assert!(editor_owns("command+F"));
+    assert!(editor_owns("command+F", false));
     // Find in Files also belongs to the editor. On Linux, stored
     // `command+F` already maps to Ctrl+Shift+F.
-    assert!(editor_owns("command+shift+F"));
-    assert!(!editor_owns("command+T"));
+    assert!(editor_owns("command+shift+F", false));
+    assert!(!editor_owns("command+T", false));
 }
 
 #[test]
@@ -207,4 +207,49 @@ fn captured_control_shortcut_consumes_control_without_command() {
     output.textures_delta.clear();
     assert_eq!(parse("command+ctrl+T"), parse("ctrl+command+T"));
     assert!(parse("command+ctrl+T").unwrap().modifiers.command);
+}
+
+#[test]
+fn jetbrains_keymap_claims_sidebar_chords_only_when_on() {
+    let declaration = if cfg!(target_os = "macos") {
+        "command+B"
+    } else {
+        "ctrl+B"
+    };
+    assert!(!editor_owns(declaration, false));
+    assert!(editor_owns(declaration, true));
+    assert!(editor_owns("F2", true));
+    assert!(editor_owns("shift+F6", true));
+    // Go to Implementation beats New browser tab in a focused editor.
+    let implementation = if cfg!(target_os = "macos") {
+        "command+alt+B"
+    } else {
+        "ctrl+alt+B"
+    };
+    assert!(editor_owns(implementation, false));
+}
+
+#[test]
+fn double_shift_fires_on_two_clean_taps_only() {
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut taps = DoubleShift::default();
+    assert!(!taps.update(true, false, at(0)));
+    assert!(!taps.update(false, false, at(50)));
+    assert!(!taps.update(true, false, at(150)));
+    assert!(taps.update(false, false, at(200)));
+    // Shift held while typing a capital letter is not a tap.
+    let mut typing = DoubleShift::default();
+    typing.update(true, false, at(0));
+    typing.update(false, false, at(50));
+    typing.update(true, false, at(100));
+    typing.update(true, true, at(120));
+    assert!(!typing.update(false, false, at(150)));
+    // Taps too far apart do not count.
+    let mut slow = DoubleShift::default();
+    slow.update(true, false, at(0));
+    slow.update(false, false, at(10));
+    slow.update(true, false, at(900));
+    assert!(!slow.update(false, false, at(910)));
 }

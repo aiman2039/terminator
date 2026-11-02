@@ -1,21 +1,10 @@
 //! Reformat (Cmd/Ctrl+Alt+L) and code actions (Alt+Enter) through the
 //! language server. Edits apply to open buffers as one undo step each;
-//! actions that arrive without an edit are resolved on pick.
+//! actions that arrive without an edit are resolved on pick. The popup
+//! lives in `action_popup`.
 
+pub(crate) use super::action_popup::{ActionPick, ActionsPopup, BuiltinAction, actions_ui};
 use super::*;
-
-/// The Alt+Enter popup.
-pub(crate) struct ActionsPopup {
-    pub path: PathBuf,
-    /// Generation of the in-flight request (`None` once answered).
-    pub generation: Option<u64>,
-    /// Buffer revision the actions were asked for; a pick after an edit
-    /// is refused, since the action ranges point at the older text.
-    pub revision: u64,
-    pub items: Vec<native_lsp::CodeActionItem>,
-    pub selected: usize,
-    pub anchor: Option<egui::Rect>,
-}
 
 /// Apply LSP text edits (UTF-16 ranges) to a buffer, last first so earlier
 /// ranges stay valid, as one undo step. Edits at the same position apply
@@ -85,68 +74,6 @@ fn edit_ranges<'a>(
             (a.min(b), a.max(b), edit.new_text.as_str())
         })
         .collect()
-}
-
-/// What the popup asked for this frame.
-pub(crate) enum ActionPick {
-    None,
-    Close,
-    Pick(usize),
-}
-
-/// Keys and clicks for the actions popup, painted at the caret.
-pub(crate) fn actions_ui(ui: &egui::Ui, popup: &mut ActionsPopup) -> ActionPick {
-    if popup.items.is_empty() {
-        return ActionPick::None;
-    }
-    popup.selected = popup.selected.min(popup.items.len().saturating_sub(1));
-    let mut pick = ActionPick::None;
-    ui.input_mut(|input| {
-        if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-            popup.selected = popup
-                .selected
-                .saturating_add(1)
-                .checked_rem(popup.items.len())
-                .unwrap_or(0);
-        }
-        if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-            popup.selected = popup
-                .selected
-                .checked_sub(1)
-                .unwrap_or(popup.items.len().saturating_sub(1));
-        }
-        if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
-            pick = ActionPick::Pick(popup.selected);
-        }
-        if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
-            pick = ActionPick::Close;
-        }
-    });
-    let Some(anchor) = popup.anchor else {
-        return pick;
-    };
-    egui::Area::new(egui::Id::unique(("native-code-actions", &popup.path)))
-        .order(egui::Order::Foreground)
-        .fixed_pos(anchor.left_bottom())
-        .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(480.0);
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        for (index, item) in popup.items.iter().enumerate() {
-                            let mut text = egui::RichText::new(&item.title);
-                            if item.preferred {
-                                text = text.strong();
-                            }
-                            if ui.selectable_label(index == popup.selected, text).clicked() {
-                                pick = ActionPick::Pick(index);
-                            }
-                        }
-                    });
-            });
-        });
-    pick
 }
 
 impl App {
@@ -297,7 +224,7 @@ impl App {
             && popup.path == path
             && popup.generation == Some(generation)
         {
-            if items.is_empty() {
+            if items.is_empty() && popup.builtins.is_empty() {
                 self.code_actions = None;
                 self.info = Some("No code actions here".into());
             } else {

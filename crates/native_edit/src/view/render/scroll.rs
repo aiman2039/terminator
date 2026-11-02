@@ -245,7 +245,15 @@ impl Canvas<'_> {
             ),
             Vec2::new(advance, self.geometry.row_height),
         );
-        self.ui
-            .scroll_to_rect(caret.expand2(Vec2::new(advance * 2.0, 0.0)), None);
+        // The pinned gutter covers the viewport's left edge: keep the
+        // caret right of it. At column 1 this scrolls fully back left.
+        let reveal = Rect::from_min_max(
+            Pos2::new(
+                caret.left() - self.geometry.gutter - advance * 2.0,
+                caret.top(),
+            ),
+            Pos2::new(caret.right() + advance * 2.0, caret.bottom()),
+        );
+        self.ui.scroll_to_rect(reveal, None);
     }
 }

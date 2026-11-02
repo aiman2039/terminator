@@ -107,8 +107,31 @@ impl ViewPass<'_> {
                     .map(|item| (item, popup.revision));
                 self.popups.actions = None;
             }
+            actions::ActionPick::Builtin(builtin) => {
+                self.popups.actions = None;
+                self.run_builtin_action(builtin);
+            }
             actions::ActionPick::Close => self.popups.actions = None,
             actions::ActionPick::None => {}
+        }
+    }
+
+    fn run_builtin_action(&mut self, builtin: actions::BuiltinAction) {
+        use actions::BuiltinAction;
+        match builtin {
+            BuiltinAction::GotoImplementation => {
+                self.requests.locate_at =
+                    Some((self.caret_at(), native_lsp::Locate::Implementation));
+            }
+            BuiltinAction::FindUsages => self.requests.references_at = Some(self.caret_at()),
+            BuiltinAction::Rename => self.requests.rename_at = Some(self.caret_at()),
+            BuiltinAction::AddToAgentContext => {
+                let caret = self.doc.engine.cursor();
+                let (from, to) = self.doc.engine.selection().unwrap_or((caret, caret));
+                let (first, last) = (from.line.min(to.line), from.line.max(to.line));
+                self.requests.agent_context =
+                    Some((first.saturating_add(1), last.saturating_add(1)));
+            }
         }
     }
 

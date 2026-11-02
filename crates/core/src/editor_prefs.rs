@@ -15,6 +15,9 @@ pub struct EditorPrefs {
     pub editor_caret_blink: bool,
     /// Color brackets by nesting depth.
     pub editor_rainbow_brackets: bool,
+    /// `JetBrains` keymap in a focused editor: Cmd+B, Cmd+E, Cmd+L, F2,
+    /// Shift+F6, Cmd+[ / ], Shift+Cmd+A and double Shift win over app keys.
+    pub editor_jetbrains_keys: bool,
 }
 
 impl Default for EditorPrefs {
@@ -24,6 +27,7 @@ impl Default for EditorPrefs {
             editor_line_spacing: 1.2,
             editor_caret_blink: true,
             editor_rainbow_brackets: true,
+            editor_jetbrains_keys: true,
         }
     }
 }
@@ -50,6 +54,7 @@ impl EditorPrefs {
             ),
             editor_caret_blink: self.editor_caret_blink,
             editor_rainbow_brackets: self.editor_rainbow_brackets,
+            editor_jetbrains_keys: self.editor_jetbrains_keys,
         }
     }
 }
@@ -85,6 +90,7 @@ mod tests {
             editor_line_spacing: f32::NAN,
             editor_caret_blink: false,
             editor_rainbow_brackets: false,
+            editor_jetbrains_keys: false,
         }
         .sanitized();
         assert_eq!(prefs.editor_font_size, 32.0);

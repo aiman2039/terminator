@@ -44,6 +44,13 @@ impl VimEngine {
         if let Some(args) = self.set_args() {
             return self.run_set(doc, &args);
         }
+        if let Some((line, col)) = Self::line_target(&self.command) {
+            self.command.clear();
+            self.enter_normal(doc);
+            let effects = self.place_cursor(doc, line.saturating_sub(1), col.saturating_sub(1));
+            self.request_scroll();
+            return effects;
+        }
         let effects = Self::ex_effects(&self.command);
         let failed = effects == vec![Effect::Bell];
         self.command.clear();
@@ -129,6 +136,15 @@ impl VimEngine {
             "tabnew" => vec![Effect::TabNew],
             _ => vec![Effect::Bell],
         }
+    }
+
+    /// `:42` or `:42:7` (`IntelliJ` Go to Line): 1-based line and column.
+    pub(super) fn line_target(command: &str) -> Option<(usize, usize)> {
+        let (line, col) = command
+            .trim()
+            .split_once(':')
+            .unwrap_or((command.trim(), "1"));
+        Some((line.parse().ok()?, col.parse().ok()?))
     }
 
     /// True for `:s/delim/…` and `:%s/delim/…`. Anything else starting

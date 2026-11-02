@@ -33,8 +33,8 @@ impl<B: Buffer> SourceView<'_, B> {
             return;
         }
         let bottom = canvas.clip.top() + headers.len() as f32 * self.geometry.row_height;
-        canvas.painter.hline(
-            canvas.origin.x..=canvas.clip.right(),
+        canvas.gutter_painter.hline(
+            canvas.gutter_x..=canvas.clip.right(),
             bottom,
             egui::Stroke::new(
                 1.0,
@@ -51,16 +51,16 @@ impl<B: Buffer> SourceView<'_, B> {
         let origin = canvas.origin;
         let y = canvas.clip.top() + index as f32 * geometry.row_height;
         let band = Rect::from_min_max(
-            Pos2::new(origin.x, y),
+            Pos2::new(canvas.gutter_x, y),
             Pos2::new(canvas.clip.right(), y + geometry.row_height),
         );
         canvas
-            .painter
+            .gutter_painter
             .rect_filled(band, 0.0, visuals.extreme_bg_color);
         if self.options.show_line_numbers {
-            canvas.painter.text(
+            canvas.gutter_painter.text(
                 Pos2::new(
-                    origin.x + geometry.rule_x - geometry.advance,
+                    canvas.gutter_x + geometry.rule_x - geometry.advance,
                     y + geometry.text_dy,
                 ),
                 egui::Align2::RIGHT_TOP,

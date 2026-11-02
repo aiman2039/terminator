@@ -58,7 +58,7 @@ impl<B: Buffer> SourceView<'_, B> {
     /// A click in the change band opens that change instead of moving
     /// the caret.
     fn band_click(&self, canvas: &Canvas<'_>) -> Option<(usize, egui::Pos2)> {
-        let left = canvas.response.rect.left();
+        let left = canvas.gutter_x;
         canvas
             .click_pos()
             .filter(|pos| self.options.show_line_numbers && pos.x < left + CHANGE_BAND)
@@ -76,7 +76,7 @@ impl<B: Buffer> SourceView<'_, B> {
 
     /// A click on a fold arrow (the gutter's last cell) toggles it.
     fn fold_click(&self, canvas: &Canvas<'_>) -> Option<usize> {
-        let left = canvas.response.rect.left();
+        let left = canvas.gutter_x;
         let (rule_x, gutter) = (self.geometry.rule_x, self.geometry.gutter);
         let advance = self.geometry.advance;
         canvas

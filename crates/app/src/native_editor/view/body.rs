@@ -348,6 +348,7 @@ impl ViewPass<'_> {
             },
             caret_blink: style.prefs.editor_caret_blink,
             rainbow_brackets: style.prefs.editor_rainbow_brackets,
+            jetbrains_keys: style.prefs.editor_jetbrains_keys,
             palette: Some(style.palette),
             status_items: [if crlf { "CRLF" } else { "LF" }, "UTF-8", "4 spaces"]
                 .map(str::to_owned)

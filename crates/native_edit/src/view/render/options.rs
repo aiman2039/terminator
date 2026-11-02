@@ -85,6 +85,8 @@ pub struct SourceOptions {
     pub sticky_headers: bool,
     /// Color brackets by nesting depth.
     pub rainbow_brackets: bool,
+    /// `JetBrains` keymap extras: Cmd+B, Cmd+L (Ctrl+G), F2, Shift+F6.
+    pub jetbrains_keys: bool,
 }
 
 impl Default for SourceOptions {
@@ -112,6 +114,7 @@ impl Default for SourceOptions {
             range_fills: std::sync::Arc::new(Vec::new()),
             sticky_headers: true,
             rainbow_brackets: false,
+            jetbrains_keys: false,
             diagnostics: Vec::new(),
             squiggles: Vec::new(),
             find_matches: std::sync::Arc::new(Vec::new()),

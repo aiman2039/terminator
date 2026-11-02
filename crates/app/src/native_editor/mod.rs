@@ -5,7 +5,9 @@
 //! the same 1 MiB bound as Markdown previews. Saves refuse to overwrite a
 //! file that changed on disk unless forced, Reload is disabled while dirty,
 //! and closing a dirty tab asks first — nothing is silently discarded.
+mod action_popup;
 mod actions;
+mod agent_context;
 mod blame;
 mod close;
 mod close_copies;

@@ -92,25 +92,24 @@ impl App {
         }
     }
 
+    /// Open the Alt+Enter popup at once with the built-in items; the
+    /// server's actions join it when they arrive.
     fn native_view_code_actions(
         &mut self,
         path: &Path,
         (range, revision): (native_lsp::Range, u64),
         anchor: Option<egui::Rect>,
     ) {
-        match self.lsp.request_code_actions(path, range) {
-            Some(generation) => {
-                self.code_actions = Some(ActionsPopup {
-                    path: path.to_owned(),
-                    generation: Some(generation),
-                    revision,
-                    items: Vec::new(),
-                    selected: 0,
-                    anchor,
-                });
-            }
-            None => self.info = Some("The language server is not ready".into()),
-        }
+        let generation = self.lsp.request_code_actions(path, range);
+        self.code_actions = Some(ActionsPopup {
+            path: path.to_owned(),
+            builtins: actions::BuiltinAction::for_file(generation.is_some()),
+            generation,
+            revision,
+            items: Vec::new(),
+            selected: 0,
+            anchor,
+        });
     }
 
     pub(super) fn native_view_signature(
@@ -272,6 +271,9 @@ impl App {
         }
         if let Some(position) = requests.rename_at.take() {
             self.begin_native_rename(path, site.project, position);
+        }
+        if let Some(lines) = requests.agent_context.take() {
+            self.add_to_agent_context(path, site.project, lines);
         }
         if let Some(results) = self.lsp.take_references() {
             self.show_usages("Find Usages", results.targets);

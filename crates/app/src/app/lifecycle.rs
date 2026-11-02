@@ -312,6 +312,7 @@ impl App {
             completion: None,
             signature: None,
             code_actions: None,
+            double_shift: Default::default(),
             resolve_attempts: 0,
             resolve_revision: 0,
             action_apply: None,
