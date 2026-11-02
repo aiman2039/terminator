@@ -5,6 +5,7 @@
 use super::*;
 use crate::app::OpenFileInput;
 use std::collections::HashMap;
+use terminator_native_edit::highlight::{Span, highlight_text, language_for_path};
 
 /// Jumps remembered for Back; older ones fall off.
 const HISTORY_LIMIT: usize = 64;
@@ -28,6 +29,8 @@ pub(crate) struct UsagesView {
     /// Line text per `(file, line)`: open buffers fill in at once, other
     /// files through a background read.
     pub previews: HashMap<(PathBuf, u32), String>,
+    /// Syntax spans per previewed line, filled the first time it is drawn.
+    pub highlighted: HashMap<(PathBuf, u32), Vec<Span>>,
     pub generation: u64,
 }
 
@@ -149,6 +152,7 @@ impl App {
             groups,
             total,
             previews,
+            highlighted: HashMap::new(),
             generation,
         });
     }
@@ -166,73 +170,28 @@ impl App {
         }
     }
 
-    /// The usages window: files with counts, each usage as `line:col`
-    /// plus its trimmed line. Clicking jumps; the window stays open (the
-    /// declaration chooser closes on a pick).
+    /// The usages window, styled like the `IntelliJ` Find Usages popup:
+    /// a muted summary, files with counts, and each usage as a muted line
+    /// number plus its syntax-colored line. Clicking jumps; the window
+    /// stays open (the declaration chooser closes on a pick).
     pub(crate) fn show_usages_window(&mut self, ctx: &egui::Context) {
-        let Some(view) = self.usages.as_ref() else {
+        let root = self.selected_project().map(|project| project.path.clone());
+        let Some(view) = self.usages.as_mut() else {
             return;
         };
         let title = view.title;
         let chooser = title == DECLARATION_TITLE;
         let mut open = true;
         let mut picked: Option<NavLocation> = None;
-        let root = self.selected_project().map(|project| project.path.clone());
         self.popups
             .window(ctx, title)
             .open(&mut open)
             .collapsible(false)
-            .default_width(520.0)
+            .default_width(560.0)
+            .frame(appearance::popup_frame(&ctx.global_style()).inner_margin(10))
             .show(ctx, |ui| {
-                if view.total == 0 {
-                    ui.weak("No usages found.");
-                    return;
-                }
-                ui.weak(format!(
-                    "{} usage{} in {} file{}",
-                    view.total,
-                    if view.total == 1 { "" } else { "s" },
-                    view.groups.len(),
-                    if view.groups.len() == 1 { "" } else { "s" },
-                ));
-                egui::ScrollArea::vertical()
-                    .max_height(420.0)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        for (path, items) in &view.groups {
-                            let shown = root
-                                .as_deref()
-                                .and_then(|root| path.strip_prefix(root).ok())
-                                .unwrap_or(path);
-                            ui.horizontal(|ui| {
-                                ui.strong(shown.display().to_string());
-                                ui.weak(format!("({})", items.len()));
-                            });
-                            for (line, character) in items {
-                                let preview = view
-                                    .previews
-                                    .get(&(path.clone(), *line))
-                                    .map(|text| text.trim().to_owned())
-                                    .unwrap_or_default();
-                                let label = egui::RichText::new(format!(
-                                    "{:>5}  {preview}",
-                                    line.saturating_add(1)
-                                ))
-                                .monospace();
-                                if ui
-                                    .add(egui::Button::selectable(false, label).truncate())
-                                    .clicked()
-                                {
-                                    picked = Some(NavLocation {
-                                        path: path.clone(),
-                                        line: *line,
-                                        character: *character,
-                                    });
-                                }
-                            }
-                            ui.add_space(4.0);
-                        }
-                    });
+                appearance::popup_text_style(ui.style_mut());
+                picked = usages_body(ui, view, root.as_deref());
             });
         if let Some(target) = picked {
             self.record_jump_origin();
@@ -245,6 +204,143 @@ impl App {
             self.usages = None;
         }
     }
+}
+
+/// Summary line and the grouped usage rows; returns a clicked usage.
+fn usages_body(
+    ui: &mut egui::Ui,
+    view: &mut UsagesView,
+    root: Option<&std::path::Path>,
+) -> Option<NavLocation> {
+    if view.total == 0 {
+        ui.weak("No usages found.");
+        return None;
+    }
+    ui.weak(format!(
+        "{} usage{} in {} file{}",
+        view.total,
+        if view.total == 1 { "" } else { "s" },
+        view.groups.len(),
+        if view.groups.len() == 1 { "" } else { "s" },
+    ));
+    ui.add_space(4.0);
+    let mut picked = None;
+    let UsagesView {
+        groups,
+        previews,
+        highlighted,
+        ..
+    } = view;
+    egui::ScrollArea::vertical()
+        .max_height(420.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (path, items) in groups.iter() {
+                let shown = root
+                    .and_then(|root| path.strip_prefix(root).ok())
+                    .unwrap_or(path);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(shown.display().to_string()).strong());
+                    ui.weak(format!("({})", items.len()));
+                });
+                ui.add_space(2.0);
+                for (line, character) in items {
+                    let key = (path.clone(), *line);
+                    let preview = previews.get(&key).map_or("", |text| text.trim());
+                    let spans = highlighted
+                        .entry(key)
+                        .or_insert_with(|| preview_spans(path, preview, ui.visuals().dark_mode));
+                    if usage_row(ui, line.saturating_add(1), preview, spans).clicked() {
+                        picked = Some(NavLocation {
+                            path: path.clone(),
+                            line: *line,
+                            character: *character,
+                        });
+                    }
+                }
+            }
+        });
+    picked
+}
+
+/// Syntax spans for one trimmed preview line (empty when not highlighted).
+fn preview_spans(path: &std::path::Path, text: &str, dark: bool) -> Vec<Span> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let language = language_for_path(&path.to_string_lossy());
+    highlight_text(language, text, dark)
+        .and_then(|lines| lines.into_iter().next())
+        .unwrap_or_default()
+}
+
+/// The line text as a layout job: span colors over the plain text color.
+pub(crate) fn preview_job(
+    text: &str,
+    spans: &[Span],
+    plain: egui::Color32,
+) -> egui::text::LayoutJob {
+    let font = egui::FontId::monospace(12.5);
+    let mut job = egui::text::LayoutJob::default();
+    let chars: Vec<char> = text.chars().collect();
+    let mut col = 0usize;
+    let push = |job: &mut egui::text::LayoutJob, from: usize, to: usize, color| {
+        let piece: String = chars.get(from..to).unwrap_or_default().iter().collect();
+        if !piece.is_empty() {
+            job.append(&piece, 0.0, egui::TextFormat::simple(font.clone(), color));
+        }
+    };
+    for span in spans {
+        let start = span.start.min(chars.len());
+        let end = span.end.min(chars.len());
+        if start > col {
+            push(&mut job, col, start, plain);
+        }
+        if end > start.max(col) {
+            let [r, g, b] = span.color;
+            push(
+                &mut job,
+                start.max(col),
+                end,
+                egui::Color32::from_rgb(r, g, b),
+            );
+            col = end;
+        }
+    }
+    push(&mut job, col, chars.len(), plain);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job
+}
+
+/// One usage: muted right-aligned line number, then the colored line.
+fn usage_row(ui: &mut egui::Ui, number: u32, preview: &str, spans: &[Span]) -> egui::Response {
+    let response = appearance::popup_row(ui, 24.0, false);
+    if !ui.is_rect_visible(response.rect) {
+        return response;
+    }
+    let rect = response.rect;
+    let painter = ui.painter_at(rect);
+    let muted = ui.visuals().weak_text_color();
+    painter.text(
+        egui::pos2(rect.left() + 44.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        number.to_string(),
+        egui::FontId::monospace(12.0),
+        muted,
+    );
+    let text_left = rect.left() + 58.0;
+    let mut job = preview_job(preview, spans, ui.visuals().text_color());
+    job.wrap.max_width = (rect.right() - 6.0 - text_left).max(0.0);
+    let galley = ui.painter().layout_job(job);
+    painter.galley(
+        egui::pos2(text_left, rect.center().y - galley.size().y * 0.5),
+        galley,
+        ui.visuals().text_color(),
+    );
+    response
 }
 
 /// Window title of the declaration chooser (several definition targets).
@@ -346,5 +442,29 @@ mod tests {
         assert_eq!(view.total, 3);
         assert_eq!(view.groups.len(), 2);
         assert_eq!(view.groups[0].1, [(4, 0), (9, 0)]);
+    }
+
+    #[test]
+    fn usage_previews_keep_their_syntax_colors() {
+        let text = "pub struct RowSpec<'a> {";
+        let spans = preview_spans(std::path::Path::new("list.rs"), text, true);
+        assert!(!spans.is_empty(), "rust preview is highlighted");
+        let plain = egui::Color32::from_rgb(1, 2, 3);
+        let job = preview_job(text, &spans, plain);
+        assert_eq!(job.text, text);
+        // `pub` takes the Islands Dark keyword color, not the plain one.
+        let first = job.sections.first().expect("first section");
+        assert_eq!(
+            first.format.color,
+            egui::Color32::from_rgb(0xCF, 0x8E, 0x6D)
+        );
+        // Unknown files stay plain and keep every char.
+        let job = preview_job("plain words", &[], plain);
+        assert_eq!(job.text, "plain words");
+        assert!(
+            job.sections
+                .iter()
+                .all(|section| section.format.color == plain)
+        );
     }
 }

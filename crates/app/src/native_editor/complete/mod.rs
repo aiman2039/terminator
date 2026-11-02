@@ -29,6 +29,8 @@ pub(crate) struct CompletionPopup {
     pub visible: Vec<usize>,
     pub selected: usize,
     pub anchor: Option<egui::Rect>,
+    /// The typed prefix, painted in the match color on each row.
+    pub prefix: String,
 }
 
 fn identifier(c: char) -> bool {
@@ -192,6 +194,7 @@ pub(crate) fn after_frame(
             *popup = None;
         } else {
             open.visible = rank(&open.items, &prefix);
+            open.prefix = prefix;
             if caret_rect.is_some() {
                 open.anchor = caret_rect;
             }

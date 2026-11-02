@@ -154,6 +154,54 @@ pub fn file_row(input: FileRowInput<'_>) -> egui::Response {
     })
     .inner
 }
+/// A file row whose folder glyph and row background follow the folder's
+/// project-tree role (see [`super::folder_tint`]).
+pub(crate) struct FolderRowInput<'a> {
+    pub row: FileRowInput<'a>,
+    pub folder: super::FolderTint,
+}
+
+pub fn folder_row(input: FolderRowInput<'_>) -> egui::Response {
+    let FolderRowInput { row, folder } = input;
+    let FileRowInput {
+        ui,
+        label,
+        icon,
+        selected,
+        height,
+        trailing,
+        tint,
+    } = row;
+    // Reserve the background slot before the row paints, so the role tint
+    // sits under the hover/selection fill and the text.
+    let background = ui.painter().add(egui::Shape::Noop);
+    let response = ui
+        .scope(|ui| {
+            ui.visuals_mut().override_text_color = Some(tint);
+            row_ext(
+                ui,
+                RowSpec {
+                    label,
+                    icon,
+                    selected,
+                    height,
+                    trailing,
+                    tint,
+                    icon_tint: folder.icon,
+                    spin: false,
+                    subtitle: None,
+                    brand: None,
+                    reserve_brand: false,
+                },
+            )
+        })
+        .inner;
+    if let Some(fill) = folder.fill {
+        ui.painter()
+            .set(background, egui::Shape::rect_filled(response.rect, 4, fill));
+    }
+    response
+}
 pub(crate) struct ProjectRowInput<'a> {
     pub ui: &'a mut egui::Ui,
     pub label: &'a str,

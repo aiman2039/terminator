@@ -25,27 +25,40 @@ fn rust_keyword_gets_own_span() {
 }
 
 #[test]
-fn dark_theme_uses_darcula_colors() {
+fn dark_theme_uses_islands_dark_colors() {
     let lines = highlight_text(
         Language::Rust,
-        "fn main() {\n    // note\n    let x = 1;\n}",
+        "fn main() {\n    // note\n    let x = 1;\n    let s = \"hi\";\n}",
         true,
     )
     .expect("rust highlights");
     let has = |line: usize, color: [u8; 3]| lines[line].iter().any(|span| span.color == color);
-    assert!(has(0, [0xCC, 0x78, 0x32]), "keyword orange: {:?}", lines[0]);
+    assert!(has(0, [0xCF, 0x8E, 0x6D]), "keyword orange: {:?}", lines[0]);
+    assert!(has(0, [0x56, 0xA8, 0xF5]), "function blue: {:?}", lines[0]);
+    assert!(has(1, [0x7A, 0x7E, 0x85]), "comment gray: {:?}", lines[1]);
+    assert!(has(2, [0x2A, 0xAC, 0xB8]), "number teal: {:?}", lines[2]);
+    assert!(has(3, [0x6A, 0xAB, 0x73]), "string green: {:?}", lines[3]);
+    assert!(!has(4, [0x7A, 0x7E, 0x85]));
     assert!(
-        has(0, [0xFF, 0xC6, 0x6D]),
-        "function yellow: {:?}",
-        lines[0]
-    );
-    assert!(has(1, [0x80, 0x80, 0x80]), "comment gray: {:?}", lines[1]);
-    assert!(has(2, [0x68, 0x97, 0xBB]), "number blue: {:?}", lines[2]);
-    assert!(!has(3, [0x80, 0x80, 0x80]));
-    assert!(
-        lines[2].iter().any(|span| span.color == [0xA9, 0xB7, 0xC6]),
-        "plain text stays Darcula foreground: {:?}",
+        has(2, [0xBC, 0xBE, 0xC4]),
+        "plain text stays Islands Dark foreground: {:?}",
         lines[2]
+    );
+}
+
+#[test]
+fn islands_dark_theme_matches_the_jetbrains_scheme() {
+    let theme = theme(true).expect("bundled dark theme");
+    assert_eq!(theme.name.as_deref(), Some("Islands Dark"));
+    let foreground = theme.settings.foreground.expect("foreground");
+    assert_eq!(
+        [foreground.r, foreground.g, foreground.b],
+        [0xBC, 0xBE, 0xC4]
+    );
+    let background = theme.settings.background.expect("background");
+    assert_eq!(
+        [background.r, background.g, background.b],
+        [0x19, 0x1A, 0x1C]
     );
 }
 
@@ -190,9 +203,9 @@ fn jsonc_highlights_comments_and_keeps_urls_as_strings() {
     let text = "{\n  // Comment\n  \"url\": \"https://example.test\",\n  /* Block */ \"enabled\": true,\n}\n";
     let lines =
         highlight_text(language_for_path("wrangler.jsonc"), text, true).expect("JSONC highlight");
-    assert!(lines[1].iter().any(|span| span.color == [0x80, 0x80, 0x80]));
-    assert!(lines[3].iter().any(|span| span.color == [0x80, 0x80, 0x80]));
-    assert!(lines[2].iter().any(|span| span.color == [0x6A, 0x87, 0x59]));
+    assert!(lines[1].iter().any(|span| span.color == [0x7A, 0x7E, 0x85]));
+    assert!(lines[3].iter().any(|span| span.color == [0x7A, 0x7E, 0x85]));
+    assert!(lines[2].iter().any(|span| span.color == [0x6A, 0xAB, 0x73]));
 }
 
 #[test]

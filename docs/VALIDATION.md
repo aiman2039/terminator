@@ -5875,3 +5875,34 @@ read-only mount; Cargo metadata resolved `/src` as the workspace and `/build`
 as its target directory. Full release checks, live Windows execution, GUI
 fixtures, and a before/after release timing comparison were not run. No real
 release was committed, tagged, pushed, or dispatched.
+
+## JetBrains Islands Dark defaults (2026-11-02)
+
+Colors come from the JetBrains `intellij-community` sources:
+`themes/islands/ManyIslandsDark.theme.json`, `IslandSchemeDark.xml`, and the
+expUI `sourceRoot`/`testRoot`/`excludeRoot` dark node icons.
+
+- `AppearanceConfig::islands_dark()` is the new default (editor `#191A1C`,
+  tool windows `#212326`, selection `#2A4371`, Islands file-status colors).
+  Settings lists it first; IntelliJ dark, High contrast, Terminator dark, and
+  IntelliJ light stay as presets. Saved themes keep their explicit colors.
+- `IslandsDark.tmTheme` replaces `Darcula.tmTheme`: keyword `#CF8E6D`,
+  string `#6AAB73`, number `#2AACB8`, function `#56A8F5`, field `#C77DBB`,
+  attribute `#B3AE60`, comment `#7A7E85`, doc comment `#5F826B` italic. User
+  types and enum variants keep the plain `#BCBEC4` (variants italic);
+  primitives take the keyword color.
+- Explorer folders: `src`/`lib`/`source` blue, test roots green on a faint
+  green row, ignored and build-output folders orange on a faint orange row.
+- Dark popups and menus lift one layer above the editor (`#26282C` on Islands)
+  with a `#33353B`-class border. Completion rows show the kind badge (shared
+  with the Structure view), the typed prefix in popup blue `#538AF9`, the
+  detail right-aligned, and a key-hint footer. Find Usages uses the popup frame
+  with muted line numbers and syntax-colored previews.
+
+Not included: the Islands gap/rounded-island panel geometry; panels stay flush
+as before.
+
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+--all-features -- -D warnings`, `sh scripts/check.sh sarah`, and
+`cargo test --workspace --all-features --locked` were run on this branch. No
+native GUI fixture or screenshot comparison was run.

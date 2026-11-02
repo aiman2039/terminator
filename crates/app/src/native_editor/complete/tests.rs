@@ -100,3 +100,19 @@ fn accepting_replaces_the_prefix_and_lands_on_the_snippet_stop() {
     engine.undo(&mut buffer);
     assert_eq!(buffer.text(), "let v = pri\n");
 }
+
+#[test]
+fn completion_badges_match_the_structure_view() {
+    use super::popup::kind_badge;
+    assert_eq!(kind_badge(Some("Struct")).map(|(c, _)| c), Some('S'));
+    assert_eq!(kind_badge(Some("Method")).map(|(c, _)| c), Some('m'));
+    assert_eq!(kind_badge(Some("Field")).map(|(c, _)| c), Some('p'));
+    // Keywords show no badge, as in `IntelliJ`.
+    assert!(kind_badge(Some("Keyword")).is_none());
+    assert!(kind_badge(None).is_none());
+    // Functions and fields read as different groups.
+    assert_ne!(
+        kind_badge(Some("Function")).map(|(_, tint)| tint),
+        kind_badge(Some("Field")).map(|(_, tint)| tint)
+    );
+}

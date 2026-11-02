@@ -23,9 +23,11 @@ pub(crate) fn popup_ui(ui: &egui::Ui, popup: &mut CompletionPopup) -> PopupActio
         .order(egui::Order::Foreground)
         .fixed_pos(anchor.left_bottom())
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(460.0);
-                let max_height = VISIBLE_ROWS as f32 * 20.0;
+            appearance::popup_text_style(ui.style_mut());
+            appearance::popup_frame(ui.style()).show(ui, |ui| {
+                ui.set_width(POPUP_WIDTH);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let max_height = VISIBLE_ROWS as f32 * ROW_HEIGHT;
                 egui::ScrollArea::vertical()
                     .max_height(max_height)
                     .show(ui, |ui| {
@@ -33,6 +35,7 @@ pub(crate) fn popup_ui(ui: &egui::Ui, popup: &mut CompletionPopup) -> PopupActio
                             action = clicked;
                         }
                     });
+                popup_footer(ui);
             });
         });
     action
@@ -71,6 +74,10 @@ fn popup_keys(ui: &egui::Ui, popup: &mut CompletionPopup) -> (PopupAction, bool)
     (action, moved)
 }
 
+/// Popup width and row height, as in the `IntelliJ` completion list.
+const POPUP_WIDTH: f32 = 520.0;
+const ROW_HEIGHT: f32 = 22.0;
+
 /// The visible items; returns an accept for a clicked row.
 fn popup_rows(ui: &mut egui::Ui, popup: &CompletionPopup, moved: bool) -> Option<PopupAction> {
     let mut action = None;
@@ -79,7 +86,7 @@ fn popup_rows(ui: &mut egui::Ui, popup: &CompletionPopup, moved: bool) -> Option
             continue;
         };
         let selected = row == popup.selected;
-        let response = ui.horizontal(|ui| item_row(ui, item, selected)).inner;
+        let response = item_row(ui, item, &popup.prefix, selected);
         if selected && moved {
             response.scroll_to_me(None);
         }
@@ -90,21 +97,97 @@ fn popup_rows(ui: &mut egui::Ui, popup: &CompletionPopup, moved: bool) -> Option
     action
 }
 
-/// Kind initial, label, and detail; returns the label's response.
+/// Kind badge letter and tint, shared with the Structure tool window.
+/// Keywords get no badge, as in the `IntelliJ` lookup.
+pub(crate) fn kind_badge(kind: Option<&str>) -> Option<(char, egui::Color32)> {
+    match kind? {
+        "Keyword" => None,
+        kind => Some(crate::sidebar_ui::structure::kind_badge(kind)),
+    }
+}
+
+/// Kind badge, label with the typed prefix in the match color, and the
+/// detail right-aligned in muted text; returns the row's response.
 fn item_row(
     ui: &mut egui::Ui,
     item: &native_lsp::CompletionItem,
+    prefix: &str,
     selected: bool,
 ) -> egui::Response {
-    let kind = item
-        .kind
-        .as_deref()
-        .and_then(|kind| kind.chars().next())
-        .unwrap_or('•');
-    ui.weak(egui::RichText::new(kind.to_string()).monospace());
-    let label = ui.selectable_label(selected, egui::RichText::new(&item.label).monospace());
-    if let Some(detail) = &item.detail {
-        ui.add(egui::Label::new(egui::RichText::new(detail).weak().small()).truncate());
+    let response = appearance::popup_row(ui, ROW_HEIGHT, selected);
+    if !ui.is_rect_visible(response.rect) {
+        return response;
     }
-    label
+    let rect = response.rect;
+    let painter = ui.painter_at(rect);
+    let badge = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 13.0, rect.center().y),
+        egui::vec2(15.0, 15.0),
+    );
+    if let Some((letter, tint)) = kind_badge(item.kind.as_deref()) {
+        painter.rect_filled(badge, 3, tint.gamma_multiply(0.22));
+        painter.text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            letter,
+            egui::FontId::monospace(10.0),
+            tint,
+        );
+    }
+    let text = ui.visuals().text_color();
+    let muted = ui.visuals().weak_text_color();
+    let label = ui.painter().layout_job(appearance::highlighted_label(
+        appearance::HighlightedLabelInput {
+            text: &item.label,
+            query: prefix,
+            font: egui::FontId::monospace(13.0),
+            color: text,
+            matched: appearance::popup_match_color(ui.visuals()),
+        },
+    ));
+    let label_left = badge.right() + 7.0;
+    let label_width = label.size().x;
+    painter.galley(
+        egui::pos2(label_left, rect.center().y - label.size().y * 0.5),
+        label,
+        text,
+    );
+    if let Some(detail) = &item.detail {
+        let room = (rect.right() - 8.0 - (label_left + label_width + 16.0)).max(0.0);
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            detail.clone(),
+            egui::FontId::proportional(12.0),
+            muted,
+        );
+        job.wrap.max_width = room;
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        let galley = ui.painter().layout_job(job);
+        painter.galley(
+            egui::pos2(
+                rect.right() - 8.0 - galley.size().x,
+                rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            muted,
+        );
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Button, true, selected, &item.label)
+    });
+    response
+}
+
+/// Key hints under the list, as in the `IntelliJ` lookup footer.
+fn popup_footer(ui: &mut egui::Ui) {
+    ui.add_space(4.0);
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new("Press ⏎ or ⇥ to insert, Esc to close")
+                .small()
+                .weak(),
+        );
+    });
 }

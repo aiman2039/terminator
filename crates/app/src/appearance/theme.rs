@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use terminator_core::appearance::{AppearanceConfig, rgb};
 use terminator_native_edit::view::{BOLD_FAMILY, ITALIC_FAMILY};
 
-/// Chrome tints that follow the theme: dark themes keep the fixed Orca
-/// values below, light themes derive them from the palette. Set by
-/// [`apply`]; every viewport shares one theme.
+/// Chrome tints that follow the theme: popups and menus derive from the
+/// palette (a lifted `JetBrains` popup layer on dark themes), dark themes
+/// keep the fixed bright icon. Set by [`apply`]; every viewport shares one
+/// theme.
 struct Chrome {
     icon: AtomicU32,
     menu_fill: AtomicU32,
@@ -22,15 +23,20 @@ const DARK_ICON: Color32 = Color32::from_rgb(242, 244, 248);
 // app's `raw_input_hook` — so capping only the main window alternates the
 // shared font atlas between two sizes every frame and damages its text.
 
-/// Orca dark context menu fill: `--background` `#0a0a0a`, used as the solid
-/// stand-in for `dark:bg-[rgba(0,0,0,0.12)]` + `backdrop-blur-2xl`.
-const DARK_MENU_FILL: Color32 = Color32::from_rgb(10, 10, 10);
-/// Orca `--popover-foreground` `#fafafa`.
-const DARK_MENU_TEXT: Color32 = Color32::from_rgb(250, 250, 250);
-/// Orca `--muted-foreground` `#a1a1a1` (shortcuts use this at 85% in CSS).
-const DARK_MENU_MUTED: Color32 = Color32::from_rgb(161, 161, 161);
-/// Orca `dark:border-white/14` and `dark:focus:bg-white/14`.
-const DARK_MENU_LINE: Color32 = Color32::from_rgba_premultiplied(36, 36, 36, 36);
+/// `JetBrains` Islands Dark popup layer (`popup-bg` `#26282C`), used until
+/// the first [`apply`] derives the menu tints from the theme.
+const DARK_MENU_FILL: Color32 = Color32::from_rgb(0x26, 0x28, 0x2C);
+/// Islands `text-default`.
+const DARK_MENU_TEXT: Color32 = Color32::from_rgb(0xD1, 0xD3, 0xD9);
+/// Islands `text-muted` (shortcuts, details).
+const DARK_MENU_MUTED: Color32 = Color32::from_rgb(0x9F, 0xA2, 0xA8);
+/// Islands `popup-border` `#33353B`; also the menu hover fill.
+const DARK_MENU_LINE: Color32 = Color32::from_rgb(0x33, 0x35, 0x3B);
+/// How far a dark popup lifts from the editor color toward the text color:
+/// Islands `#191A1C` editor to `#26282C` popup.
+const DARK_POPUP_LIFT: f32 = 0.07;
+/// The popup border lifts a little further than its fill.
+const DARK_POPUP_LINE_LIFT: f32 = 0.12;
 
 const fn packed(color: Color32) -> u32 {
     u32::from_le_bytes(color.to_array())
@@ -75,6 +81,7 @@ pub(super) fn menu_line() -> Color32 {
 }
 
 /// Icon, menu fill, menu text, menu muted, and menu line colors for `theme`.
+/// Dark popups sit one layer above the editor, like `JetBrains` popups.
 fn chrome_for(theme: &AppearanceConfig) -> [Color32; 5] {
     if theme.is_light() {
         [
@@ -85,12 +92,14 @@ fn chrome_for(theme: &AppearanceConfig) -> [Color32; 5] {
             Color32::from_black_alpha(20),
         ]
     } else {
+        let window = color(&theme.window);
+        let text = color(&theme.text);
         [
             DARK_ICON,
-            DARK_MENU_FILL,
-            DARK_MENU_TEXT,
-            DARK_MENU_MUTED,
-            DARK_MENU_LINE,
+            window.lerp_to_gamma(text, DARK_POPUP_LIFT),
+            text,
+            color(&theme.secondary),
+            window.lerp_to_gamma(text, DARK_POPUP_LINE_LIFT),
         ]
     }
 }
@@ -349,21 +358,25 @@ mod chrome_tests {
     use super::*;
 
     #[test]
-    fn dark_themes_keep_the_fixed_chrome_and_light_themes_follow_the_palette() {
+    fn dark_popups_lift_above_the_editor_and_light_themes_follow_the_palette() {
         for dark in [
+            AppearanceConfig::islands_dark(),
             AppearanceConfig::intellij_dark(),
             AppearanceConfig::high_contrast(),
         ] {
-            assert_eq!(
-                chrome_for(&dark),
-                [
-                    DARK_ICON,
-                    DARK_MENU_FILL,
-                    DARK_MENU_TEXT,
-                    DARK_MENU_MUTED,
-                    DARK_MENU_LINE
-                ]
-            );
+            let [icon, fill, text, muted, line] = chrome_for(&dark);
+            assert_eq!(icon, DARK_ICON);
+            assert_eq!(text, color(&dark.text));
+            assert_eq!(muted, color(&dark.secondary));
+            let window = color(&dark.window);
+            let luma = |c: Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
+            assert!(luma(fill) > luma(window), "popup lifts: {dark:?}");
+            assert!(luma(line) > luma(fill), "border reads on the popup");
+        }
+        // Islands Dark: `#191A1C` editor gives the `#26282C` popup layer.
+        let [_, fill, _, _, _] = chrome_for(&AppearanceConfig::islands_dark());
+        for (got, want) in fill.to_array().iter().zip([0x26u8, 0x28, 0x2C]) {
+            assert!(got.abs_diff(want) <= 3, "{fill:?}");
         }
         let light = AppearanceConfig::intellij_light();
         let [icon, fill, text, ..] = chrome_for(&light);
