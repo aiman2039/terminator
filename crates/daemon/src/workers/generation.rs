@@ -95,8 +95,11 @@ impl GenerationWorker {
     /// other generations whose process exited.
     fn maintain_catalog(&mut self, shared: &Arc<Shared>, root: &Paths, survey: &Survey) {
         if self.global_prune.elapsed() >= Duration::from_secs(30) {
-            if let Err(error) = shared.prune_global(&survey.owners) {
-                shared.degraded(&format!("Global history retention: {error:#}"));
+            match shared.prune_global(&survey.owners) {
+                // Another holder has the coordination lock: retry on the next tick.
+                Err(error) if is_busy(&error) => return,
+                Err(error) => shared.degraded(&format!("Global history retention: {error:#}")),
+                Ok(()) => {}
             }
             if let Err(error) = generations::prune_retired(root, generations::RETIRED_RETENTION) {
                 shared.degraded(&format!(
@@ -114,4 +117,14 @@ impl GenerationWorker {
             let _ = generations::recover_exited(root, other);
         }
     }
+}
+
+/// A bounded coordination wait expired; background work retries later.
+fn is_busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<generations::GenerationsError>(),
+            Some(generations::GenerationsError::Busy { .. })
+        )
+    })
 }

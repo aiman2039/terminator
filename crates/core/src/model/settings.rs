@@ -40,7 +40,7 @@ impl Default for Settings {
             shell: String::new(),
             history_days: 30,
             session_mib: 50,
-            total_mib: 2048,
+            total_mib: 512,
             scrollback_lines: 10_000,
             font_size: 13.0,
             editor_close_timeout_secs: 1,
