@@ -176,9 +176,9 @@ jobs:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       # #68: Buildx layer cache for both images, per architecture.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build portable toolchain image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: scripts
           file: scripts/portable-linux.Dockerfile
@@ -188,7 +188,7 @@ jobs:
           cache-from: type=gha,scope=portable-toolchain-${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=portable-toolchain-${{ matrix.target }}
       - name: Build portable runtime image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: scripts
           file: scripts/portable-linux.Dockerfile
