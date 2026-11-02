@@ -442,6 +442,8 @@ fn stage_all_stages_every_path_in_one_operation() {
         fs::write(&path, "x\n").unwrap();
         paths.push(path);
     }
+    // `*` is not a valid Windows file name.
+    #[cfg(unix)]
     fs::write(root.join("*"), "star\n").unwrap();
     perform(root, Op::StageAll(paths)).unwrap();
     let staged = git_text(root, &["diff", "--cached", "--name-only"]).unwrap();

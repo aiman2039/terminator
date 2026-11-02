@@ -19,7 +19,7 @@ pub(super) struct WatchState {
     /// Identity of each watched path when it was added. inotify
     /// drops the watch of a deleted root, so a recreated or retargeted
     /// path with the same name must be watched again.
-    identities: Vec<Option<(u64, u64)>>,
+    identities: Vec<Option<Identity>>,
     /// A watch failed; polling continues until the targets change.
     failed: bool,
 }
@@ -85,21 +85,12 @@ pub(super) fn rewatch(state: &Mutex<WatchState>, targets: Watches) -> bool {
     *failed
 }
 
-/// Device and inode on Unix; creation time elsewhere.
-fn identity(path: &Path) -> Option<(u64, u64)> {
-    let metadata = std::fs::metadata(path).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some((metadata.dev(), metadata.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        let created = metadata
-            .created()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        Some((created.as_secs(), u64::from(created.subsec_nanos())))
-    }
+/// File ID plus birth time. Linux often gives a recreated folder the
+/// freed inode number, so the inode alone cannot see the change.
+type Identity = (file_id::FileId, Option<std::time::SystemTime>);
+
+fn identity(path: &Path) -> Option<Identity> {
+    let id = file_id::get_file_id(path).ok()?;
+    let created = std::fs::metadata(path).ok()?.created().ok();
+    Some((id, created))
 }
