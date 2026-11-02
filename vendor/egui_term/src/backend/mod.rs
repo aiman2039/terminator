@@ -1,4 +1,5 @@
 pub mod settings;
+pub mod typeahead;
 
 use crate::types::Size;
 use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
@@ -228,6 +229,8 @@ pub struct TerminalBackend {
     selection_hold: bool,
     /// Grid point where the current drag started. Survives an application clear.
     drag_anchor: Option<Point>,
+    /// Local echo prediction for slow links (Terminator #83).
+    type_ahead: typeahead::TypeAhead,
 }
 
 impl TerminalBackend {
@@ -268,6 +271,7 @@ impl TerminalBackend {
             terminal_size,
             cursor: term.grid_mut().cursor_cell().clone(),
             hovered_hyperlink: None,
+            predictions: Vec::new(),
         };
         let term = Arc::new(FairMutex::new(term));
         let pty_event_loop = EventLoop::new(term.clone(), event_proxy, pty, false, false)?;
@@ -326,6 +330,7 @@ impl TerminalBackend {
             repaint_budget,
             selection_hold: false,
             drag_anchor: None,
+            type_ahead: typeahead::TypeAhead::default(),
         })
     }
 
@@ -350,8 +355,10 @@ impl TerminalBackend {
         let mut term = term.lock();
         match cmd {
             BackendCommand::Write(input) => {
-                self.write(input);
                 term.scroll_display(Scroll::Bottom);
+                self.type_ahead
+                    .on_input(&input, type_ahead_screen(&term), Instant::now());
+                self.write(input);
             }
             BackendCommand::ScrollLocal {
                 lines,
@@ -582,7 +589,41 @@ impl TerminalBackend {
         self.last_content.cursor = cursor;
         self.last_content.terminal_mode = *terminal.mode();
         self.last_content.terminal_size = self.size;
+        let screen = type_ahead_screen(&terminal);
+        let lines = terminal.screen_lines();
+        self.type_ahead.on_output(
+            screen,
+            |(line, column)| {
+                let inside =
+                    usize::try_from(line).is_ok_and(|line| line < lines) && column < screen.columns;
+                if inside {
+                    terminal.grid()[Point::new(Line(line), Column(column))].c
+                } else {
+                    ' '
+                }
+            },
+            Instant::now(),
+        );
+        self.last_content.predictions = self
+            .type_ahead
+            .visible()
+            .into_iter()
+            .map(|((line, column), ch)| (Point::new(Line(line), Column(column)), ch))
+            .collect();
         self.last_content()
+    }
+
+    /// Type-ahead mode for this session; `Off` drops pending predictions.
+    pub fn set_type_ahead(&mut self, mode: typeahead::TypeAheadMode) {
+        if self.type_ahead.mode() != mode {
+            self.type_ahead.set_mode(mode);
+            self.grid_dirty.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Measured key-to-echo time, once the session has echoed a key.
+    pub fn echo_latency(&self) -> Option<Duration> {
+        self.type_ahead.latency()
     }
 
     pub fn last_content(&self) -> &RenderableContent {
@@ -1582,6 +1623,8 @@ pub struct RenderableContent {
     pub cursor: Cell,
     pub terminal_mode: TermMode,
     pub terminal_size: TerminalSize,
+    /// Unconfirmed type-ahead characters on the live screen, drawn dimmed.
+    pub predictions: Vec<(Point, char)>,
 }
 
 impl Default for RenderableContent {
@@ -1595,7 +1638,19 @@ impl Default for RenderableContent {
             cursor: Cell::default(),
             terminal_mode: TermMode::empty(),
             terminal_size: TerminalSize::default(),
+            predictions: Vec::new(),
         }
+    }
+}
+
+/// Cursor and blocking state for [`typeahead::TypeAhead`]. The alternate
+/// screen (full-screen apps) and a scrolled-back view never predict.
+fn type_ahead_screen(term: &Term<EventProxy>) -> typeahead::Screen {
+    let cursor = term.grid().cursor.point;
+    typeahead::Screen {
+        cursor: (cursor.line.0, cursor.column.0),
+        columns: term.columns(),
+        blocked: term.mode().contains(TermMode::ALT_SCREEN) || term.grid().display_offset() != 0,
     }
 }
 

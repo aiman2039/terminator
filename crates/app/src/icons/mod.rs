@@ -141,6 +141,12 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         .unwrap_or(egui::include_image!("../../assets/icons/file.svg"))
 }
 
+/// `name` is in the shared UI icon table (no file-icon fallback).
+#[cfg(test)]
+pub fn is_ui_icon(name: &str) -> bool {
+    IconTables::source(ui_sources::UI_SOURCES, name).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

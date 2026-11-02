@@ -20,6 +20,7 @@ pub(super) mod support;
 #[cfg(feature = "test-support")]
 pub(crate) use support::{CrossGlideInput, FrameGlideInput};
 
+mod action_availability;
 mod attention_inbox;
 mod center_overlays;
 mod daemon_recovery;
@@ -40,5 +41,6 @@ mod ssh_page;
 mod status_info;
 mod tab_creation;
 mod tab_switcher;
+mod type_ahead;
 mod workspace_close;
 mod workspace_tabs;

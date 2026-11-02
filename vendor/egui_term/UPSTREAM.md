@@ -2,6 +2,19 @@ Vendored from https://github.com/kemokempo/egui_term at 31bbc7ab8503c9518fcee571
 
 Local integration changes: expose a path token lookup for the context menu; allow keyboard input to the focused terminal when the pointer is elsewhere while preserving pointer hit testing.
 
+## Type-ahead prediction (2026-11-02)
+
+`backend/typeahead.rs` adds local echo prediction for slow sessions
+(Terminator #83). The behavior follows the JediTerm
+`TerminalTypeAheadManager` tests as a specification; no JediTerm code is
+copied. `BackendCommand::Write` records single printable ASCII keys;
+`sync()` confirms them against the grid, measures key-to-echo time, and
+fills `RenderableContent::predictions`. `paint_terminal` draws them in a dim
+foreground with the cursor after the last one. Any other input, a mismatch,
+the alternate screen, or a scrolled-back view clears them.
+`TerminalBackend::set_type_ahead` selects Off, Auto (shown above 100 ms) or
+On; `echo_latency` reports the measured time.
+
 ## Accessibility focus node (2026-10-20)
 
 Register the terminal keyboard target with WidgetInfo before requesting focus.

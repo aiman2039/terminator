@@ -3,9 +3,28 @@
 use crate::*;
 
 impl App {
+    /// An OS notification click goes straight to the agent's terminal
+    /// (#79). The detail card stays for a notice whose session has ended or
+    /// is not in the snapshot yet.
     pub(super) fn handle_activation(&mut self, ctx: &egui::Context, notice: String) {
-        self.detail = Some(notice);
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        let live = self
+            .state
+            .notifications
+            .iter()
+            .find(|candidate| candidate.id == notice)
+            .and_then(|candidate| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == candidate.session_id)
+            })
+            .is_some_and(|session| session.lifecycle.live());
+        if live {
+            self.apply_notice_action(notice, AttentionAction::Go);
+        } else {
+            self.detail = Some(notice);
+        }
     }
 
     pub(super) fn handle_error(&mut self, e: String) {

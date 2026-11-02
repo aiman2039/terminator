@@ -152,7 +152,7 @@ impl App {
     /// read/snooze/dismiss apply to every notice folded into the row.
     pub(super) fn apply_group_action(&mut self, group: &NoticeGroup, action: AttentionAction) {
         match action {
-            AttentionAction::Go => {
+            AttentionAction::Go | AttentionAction::Review => {
                 if let Some(first) = group.notices.first() {
                     self.apply_notice_action(first.id.clone(), action);
                 }
@@ -165,22 +165,30 @@ impl App {
         }
     }
 
+    fn go_notice(&mut self, id: String) {
+        if let Some(session) = self
+            .state
+            .notifications
+            .iter()
+            .find(|notice| notice.id == id)
+            .map(|notice| notice.session_id.clone())
+        {
+            self.go_session(&session);
+        }
+        self.unread_selected = Some(id);
+        self.detail = None;
+    }
+
     pub(crate) fn apply_notice_action(&mut self, id: String, action: AttentionAction) {
         let mut presentation_changed = false;
         match action {
             AttentionAction::None => {}
-            AttentionAction::Go => {
-                if let Some(session) = self
-                    .state
-                    .notifications
-                    .iter()
-                    .find(|notice| notice.id == id)
-                    .map(|notice| notice.session_id.clone())
-                {
-                    self.go_session(&session);
-                }
-                self.unread_selected = Some(id.clone());
-                self.detail = None;
+            AttentionAction::Go => self.go_notice(id),
+            AttentionAction::Review => {
+                self.go_notice(id);
+                // Read-only: the Git sidebar follows the focused session's
+                // working directory; no Git state changes.
+                self.show_git_sidebar();
             }
             AttentionAction::Read => {
                 self.send(Request::Notice {
@@ -300,6 +308,8 @@ pub(crate) fn state_color(state: AgentState, theme: &AppearanceConfig) -> Color3
 pub(crate) enum AttentionAction {
     None,
     Go,
+    /// Go to the agent's terminal and show its working-tree changes.
+    Review,
     Snooze,
     Dismiss,
     /// Mark read without resolving, dismissing, or changing lifecycle.

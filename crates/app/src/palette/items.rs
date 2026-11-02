@@ -128,10 +128,22 @@ impl App {
             items.push(PaletteItem::Settings(section));
         }
         items.push(PaletteItem::AddProject);
-        items.extend(PINNED_ACTIONS.iter().copied().map(PaletteItem::Action));
+        items.extend(
+            PINNED_ACTIONS
+                .iter()
+                .copied()
+                .filter(|&action| self.shortcut_applies(action))
+                .map(PaletteItem::Action),
+        );
         items.push(PaletteItem::OpenPlayer);
         items.push(PaletteItem::CheckForUpdates);
-        items.extend(PINNED_IDE_ACTIONS.iter().copied().map(PaletteItem::Action));
+        items.extend(
+            PINNED_IDE_ACTIONS
+                .iter()
+                .copied()
+                .filter(|&action| self.shortcut_applies(action))
+                .map(PaletteItem::Action),
+        );
         items.extend([PaletteItem::ToggleIdeSidebarHeight, PaletteItem::SaveLayout]);
         for profile in &self.state.vnc_profiles {
             items.push(PaletteItem::VncProfile(
@@ -160,10 +172,7 @@ impl App {
     }
 
     fn palette_lists_action(&self, action: Action) -> bool {
-        !pinned_action(action)
-            && !HIDDEN_ACTIONS.contains(&action)
-            && self.shortcut_applies(action)
-            && (!SESSION_ACTIONS.contains(&action) || self.active_session.is_some())
+        !pinned_action(action) && !HIDDEN_ACTIONS.contains(&action) && self.shortcut_applies(action)
     }
 
     /// Before the file index is ready: files from loaded directories and

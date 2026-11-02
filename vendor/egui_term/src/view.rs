@@ -543,7 +543,81 @@ fn paint_terminal(
         }
     }
     flush_text_run(painter, &mut shapes, &mut run);
+    paint_predictions(PredictionPaint {
+        theme,
+        regular,
+        painter,
+        content,
+        origin: layout_min,
+        cell: Vec2::new(cell_width, cell_height),
+        background: global_bg,
+        run: &mut run,
+        shapes: &mut shapes,
+    });
     shapes
+}
+
+struct PredictionPaint<'a> {
+    theme: &'a TerminalTheme,
+    regular: FontId,
+    painter: &'a Painter,
+    content: &'a crate::backend::RenderableContent,
+    origin: Pos2,
+    cell: Vec2,
+    background: Color32,
+    run: &'a mut TextRun,
+    shapes: &'a mut Vec<Shape>,
+}
+
+/// Type-ahead (#83): unconfirmed keys in a dim foreground, with the cursor
+/// after the last one. The real echo replaces them on the next sync.
+fn paint_predictions(input: PredictionPaint<'_>) {
+    let PredictionPaint {
+        theme,
+        regular,
+        painter,
+        content,
+        origin,
+        cell,
+        background,
+        run,
+        shapes,
+    } = input;
+    let (Some((first, _)), Some((last, _))) =
+        (content.predictions.first(), content.predictions.last())
+    else {
+        return;
+    };
+    if content.display_offset != 0 {
+        return;
+    }
+    let at = |point: &TerminalGridPoint| {
+        Pos2::new(
+            origin.x + cell.x * point.column.0 as f32,
+            origin.y + cell.y * point.line.0 as f32,
+        )
+    };
+    let start = at(first);
+    let count = content.predictions.len() as f32;
+    shapes.push(Shape::Rect(RectShape::filled(
+        Rect::from_min_size(start, Vec2::new(cell.x * count + 1., cell.y + 1.)),
+        CornerRadius::ZERO,
+        background,
+    )));
+    run.origin = start;
+    run.end_x = start.x;
+    run.y = start.y;
+    run.fg = theme
+        .get_color(Color::Named(NamedColor::Foreground))
+        .linear_multiply(0.5);
+    run.font = regular;
+    run.text = content.predictions.iter().map(|(_, ch)| *ch).collect();
+    flush_text_run(painter, shapes, run);
+    shapes.push(Shape::Rect(RectShape::filled(
+        Rect::from_min_size(at(last) + Vec2::new(cell.x, 0.0), cell),
+        CornerRadius::default(),
+        theme.get_color(content.cursor.fg),
+    )));
 }
 
 fn text_run_continues(run: &TextRun, x: f32, y: f32, fg: Color32, font: &FontId) -> bool {

@@ -11,7 +11,7 @@ use super::header::{
 const TOOLBAR_MIN_WIDTH: f32 = 120.0;
 
 impl App {
-    pub(super) fn show_git_sidebar(&mut self) {
+    pub(crate) fn show_git_sidebar(&mut self) {
         self.preferences.right_projects = false;
         self.preferences.visible = true;
         self.preferences.tool = SidebarTool::Git;

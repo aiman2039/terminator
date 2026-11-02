@@ -1061,3 +1061,49 @@ fn go_click_focuses_the_agent() {
             .any(|action| action == "focus")
     );
 }
+
+fn waiting_notice(app: &mut App, lifecycle: Lifecycle) {
+    let mut session = session_fixture("agent", SessionKind::Shell);
+    session.lifecycle = lifecycle;
+    app.state.sessions = vec![session];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "agent",
+        state: AgentState::WaitingInput,
+        created: now(),
+    })];
+}
+
+#[test]
+fn notification_click_goes_straight_to_a_live_agent() {
+    let (mut app, ctx, _dir) = fixture();
+    waiting_notice(&mut app, Lifecycle::Running);
+    app.update_tx
+        .send(Update::Activation("wait".into()))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.active_session.as_deref(), Some("agent"));
+    assert!(app.detail.is_none());
+}
+
+#[test]
+fn notification_click_for_an_ended_agent_shows_the_card() {
+    let (mut app, ctx, _dir) = fixture();
+    waiting_notice(&mut app, Lifecycle::Ended);
+    app.update_tx
+        .send(Update::Activation("wait".into()))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.detail.as_deref(), Some("wait"));
+}
+
+#[test]
+fn review_changes_focuses_the_agent_and_shows_git() {
+    let (mut app, _ctx, _dir) = fixture();
+    waiting_notice(&mut app, Lifecycle::Running);
+    app.preferences.tool = SidebarTool::Agents;
+    app.apply_notice_action("wait".into(), AttentionAction::Review);
+    assert_eq!(app.active_session.as_deref(), Some("agent"));
+    assert_eq!(app.preferences.tool, SidebarTool::Git);
+    assert!(app.preferences.visible);
+}
