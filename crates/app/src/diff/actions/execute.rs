@@ -43,17 +43,23 @@ async fn current(service: &Services, change: &Undo, cancel: &CancellationToken) 
         })
     } else {
         let path = change.root.join(&change.path);
-        service
+        let (exists, mode) = service
             .fs()
-            .run(cancel, move || {
-                let (exists, mode) = file_identity(&path)?;
-                Ok(Version {
-                    text: String::from_utf8(terminator_git::worktree_file(&path)?)?,
-                    exists,
-                    mode,
-                })
-            })
-            .await
+            .run(cancel, move || file_identity(&path))
+            .await?;
+        // Index form, matching the diff text and what `git apply` patches.
+        let text = clean::worktree(clean::WorktreeInput {
+            service,
+            root: &change.root,
+            path: &change.path,
+            cancel,
+        })
+        .await?;
+        Ok(Version {
+            text: String::from_utf8(text)?,
+            exists,
+            mode,
+        })
     }
 }
 
@@ -74,6 +80,11 @@ pub(super) async fn apply(
             Ok(())
         })
         .await?;
+    // `git apply` would run the filter (LFS) over raw content.
+    ensure!(
+        !clean::filtered(service, &change.root, &change.path).await?,
+        clean::FILTERED
+    );
     ensure!(
         current(service, change, cancel).await? == change.before,
         "The file or index changed; refresh the diff before retrying"
