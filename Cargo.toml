@@ -23,6 +23,10 @@ base64 = "0.23"
 libc = "0.2"
 [profile.dev]
 debug = 1
+# Optimize dependencies, not workspace code: the debug GUI's __eh_frame was
+# 19 MB, over ld's 16 MB compact-unwind limit (see .cargo/config.toml).
+[profile.dev.package."*"]
+opt-level = 1
 [profile.release]
 # #71: thin LTO made the warm release rebuild about 5x slower for a small
 # size gain (docs/VALIDATION.md, 2026-11-02).
