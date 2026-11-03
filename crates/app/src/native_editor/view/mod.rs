@@ -111,6 +111,10 @@ struct ViewRequests {
     /// Add to agent context: 1-based first and last line.
     agent_context: Option<(usize, usize)>,
     open_file_picker: bool,
+    /// `gf`: the file name under the cursor, unresolved.
+    goto_file: Option<String>,
+    /// Ctrl-^ / Ctrl-6: edit the alternate file.
+    alternate_file: bool,
     toggle_pin: bool,
     open_local_history: bool,
     recent_open: Option<PathBuf>,

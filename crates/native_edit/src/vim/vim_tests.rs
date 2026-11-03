@@ -2,7 +2,7 @@ use super::super::doc::Buffer;
 use super::mode::{Cursor, Effect, Key, ModalEngine, Mode};
 use super::state::{VimEngine, parse_vimrc};
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     use crate::doc::Doc;
@@ -11,7 +11,11 @@ mod tests {
         (VimEngine::new(), Doc::new(text))
     }
 
-    fn keys<B: Buffer>(eng: &mut VimEngine, doc: &mut B, seq: &str) -> Vec<Effect> {
+    pub(in crate::vim) fn keys<B: Buffer>(
+        eng: &mut VimEngine,
+        doc: &mut B,
+        seq: &str,
+    ) -> Vec<Effect> {
         let mut out = Vec::new();
         for c in seq.chars() {
             out.extend(eng.press_key(doc, Key::Char(c)));

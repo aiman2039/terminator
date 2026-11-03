@@ -125,3 +125,57 @@ pub(crate) fn flat_text<B: Buffer>(doc: &B) -> Vec<char> {
     }
     out
 }
+
+/// Characters vim's default `isfname` accepts in a file name.
+fn is_file_name_char(c: char) -> bool {
+    c.is_alphanumeric()
+        || matches!(
+            c,
+            '/' | '.' | '-' | '_' | '+' | ',' | '#' | '$' | '%' | '~' | '=' | '@'
+        )
+}
+
+/// The file name under (or right after) char column `col` of `line`, as
+/// `gf` reads it. A trailing `:line[:col]` is kept for the GUI to parse.
+pub(super) fn file_name_at(line: &str, col: usize) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let start_at =
+        (col..chars.len()).find(|&i| chars.get(i).copied().is_some_and(is_file_name_char))?;
+    let name_start = |mut start: usize| {
+        while let Some(prev) = start.checked_sub(1)
+            && chars.get(prev).copied().is_some_and(is_file_name_char)
+        {
+            start = prev;
+        }
+        start
+    };
+    let mut start = name_start(start_at);
+    // On the `12` of `main.rs:12[:7]`, step back over `:digits` parts to
+    // the file name itself.
+    while let Some(colon) = start.checked_sub(1)
+        && chars.get(colon) == Some(&':')
+        && chars
+            .get(start..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(|c| **c != ':' && is_file_name_char(**c))
+            .all(char::is_ascii_digit)
+        && colon
+            .checked_sub(1)
+            .and_then(|prev| chars.get(prev))
+            .is_some_and(|c| is_file_name_char(*c))
+    {
+        start = name_start(colon);
+    }
+    let mut end = start_at;
+    while chars
+        .get(end)
+        .copied()
+        .is_some_and(|c| is_file_name_char(c) || c == ':')
+    {
+        end = end.saturating_add(1);
+    }
+    let name: String = chars.get(start..end)?.iter().collect();
+    let name = name.trim_end_matches([':', '.', ',']).to_owned();
+    (!name.is_empty()).then_some(name)
+}

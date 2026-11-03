@@ -119,11 +119,11 @@ and [GitHub's certificate setup](https://docs.github.com/en/actions/how-tos/depl
   validated on that older OS.
 - Linux packages are dynamically linked GNU/Linux builds produced on Ubuntu
   24.04. Use Ubuntu 24.04 or a compatible newer distribution with WebKitGTK 4.1.
-  The `-portable` Linux assets are built in an AlmaLinux 8 container (glibc 2.28)
-  without the `webview` feature, so they run on RHEL 8 and newer but have no
-  in-app Browser tabs. `scripts/portable-linux.sh` builds one and checks it in a
-  clean AlmaLinux 8 image: no unresolved libraries, no WebKit link, and no glibc
-  symbol newer than 2.28. Alpine/musl is not supported. Runtime desktop libraries
+  The `-portable` Linux assets are built in an AlmaLinux 8 container with
+  `cargo-zigbuild` for glibc 2.17, without the `webview` feature, so they run on
+  RHEL/CentOS 7 and newer but have no in-app Browser tabs.
+  `scripts/portable-linux.sh` builds one and checks it in a clean CentOS 7 image:
+  no unresolved libraries, no WebKit link, and no glibc symbol newer than 2.17. Alpine/musl is not supported. Runtime desktop libraries
   and an XDG portal backend are described in the [setup guide](REFERENCE.md#build-and-run).
 - Windows needs a port of Unix sockets, process/session handling, and packaging.
   It cannot be added simply by extending the build matrix. BSD, mobile, and web

@@ -12,7 +12,10 @@ mod motions;
 mod mouse;
 mod normal;
 mod operators;
+#[cfg(test)]
+mod paste_tests;
 mod record;
+mod register;
 mod repeat;
 mod state;
 mod substitute;

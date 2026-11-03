@@ -134,12 +134,12 @@ pub(crate) fn kind_badge(kind: &str) -> (char, egui::Color32) {
 impl App {
     /// Path of the native editor in the selected project's active pane.
     pub(crate) fn active_editor_path(&self) -> Option<PathBuf> {
-        let project_id = self.selected.clone()?;
-        match self
-            .layouts
-            .get(&project_id)
-            .and_then(|workspace| workspace.active_pane().cloned())
-        {
+        self.active_editor_path_ref().map(Path::to_path_buf)
+    }
+
+    /// The active native editor's file, borrowed (cheap enough per frame).
+    pub(crate) fn active_editor_path_ref(&self) -> Option<&Path> {
+        match self.layouts.get(self.selected.as_ref()?)?.active_pane() {
             Some(Tab::NativeEditor { path }) => Some(path),
             _ => None,
         }

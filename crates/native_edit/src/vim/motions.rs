@@ -166,6 +166,8 @@ impl VimEngine {
                 .checked_add(count.max(1))
                 .unwrap_or(from)
                 .min(from.checked_add(room).unwrap_or(from));
+            // Vim parity: `x` fills the unnamed register, so `xp` swaps.
+            self.set_register_local(super::helpers::range_text(doc, from, to));
             let cursor = self.delete_range(doc, from, to);
             self.cursor = cursor;
         }

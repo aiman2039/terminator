@@ -18,6 +18,8 @@ impl ViewPass<'_> {
             Effect::OpenFilePicker => self.requests.open_file_picker = true,
             Effect::Hover => self.request_hover(),
             Effect::GotoDefinition => self.requests.goto_at = Some(self.caret_at()),
+            Effect::GotoFile(name) => self.requests.goto_file = Some(name),
+            Effect::AlternateFile => self.requests.alternate_file = true,
             Effect::GotoImplementation => {
                 self.requests.locate_at =
                     Some((self.caret_at(), native_lsp::Locate::Implementation));

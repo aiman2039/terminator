@@ -27,3 +27,12 @@ pub(crate) fn range_text<B: Buffer>(doc: &B, from: usize, to: usize) -> String {
     }
     out
 }
+
+/// Text with CRLF / CR line ends as LF; borrows when there is no `\r`.
+pub(crate) fn normalize_newlines(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n").into()
+    } else {
+        text.into()
+    }
+}

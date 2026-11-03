@@ -120,7 +120,10 @@ impl RepeatTokens {
         let count = self.count;
         match self.toks.get(self.pos)? {
             Tok::Key(Key::Char('x')) if tail_len == 1 => Some(Repeat::DeleteChars { count }),
-            Tok::Key(Key::Char('p')) if tail_len == 1 => Some(Repeat::Paste { count }),
+            Tok::Key(Key::Char(key @ ('p' | 'P'))) if tail_len == 1 => Some(Repeat::Paste {
+                count,
+                before: *key == 'P',
+            }),
             Tok::Key(Key::Char(place @ ('i' | 'a' | 'A' | 'I' | 'o' | 'O'))) => {
                 if tail_len != 1 || self.typed.is_empty() {
                     return None;
@@ -259,11 +262,7 @@ impl VimEngine {
             | Repeat::BlockChange { .. } => {
                 self.replay_block(doc, change);
             }
-            Repeat::Paste { count } => {
-                for _ in 0..count.max(1) {
-                    self.paste(doc);
-                }
-            }
+            Repeat::Paste { count, before } => self.put(doc, before, count),
         }
     }
 

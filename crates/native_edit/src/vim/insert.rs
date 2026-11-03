@@ -46,7 +46,7 @@ impl VimEngine {
             }
             // Unreachable through the view (Ctrl-V pastes outside vim
             // Normal/Visual); bell rather than guess.
-            Key::CtrlV | Key::BackTab => return vec![Effect::Bell],
+            Key::CtrlV | Key::CtrlCaret | Key::BackTab => return vec![Effect::Bell],
             Key::Char(_) => return vec![Effect::Bell],
         }
         Vec::new()

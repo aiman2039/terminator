@@ -326,6 +326,8 @@ impl App {
             commit_files: HashMap::new(),
             nav_back: Vec::new(),
             nav_forward: Vec::new(),
+            editor_current: None,
+            editor_alternate: None,
             native_rename: None,
             file_index: terminator_native_edit::finder::FileIndex::empty(),
             file_index_rx: None,

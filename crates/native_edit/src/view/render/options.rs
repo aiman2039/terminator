@@ -87,6 +87,9 @@ pub struct SourceOptions {
     pub rainbow_brackets: bool,
     /// `JetBrains` keymap extras: Cmd+B, Cmd+L (Ctrl+G), F2, Shift+F6.
     pub jetbrains_keys: bool,
+    /// Reads the system clipboard for vim `p`/`P`; `None` pastes only
+    /// the editor's own register.
+    pub read_clipboard: Option<fn() -> Option<String>>,
 }
 
 impl Default for SourceOptions {
@@ -115,6 +118,7 @@ impl Default for SourceOptions {
             sticky_headers: true,
             rainbow_brackets: false,
             jetbrains_keys: false,
+            read_clipboard: None,
             diagnostics: Vec::new(),
             squiggles: Vec::new(),
             find_matches: std::sync::Arc::new(Vec::new()),

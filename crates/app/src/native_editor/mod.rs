@@ -16,6 +16,7 @@ mod doc;
 mod file_io;
 mod find;
 mod find_files;
+mod goto_file;
 mod gutter;
 mod hierarchy;
 mod jumps;

@@ -276,10 +276,38 @@ impl<B: Buffer> SourceView<'_, B> {
             self.engine
                 .for_each_caret(self.doc, |engine, doc| engine.modeless_key(doc, vkey))
         } else {
-            self.engine.press_key(self.doc, vkey)
+            self.adopt_clipboard_for_paste(vkey);
+            let effects = self.engine.press_key(self.doc, vkey);
+            self.snapshot_clipboard();
+            effects
         };
         self.out.effects.extend(effects);
         true
+    }
+
+    /// Before a Normal-mode `p`/`P`, take the system clipboard into the
+    /// unnamed register (`clipboard=unnamed`), so text copied elsewhere
+    /// pastes. Read only on that keypress, never per frame.
+    fn adopt_clipboard_for_paste(&mut self, vkey: VKey) {
+        if self.engine.mode() != Mode::Normal || !self.engine.is_idle() {
+            return;
+        }
+        if let (VKey::Char('p' | 'P'), Some(read)) = (vkey, self.options.read_clipboard)
+            && let Some(text) = read()
+        {
+            self.engine.adopt_clipboard(&text);
+        }
+    }
+
+    /// After a register-only delete (`d`, `c`, `x`, `s`), note the system
+    /// clipboard, so a later `p` pastes the deleted text unless something
+    /// new was copied meanwhile.
+    fn snapshot_clipboard(&mut self) {
+        if self.engine.take_clipboard_snapshot()
+            && let Some(read) = self.options.read_clipboard
+        {
+            self.engine.note_clipboard(read().as_deref());
+        }
     }
 
     /// In Insert mode, type the text events (minus echoes of keys already

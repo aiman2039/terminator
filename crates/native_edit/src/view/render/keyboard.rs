@@ -154,14 +154,18 @@ impl<B: Buffer> SourceView<'_, B> {
         // Control is independent of Command on macOS. Ctrl-Q is Vim's
         // block-selection alias for backends that reserve Ctrl-V for
         // clipboard paste.
-        if matches!(key, egui::Key::V | egui::Key::Q)
-            && modifiers.ctrl
+        let vim_ctrl = modifiers.ctrl
             && !modifiers.mac_cmd
             && !modifiers.alt
-            && !modifiers.shift
-            && ctrl_v_is_block(self.options.vim, self.engine.mode())
-        {
-            batch.vim_ctrls.push((key, modifiers, VKey::CtrlV));
+            && ctrl_v_is_block(self.options.vim, self.engine.mode());
+        let vim_key = match key {
+            egui::Key::V | egui::Key::Q if vim_ctrl && !modifiers.shift => Some(VKey::CtrlV),
+            // Ctrl-6 / Ctrl-^ (Shift may be held): the alternate file.
+            egui::Key::Num6 if vim_ctrl => Some(VKey::CtrlCaret),
+            _ => None,
+        };
+        if let Some(vkey) = vim_key {
+            batch.vim_ctrls.push((key, modifiers, vkey));
         } else if let Some(action) = ide_shortcut(key, modifiers) {
             batch.actions.push((key, modifiers, action));
         }

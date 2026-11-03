@@ -5,16 +5,55 @@ use std::path::Path;
 pub fn read_paste() -> Result<Option<String>> {
     let mut clipboard = arboard::Clipboard::new().context("Cannot open clipboard")?;
     // Match Orca: text wins when both text and image formats are available.
-    if let Ok(text) = clipboard.get_text()
-        && !text.is_empty()
-    {
-        return Ok(Some(text.replace("\r\n", "\n")));
+    if let Some(text) = clipboard_text(&mut clipboard) {
+        return Ok(Some(text));
     }
     match clipboard.get_image() {
         Ok(image) => save_image(&image, &std::env::temp_dir()).map(Some),
         Err(arboard::Error::ContentNotAvailable) => Ok(None),
         Err(error) => Err(error).context("Cannot read clipboard image"),
     }
+}
+
+/// Longest wait for a vim clipboard read; a slow owner (X11/Wayland)
+/// costs at most this, then the editor uses its own register.
+const READ_TEXT_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+
+type TextReply = std::sync::mpsc::Sender<Option<String>>;
+
+/// Clipboard text only, for vim `p`/`P` and register snapshots in the
+/// native editor. Read on those keypresses, never per frame. A worker
+/// thread owns the clipboard, so the GUI waits at most [`READ_TEXT_WAIT`].
+pub fn read_text() -> Option<String> {
+    static WORKER: std::sync::OnceLock<Option<std::sync::mpsc::Sender<TextReply>>> =
+        std::sync::OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        let (requests, inbox) = std::sync::mpsc::channel::<TextReply>();
+        std::thread::Builder::new()
+            .name("vim-clipboard".into())
+            .spawn(move || {
+                let mut clipboard = None;
+                for reply in inbox {
+                    if clipboard.is_none() {
+                        clipboard = arboard::Clipboard::new().ok();
+                    }
+                    let text = clipboard.as_mut().and_then(clipboard_text);
+                    // The GUI may have stopped waiting; that is fine.
+                    let _ = reply.send(text);
+                }
+            })
+            .ok()?;
+        Some(requests)
+    });
+    let (reply, answer) = std::sync::mpsc::channel();
+    worker.as_ref()?.send(reply).ok()?;
+    answer.recv_timeout(READ_TEXT_WAIT).ok().flatten()
+}
+
+/// Non-empty clipboard text with CRLF line ends as LF.
+fn clipboard_text(clipboard: &mut arboard::Clipboard) -> Option<String> {
+    let text = clipboard.get_text().ok()?;
+    (!text.is_empty()).then(|| text.replace("\r\n", "\n"))
 }
 
 fn save_image(image: &arboard::ImageData<'_>, directory: &Path) -> Result<String> {

@@ -37,11 +37,14 @@ pub(crate) struct UsagesView {
 impl App {
     /// Where the caret is in the active native editor, if any.
     pub(crate) fn current_location(&self) -> Option<NavLocation> {
-        let path = self.active_editor_path()?;
-        let doc = self.native_docs.get(&path)?;
-        let (line, character) = doc.caret_position()?;
+        self.location_of(self.active_editor_path_ref()?)
+    }
+
+    /// The caret of the open buffer for `path`.
+    pub(crate) fn location_of(&self, path: &Path) -> Option<NavLocation> {
+        let (line, character) = self.native_docs.get(path)?.caret_position()?;
         Some(NavLocation {
-            path,
+            path: path.to_owned(),
             line,
             character,
         })

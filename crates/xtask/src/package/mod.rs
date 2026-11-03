@@ -124,6 +124,9 @@ fn licenses(destination: &Path) -> Result<()> {
     )?;
     Ok(())
 }
+/// Oldest glibc the portable Linux package supports.
+const PORTABLE_GLIBC: &str = "2.17";
+
 pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>, portable: bool) -> Result<()> {
     let build_timer = StageTimer::new("Build");
     let shell = xshell::Shell::new()?;
@@ -136,12 +139,25 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>, portable: bo
     } else {
         &[]
     };
-    xshell::cmd!(shell, "cargo build --locked -p terminator -p terminator-daemon -p terminator-hook {release_flag...} {timing_flag...} {feature_flags...}").run()?;
+    // Portable Linux links against glibc 2.17 (RHEL/CentOS 7) through cargo-zigbuild.
+    let portable_target = (portable && cfg!(target_os = "linux"))
+        .then(|| format!("{}-unknown-linux-gnu", std::env::consts::ARCH));
+    let (build_command, target_flags) = match &portable_target {
+        Some(target) => (
+            "zigbuild",
+            vec!["--target".to_owned(), format!("{target}.{PORTABLE_GLIBC}")],
+        ),
+        None => ("build", Vec::new()),
+    };
+    xshell::cmd!(shell, "cargo {build_command} --locked -p terminator -p terminator-daemon -p terminator-hook {release_flag...} {timing_flag...} {feature_flags...} {target_flags...}").run()?;
     drop(build_timer);
     let _package_timer = StageTimer::new("Package");
-    let binaries = std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(|| root().join("target"), PathBuf::from)
-        .join(if debug { "debug" } else { "release" });
+    let mut binaries =
+        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), PathBuf::from);
+    if let Some(target) = &portable_target {
+        binaries.push(target);
+    }
+    binaries.push(if debug { "debug" } else { "release" });
     let destination = output_dir.unwrap_or_else(|| root().join("target/package"));
     fs::create_dir_all(&destination)?;
     let staging = tempfile::Builder::new()

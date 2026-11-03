@@ -38,6 +38,8 @@ pub enum Key {
     /// Normal/Visual modes (where vim owns it, IdeaVim-style) and keeps
     /// it as paste everywhere else, so modeless editing never loses paste.
     CtrlV,
+    /// Ctrl-^ (Ctrl-6): edit the alternate file.
+    CtrlCaret,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +71,11 @@ pub enum Effect {
     /// Jump to the definition under the cursor (`gd`, F12); the GUI
     /// owns servers and opening the target.
     GotoDefinition,
+    /// Open the file named under the cursor (`gf`). The text may end in
+    /// `:line[:col]`; the GUI resolves it against the file and project.
+    GotoFile(String),
+    /// Edit the alternate (previously active) file (Ctrl-^ / Ctrl-6).
+    AlternateFile,
     /// Jump to the implementations of the symbol under the cursor
     /// (Cmd/Ctrl+Alt+B); several open the chooser.
     GotoImplementation,
@@ -194,6 +201,8 @@ pub(crate) enum Repeat {
     },
     Paste {
         count: usize,
+        /// `P`: before the cursor (or above the line).
+        before: bool,
     },
 }
 

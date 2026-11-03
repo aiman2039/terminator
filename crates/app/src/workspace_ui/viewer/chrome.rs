@@ -75,17 +75,6 @@ impl Viewer<'_> {
             self.app.open_new_browser_tab(None);
             ui.close();
         }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "New VNC Viewer",
-            icon: "Monitor",
-            shortcut: &self.app.shortcut_label(Action::NewVnc),
-        })
-        .clicked()
-        {
-            self.app.open_new_vnc_tab(None);
-            ui.close();
-        }
     }
 
     pub(super) fn tab_title(&mut self, tab: &mut Tab) -> egui::WidgetText {

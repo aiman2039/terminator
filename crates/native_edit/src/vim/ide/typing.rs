@@ -76,7 +76,7 @@ impl VimEngine {
                 self.ide_ensure_insert(doc);
                 return self.insert_key(doc, key);
             }
-            Key::CtrlV => return vec![Effect::Bell],
+            Key::CtrlV | Key::CtrlCaret => return vec![Effect::Bell],
         }
         Vec::new()
     }

@@ -212,21 +212,40 @@ impl App {
                 self.preferences.pinned_native_files.insert(path.to_owned());
             }
         }
-        if let Some(path_to_open) = requests.recent_open.take()
-            && let Some(uri) = native_lsp::file_uri(&path_to_open)
-        {
-            let at = native_lsp::Position {
-                line: 0,
-                character: 0,
-            };
-            self.pending_goto.push(lsp_manager::GotoJump {
-                from: path.to_owned(),
-                targets: vec![native_lsp::GotoTarget {
-                    uri: uri.to_string(),
-                    range: native_lsp::Range { start: at, end: at },
-                }],
-            });
+        if let Some(path_to_open) = requests.recent_open.take() {
+            self.queue_jump(path, &path_to_open, (0, 0));
         }
+        if let Some(name) = requests.goto_file.take() {
+            let root = self.selected_project().map(|project| project.path.clone());
+            match goto_file::resolve_goto_file(&name, path, root.as_deref()) {
+                Some((target, line, column)) => self.queue_jump(path, &target, (line, column)),
+                None => self.info = Some(format!("Can't find file \"{name}\" in path")),
+            }
+        }
+        if requests.alternate_file {
+            match self.alternate_location() {
+                Some(target) if target.path != path => {
+                    self.queue_jump(path, &target.path, (target.line, target.character));
+                }
+                _ => self.info = Some("No alternate file".to_owned()),
+            }
+        }
+    }
+
+    /// Open `target` at an LSP (zero-based, UTF-16) position once the
+    /// workspace is checked back in; the jump is recorded for Back.
+    fn queue_jump(&mut self, from: &Path, target: &Path, (line, character): (u32, u32)) {
+        let Some(uri) = native_lsp::file_uri(target) else {
+            return;
+        };
+        let at = native_lsp::Position { line, character };
+        self.pending_goto.push(lsp_manager::GotoJump {
+            from: from.to_owned(),
+            targets: vec![native_lsp::GotoTarget {
+                uri: uri.to_string(),
+                range: native_lsp::Range { start: at, end: at },
+            }],
+        });
     }
 
     /// Inlay, hover, goto, references, hierarchy, and rename requests,

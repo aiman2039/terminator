@@ -20,6 +20,13 @@ pub struct VimEngine {
     /// every unnamed-register write stages here; the view forwards it to
     /// the system clipboard and clears it. Never affects editing.
     pub(crate) clipboard: Option<String>,
+    /// System clipboard text as last known (written by a yank or read by
+    /// the host): `p` adopts the clipboard only when it differs, so a
+    /// newer `d`/`c`/`x` register is not lost to older clipboard text.
+    pub(crate) clipboard_seen: Option<String>,
+    /// A delete wrote the register without the clipboard; the host should
+    /// report the current clipboard text ([`VimEngine::note_clipboard`]).
+    pub(crate) clipboard_snapshot: bool,
     /// Bits of the change in progress; parsed into [`Repeat`] when it
     /// completes. Skipped while replaying.
     pub(crate) recording: Vec<Bit>,
@@ -65,6 +72,8 @@ impl Default for VimEngine {
             insert_group: false,
             block_pending: None,
             clipboard: None,
+            clipboard_seen: None,
+            clipboard_snapshot: false,
             recording: Vec::new(),
             replaying: false,
             last_change: None,
@@ -171,6 +180,12 @@ impl VimEngine {
         } else {
             self.count.parse().unwrap_or(1).clamp(1, 1_000_000)
         }
+    }
+
+    /// No operator or `g` prefix is waiting for more keys (a count may be).
+    #[must_use]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.pending.is_none() && !self.pending_g
     }
 
     pub(super) fn clear_pending(&mut self) {

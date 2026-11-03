@@ -139,13 +139,8 @@ impl VimEngine {
     /// it lands at the session end. Pasted `\r\n` and `\r` become `\n`, so
     /// a paste never adds stray carriage returns to the buffer.
     pub fn paste_text<B: Buffer>(&mut self, doc: &mut B, text: &str) {
-        let normalized;
-        let text = if text.contains('\r') {
-            normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-            normalized.as_str()
-        } else {
-            text
-        };
+        let normalized = super::helpers::normalize_newlines(text);
+        let text = normalized.as_ref();
         if text.is_empty() {
             return;
         }
@@ -288,6 +283,10 @@ impl VimEngine {
                 .map_or(doc.len_chars(), |next| next.min(doc.len_chars()));
         }
         let (from, to) = (from.min(to), from.max(to));
+        // Vim parity: `d` and `c` fill the unnamed register, so `dwp` works.
+        if from < to && op != PendingOp::Yank {
+            self.set_register_local(range_text(doc, from, to));
+        }
         match op {
             PendingOp::Delete => {
                 let cursor = self.delete_range(doc, from, to);
@@ -350,50 +349,73 @@ impl VimEngine {
         self.enter_normal(doc);
     }
 
-    pub(super) fn paste<B: Buffer>(&mut self, doc: &mut B) {
+    /// `p` (`before == false`) or `P`, `count` copies in one insert:
+    /// linewise below or above the cursor line, charwise after or at the
+    /// cursor.
+    pub(super) fn put<B: Buffer>(&mut self, doc: &mut B, before: bool, count: usize) {
         if self.register.text.is_empty() {
             return;
         }
+        let count = count.max(1);
         if !self.register.linewise && self.register.block_width.is_some() {
-            self.paste_block(doc);
+            for _ in 0..count {
+                self.paste_block(doc);
+            }
             return;
         }
         if self.register.linewise {
-            let line = self
-                .cursor
-                .line
-                .checked_add(1)
-                .map_or(doc.line_count(), |line| line.min(doc.line_count()));
-            let at = if line < doc.line_count() {
+            let lines = doc.line_count();
+            let line = if before {
+                self.cursor.line.min(lines.saturating_sub(1))
+            } else {
+                self.cursor
+                    .line
+                    .checked_add(1)
+                    .map_or(lines, |line| line.min(lines))
+            };
+            let at = if line < lines {
                 doc.char_at_line_col(line, 0)
             } else {
                 doc.len_chars()
             };
-            let prefix = if line == doc.line_count() && !doc_is_empty(doc) {
+            let prefix = if line == lines && !doc_is_empty(doc) {
                 "\n"
             } else {
                 ""
             };
-            let text = format!("{}{}\n", prefix, self.register.text);
-            doc.insert(at, &text);
+            let body = format!("{}\n", self.register.text).repeat(count);
+            doc.insert(at, &format!("{prefix}{body}"));
             doc.end_run();
             self.cursor.line = line.min(doc.line_count().saturating_sub(1));
             self.cursor.col = Self::first_non_blank(doc, self.cursor.line);
         } else {
-            let at = self
-                .char_idx(doc, self.cursor)
-                .checked_add(1)
-                .map_or(doc.len_chars(), |at| at.min(doc.len_chars()));
-            doc.insert(at, &self.register.text);
+            let cursor_at = self.char_idx(doc, self.cursor);
+            let at = if before {
+                cursor_at
+            } else {
+                cursor_at.saturating_add(1)
+            }
+            .min(doc.len_chars());
+            let text = self.register.text.repeat(count);
+            doc.insert(at, &text);
             doc.end_run();
-            let landed = at
-                .checked_add(self.register.text.chars().count())
-                .and_then(|sum| sum.checked_sub(1))
-                .unwrap_or(at);
-            let (line, col) = doc.line_col_at(landed);
-            self.cursor = Cursor { line, col };
+            self.land_after_charwise_paste(doc, at, &text);
         }
         self.enter_normal(doc);
+    }
+
+    /// Vim parity: after a charwise put the cursor is on the last pasted
+    /// char, or on the first one when the text spans lines.
+    fn land_after_charwise_paste<B: Buffer>(&mut self, doc: &B, at: usize, text: &str) {
+        let landed = if text.contains('\n') {
+            at
+        } else {
+            at.saturating_add(text.chars().count())
+                .saturating_sub(1)
+                .max(at)
+        };
+        let (line, col) = doc.line_col_at(landed);
+        self.cursor = Cursor { line, col };
     }
 
     pub(super) fn change_line<B: Buffer>(&mut self, doc: &mut B, count: usize) {
@@ -416,29 +438,5 @@ impl VimEngine {
         };
         self.begin_insert_session(doc);
         self.clamp(doc);
-    }
-
-    /// Write the unnamed register and stage the text for host clipboard
-    /// sync. All register writes funnel through here — never assign the
-    /// fields directly (except invalidation, which writes nothing).
-    pub(super) fn set_register(
-        &mut self,
-        text: String,
-        linewise: bool,
-        block_width: Option<usize>,
-    ) {
-        if !text.is_empty() {
-            self.clipboard = Some(text.clone());
-        }
-        self.register.text = text;
-        self.register.linewise = linewise;
-        self.register.block_width = block_width;
-    }
-
-    /// Take staged clipboard text, if a yank or register write happened
-    /// since the last take. Pure host plumbing.
-    #[must_use]
-    pub fn take_clipboard(&mut self) -> Option<String> {
-        self.clipboard.take()
     }
 }

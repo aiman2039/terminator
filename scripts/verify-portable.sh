@@ -1,8 +1,8 @@
 #!/bin/sh
-# Fails when a binary needs glibc newer than 2.28 or a library that is not installed.
+# Fails when a binary needs glibc newer than 2.17 or a library that is not installed.
 set -eu
 dir="$1"
-max_glibc="2.28"
+max_glibc="2.17"
 for binary in terminator terminator-daemon terminator-hook; do
     path="$dir/$binary"
     ldd "$path"

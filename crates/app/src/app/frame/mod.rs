@@ -123,6 +123,7 @@ impl eframe::App for App {
         self.handle_vnc_escape_keys(&ctx);
         self.switcher_input(&ctx);
         self.run_shortcuts(&ctx);
+        self.track_alternate_file();
         self.suspend_hidden_rename(&ctx);
         if self.state_loaded {
             self.migrate_attention();

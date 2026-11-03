@@ -3,7 +3,7 @@ use super::cursor::GotoInput;
 use super::mode::{Bit, Cursor, Effect, Key, Mode, PendingOp, Place};
 use super::operators::{ApplyOperatorInput, JumpToMatchInput};
 use super::state::VimEngine;
-use super::words::{WordClass, current_char, line_len, word_class};
+use super::words::{WordClass, current_char, file_name_at, line_len, word_class};
 impl VimEngine {
     pub(super) fn normal_key<B: Buffer>(&mut self, doc: &mut B, key: Key) -> Vec<Effect> {
         // Vim parity: Space moves right like `l`, including under operators.
@@ -32,9 +32,9 @@ impl VimEngine {
             self.rec_bit(Bit::Key(key));
             return Some(Vec::new());
         }
-        // `gd` is goto-definition; any other non-`g` key after `g`
-        // cancels the prefix.
-        if self.pending_g && key != Key::Char('g') && key != Key::Char('d') {
+        // `gd` is goto-definition and `gf` goto-file; any other non-`g`
+        // key after `g` cancels the prefix.
+        if self.pending_g && !matches!(key, Key::Char('g' | 'd' | 'f')) {
             self.clear_pending();
             self.rec_discard();
             return Some(vec![Effect::Bell]);
@@ -56,12 +56,22 @@ impl VimEngine {
             Key::Char('^') => self.motion_first_non_blank(doc),
             Key::Char('G') => self.motion_last_line(doc, count),
             Key::Char('g') => return self.g_key(doc),
+            Key::Char('f') if self.pending_g => return self.goto_file(doc),
+            // Ctrl-^ (Ctrl-6): edit the alternate file; the GUI owns files.
+            Key::CtrlCaret => {
+                self.clear_pending();
+                self.rec_discard();
+                return vec![Effect::AlternateFile];
+            }
             // The Delete key deletes like `x`, including under counts.
             Key::Char('x') | Key::Delete => self.delete_x(doc, count),
             Key::Char('d') => return self.d_key(doc),
             Key::Char('c') => return self.operator_key(doc, PendingOp::Change),
             Key::Char('y') => return self.operator_key(doc, PendingOp::Yank),
-            Key::Char('p') => self.paste_key(doc),
+            Key::Char('Y') => self.yank_line_key(doc, count),
+            Key::Char('p') => self.paste_key(doc, false, count),
+            Key::Char('P') => self.paste_key(doc, true, count),
+            Key::Char('s') => return self.substitute_key(doc, count),
             Key::Char('.') => return self.repeat_key(doc),
             Key::Char('u') => self.undo(doc),
             Key::Char('i') => self.insert_key_at(doc, key, Place::AtCursor),
@@ -155,11 +165,44 @@ impl VimEngine {
         self.rec_commit();
     }
 
-    fn paste_key<B: Buffer>(&mut self, doc: &mut B) {
-        self.rec_bit(Bit::Key(Key::Char('p')));
-        self.paste(doc);
+    /// `p` pastes after the cursor, `P` before it, `count` times (as `.`
+    /// replays it).
+    fn paste_key<B: Buffer>(&mut self, doc: &mut B, before: bool, count: usize) {
+        self.rec_bit(Bit::Key(Key::Char(if before { 'P' } else { 'p' })));
+        self.put(doc, before, count);
         self.clear_pending();
         self.rec_commit();
+    }
+
+    /// `Y` yanks whole lines, like `yy`.
+    fn yank_line_key<B: Buffer>(&mut self, doc: &mut B, count: usize) {
+        self.clear_pending();
+        self.yank_lines(doc, count);
+        // Yank mutates nothing: the last change survives.
+        self.rec_discard();
+    }
+
+    /// `s` changes `count` characters, like `cl`. Under an operator
+    /// (`ds`, `cs`, `ys`) it is not a motion: bell.
+    fn substitute_key<B: Buffer>(&mut self, doc: &mut B, count: usize) -> Vec<Effect> {
+        if self.pending.is_some() {
+            self.clear_pending();
+            self.rec_discard();
+            return vec![Effect::Bell];
+        }
+        self.operator_key(doc, PendingOp::Change);
+        self.apply_motion(doc, 'l', count);
+        Vec::new()
+    }
+
+    /// `gf`: open the file name under the cursor; the GUI resolves it.
+    fn goto_file<B: Buffer>(&mut self, doc: &mut B) -> Vec<Effect> {
+        self.clear_pending();
+        self.rec_discard();
+        match file_name_at(&doc.line_text(self.cursor.line), self.cursor.col) {
+            Some(name) => vec![Effect::GotoFile(name)],
+            None => vec![Effect::Bell],
+        }
     }
 
     /// `.` replays the last change; it bells under an operator or with
@@ -402,6 +445,8 @@ impl VimEngine {
                 false,
             ),
             'l' => {
+                // Exclusive end: one past the last char, so `dl`, `cl` and
+                // `s` on the last char still take it.
                 let len = line_len(doc, self.cursor.line);
                 (
                     Cursor {
@@ -410,7 +455,7 @@ impl VimEngine {
                             .cursor
                             .col
                             .checked_add(count)
-                            .map_or(len.saturating_sub(1), |col| col.min(len.saturating_sub(1))),
+                            .map_or(len, |col| col.min(len)),
                     },
                     false,
                 )

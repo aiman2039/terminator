@@ -39,17 +39,6 @@ impl App {
             self.open_new_browser_tab(None);
             ui.close();
         }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: Action::NewVnc.label(),
-            icon: Action::NewVnc.icon(),
-            shortcut: &self.shortcut_label(Action::NewVnc),
-        })
-        .clicked()
-        {
-            self.open_new_vnc_tab(None);
-            ui.close();
-        }
         let profiles = self.state.vnc_profiles.clone();
         if !profiles.is_empty() {
             ui.separator();
@@ -143,17 +132,6 @@ impl App {
             .clicked()
             {
                 self.open_new_browser_tab(None);
-                ui.close();
-            }
-            if appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: Action::NewVnc.label(),
-                icon: Action::NewVnc.icon(),
-                shortcut: &self.shortcut_label(Action::NewVnc),
-            })
-            .clicked()
-            {
-                self.open_new_vnc_tab(None);
                 ui.close();
             }
         }

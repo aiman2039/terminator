@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the portable Linux package on AlmaLinux 8 and checks it on a clean AlmaLinux 8 image.
+# Builds the portable Linux package on AlmaLinux 8 for glibc 2.17 and checks it on a clean CentOS 7 image.
 set -eu
 cd "$(dirname "$0")/.."
 out="$PWD/target/portable-package"

@@ -60,7 +60,7 @@ impl VimEngine {
             Key::Char('d' | 'x') | Key::Backspace | Key::Delete => {
                 self.visual_delete(doc, linewise);
             }
-            Key::Char('c') => self.visual_change(doc, linewise),
+            Key::Char('c' | 's') => self.visual_change(doc, linewise),
             // Block insert: `I` at the left edge, `A` past the right edge.
             // Typing replays on every other row at Escape.
             Key::Char('I') if self.mode == Mode::VisualBlock => {
