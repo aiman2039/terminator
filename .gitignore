@@ -25,3 +25,4 @@ refs-research/*
 vendor/egui_term/target/
 .idea/
 .claude/worktrees/
+.env
