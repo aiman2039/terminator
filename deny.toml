@@ -81,9 +81,6 @@ skip = [
     { crate = "zune-core", reason = "0.4 via resvg vs 0.5 via image" },
     { crate = "zune-jpeg", reason = "0.4 via resvg vs 0.5 via image" },
     # tungstenite 0.28 (rand 0.9) vs reqwest/hickory (rand 0.10): unify on tungstenite upgrade.
-    { crate = "block-buffer", reason = "0.10 via sha1/tungstenite vs 0.12 via sha2 0.11" },
-    { crate = "crypto-common", reason = "0.1 via digest 0.10/tungstenite vs 0.2 via sha2 0.11" },
-    { crate = "digest", reason = "0.10 via sha1/tungstenite vs 0.11 via sha2 0.11" },
     { crate = "cpufeatures", reason = "0.2 via tungstenite vs 0.3 via chacha20/rand 0.10" },
     { crate = "rand", reason = "0.9 via tungstenite vs 0.10 via hickory" },
     { crate = "rand_core", reason = "0.9 via tungstenite vs 0.10 via chacha20" },
