@@ -15,7 +15,7 @@ base64.workspace = true
 rustix.workspace = true
 fs2 = "0.4"
 signal-hook = "0.4"
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 tempfile = "3"
