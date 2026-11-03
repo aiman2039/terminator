@@ -854,3 +854,43 @@ fn file_uri_round_trips_special_chars() {
     assert!(uri_to_path("https://example.com/x").is_none());
     assert!(uri_to_path(":::").is_none());
 }
+
+#[test]
+fn spell_actions_keep_fixes_and_dictionary_commands() {
+    let items = parse_spell_actions(&serde_json::json!([
+        {"title": "Replace with: “received”", "kind": "quickfix", "edit": {"changes": {}},
+         "command": {"title": "Record lint statistic", "command": "HarperRecordLint"}},
+        {"title": "Ignore Harper error.", "command": "HarperIgnoreLint", "arguments": ["file:///a"]},
+        {"title": "No edit, no command"},
+    ]));
+    let titles: Vec<&str> = items.iter().map(|item| item.title.as_str()).collect();
+    assert_eq!(titles, ["Replace with: “received”", "Ignore Harper error."]);
+    assert!(items.iter().all(|item| item.spell));
+    // An edit wins: its statistics command never runs.
+    assert!(action_command(&items[0].raw).is_none());
+    let command = action_command(&items[1].raw).expect("command");
+    assert_eq!(command["command"], "HarperIgnoreLint");
+    assert_eq!(command["arguments"][0], "file:///a");
+}
+
+#[test]
+fn language_server_actions_still_skip_bare_commands() {
+    let items = parse_code_actions(&serde_json::json!([
+        {"title": "Run test", "command": "rust-analyzer.runSingle"},
+    ]));
+    assert!(items.is_empty());
+}
+
+#[test]
+fn spell_language_ids_cover_files_without_a_server() {
+    let id = |name: &str, language| spell_language_id(Path::new(name), language);
+    assert_eq!(id("a.rs", Language::Rust), "rust");
+    assert_eq!(id("a.go", Language::Go), "go");
+    assert_eq!(id("a.sh", Language::Shell), "shellscript");
+    assert_eq!(id("a.lua", Language::Plain), "lua");
+    assert_eq!(id("notes.txt", Language::Plain), "plaintext");
+    assert_eq!(
+        family(SPELL_SERVER).map(|f| f.candidates),
+        Some(&["harper-ls"][..])
+    );
+}

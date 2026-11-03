@@ -47,6 +47,7 @@ impl Default for Settings {
             diff_split_default: false,
             native_vim: true,
             inlay_hints: true,
+            spell_check: true,
             keybindings: Settings::default_keybindings(),
             vnc_detached_timeout_minutes: 30,
             ssh_keepalive_seconds: crate::ssh::Tuning::DEFAULT.keepalive_seconds,

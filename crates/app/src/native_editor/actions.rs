@@ -171,6 +171,13 @@ impl App {
         }
         match native_lsp::code_action_edits(&item.raw) {
             Ok(files) => self.apply_workspace_edit(files),
+            // "Add to dictionary", "Ignore": the server updates its state
+            // and republishes the underlines.
+            Err(_) if item.spell && native_lsp::action_command(&item.raw).is_some() => {
+                if !self.lsp.execute_action_command(path, item) {
+                    self.error = Some("The spell checker is not ready".into());
+                }
+            }
             Err(_) if item.raw.get("data").is_some() => {
                 self.resolve_attempts = 0;
                 self.resolve_revision = revision;
@@ -361,6 +368,7 @@ mod tests {
             title: "Rename".into(),
             kind: None,
             preferred: false,
+            spell: false,
             raw: serde_json::json!({"edit": {"changes": {uri: [{
                 "range": {"start": {"line": 0, "character": 4},
                           "end": {"line": 0, "character": 5}},

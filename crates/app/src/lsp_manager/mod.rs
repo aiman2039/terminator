@@ -39,8 +39,11 @@ mod gated;
 mod navigation;
 mod problems;
 mod symbols;
+use docs::Slot;
 pub(crate) use docs::SubmitTextInput;
 mod responses;
+mod spell;
+use spell::ActionWait;
 mod supervisor;
 mod trust;
 
@@ -145,7 +148,10 @@ enum Pending {
     CodeActions {
         path: PathBuf,
         generation: u64,
+        spell: bool,
     },
+    /// `workspace/executeCommand`; the answer carries nothing we use.
+    Command,
     Resolve {
         path: PathBuf,
     },
@@ -246,6 +252,7 @@ enum PumpEvent {
         message: L::LspMessage,
     },
     Diagnostics {
+        key: ServerKey,
         path: PathBuf,
         items: Vec<L::Diagnostic>,
     },
@@ -262,6 +269,15 @@ pub struct LspManager {
     servers: HashMap<ServerKey, Server>,
     docs: HashMap<PathBuf, OpenDoc>,
     diagnostics: HashMap<PathBuf, Vec<L::Diagnostic>>,
+    /// Spell-checker documents (`harper-ls`), beside `docs`: every file
+    /// type, one server per root, even where no language server exists.
+    spell_docs: HashMap<PathBuf, OpenDoc>,
+    /// Spell findings per path. Editor underlines only: they stay out of
+    /// the Problems panel, its counts, and the Explorer's red names.
+    spell_diagnostics: HashMap<PathBuf, Vec<L::Diagnostic>>,
+    /// Settings → Check spelling.
+    spell_enabled: bool,
+    action_wait: Option<ActionWait>,
     hover: Option<HoverPopup>,
     goto: Option<GotoJump>,
     references: Option<ReferenceResults>,
@@ -321,6 +337,11 @@ impl LspManager {
             servers: HashMap::new(),
             docs: HashMap::new(),
             diagnostics: HashMap::new(),
+            spell_docs: HashMap::new(),
+            spell_diagnostics: HashMap::new(),
+            // Settings turn it on (default true) when the state loads.
+            spell_enabled: false,
+            action_wait: None,
             hover: None,
             goto: None,
             references: None,
@@ -423,22 +444,6 @@ impl LspManager {
     }
 }
 
-/// Inverse of [`L::server_language`], for the server table.
-fn language_of(id: &str) -> Language {
-    match id {
-        "rust" => Language::Rust,
-        "python" => Language::Python,
-        "typescript" => Language::TypeScript,
-        "markdown" => Language::Markdown,
-        "html" => Language::Html,
-        "css" => Language::Css,
-        "json" => Language::Json,
-        "toml" => Language::Toml,
-        "yaml" => Language::Yaml,
-        _ => Language::Plain,
-    }
-}
-
 /// Workspace root for one file: nearest ancestor holding a language
 /// marker (`Cargo.toml`, `pyproject.toml`, …), else nearest with `.git`,
 /// else the file's own directory. Language markers win over a nearer
@@ -475,6 +480,8 @@ fn project_root(path: &Path, language: Language) -> PathBuf {
     fallback.unwrap_or_else(|| path.parent().map(Path::to_path_buf).unwrap_or_default())
 }
 
+#[cfg(test)]
+mod spell_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

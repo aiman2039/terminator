@@ -221,6 +221,9 @@ pub struct Settings {
     pub native_vim: bool,
     /// Inline type and parameter-name hints from the language server.
     pub inlay_hints: bool,
+    /// Check spelling in editors: `harper-ls` in the native editor,
+    /// `spell` in Neovim (`editor-spell-v1`).
+    pub spell_check: bool,
     pub keybindings: std::collections::BTreeMap<String, String>,
     /// Disconnect a VNC session no viewer has watched for this many
     /// minutes; 0 keeps detached sessions connected.
@@ -253,6 +256,9 @@ pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
 pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
 pub const NTFY_CAPABILITY: &str = "ntfy-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
+/// The daemon starts Neovim editors with spell checking on request
+/// (`Settings::spell_check`).
+pub const EDITOR_SPELL_CAPABILITY: &str = "editor-spell-v1";
 pub const AGENT_PRESENCE_CAPABILITY: &str = agents::CAPABILITY;
 pub const VNC_CAPABILITY: &str = vnc::CAPABILITY;
 pub const VNC_REGIONS_CAPABILITY: &str = vnc::REGIONS_CAPABILITY;

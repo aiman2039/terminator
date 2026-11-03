@@ -42,6 +42,15 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<CommandBuilder> {
             "-c",
             "autocmd FocusGained,BufEnter,CursorHold * checktime",
         ]);
+        if settings.spell_check {
+            // File buffers only; `z=` lists fixes, `zg` adds a word.
+            command.args([
+                "-c",
+                "autocmd BufWinEnter * if &buftype ==# '' | setlocal spell | endif",
+                "-c",
+                "setlocal spell",
+            ]);
+        }
         command.args(vim_position(line, column));
         command.arg("--");
         command.arg(file);
@@ -104,6 +113,34 @@ fn terminal_args(input: TerminalArgsInput<'_>) -> Vec<OsString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_neovim_turns_spell_on_only_when_asked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Paths::at(dir.path().into());
+        let spelled = |spell_check| {
+            let settings = Settings {
+                editor_program: "/bin/sh".into(),
+                editor_mode: EditorMode::Embedded,
+                spell_check,
+                ..Settings::default()
+            };
+            let command = prepare(PrepareInput {
+                paths: &paths,
+                sid: "s1",
+                settings: &settings,
+                file: Path::new("/tmp/notes.md"),
+                line: None,
+                column: None,
+            })
+            .expect("prepare");
+            command
+                .get_argv()
+                .iter()
+                .any(|arg| arg.to_string_lossy() == "setlocal spell")
+        };
+        assert!(spelled(true));
+        assert!(!spelled(false));
+    }
     #[test]
     fn terminal_editors_receive_supported_positions_and_a_literal_file() {
         let file = Path::new("/tmp/space - file.rs");

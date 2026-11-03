@@ -18,6 +18,7 @@ impl App {
         self.type_ahead_row(ui);
         self.editor_mode_row(ui);
         self.native_editor_rows(ui);
+        self.spell_check_row(ui);
         self.lsp_server_rows(ui, &mut browse);
         self.diff_viewer_row(ui);
         self.diff_close_settings(ui);
@@ -193,6 +194,38 @@ impl App {
                 },
             });
         }
+    }
+
+    /// Spell checking for both editors. Neovim needs a daemon that
+    /// passes the flag on (`editor-spell-v1`); the native editor does not.
+    fn spell_check_row(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible("Spell checking", "spell spelling typo harper dictionary") {
+            return;
+        }
+        let native = self.settings_draft.editor_mode == EditorMode::Native;
+        let enabled = native
+            || self
+                .state
+                .capabilities
+                .iter()
+                .any(|c| c == terminator_core::EDITOR_SPELL_CAPABILITY);
+        let description = if native {
+            "Underline typos in text and comments (harper-ls on PATH). Alt+Enter lists fixes."
+        } else {
+            "Turn on Neovim 'spell' for new editors. z= lists fixes, zg adds a word."
+        };
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Spell checking",
+            description,
+            add_control: |ui| {
+                ui.add_enabled(
+                    enabled,
+                    egui::Checkbox::new(&mut self.settings_draft.spell_check, "Check spelling"),
+                )
+                .on_disabled_hover_text("Restart the daemon to use this with Neovim editors.");
+            },
+        });
     }
 
     fn lsp_server_rows(&mut self, ui: &mut egui::Ui, browse: &mut Option<BrowseTarget>) {

@@ -240,10 +240,31 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     fn menu_lsp_items(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        self.menu_actions_item(ui);
         if crate::lsp::server_language(self.language).is_none() {
             return;
         }
-        ui.separator();
+        self.menu_language_items(ui);
+    }
+
+    /// Every file: spelling fixes come from the spell checker even where
+    /// no language server exists.
+    fn menu_actions_item(&mut self, ui: &mut egui::Ui) {
+        let actions = MenuRow {
+            label: "Show context actions",
+            icon: "CircleCheck",
+            shortcut: if cfg!(target_os = "macos") {
+                "⌥↩"
+            } else {
+                "Alt+Enter"
+            },
+        };
+        let response = self.item(ui, actions);
+        self.effect_on_click(ui, &response, Effect::CodeActions);
+    }
+
+    fn menu_language_items(&mut self, ui: &mut egui::Ui) {
         let call_keys = if cfg!(target_os = "macos") {
             "⌃⌥H"
         } else {

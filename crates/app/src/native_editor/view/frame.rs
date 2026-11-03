@@ -26,7 +26,7 @@ impl App {
         // Diagnostics snapshots for this frame: the manager borrow ends
         // before the buffer borrow begins.
         let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
-        let problems = self.lsp.problems_for(path);
+        let problems = self.lsp.editor_diagnostics(path);
         let reference = self
             .selected_project()
             .and_then(|project| path.strip_prefix(&project.path).ok())

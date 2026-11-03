@@ -748,6 +748,15 @@ fn ready_server(
     path: &Path,
 ) -> (ServerKey, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
     let key = manager.docs.get(path).expect("doc").server.clone();
+    let outbox = ready_key(manager, &key);
+    (key, outbox)
+}
+
+/// Fake ready server for `key`; its outbox receives what it is sent.
+pub(super) fn ready_key(
+    manager: &mut LspManager,
+    key: &ServerKey,
+) -> tokio::sync::mpsc::UnboundedReceiver<Vec<u8>> {
     let (inbox, outbox) = tokio::sync::mpsc::unbounded_channel();
     manager.servers.insert(
         key.clone(),
@@ -762,7 +771,7 @@ fn ready_server(
             ready: true,
         },
     );
-    (key, outbox)
+    outbox
 }
 
 #[test]

@@ -12,6 +12,8 @@ pub struct ServerFamily {
     pub label: &'static str,
     pub candidates: &'static [&'static str],
     pub args: &'static [&'static str],
+    /// Runs project code (build scripts, plugins): ask before starting.
+    pub needs_trust: bool,
 }
 
 /// Every supported server family. The CSS, HTML, and JSON servers come
@@ -22,56 +24,134 @@ pub const SERVER_FAMILIES: &[ServerFamily] = &[
         label: "Rust language server",
         candidates: &["rust-analyzer"],
         args: &[],
+        needs_trust: true,
     },
     ServerFamily {
         id: "python",
         label: "Python language server",
         candidates: &["pylsp"],
         args: &[],
+        needs_trust: true,
     },
     ServerFamily {
         id: "typescript",
         label: "TypeScript language server",
         candidates: &["typescript-language-server"],
         args: &["--stdio"],
+        needs_trust: true,
     },
     ServerFamily {
         id: "markdown",
         label: "Markdown language server",
         candidates: &["marksman"],
         args: &["server"],
+        needs_trust: true,
     },
     ServerFamily {
         id: "html",
         label: "HTML language server",
         candidates: &["vscode-html-language-server"],
         args: &["--stdio"],
+        needs_trust: true,
     },
     ServerFamily {
         id: "css",
         label: "CSS / SCSS / LESS language server",
         candidates: &["vscode-css-language-server"],
         args: &["--stdio"],
+        needs_trust: true,
     },
     ServerFamily {
         id: "json",
         label: "JSON language server",
         candidates: &["vscode-json-language-server"],
         args: &["--stdio"],
+        needs_trust: true,
     },
     ServerFamily {
         id: "toml",
         label: "TOML language server",
         candidates: &["taplo"],
         args: &["lsp", "stdio"],
+        needs_trust: true,
     },
     ServerFamily {
         id: "yaml",
         label: "YAML language server",
         candidates: &["yaml-language-server"],
         args: &["--stdio"],
+        needs_trust: true,
+    },
+    ServerFamily {
+        id: SPELL_SERVER,
+        label: "Spell checker",
+        candidates: &["harper-ls"],
+        args: &["--stdio"],
+        needs_trust: false,
     },
 ];
+
+/// Family id of the spell checker. It runs beside the file's language
+/// server for every file, so no [`Language`] maps to it.
+pub const SPELL_SERVER: &str = "spell";
+
+/// Server family by id.
+#[must_use]
+pub fn family(id: &str) -> Option<&'static ServerFamily> {
+    SERVER_FAMILIES.iter().find(|family| family.id == id)
+}
+
+/// [`server_candidates`] by family id.
+#[must_use]
+pub fn family_candidates(id: &str) -> &'static [&'static str] {
+    family(id).map_or(&[], |family| family.candidates)
+}
+
+/// [`server_args`] by family id.
+#[must_use]
+pub fn family_args(id: &str) -> &'static [&'static str] {
+    family(id).map_or(&[], |family| family.args)
+}
+
+/// Whether a family may start only in a trusted project root.
+#[must_use]
+pub fn family_needs_trust(id: &str) -> bool {
+    family(id).is_none_or(|family| family.needs_trust)
+}
+
+/// `languageId` for the spell checker: the language server's id, else a
+/// common id for languages without a server here, else plain text.
+/// `harper-ls` checks comments in code and all of plain text and Markdown.
+#[must_use]
+pub fn spell_language_id(path: &Path, language: Language) -> &'static str {
+    if let Some(id) = language_id_for_path(path, language) {
+        return id;
+    }
+    match language {
+        Language::Go => "go",
+        Language::C => "c",
+        Language::Cpp => "cpp",
+        Language::Java => "java",
+        Language::Shell => "shellscript",
+        _ => match extension(path).as_str() {
+            "lua" => "lua",
+            "rb" => "ruby",
+            "swift" => "swift",
+            "kt" | "kts" => "kotlin",
+            "cs" => "csharp",
+            "php" => "php",
+            "nix" => "nix",
+            "dart" => "dart",
+            "scala" => "scala",
+            "hs" => "haskell",
+            "sol" => "solidity",
+            "typ" => "typst",
+            "tex" => "latex",
+            "org" => "org",
+            _ => "plaintext",
+        },
+    }
+}
 
 /// Server family id for a language, if it has a server. TypeScript and
 /// JavaScript share one family, because one `typescript-language-server`
