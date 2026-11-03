@@ -52,7 +52,7 @@ pub fn code_action(input: CodeActionInput<'_>) -> Vec<u8> {
                 Some(Severity::Error) => 1,
                 Some(Severity::Warning) => 2,
                 Some(Severity::Information) => 3,
-                Some(Severity::Hint) | None => 4,
+                Some(Severity::Hint | Severity::Spelling) | None => 4,
             };
             serde_json::json!({
                 "range": { "start": position(item.range.start), "end": position(item.range.end) },
@@ -86,6 +86,9 @@ pub struct CodeActionItem {
     pub kind: Option<String>,
     pub preferred: bool,
     pub raw: Value,
+    /// Offered by the spell-check server: commands run there, not on the
+    /// file's language server.
+    pub spell: bool,
 }
 
 /// Parse `textDocument/codeAction`: actions that carry an edit or can be
@@ -93,21 +96,7 @@ pub struct CodeActionItem {
 /// this client does not run, so they are left out.
 #[must_use]
 pub fn parse_code_actions(result: &Value) -> Vec<CodeActionItem> {
-    let Some(items) = result.as_array() else {
-        return Vec::new();
-    };
-    let mut out: Vec<CodeActionItem> = items
-        .iter()
-        .filter(|item| item.get("edit").is_some() || item.get("data").is_some())
-        .filter_map(|item| {
-            Some(CodeActionItem {
-                title: item.get("title")?.as_str()?.to_owned(),
-                kind: item.get("kind").and_then(Value::as_str).map(str::to_owned),
-                preferred: item.get("isPreferred").and_then(Value::as_bool) == Some(true),
-                raw: item.clone(),
-            })
-        })
-        .collect();
+    let mut out = action_items(result, false, |item| item.get("data").is_some());
     // Preferred fixes first, then quick fixes, then the rest in order.
     out.sort_by_key(|item| {
         (
@@ -127,4 +116,63 @@ pub fn code_action_edits(action: &Value) -> Result<Vec<RenameFileEdit>, String> 
         .get("edit")
         .ok_or_else(|| "The language server did not provide an edit for this action".to_owned())?;
     parse_rename(edit)
+}
+
+/// Parse the spell server's `textDocument/codeAction`: replacement fixes
+/// (with an edit) plus bare commands such as "add to dictionary", which
+/// [`action_command`] turns into `workspace/executeCommand`. Fixes keep
+/// the server's order, so the best suggestion stays first.
+#[must_use]
+pub fn parse_spell_actions(result: &Value) -> Vec<CodeActionItem> {
+    action_items(result, true, |item| action_command(item).is_some())
+}
+
+/// Actions with an edit, or that `runnable` accepts, as items.
+fn action_items(
+    result: &Value,
+    spell: bool,
+    runnable: impl Fn(&Value) -> bool,
+) -> Vec<CodeActionItem> {
+    let Some(items) = result.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter(|item| item.get("edit").is_some() || runnable(item))
+        .filter_map(|item| {
+            Some(CodeActionItem {
+                title: item.get("title")?.as_str()?.to_owned(),
+                kind: item.get("kind").and_then(Value::as_str).map(str::to_owned),
+                preferred: item.get("isPreferred").and_then(Value::as_bool) == Some(true),
+                raw: item.clone(),
+                spell,
+            })
+        })
+        .collect()
+}
+
+/// `{command, arguments}` of a bare `Command` or of a code action that
+/// carries only a command. `None` for actions with an edit.
+#[must_use]
+pub fn action_command(action: &Value) -> Option<Value> {
+    if action.get("edit").is_some() {
+        return None;
+    }
+    let (name, arguments) = match action.get("command")? {
+        Value::String(name) => (name.clone(), action.get("arguments")),
+        command => (
+            command.get("command")?.as_str()?.to_owned(),
+            command.get("arguments"),
+        ),
+    };
+    Some(serde_json::json!({
+        "command": name,
+        "arguments": arguments.cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+    }))
+}
+
+/// `workspace/executeCommand` for a value from [`action_command`].
+#[must_use]
+pub fn execute_command(id: &RequestId, command: &Value) -> Vec<u8> {
+    request(id, "workspace/executeCommand", command.clone())
 }

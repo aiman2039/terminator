@@ -66,7 +66,17 @@ impl LspManager {
         build: impl FnOnce(&L::RequestId, &url::Url) -> Vec<u8>,
         pending: Pending,
     ) -> bool {
-        let Some(doc) = self.docs.get(path) else {
+        self.send_in((Slot::Main, path), build, pending)
+    }
+
+    /// [`send_for`](Self::send_for) on one slot's server.
+    pub(super) fn send_in(
+        &mut self,
+        (slot, path): (Slot, &Path),
+        build: impl FnOnce(&L::RequestId, &url::Url) -> Vec<u8>,
+        pending: Pending,
+    ) -> bool {
+        let Some(doc) = self.docs_of(slot).get(path) else {
             return false;
         };
         let (key, uri) = (doc.server.clone(), doc.uri.clone());
@@ -100,31 +110,97 @@ impl LspManager {
 
     /// Code actions for `range` with the diagnostics on it.
     pub fn request_code_actions(&mut self, path: &Path, range: L::Range) -> Option<u64> {
-        let diagnostics: Vec<L::Diagnostic> = self
-            .problems_for(path)
-            .into_iter()
-            .filter(|item| {
-                item.range.start.line <= range.end.line && range.start.line <= item.range.end.line
-            })
-            .collect();
+        let touching = |items: Option<&Vec<L::Diagnostic>>| -> Vec<L::Diagnostic> {
+            items
+                .into_iter()
+                .flatten()
+                .filter(|item| {
+                    item.range.start.line <= range.end.line
+                        && range.start.line <= item.range.end.line
+                })
+                .cloned()
+                .collect()
+        };
+        let diagnostics = touching(self.diagnostics.get(path));
+        let spelling = touching(self.spell_diagnostics.get(path));
         self.completion_generation = self.completion_generation.wrapping_add(1);
         let generation = self.completion_generation;
-        self.send_for(
-            path,
-            |id, uri| {
+        fn build(
+            range: L::Range,
+            diagnostics: &[L::Diagnostic],
+        ) -> impl FnOnce(&L::RequestId, &url::Url) -> Vec<u8> + '_ {
+            move |id, uri| {
                 L::code_action(L::CodeActionInput {
                     id,
                     uri,
                     range,
-                    diagnostics: &diagnostics,
+                    diagnostics,
                 })
-            },
-            Pending::CodeActions {
-                path: path.to_owned(),
-                generation,
-            },
+            }
+        }
+        let pending = |spell| Pending::CodeActions {
+            path: path.to_owned(),
+            generation,
+            spell,
+        };
+        let main = self.send_for(path, build(range, &diagnostics), pending(false));
+        // Ask the spell checker only where it found something: the
+        // popup then never waits on it for a clean line.
+        let spell = !spelling.is_empty()
+            && self.send_in((Slot::Spell, path), build(range, &spelling), pending(true));
+        let remaining = usize::from(main).saturating_add(usize::from(spell));
+        if remaining == 0 {
+            return None;
+        }
+        self.action_wait = Some(ActionWait {
+            path: path.to_owned(),
+            generation,
+            remaining,
+            items: Vec::new(),
+        });
+        Some(generation)
+    }
+
+    /// Collect one server's code actions; publish the merged list once
+    /// every asked server answered. Spell fixes lead on a typo.
+    pub(super) fn on_code_actions(
+        &mut self,
+        (path, generation): (PathBuf, u64),
+        spell: bool,
+        items: Vec<L::CodeActionItem>,
+    ) {
+        let Some(wait) = self
+            .action_wait
+            .as_mut()
+            .filter(|wait| wait.path == path && wait.generation == generation)
+        else {
+            return;
+        };
+        if spell {
+            wait.items.splice(0..0, items);
+        } else {
+            wait.items.extend(items);
+        }
+        wait.remaining = wait.remaining.saturating_sub(1);
+        if wait.remaining == 0
+            && let Some(wait) = self.action_wait.take()
+        {
+            self.edit_answers.actions = Some((wait.path, wait.generation, wait.items));
+        }
+    }
+
+    /// Run a bare command action (for example "add to dictionary") on
+    /// the server that offered it. False when that server is not ready.
+    pub fn execute_action_command(&mut self, path: &Path, item: &L::CodeActionItem) -> bool {
+        let Some(command) = L::action_command(&item.raw) else {
+            return false;
+        };
+        let slot = if item.spell { Slot::Spell } else { Slot::Main };
+        self.send_in(
+            (slot, path),
+            |id, _| L::execute_command(id, &command),
+            Pending::Command,
         )
-        .then_some(generation)
     }
 
     /// Resolve an action that arrived without its edit.

@@ -140,6 +140,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         NVIM_REVIEW_CAPABILITY.into(),
         TERMINAL_NOTICES_CAPABILITY.into(),
         NOTIFICATION_SOUND_CAPABILITY.into(),
+        terminator_core::EDITOR_SPELL_CAPABILITY.into(),
         NTFY_CAPABILITY.into(),
         DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),

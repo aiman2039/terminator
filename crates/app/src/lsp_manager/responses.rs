@@ -18,7 +18,11 @@ pub(super) fn decode_body(key: &ServerKey, body: &[u8]) -> Option<PumpEvent> {
         }
         let (uri, items) = L::parse_diagnostics(params)?;
         let path = L::uri_to_path(&uri)?;
-        return Some(PumpEvent::Diagnostics { path, items });
+        return Some(PumpEvent::Diagnostics {
+            key: key.clone(),
+            path,
+            items,
+        });
     }
     Some(PumpEvent::Message {
         key: key.clone(),
@@ -39,8 +43,24 @@ impl LspManager {
     pub(super) fn on_event(&mut self, event: PumpEvent) {
         match event {
             PumpEvent::Message { key, message } => self.on_message(&key, message),
-            PumpEvent::Diagnostics { path, items } => {
-                if self.docs.contains_key(&path) {
+            // The spell doc's own server published it: spelling findings.
+            PumpEvent::Diagnostics { key, path, items }
+                if self
+                    .spell_docs
+                    .get(&path)
+                    .is_some_and(|doc| doc.server == key) =>
+            {
+                let items = items
+                    .into_iter()
+                    .map(|item| L::Diagnostic {
+                        severity: Some(L::Severity::Spelling),
+                        ..item
+                    })
+                    .collect();
+                self.spell_diagnostics.insert(path, items);
+            }
+            PumpEvent::Diagnostics { key, path, items } => {
+                if self.docs.get(&path).is_some_and(|doc| doc.server == key) {
                     self.diagnostics.insert(path, items);
                 }
             }
@@ -142,7 +162,7 @@ impl LspManager {
         // Buffers submitted while starting open now, in order behind
         // `initialized`: a single pre-ready submit is enough, and no
         // further frame is needed to get its `didOpen` out.
-        for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
+        for doc in self.all_docs_mut().filter(|doc| doc.server == *key) {
             if let Some(text) = doc.pending_text.take() {
                 doc.version = doc.version.saturating_add(1);
                 let _ = inbox.send(L::did_open(L::DidOpenInput {
@@ -187,10 +207,19 @@ impl LspManager {
             Pending::DocumentHighlight { path, revision } => {
                 self.on_document_highlight(path, revision, &answer.value());
             }
-            Pending::CodeActions { path, generation } => {
-                self.edit_answers.actions =
-                    Some((path, generation, L::parse_code_actions(&answer.value())));
+            Pending::CodeActions {
+                path,
+                generation,
+                spell,
+            } => {
+                let items = if spell {
+                    L::parse_spell_actions(&answer.value())
+                } else {
+                    L::parse_code_actions(&answer.value())
+                };
+                self.on_code_actions((path, generation), spell, items);
             }
+            Pending::Command => {}
             Pending::Resolve { path } => {
                 if let Some(action) = answer.result {
                     self.edit_answers.resolved = Some((path, action));

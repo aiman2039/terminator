@@ -79,6 +79,8 @@ impl RenderHelpers {
         match severity {
             crate::lsp::Severity::Error => visuals.error_fg_color,
             crate::lsp::Severity::Warning => visuals.warn_fg_color,
+            // Typo green, like other editors, readable on dark and light.
+            crate::lsp::Severity::Spelling => Color32::from_rgb(0x4C, 0xAF, 0x50),
             _ => visuals.weak_text_color(),
         }
     }

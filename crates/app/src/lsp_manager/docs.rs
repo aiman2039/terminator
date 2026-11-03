@@ -1,5 +1,22 @@
 use super::*;
 
+/// Which document map a server slot uses.
+#[derive(Clone, Copy)]
+pub(super) enum Slot {
+    Main,
+    Spell,
+}
+
+struct SlotSubmit<'a> {
+    slot: Slot,
+    path: &'a Path,
+    key: ServerKey,
+    protocol_id: &'static str,
+    uri: url::Url,
+    revision: u64,
+    text: &'a str,
+}
+
 pub(crate) struct SubmitTextInput<'a> {
     pub path: &'a Path,
     pub language: Language,
@@ -14,11 +31,30 @@ impl LspManager {
     /// server, and edits older than the debounce. Unsupported languages
     /// untrack (and close) silently.
     pub fn sync_doc(&mut self, path: &Path, language: Language, revision: u64) -> bool {
-        if L::server_language(language).is_none() {
+        let main = if L::server_language(language).is_some() {
+            self.sync_slot(Slot::Main, path, revision)
+        } else {
             self.close_path(path);
-            return false;
+            false
+        };
+        let spell = if self.spell_enabled {
+            self.sync_slot(Slot::Spell, path, revision)
+        } else {
+            false
+        };
+        main || spell
+    }
+
+    pub(super) fn docs_of(&mut self, slot: Slot) -> &mut HashMap<PathBuf, OpenDoc> {
+        match slot {
+            Slot::Main => &mut self.docs,
+            Slot::Spell => &mut self.spell_docs,
         }
-        let Some(doc) = self.docs.get_mut(path) else {
+    }
+
+    /// [`sync_doc`](Self::sync_doc) for one server slot.
+    fn sync_slot(&mut self, slot: Slot, path: &Path, revision: u64) -> bool {
+        let Some(doc) = self.docs_of(slot).get_mut(path) else {
             return true;
         };
         if doc.observed != revision {
@@ -35,8 +71,13 @@ impl LspManager {
         let key = doc.server.clone();
         match self.servers.get(&key) {
             Some(server) => server.ready,
-            None => self.spawn_allowed(key.language) && self.root_trusted(&key.root),
+            None => self.spawn_allowed(key.language) && self.key_trusted(&key),
         }
+    }
+
+    /// Servers that run no project code (the spell checker) need no trust.
+    pub(super) fn key_trusted(&mut self, key: &ServerKey) -> bool {
+        !L::family_needs_trust(key.language) || self.root_trusted(&key.root)
     }
 
     /// Open or refresh one buffer on its server. Always records the
@@ -51,6 +92,11 @@ impl LspManager {
             revision,
             text,
         } = input;
+        // The spell slot keeps its own debounce: completion, hover, and
+        // goto push live text often, and harper re-lints the whole file.
+        if self.spell_enabled && self.sync_slot(Slot::Spell, path, revision) {
+            self.submit_spell(path, language, (revision, text));
+        }
         let Some(language_id) = L::server_language(language) else {
             return;
         };
@@ -61,18 +107,66 @@ impl LspManager {
         let Some(uri) = L::file_uri(path) else {
             return;
         };
-        let now = Instant::now();
-        let doc = self.docs.entry(path.to_owned()).or_insert_with(|| OpenDoc {
+        self.submit_slot(SlotSubmit {
+            slot: Slot::Main,
+            path,
+            key,
+            protocol_id,
             uri,
-            version: 0,
-            server: key.clone(),
-            language_id: protocol_id,
-            submitted: revision,
-            observed: revision,
-            last_change: now,
-            opened: false,
-            pending_text: None,
+            revision,
+            text,
         });
+    }
+
+    /// The spell half of [`submit_text`](Self::submit_text).
+    fn submit_spell(&mut self, path: &Path, language: Language, (revision, text): (u64, &str)) {
+        let Some(uri) = L::file_uri(path) else {
+            return;
+        };
+        // Reuse a known root (spell, then language doc) before walking up.
+        let root = match self.spell_docs.get(path).or_else(|| self.docs.get(path)) {
+            Some(doc) => doc.server.root.clone(),
+            None => project_root(path, Language::Plain),
+        };
+        self.submit_slot(SlotSubmit {
+            slot: Slot::Spell,
+            path,
+            key: ServerKey {
+                language: L::SPELL_SERVER,
+                root,
+            },
+            protocol_id: L::spell_language_id(path, language),
+            uri,
+            revision,
+            text,
+        });
+    }
+
+    fn submit_slot(&mut self, input: SlotSubmit<'_>) {
+        let SlotSubmit {
+            slot,
+            path,
+            key,
+            protocol_id,
+            uri,
+            revision,
+            text,
+        } = input;
+        let now = Instant::now();
+        let doc = self
+            .docs_of(slot)
+            .entry(path.to_owned())
+            .or_insert_with(|| OpenDoc {
+                uri,
+                version: 0,
+                server: key.clone(),
+                language_id: protocol_id,
+                submitted: revision,
+                observed: revision,
+                last_change: now,
+                opened: false,
+                pending_text: None,
+            });
         if doc.server != key {
             doc.server = key.clone();
             doc.opened = false;
@@ -87,7 +181,7 @@ impl LspManager {
             // while a server is actually starting: an unavailable server
             // would pile a copy per frame with nobody to flush it.
             if self.servers.contains_key(&key)
-                && let Some(doc) = self.docs.get_mut(path)
+                && let Some(doc) = self.docs_of(slot).get_mut(path)
             {
                 doc.pending_text = Some(text.to_owned());
             }
@@ -97,7 +191,7 @@ impl LspManager {
         let Some(inbox) = inbox else {
             return;
         };
-        let Some(doc) = self.docs.get_mut(path) else {
+        let Some(doc) = self.docs_of(slot).get_mut(path) else {
             return;
         };
         // A parked open is already flushed or superseded; either way the
@@ -133,13 +227,29 @@ impl LspManager {
         }
     }
 
-    pub(super) fn close_path(&mut self, path: &Path) {
-        if let Some(doc) = self.docs.remove(path)
+    /// Close one spell document and drop its findings.
+    pub(super) fn close_spell(&mut self, path: &Path) {
+        self.close_doc(Slot::Spell, path);
+        self.spell_diagnostics.remove(path);
+    }
+
+    /// Untrack one slot's document, `didClose` it when it was open.
+    fn close_doc(&mut self, slot: Slot, path: &Path) {
+        if let Some(doc) = self.docs_of(slot).remove(path)
             && doc.opened
             && let Some(server) = self.servers.get(&doc.server)
         {
             let _ = server.inbox.send(L::did_close(&doc.uri));
         }
+    }
+
+    /// Every tracked document, language and spell, for per-server sweeps.
+    pub(super) fn all_docs_mut(&mut self) -> impl Iterator<Item = &mut OpenDoc> {
+        self.docs.values_mut().chain(self.spell_docs.values_mut())
+    }
+
+    pub(super) fn close_path(&mut self, path: &Path) {
+        self.close_doc(Slot::Main, path);
         self.diagnostics.remove(path);
         let had_symbols = self.symbols.remove(path).is_some();
         self.symbols_rev.remove(path);
@@ -171,17 +281,26 @@ impl LspManager {
     /// Forget closed tabs: `didClose` open buffers, drop their state,
     /// and shut down servers nobody needs anymore.
     pub fn prune(&mut self, live: &std::collections::HashSet<PathBuf>) {
-        let gone: Vec<PathBuf> = self
-            .docs
-            .keys()
-            .filter(|path| !live.contains(*path))
-            .cloned()
-            .collect();
-        for path in &gone {
-            self.close_path(path);
+        for slot in [Slot::Main, Slot::Spell] {
+            let gone: Vec<PathBuf> = self
+                .docs_of(slot)
+                .keys()
+                .filter(|path| !live.contains(*path))
+                .cloned()
+                .collect();
+            for path in &gone {
+                match slot {
+                    Slot::Main => self.close_path(path),
+                    Slot::Spell => self.close_spell(path),
+                }
+            }
         }
-        let needed: std::collections::HashSet<ServerKey> =
-            self.docs.values().map(|doc| doc.server.clone()).collect();
+        let needed: std::collections::HashSet<ServerKey> = self
+            .docs
+            .values()
+            .chain(self.spell_docs.values())
+            .map(|doc| doc.server.clone())
+            .collect();
         let idle: Vec<ServerKey> = self
             .servers
             .keys()

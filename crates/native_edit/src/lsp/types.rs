@@ -20,6 +20,9 @@ pub enum Severity {
     Warning,
     Information,
     Hint,
+    /// Spell-checker finding (`harper-ls`). Weakest, own underline color,
+    /// and kept out of the Problems panel.
+    Spelling,
 }
 
 /// One published diagnostic.

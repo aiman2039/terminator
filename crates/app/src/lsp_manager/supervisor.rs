@@ -66,7 +66,7 @@ impl LspManager {
             return None;
         }
         // Never run project code (build scripts, proc macros) unasked.
-        if !self.root_trusted(&key.root) {
+        if !self.key_trusted(key) {
             return None;
         }
         // Crash loops back off, then give up with a reason.
@@ -117,7 +117,7 @@ impl LspManager {
         {
             return terminator_core::find_executable(custom);
         }
-        terminator_native_edit::lsp::server_candidates(language_of(language))
+        L::family_candidates(language)
             .iter()
             .find_map(|candidate| terminator_core::find_executable(candidate))
     }
@@ -134,7 +134,7 @@ impl LspManager {
                 "Language server not found: {custom}. Fix the path in Settings → Terminal & Editor."
             );
         }
-        let candidates = terminator_native_edit::lsp::server_candidates(language_of(language));
+        let candidates = L::family_candidates(language);
         format!(
             "No language server on PATH ({}); install it or set a path in Settings → Terminal & Editor.",
             candidates.join(", ")
@@ -229,7 +229,7 @@ impl LspManager {
         if self.servers.remove(key).is_some() {
             self.note_failure(key.language);
             self.unavailable.insert(key.language, note.to_owned());
-            for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
+            for doc in self.all_docs_mut().filter(|doc| doc.server == *key) {
                 doc.opened = false;
             }
         }
@@ -252,7 +252,7 @@ impl LspManager {
         self.note_failure(key.language);
         // Docs re-open (and the server respawns, cooldown permitting)
         // on the next sync; pending answers are dead with their ids.
-        for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
+        for doc in self.all_docs_mut().filter(|doc| doc.server == *key) {
             doc.opened = false;
         }
     }
@@ -271,7 +271,7 @@ impl LspManager {
         }
         self.workspace_symbols.remove(key);
         self.search_revision = self.search_revision.wrapping_add(1);
-        for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
+        for doc in self.all_docs_mut().filter(|doc| doc.server == *key) {
             doc.opened = false;
         }
     }
@@ -303,7 +303,7 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
         cancel,
     } = input;
     let mut child = match tokio::process::Command::new(&binary)
-        .args(L::server_args(language_of(key.language)))
+        .args(L::family_args(key.language))
         .current_dir(&root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -423,7 +423,7 @@ fn spawn_server_direct(
     pump: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
 ) -> Result<Server, String> {
     let mut child = tokio::process::Command::new(binary)
-        .args(L::server_args(language_of(key.language)))
+        .args(L::family_args(key.language))
         .current_dir(&key.root)
         // This path is only for tests. A release launched with `cargo run`
         // holds the shared target's build lock while tests run. Keep the

@@ -47,6 +47,16 @@ impl LspManager {
         self.diagnostics.get(path).cloned().unwrap_or_default()
     }
 
+    /// Language diagnostics plus spelling findings, for the editor's
+    /// underlines and hover.
+    pub fn editor_diagnostics(&self, path: &Path) -> Vec<L::Diagnostic> {
+        let mut items = self.problems_for(path);
+        if let Some(spelling) = self.spell_diagnostics.get(path) {
+            items.extend(spelling.iter().cloned());
+        }
+        items
+    }
+
     /// Every tracked file's diagnostics, sorted by path, for the
     /// global Problems panel.
     #[must_use]
