@@ -1463,3 +1463,13 @@ fn document_highlight_answers_apply_to_their_revision_only() {
     );
     assert!(manager.document_highlights(&path, 2).is_none());
 }
+
+#[test]
+fn submitted_revision_names_the_text_the_server_last_saw() {
+    let mut manager = LspManager::trusting();
+    let path = crate::test_path("/tmp/synced.rs");
+    assert_eq!(manager.submitted_revision(&path), None);
+    tracked(&mut manager, &path);
+    // Workspace edits without a version apply only at this revision.
+    assert_eq!(manager.submitted_revision(&path), Some(1));
+}

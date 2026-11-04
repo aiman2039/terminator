@@ -2,16 +2,20 @@
 //! buffer, the live re-diff of the left text against that buffer, and the
 //! filler rows and tints that keep the editor aligned with the left pane.
 use super::*;
+use crate::native_editor::LineEnding;
 use eframe::egui::Color32;
 use std::sync::{Arc, mpsc};
+use terminator_core::async_service::CancellationToken;
 use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::highlight::HighlightCache;
 use terminator_native_edit::view::{LineFill, RangeFill};
 use terminator_native_edit::vim::VimEngine;
 
-/// Buffers up to this size re-diff on the frame that edited them; larger
-/// ones re-diff on a worker thread once typing pauses.
+/// A buffer up to this size builds its first live diff on the frame that
+/// shows it (no spinner); every later re-diff runs on the shared CPU pool.
 const SYNC_BYTES: usize = 16 * 1024;
+/// Typing pause before a small buffer re-diffs, in seconds.
+const SMALL_DEBOUNCE: f64 = 0.03;
 /// Typing pause before a large buffer re-diffs, in seconds.
 const DEBOUNCE: f64 = 0.15;
 
@@ -20,8 +24,8 @@ pub(crate) struct LiveEditor {
     pub doc: Doc,
     pub engine: VimEngine,
     pub highlight: HighlightCache,
-    /// The file is uniformly CRLF: it edits as LF and saves as CRLF.
-    crlf: bool,
+    /// The file's line breaks: uniform CRLF edits as LF and saves as CRLF.
+    line_ending: LineEnding,
     /// Buffer revision `Edit::text` mirrors.
     synced: u64,
     /// When the buffer last changed (UI time), for the re-diff debounce.
@@ -30,27 +34,21 @@ pub(crate) struct LiveEditor {
 
 impl LiveEditor {
     pub fn new(text: &str) -> Self {
-        let lf = text.replace("\r\n", "\n");
-        let crlf = lf.len() != text.len() && lf.replace('\n', "\r\n") == text;
-        let doc = Doc::new(if crlf { lf } else { text.to_owned() });
+        let (text, line_ending) = LineEnding::decode(text.to_owned());
+        let doc = Doc::new(text);
         Self {
             synced: doc.revision(),
             doc,
             engine: VimEngine::new(),
             highlight: HighlightCache::default(),
-            crlf,
+            line_ending,
             edited_at: 0.0,
         }
     }
 
     /// The buffer as it would be saved.
     pub fn text(&self) -> String {
-        let text = self.doc.text();
-        if self.crlf {
-            text.replace('\n', "\r\n")
-        } else {
-            text
-        }
+        self.line_ending.encode(self.doc.text())
     }
 }
 
@@ -59,8 +57,10 @@ impl LiveEditor {
 pub(crate) struct LiveDiff {
     /// `(buffer revision, document)` currently shown.
     pub shown: Option<(u64, Arc<DiffDocument>)>,
-    /// A worker build for one revision.
-    pending: Option<(u64, mpsc::Receiver<DiffDocument>)>,
+    /// The one pool build in flight, for one revision. Replacing it
+    /// cancels the old build, and its late result is dropped with the
+    /// receiver.
+    pending: Option<Pending>,
     /// Editor marks for `(document generation, palette)`.
     marks: Option<(DiffGeneration, MarkColors, Arc<EditorMarks>)>,
 }
@@ -81,13 +81,18 @@ impl review::Edit {
     /// large buffer re-diffs. A large buffer's first build also runs on a
     /// worker (see [`review::Edit::live_loading`]). `true` in the second
     /// value asks for another frame.
-    pub fn live_document(&mut self, path: &Path, now: f64) -> (Arc<DiffDocument>, bool) {
+    pub fn live_document(
+        &mut self,
+        path: &Path,
+        now: f64,
+        pool: &crate::gui_services::Submit,
+    ) -> (Arc<DiffDocument>, bool) {
         let revision = self.editor.synced;
         let live = &mut self.live;
-        if let Some((built, receiver)) = &live.pending
-            && let Ok(doc) = receiver.try_recv()
+        if let Some(pending) = &live.pending
+            && let Ok(doc) = pending.receiver.try_recv()
         {
-            live.shown = Some((*built, Arc::new(doc)));
+            live.shown = Some((pending.revision, Arc::new(doc)));
             live.pending = None;
         }
         let current = live.shown.as_ref().is_some_and(|(at, _)| *at == revision);
@@ -97,18 +102,27 @@ impl review::Edit {
             .saturating_add(self.document.left_text.len())
             <= SYNC_BYTES;
         let mut waiting = false;
-        if !current && small {
-            live.pending = None;
+        if !current && small && live.shown.is_none() {
             live.shown = Some((
                 revision,
                 Arc::new(build_live(&self.document, &self.text, path)),
             ));
         } else if !current {
             // Nothing shown yet: build at once, without the typing pause.
-            let idle = live.shown.is_none() || now - self.editor.edited_at >= DEBOUNCE;
-            let building = live.pending.as_ref().is_some_and(|(at, _)| *at == revision);
+            let pause = if small { SMALL_DEBOUNCE } else { DEBOUNCE };
+            let idle = live.shown.is_none() || now - self.editor.edited_at >= pause;
+            let building = live
+                .pending
+                .as_ref()
+                .is_some_and(|p| p.revision == revision);
             if idle && !building {
-                live.pending = Some((revision, spawn_build(&self.document, &self.text, path)));
+                live.pending = spawn_build(SpawnBuildInput {
+                    pool,
+                    document: &self.document,
+                    text: &self.text,
+                    path,
+                    revision,
+                });
             }
             waiting = true;
         }
@@ -140,17 +154,65 @@ impl review::Edit {
     }
 }
 
-fn spawn_build(
-    document: &Arc<DiffDocument>,
-    text: &str,
-    path: &Path,
-) -> mpsc::Receiver<DiffDocument> {
+/// One live diff build on the shared CPU pool.
+struct Pending {
+    revision: u64,
+    receiver: mpsc::Receiver<DiffDocument>,
+    cancel: CancellationToken,
+}
+
+impl Drop for Pending {
+    /// A replaced or abandoned build is cancelled; a queued one never runs.
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+struct SpawnBuildInput<'a> {
+    pool: &'a crate::gui_services::Submit,
+    document: &'a Arc<DiffDocument>,
+    text: &'a str,
+    path: &'a Path,
+    revision: u64,
+}
+
+/// Queue a build on the shared CPU pool. `None` when the pool refused it
+/// (overloaded or closed); the caller retries on a later frame.
+fn spawn_build(input: SpawnBuildInput<'_>) -> Option<Pending> {
+    use terminator_core::async_service::{OperationContext, Policy};
+    let SpawnBuildInput {
+        pool,
+        document,
+        text,
+        path,
+        revision,
+    } = input;
     let (sender, receiver) = mpsc::channel();
+    let cancel = CancellationToken::new();
     let (document, text, path) = (Arc::clone(document), text.to_owned(), path.to_owned());
-    std::thread::spawn(move || {
-        let _ = sender.send(build_live(&document, &text, &path));
-    });
-    receiver
+    let cpu = pool.cpu().clone();
+    let token = cancel.clone();
+    let context = OperationContext::new(
+        "diff-live",
+        path.display().to_string(),
+        Policy::ReplaceableRead,
+    );
+    pool.handle()
+        .submit(context, cancel.clone(), async move {
+            let built = cpu
+                .run(&token, move || {
+                    anyhow::Ok(build_live(&document, &text, &path))
+                })
+                .await?;
+            let _ = sender.send(built);
+            Ok(Vec::new())
+        })
+        .ok()?;
+    Some(Pending {
+        revision,
+        receiver,
+        cancel,
+    })
 }
 
 /// `document.left_text` against `text`, every unchanged line shown (the
@@ -159,6 +221,7 @@ pub(crate) fn build_live(document: &DiffDocument, text: &str, path: &Path) -> Di
     let view = DiffView {
         context: usize::MAX / 4,
         revealed: Vec::new(),
+        revealed_in: None,
         options: document.options,
     };
     let mut doc = build_with_options(BuildWithOptionsInput {
@@ -180,6 +243,7 @@ pub(crate) fn build_live(document: &DiffDocument, text: &str, path: &Path) -> Di
                 new_no: number,
                 spans,
                 moved: false,
+                end: LineEnd::default(),
             };
             doc.split.push(SplitRow {
                 left: Some(side(line_spans(&highlighted, Some(index), line))),

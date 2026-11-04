@@ -149,8 +149,7 @@ pub fn visual_rows_folded<B: Buffer>(
         }
         let first = rows.len();
         let text = doc.line_text(line);
-        let chars: Vec<char> = text.chars().collect();
-        let line_len = chars.len();
+        let line_len = text.chars().count();
         if line_len == 0 || wrap_columns.is_none() {
             rows.push(VisualRow {
                 line,
@@ -169,6 +168,8 @@ pub fn visual_rows_folded<B: Buffer>(
             });
             continue;
         }
+        // Only wrapped lines need random access to their chars.
+        let chars: Vec<char> = text.chars().collect();
         let limit = wrap_columns.unwrap_or(usize::MAX).max(1);
         let mut start = 0;
         while start < line_len {

@@ -152,7 +152,7 @@ impl App {
     /// and says why. Returns true while the close must not proceed.
     fn workspace_close_waits_on_native(&mut self, project: &str, tab_id: &str) -> bool {
         if self.native_close_prompt.is_some()
-            || self.native_close_after_save.is_some()
+            || !self.native_close_after_save.is_empty()
             || !self.pending_native_close.is_empty()
         {
             return true;

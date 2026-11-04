@@ -147,14 +147,78 @@ fn a_large_first_live_diff_builds_off_the_gui_thread() {
         staged: false,
         context: 3,
     }));
+    let (pool, _owner) = pool();
     let mut buffer = review::Edit::new(document);
-    let (_, waiting) = buffer.live_document(Path::new("file.rs"), 0.0);
+    let (_, waiting) = buffer.live_document(Path::new("file.rs"), 0.0, &pool);
     assert!(waiting, "the first large build waits for its worker");
     assert!(buffer.live_loading());
     let started = std::time::Instant::now();
     while buffer.live_loading() && started.elapsed() < std::time::Duration::from_secs(30) {
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let _ = buffer.live_document(Path::new("file.rs"), 0.0);
+        let _ = buffer.live_document(Path::new("file.rs"), 0.0, &pool);
     }
     assert!(!buffer.live_loading(), "the worker build is shown");
+}
+
+fn pool() -> (crate::gui_services::Submit, crate::gui_services::Owner) {
+    let dir = std::env::temp_dir().join(terminator_core::id());
+    let (updates, _) = std::sync::mpsc::channel();
+    let (services, owner) = crate::gui_services::Services::new(
+        terminator_core::Paths::at(dir),
+        eframe::egui::Context::default(),
+        updates,
+    )
+    .unwrap();
+    (services.submit(), owner)
+}
+
+/// Edit the buffer, then poll the live diff (one frame per call) until
+/// it describes the current revision.
+fn settle(buffer: &mut review::Edit, pool: &crate::gui_services::Submit, now: f64) -> u64 {
+    let started = std::time::Instant::now();
+    loop {
+        let _ = buffer.live_document(Path::new("file.rs"), now, pool);
+        let revision = buffer.editor.doc.revision();
+        if buffer
+            .live
+            .shown
+            .as_ref()
+            .is_some_and(|(at, _)| *at == revision)
+            || started.elapsed() > std::time::Duration::from_secs(30)
+        {
+            return revision;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn typing_rebuilds_the_live_diff_off_the_gui_thread_and_drops_stale_builds() {
+    let document = std::sync::Arc::new(build_with_context(BuildWithContextInput {
+        path: Path::new("file.rs"),
+        left: "a\n",
+        right: "a\nb\n",
+        staged: false,
+        context: 3,
+    }));
+    let (pool, _owner) = pool();
+    let mut buffer = review::Edit::new(document);
+    // The first small build is shown at once.
+    let _ = buffer.live_document(Path::new("file.rs"), 0.0, &pool);
+    assert!(!buffer.live_loading());
+    let first = buffer.live.shown.as_ref().map(|(at, _)| *at);
+    // Two quick edits: the frame after an edit keeps the old document
+    // while the rebuild runs on the pool.
+    for (step, text) in ["x", "y"].into_iter().enumerate() {
+        let at = buffer.editor.doc.char_at_line_col(1, 1);
+        buffer.editor.doc.insert(at, text);
+        buffer.sync_text(1.0 + step as f64);
+        let (_, waiting) = buffer.live_document(Path::new("file.rs"), 1.0 + step as f64, &pool);
+        assert!(waiting, "an edit re-diffs on the pool, not this frame");
+        assert_eq!(buffer.live.shown.as_ref().map(|(at, _)| *at), first);
+    }
+    let revision = settle(&mut buffer, &pool, 10.0);
+    let (at, live) = buffer.live.shown.as_ref().expect("live diff");
+    assert_eq!(*at, revision, "only the newest revision is shown");
+    assert_eq!(live.right_text, "a\nbyx\n");
 }

@@ -184,6 +184,16 @@ impl Kind {
     }
 }
 
+/// "1 line", "3 lines", or with `adjective` "3 picked lines".
+pub(crate) fn lines_label(count: usize, adjective: &str) -> String {
+    let noun = if count == 1 { "line" } else { "lines" };
+    if adjective.is_empty() {
+        format!("{count} {noun}")
+    } else {
+        format!("{count} {adjective} {noun}")
+    }
+}
+
 pub(crate) enum Request {
     Save {
         document: Arc<DiffDocument>,
@@ -246,25 +256,24 @@ fn partial_lines(input: PartialLinesInput<'_>) -> String {
         .new
         .clone()
         .filter_map(|index| Some((index, *right.get(index)?)));
+    let stage = kind == Kind::Stage;
+    let lines = old
+        .filter(|(index, _)| picked.old.contains(index) != stage)
+        .chain(new.filter(|(index, _)| picked.new.contains(index) == stage))
+        .map(|(_, line)| line);
+    join_lines(lines)
+}
+
+/// Concatenate whole lines. A line without a final newline (the last line
+/// of one side) gets one when another line follows it, so two lines never
+/// merge into one.
+fn join_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     let mut region = String::new();
-    if kind == Kind::Stage {
-        region.extend(
-            old.filter(|(index, _)| !picked.old.contains(index))
-                .map(|(_, line)| line),
-        );
-        region.extend(
-            new.filter(|(index, _)| picked.new.contains(index))
-                .map(|(_, line)| line),
-        );
-    } else {
-        region.extend(
-            old.filter(|(index, _)| picked.old.contains(index))
-                .map(|(_, line)| line),
-        );
-        region.extend(
-            new.filter(|(index, _)| !picked.new.contains(index))
-                .map(|(_, line)| line),
-        );
+    for line in lines {
+        if !region.is_empty() && !region.ends_with('\n') {
+            region.push('\n');
+        }
+        region.push_str(line);
     }
     region
 }
@@ -283,6 +292,15 @@ pub(crate) struct Undo {
     index: bool,
     before: Version,
     after: Version,
+    /// What the action did, for the undo history ("Stage hunk 3").
+    pub label: String,
+}
+
+impl Undo {
+    /// The action wrote the working tree (Discard or Save), not the index.
+    pub fn worktree(&self) -> bool {
+        !self.index
+    }
 }
 
 #[derive(Debug)]
@@ -323,6 +341,8 @@ struct EditInput<'a> {
     hunk: &'a Hunk,
     kind: Kind,
     lines: Option<&'a LineSelection>,
+    /// The undo history label ("Stage hunk 3").
+    label: String,
 }
 
 /// The side an edit overwrites, captured so Undo can restore it.
@@ -353,6 +373,7 @@ fn edit(input: EditInput<'_>) -> Undo {
         hunk,
         kind,
         lines,
+        label,
     } = input;
     let index = kind != Kind::Discard;
     let before = before_version(source, doc, kind);
@@ -410,6 +431,7 @@ fn edit(input: EditInput<'_>) -> Undo {
         index,
         before,
         after,
+        label,
     }
 }
 

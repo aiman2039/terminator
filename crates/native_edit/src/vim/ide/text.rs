@@ -1,20 +1,20 @@
 //! Stateless text scans for IDE editing: bracket pairs, selection growth
 //! candidates, and indentation.
 
+use super::super::motion::delims::PAIRS;
+
 pub(super) struct IdeText;
 
 impl IdeText {
     pub fn closer_for(open: char) -> Option<char> {
-        match open {
-            '(' => Some(')'),
-            '[' => Some(']'),
-            '{' => Some('}'),
-            _ => None,
-        }
+        PAIRS
+            .iter()
+            .find(|(o, _)| *o == open)
+            .map(|(_, close)| *close)
     }
 
     pub fn is_closer(c: char) -> bool {
-        matches!(c, ')' | ']' | '}')
+        PAIRS.iter().any(|(_, close)| *close == c)
     }
 
     /// A pair may open before end of line, whitespace, a closer, or a

@@ -19,87 +19,167 @@ pub(crate) fn word_class(c: char) -> WordClass {
     }
 }
 
-pub(crate) fn word_forward(text: &[char], mut i: usize, count: usize) -> usize {
-    for _ in 0..count {
-        if i >= text.len() {
-            break;
+/// Word class under `big` (WORD) rules: only blanks separate WORDs.
+pub(crate) fn class_of(c: char, big: bool) -> WordClass {
+    if big {
+        if c.is_whitespace() {
+            WordClass::Blank
+        } else {
+            WordClass::Word
         }
-        let Some(&ch) = text.get(i) else {
-            break;
-        };
-        let cls = word_class(ch);
-        if cls != WordClass::Blank {
-            while text.get(i).is_some_and(|ch| word_class(*ch) == cls) {
-                i = i.checked_add(1).unwrap_or(text.len());
-            }
-        }
-        while text
-            .get(i)
-            .is_some_and(|ch| word_class(*ch) == WordClass::Blank)
-        {
-            i = i.checked_add(1).unwrap_or(text.len());
-        }
+    } else {
+        word_class(c)
     }
-    i.min(text.len())
 }
 
-pub(crate) fn word_backward(text: &[char], mut i: usize, count: usize) -> usize {
+/// Random access to buffer chars by char index (newlines included).
+pub(crate) trait CharSource {
+    fn at(&mut self, i: usize) -> Option<char>;
+}
+
+impl CharSource for &[char] {
+    fn at(&mut self, i: usize) -> Option<char> {
+        self.get(i).copied()
+    }
+}
+
+fn is_blank<S: CharSource>(s: &mut S, i: usize, big: bool) -> bool {
+    s.at(i).is_none_or(|c| class_of(c, big) == WordClass::Blank)
+}
+
+/// `i` is the newline of an empty line: vim stops `w`/`b`/`ge` there.
+fn empty_line_at<S: CharSource>(s: &mut S, i: usize) -> bool {
+    s.at(i) == Some('\n') && i.checked_sub(1).is_none_or(|prev| s.at(prev) == Some('\n'))
+}
+
+/// `w` / `W`: start of the `count`th next word; empty lines are words.
+pub(crate) fn word_forward<S: CharSource>(
+    s: &mut S,
+    mut i: usize,
+    count: usize,
+    big: bool,
+) -> usize {
     for _ in 0..count {
-        if i == 0 {
-            break;
+        let Some(ch) = s.at(i) else { break };
+        let cls = class_of(ch, big);
+        if cls != WordClass::Blank {
+            while s.at(i).is_some_and(|c| class_of(c, big) == cls) {
+                i = i.saturating_add(1);
+            }
         }
-        let mut j = i.saturating_sub(1);
-        while j > 0
-            && text
-                .get(j)
-                .is_some_and(|ch| word_class(*ch) == WordClass::Blank)
-        {
+        while let Some(c) = s.at(i) {
+            if c == '\n' {
+                i = i.saturating_add(1);
+                if s.at(i) == Some('\n') {
+                    break;
+                }
+            } else if class_of(c, big) == WordClass::Blank {
+                i = i.saturating_add(1);
+            } else {
+                break;
+            }
+        }
+    }
+    i
+}
+
+/// `b` / `B`: start of the `count`th previous word; empty lines are words.
+pub(crate) fn word_backward<S: CharSource>(
+    s: &mut S,
+    mut i: usize,
+    count: usize,
+    big: bool,
+) -> usize {
+    for _ in 0..count {
+        let Some(mut j) = i.checked_sub(1) else { break };
+        while !empty_line_at(s, j) && is_blank(s, j, big) && j > 0 {
             j = j.saturating_sub(1);
         }
-        let cls = word_class(text.get(j).copied().unwrap_or(' '));
-        while j > 0
-            && j.checked_sub(1)
-                .and_then(|prev| text.get(prev).copied())
-                .is_some_and(|ch| word_class(ch) == cls)
+        if empty_line_at(s, j) || is_blank(s, j, big) {
+            i = j;
+            continue;
+        }
+        let cls = s.at(j).map_or(WordClass::Blank, |c| class_of(c, big));
+        while let Some(prev) = j.checked_sub(1)
+            && s.at(prev).is_some_and(|c| class_of(c, big) == cls)
         {
-            j = j.saturating_sub(1);
+            j = prev;
         }
         i = j;
     }
     i
 }
 
-pub(crate) fn word_end(text: &[char], mut i: usize, count: usize) -> usize {
+/// `e` / `E`: end of the `count`th next word (empty lines are skipped).
+pub(crate) fn word_end<S: CharSource>(s: &mut S, mut i: usize, count: usize, big: bool) -> usize {
     for _ in 0..count {
-        if text.is_empty() {
-            break;
-        }
-        i = i
-            .checked_add(1)
-            .unwrap_or(i)
-            .min(text.len().saturating_sub(1));
-        while text
-            .get(i)
-            .is_some_and(|ch| word_class(*ch) == WordClass::Blank)
+        let mut j = i.saturating_add(1);
+        while s
+            .at(j)
+            .is_some_and(|c| class_of(c, big) == WordClass::Blank)
         {
-            i = i.checked_add(1).unwrap_or(text.len());
+            j = j.saturating_add(1);
         }
-        if i >= text.len() {
-            break;
+        let Some(ch) = s.at(j) else { break };
+        let cls = class_of(ch, big);
+        while s
+            .at(j.saturating_add(1))
+            .is_some_and(|c| class_of(c, big) == cls)
+        {
+            j = j.saturating_add(1);
         }
-        let Some(ch) = text.get(i).copied() else {
+        i = j;
+    }
+    i
+}
+
+/// `ge` / `gE`: end of the `count`th previous word.
+pub(crate) fn word_end_back<S: CharSource>(
+    s: &mut S,
+    mut i: usize,
+    count: usize,
+    big: bool,
+) -> usize {
+    for _ in 0..count {
+        let cls = s.at(i).map_or(WordClass::Blank, |c| class_of(c, big));
+        let mut j = i;
+        if cls != WordClass::Blank {
+            while let Some(prev) = j.checked_sub(1)
+                && s.at(prev).is_some_and(|c| class_of(c, big) == cls)
+            {
+                j = prev;
+            }
+        }
+        let Some(mut k) = j.checked_sub(1) else {
+            i = 0;
             break;
         };
-        let cls = word_class(ch);
-        while i
-            .checked_add(1)
-            .and_then(|next| text.get(next).copied())
-            .is_some_and(|ch| word_class(ch) == cls)
+        while !empty_line_at(s, k) && is_blank(s, k, big) && k > 0 {
+            k = k.saturating_sub(1);
+        }
+        i = k;
+    }
+    i
+}
+
+/// `cw` on a word: through the end of the current word (even on its
+/// last char), then `count - 1` more word ends.
+pub(crate) fn change_word_end<S: CharSource>(
+    s: &mut S,
+    mut i: usize,
+    count: usize,
+    big: bool,
+) -> usize {
+    if let Some(ch) = s.at(i) {
+        let cls = class_of(ch, big);
+        while s
+            .at(i.saturating_add(1))
+            .is_some_and(|c| class_of(c, big) == cls)
         {
-            i = i.checked_add(1).unwrap_or(i);
+            i = i.saturating_add(1);
         }
     }
-    i.min(text.len().saturating_sub(1))
+    word_end(s, i, count.saturating_sub(1), big)
 }
 
 // --- cursor plumbing ---

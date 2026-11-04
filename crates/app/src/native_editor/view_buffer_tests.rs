@@ -1,4 +1,5 @@
-use super::file_io::NativeFileIo;
+use super::file_io::{Fingerprint, NativeFileIo, SavedFile};
+use super::test_support::{app, open, save};
 use super::*;
 use std::time::SystemTime;
 use terminator_native_edit::vim::Key as VimKey;
@@ -8,29 +9,16 @@ fn crlf_files_edit_as_lf_and_save_as_crlf() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("win.txt");
     std::fs::write(&path, "a\r\nb\r\n").unwrap();
-    let ctx = egui::Context::default();
-    let app = App::with_context(&ctx, Paths::at(dir.path().join("state")));
-    let mut native = NativeDoc::new(path.clone(), false);
-    native.ensure_loading(&app.services);
-    let start = std::time::Instant::now();
-    while native.doc.is_none() {
-        assert!(start.elapsed() < Duration::from_secs(10), "load");
-        native.poll();
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(native.crlf);
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    assert_eq!(native.line_ending, LineEnding::Crlf);
     assert_eq!(native.doc.as_ref().unwrap().text(), "a\nb\n");
     assert!(!native.dirty());
     if let Some(buffer) = native.doc.as_mut() {
         let end = buffer.len_chars();
         buffer.insert(end, "c\n");
     }
-    native.start_save(&app.services);
-    while native.saving {
-        assert!(start.elapsed() < Duration::from_secs(10), "save");
-        native.poll();
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    save(&mut native, &app);
     assert_eq!(native.save_error, None);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\r\nb\r\nc\r\n");
     assert!(!native.dirty());
@@ -38,33 +26,21 @@ fn crlf_files_edit_as_lf_and_save_as_crlf() {
 
 #[test]
 fn one_crlf_line_does_not_convert_the_whole_file() {
-    assert!(NativeFileIo::all_crlf("a\r\nb\r\n"));
-    assert!(!NativeFileIo::all_crlf("a\nb\r\nc\n"));
-    assert!(!NativeFileIo::all_crlf("a\r\nb\rc\r\n"));
-    assert!(!NativeFileIo::all_crlf("plain"));
+    let detect = super::file_io::LineEnding::detect;
+    assert_eq!(detect("a\r\nb\r\n"), LineEnding::Crlf);
+    assert_ne!(detect("a\nb\r\nc\n"), LineEnding::Crlf);
+    assert_ne!(detect("a\r\nb\rc\r\n"), LineEnding::Crlf);
+    assert_ne!(detect("plain"), LineEnding::Crlf);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mixed.txt");
     std::fs::write(&path, "a\nb\r\nc\n").unwrap();
-    let ctx = egui::Context::default();
-    let app = App::with_context(&ctx, Paths::at(dir.path().join("state")));
-    let mut native = NativeDoc::new(path.clone(), false);
-    native.ensure_loading(&app.services);
-    let start = std::time::Instant::now();
-    while native.doc.is_none() {
-        assert!(start.elapsed() < Duration::from_secs(10), "load");
-        native.poll();
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(!native.crlf);
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    assert_ne!(native.line_ending, LineEnding::Crlf);
     if let Some(buffer) = native.doc.as_mut() {
         buffer.insert(0, "x");
     }
-    native.start_save(&app.services);
-    while native.saving {
-        assert!(start.elapsed() < Duration::from_secs(10), "save");
-        native.poll();
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    save(&mut native, &app);
     assert_eq!(native.save_error, None);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "xa\nb\r\nc\n");
 }
@@ -107,8 +83,9 @@ fn split_views_keep_their_own_caret_and_the_focused_one_rests_live() {
 fn undoing_back_to_the_saved_text_is_clean() {
     let mut native = NativeDoc::new(PathBuf::from("/tmp/clean.txt"), true);
     let mut buffer = Doc::new("saved");
-    native.saved_hash = NativeFileIo::text_hash("saved");
+    native.saved_hash = terminator_native_edit::doc::hash_text("saved");
     native.saved_revision = buffer.revision();
+    native.saved_len = buffer.len_chars();
     native.engine.press_key(&mut buffer, VimKey::Char('i'));
     native.engine.type_text(&mut buffer, "x");
     native.engine.press_key(&mut buffer, VimKey::Escape);
@@ -227,8 +204,12 @@ fn an_edit_during_a_save_stays_unsaved_when_the_write_lands() {
     // Typing while the write runs.
     native.doc.as_mut().expect("buffer").insert(3, " more");
     assert!(native.dirty());
-    tx.send(Ok(Some(SystemTime::now())))
-        .expect("deliver the save result");
+    tx.send(Ok(SavedFile {
+        mtime: Some(SystemTime::now()),
+        fingerprint: Fingerprint::of(b""),
+        text_hash: 0,
+    }))
+    .expect("deliver the save result");
     native.poll();
     assert!(!native.saving);
     assert!(
@@ -242,8 +223,12 @@ fn an_edit_during_a_save_stays_unsaved_when_the_write_lands() {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     native.save_rx = Some(rx);
     native.saving = true;
-    tx.send(Ok(Some(SystemTime::now())))
-        .expect("deliver the save result");
+    tx.send(Ok(SavedFile {
+        mtime: Some(SystemTime::now()),
+        fingerprint: Fingerprint::of(b""),
+        text_hash: 0,
+    }))
+    .expect("deliver the save result");
     native.poll();
     assert!(!native.dirty(), "the written revision is clean again");
 }
@@ -262,7 +247,7 @@ fn disk_mtime_reads_are_throttled_and_off_thread() {
     native.mtime_rx = Some(rx);
     assert!(!native.mtime_probe_due());
     let fresh = SystemTime::UNIX_EPOCH + Duration::from_secs(5);
-    tx.send(Some(fresh)).unwrap();
+    tx.send(Ok(Some(fresh))).unwrap();
     native.poll_mtime();
     assert!(native.mtime_rx.is_none());
     assert_eq!(native.mtime_check.map(|(_, m)| m), Some(Some(fresh)));

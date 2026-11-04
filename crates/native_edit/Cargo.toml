@@ -11,6 +11,7 @@ egui = { version = "0.37", default-features = false }
 ignore = "0.4"
 lsp-types = "0.97"
 nucleo = "0.5"
+regex = "1"
 ropey = { version = "1.6", default-features = false, features = ["cr_lines", "simd"] }
 serde_json = "1"
 syntect = "5"
@@ -20,6 +21,7 @@ tree-sitter-javascript = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 two-face = "0.5"
+unicode-segmentation = "1"
 unicode-width = "0.2"
 url = "2"
 

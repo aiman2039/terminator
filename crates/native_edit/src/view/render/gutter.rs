@@ -211,7 +211,7 @@ impl<B: Buffer> SourceView<'_, B> {
                 Sense::click(),
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(&annotation.hover);
+            .on_hover_text(&*annotation.hover);
         if hit.clicked() {
             self.out.annotation_clicked = Some(line);
         }

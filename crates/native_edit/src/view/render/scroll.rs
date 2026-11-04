@@ -94,30 +94,55 @@ impl<B: Buffer> SourceView<'_, B> {
         }
     }
 
-    /// Error stripe: every problem as a tick on the right edge, placed by
-    /// its line's share of the file (`IntelliJ`'s scrollbar marks).
+    /// Overview ruler on the right edge, each mark placed by its line's
+    /// share of the file (`IntelliJ`'s scrollbar marks): VCS changes in a
+    /// left lane, find matches in the middle, problems on the right.
     pub(super) fn paint_squiggle_rail(&self, ui: &egui::Ui, rail: Rect) {
-        if self.options.squiggles.is_empty() {
-            return;
-        }
         let lines = self.doc.line_count().max(1);
         let painter = ui.painter().with_clip_rect(rail);
+        let y_of = |line: usize| rail.top() + rail.height() * line as f32 / lines as f32;
+        let tick = |x: f32, y: f32, height: f32, color: egui::Color32| {
+            painter.rect_filled(
+                Rect::from_min_size(Pos2::new(x, y), Vec2::new(3.0, height.max(2.0))),
+                0.0,
+                color,
+            );
+        };
+        let [added, modified, deleted] = self.options.change_colors;
+        for mark in self.options.change_marks.iter() {
+            let color = match mark.kind {
+                super::ChangeKind::Added => added,
+                super::ChangeKind::Modified => modified,
+                super::ChangeKind::Deleted => deleted,
+            };
+            let (top, bottom) = (y_of(mark.start), y_of(mark.end));
+            tick(rail.right() - 12.0, top, bottom - top, color);
+        }
+        let match_color = ui.visuals().selection.bg_fill;
         let mut last_y = f32::NEG_INFINITY;
-        for squiggle in &self.options.squiggles {
-            let y = rail.top() + rail.height() * squiggle.line as f32 / lines as f32;
-            if y - last_y < 2.0 {
+        for &(line, _, _) in self.options.find_matches.iter() {
+            let y = y_of(line);
+            if y - last_y >= 2.0 {
+                last_y = y;
+                tick(rail.right() - 8.0, y, 2.0, match_color);
+            }
+        }
+        let mut last_y = f32::NEG_INFINITY;
+        for squiggle in self.options.squiggles.iter() {
+            let y = y_of(squiggle.line);
+            if y - last_y < 2.0
+                || !matches!(
+                    squiggle.severity,
+                    crate::lsp::Severity::Error | crate::lsp::Severity::Warning
+                )
+            {
                 continue;
             }
             last_y = y;
-            if !matches!(
-                squiggle.severity,
-                crate::lsp::Severity::Error | crate::lsp::Severity::Warning
-            ) {
-                continue;
-            }
-            painter.rect_filled(
-                Rect::from_min_size(Pos2::new(rail.right() - 4.0, y), Vec2::new(4.0, 2.0)),
-                0.0,
+            tick(
+                rail.right() - 4.0,
+                y,
+                2.0,
                 RenderHelpers::severity_color(ui.visuals(), squiggle.severity),
             );
         }

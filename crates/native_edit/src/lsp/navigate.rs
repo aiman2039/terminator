@@ -132,14 +132,19 @@ pub fn parse_document_highlights(result: &Value) -> Vec<Range> {
 /// `textDocument/rangeFormatting` for one range (4-space indents, like
 /// [`formatting`]).
 #[must_use]
-pub fn range_formatting(id: &RequestId, uri: &Url, range: Range) -> Vec<u8> {
+pub fn range_formatting(
+    id: &RequestId,
+    uri: &Url,
+    range: Range,
+    options: FormatOptions,
+) -> Vec<u8> {
     request(
         id,
         "textDocument/rangeFormatting",
         serde_json::json!({
             "textDocument": { "uri": uri.as_str() },
             "range": { "start": position_json(range.start), "end": position_json(range.end) },
-            "options": { "tabSize": 4, "insertSpaces": true },
+            "options": options.json(),
         }),
     )
 }
@@ -147,7 +152,12 @@ pub fn range_formatting(id: &RequestId, uri: &Url, range: Range) -> Vec<u8> {
 /// `textDocument/onTypeFormatting` after `ch` was typed; `position` is
 /// the caret just after it.
 #[must_use]
-pub fn on_type_formatting(id: &RequestId, uri: &Url, position: Position, ch: char) -> Vec<u8> {
+pub fn on_type_formatting(
+    id: &RequestId,
+    uri: &Url,
+    (position, ch): (Position, char),
+    options: FormatOptions,
+) -> Vec<u8> {
     request(
         id,
         "textDocument/onTypeFormatting",
@@ -155,7 +165,7 @@ pub fn on_type_formatting(id: &RequestId, uri: &Url, position: Position, ch: cha
             "textDocument": { "uri": uri.as_str() },
             "position": position_json(position),
             "ch": ch.to_string(),
-            "options": { "tabSize": 4, "insertSpaces": true },
+            "options": options.json(),
         }),
     )
 }

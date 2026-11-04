@@ -221,7 +221,7 @@ fn action_input(action: &FixtureAction) -> ActionInput {
             modifier,
         ))])
     } else if let Some(key) = &action.key {
-        ActionInput::Events(key_event(action, key).into_iter().collect())
+        ActionInput::Events(key_events(action, key))
     } else if let Some(text) = &action.input {
         ActionInput::Events(vec![egui::Event::Text(text.clone())])
     } else if let Some(text) = &action.text {
@@ -275,8 +275,12 @@ fn named_modifiers(modifier: &str) -> egui::Modifiers {
     }
 }
 
-fn key_event(action: &FixtureAction, key: &str) -> Option<egui::Event> {
-    let key = egui::Key::from_name(key)?;
+/// A real keyboard sends the key press and, for a printable key, its
+/// typed text too.
+fn key_events(action: &FixtureAction, name: &str) -> Vec<egui::Event> {
+    let Some(key) = egui::Key::from_name(name) else {
+        return Vec::new();
+    };
     let modifiers = egui::Modifiers {
         ctrl: action.ctrl,
         command: action.command || (action.ctrl && !cfg!(target_os = "macos")),
@@ -284,13 +288,7 @@ fn key_event(action: &FixtureAction, key: &str) -> Option<egui::Event> {
         shift: action.shift,
         ..Default::default()
     };
-    Some(egui::Event::Key {
-        key,
-        physical_key: None,
-        pressed: true,
-        repeat: false,
-        modifiers,
-    })
+    terminator_native_edit::view::keyboard_events(key, modifiers)
 }
 
 /// Select all, then type `text` over the selection.

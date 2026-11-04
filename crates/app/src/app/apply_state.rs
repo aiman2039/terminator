@@ -19,6 +19,15 @@ impl App {
         if observation_is_stale(&self.state, &state) {
             return;
         }
+        self.project_names.base = state
+            .projects
+            .iter()
+            .map(|p| (p.id.clone(), p.name.clone()))
+            .collect();
+        crate::sidebar_ui::apply_project_names(
+            &mut state.projects,
+            &self.preferences.project_styles,
+        );
         // Failed owners can only supply an older on-disk snapshot. Keep their
         // last observed records while publishing the new unavailability status.
         self.merge_unavailable_generations(&mut state);

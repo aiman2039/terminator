@@ -147,7 +147,13 @@ impl App {
             self.info = Some("Select a git project before creating a worktree.".into());
             return;
         };
-        let branch = default_branch(&project.name);
+        // The daemon name, not a GUI display rename.
+        let name = self
+            .project_names
+            .base
+            .get(&project.id)
+            .unwrap_or(&project.name);
+        let branch = default_branch(name);
         let dest = default_dest(&project.path, &branch);
         let draft = WorktreeDraft {
             source: project.id.clone(),

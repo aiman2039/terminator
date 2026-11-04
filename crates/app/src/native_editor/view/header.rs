@@ -35,6 +35,7 @@ impl ViewPass<'_> {
         self.header_references(ui);
         self.header_reload(ui);
         self.header_save(ui);
+        self.header_format(ui);
         self.header_status(ui);
         let heading_jump = self.header_mode(ui);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -212,10 +213,8 @@ impl ViewPass<'_> {
             .inner
             .on_disabled_hover_text("Unsaved changes are kept");
         if reload.clicked() {
-            self.doc.load_error = None;
-            self.doc.loading = false;
-            self.doc.load_rx = None;
-            self.doc.doc = None;
+            // Applied as one undoable edit: undo history survives a reload.
+            self.doc.request_reload(false);
             ui.memory_mut(|memory| memory.request_focus(self.file_focus()));
         }
     }

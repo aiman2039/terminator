@@ -230,7 +230,9 @@ impl LspManager {
     /// Close one spell document and drop its findings.
     pub(super) fn close_spell(&mut self, path: &Path) {
         self.close_doc(Slot::Spell, path);
-        self.spell_diagnostics.remove(path);
+        if self.spell_diagnostics.remove(path).is_some() {
+            self.bump_diagnostics();
+        }
     }
 
     /// Untrack one slot's document, `didClose` it when it was open.
@@ -250,7 +252,9 @@ impl LspManager {
 
     pub(super) fn close_path(&mut self, path: &Path) {
         self.close_doc(Slot::Main, path);
-        self.diagnostics.remove(path);
+        if self.diagnostics.remove(path).is_some() {
+            self.bump_diagnostics();
+        }
         let had_symbols = self.symbols.remove(path).is_some();
         self.symbols_rev.remove(path);
         self.symbols_retry.remove(path);
@@ -281,6 +285,7 @@ impl LspManager {
     /// Forget closed tabs: `didClose` open buffers, drop their state,
     /// and shut down servers nobody needs anymore.
     pub fn prune(&mut self, live: &std::collections::HashSet<PathBuf>) {
+        self.format_options.retain(|path, _| live.contains(path));
         for slot in [Slot::Main, Slot::Spell] {
             let gone: Vec<PathBuf> = self
                 .docs_of(slot)

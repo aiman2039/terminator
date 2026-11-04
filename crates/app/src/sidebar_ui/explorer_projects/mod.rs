@@ -1,5 +1,8 @@
 mod list;
+mod style;
 mod tab_tree;
+
+pub(crate) use style::{ProjectNames, apply_project_names};
 
 use super::super::agent_presence::attention_status_icon;
 use super::attention::state_color;

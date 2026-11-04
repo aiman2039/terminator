@@ -181,8 +181,9 @@ pub(super) mod tests {
         keys(&mut eng, &mut doc, "lj");
         keys(&mut eng, &mut doc, "y");
         keys(&mut eng, &mut doc, "ll");
+        // Vim parity: blockwise `p` pastes after the cursor column.
         keys(&mut eng, &mut doc, "p");
-        assert_eq!(doc.text().as_str(), "ababcd\nefefgh\n");
+        assert_eq!(doc.text().as_str(), "abcabd\nefgefh\n");
     }
 
     #[test]
@@ -554,14 +555,15 @@ pub(super) mod tests {
         assert_eq!(eng.mode(), Mode::Command);
         eng.press_key(&mut doc, Key::Enter);
         assert_eq!(eng.mode(), Mode::Normal);
-        assert_eq!(eng.cursor(), Cursor { line: 0, col: 0 });
+        // Vim starts after the cursor: the match under it is skipped.
+        assert_eq!(eng.cursor(), Cursor { line: 1, col: 4 });
         assert!(eng.take_scroll_request());
         keys(&mut eng, &mut doc, "n");
-        assert_eq!(eng.cursor(), Cursor { line: 1, col: 4 });
-        keys(&mut eng, &mut doc, "n");
         assert_eq!(eng.cursor(), Cursor { line: 0, col: 0 });
-        keys(&mut eng, &mut doc, "N");
+        keys(&mut eng, &mut doc, "n");
         assert_eq!(eng.cursor(), Cursor { line: 1, col: 4 });
+        keys(&mut eng, &mut doc, "N");
+        assert_eq!(eng.cursor(), Cursor { line: 0, col: 0 });
     }
 
     #[test]
@@ -588,9 +590,9 @@ pub(super) mod tests {
         let (mut eng, mut doc) = engine("foo foo\n");
         keys(&mut eng, &mut doc, "/foo");
         eng.press_key(&mut doc, Key::Enter);
-        assert_eq!(eng.cursor(), Cursor { line: 0, col: 0 });
-        keys(&mut eng, &mut doc, "n");
         assert_eq!(eng.cursor(), Cursor { line: 0, col: 4 });
+        keys(&mut eng, &mut doc, "n");
+        assert_eq!(eng.cursor(), Cursor { line: 0, col: 0 });
         keys(&mut eng, &mut doc, "/");
         eng.press_key(&mut doc, Key::Enter);
         assert_eq!(eng.cursor(), Cursor { line: 0, col: 4 });
@@ -627,6 +629,16 @@ pub(super) mod tests {
         );
         assert_eq!(parse_vimrc("set number\n").wrap, None);
         assert_eq!(parse_vimrc("").wrap, None);
+    }
+
+    #[test]
+    fn vimrc_indent_options_give_format_options_later_lines_win() {
+        let tabs = parse_vimrc("set noexpandtab\nset shiftwidth=8\n").format_options();
+        assert_eq!((tabs.tab_size, tabs.insert_spaces), (8, false));
+        let ts = parse_vimrc("set ts=2 et\nset sw=0\n").format_options();
+        assert_eq!((ts.tab_size, ts.insert_spaces), (2, true));
+        let none = parse_vimrc("set number\n").format_options();
+        assert_eq!((none.tab_size, none.insert_spaces), (4, true));
     }
 
     #[test]

@@ -275,6 +275,9 @@ pub struct LspManager {
     /// Spell findings per path. Editor underlines only: they stay out of
     /// the Problems panel, its counts, and the Explorer's red names.
     spell_diagnostics: HashMap<PathBuf, Vec<L::Diagnostic>>,
+    /// Bumped whenever `diagnostics` or `spell_diagnostics` change, so
+    /// views cache derived underlines without comparing diagnostics.
+    diagnostics_generation: u64,
     /// Settings → Check spelling.
     spell_enabled: bool,
     action_wait: Option<ActionWait>,
@@ -297,6 +300,8 @@ pub struct LspManager {
     symbols_rev: std::collections::HashMap<PathBuf, u64>,
     /// Last empty outline answer per path (indexing retry gate).
     symbols_retry: HashMap<PathBuf, Instant>,
+    /// Indentation each buffer formats with (`set_format_options`).
+    format_options: HashMap<PathBuf, L::FormatOptions>,
     /// Inlay hints per path, with the buffer revision they describe.
     inlay: HashMap<PathBuf, (u64, std::sync::Arc<[L::InlayHint]>)>,
     /// Last empty or failed hints answer per path (indexing retry gate).
@@ -339,6 +344,7 @@ impl LspManager {
             diagnostics: HashMap::new(),
             spell_docs: HashMap::new(),
             spell_diagnostics: HashMap::new(),
+            diagnostics_generation: 0,
             // Settings turn it on (default true) when the state loads.
             spell_enabled: false,
             action_wait: None,
@@ -357,6 +363,7 @@ impl LspManager {
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
             symbols_retry: HashMap::new(),
+            format_options: HashMap::new(),
             inlay: HashMap::new(),
             inlay_retry: HashMap::new(),
             workspace_symbol_query: String::new(),

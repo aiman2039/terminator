@@ -30,12 +30,7 @@ impl App {
             Ok(document) => {
                 let review = self.diff_reviews.entry(key.clone()).or_default();
                 review.context = document.context;
-                review.confirm_discard = None;
-                review.selected = document
-                    .hunks
-                    .len()
-                    .checked_sub(1)
-                    .map(|last| review.selected.unwrap_or(0).min(last));
+                review.reloaded(document.hunks.len());
                 self.diffs.insert(key, Ok(std::sync::Arc::new(document)));
             }
             Err(error) if self.diffs.get(&key).is_some_and(Result::is_ok) => {
@@ -51,7 +46,7 @@ impl App {
 
     pub(super) fn handle_diff_action_failed(&mut self, key: String, error: String) {
         let review = self.diff_reviews.entry(key).or_default();
-        review.busy = false;
+        review.action_finished();
         review.saving_edits = false;
         review.message = Some(error);
     }
@@ -64,8 +59,7 @@ impl App {
     ) {
         let key = tab.key();
         let review = self.diff_reviews.entry(key.clone()).or_default();
-        review.busy = false;
-        review.confirm_discard = None;
+        review.action_finished();
         match result {
             Ok(outcome) => {
                 if review.saving_edits {
@@ -74,6 +68,11 @@ impl App {
                 if undoing {
                     review.undo.pop();
                 }
+                // A discard rewrote the working tree: offer Undo at once.
+                review.offer_undo = outcome
+                    .undo
+                    .as_ref()
+                    .is_some_and(|undo| undo.worktree() && !review.saving_edits);
                 if let Some(undo) = outcome.undo {
                     if review.undo.len() == DIFF_UNDO_LIMIT {
                         review.undo.remove(0);
@@ -82,7 +81,10 @@ impl App {
                 }
                 review.message = Some(outcome.message);
             }
-            Err(error) => review.message = Some(error),
+            Err(error) => {
+                review.offer_undo = false;
+                review.message = Some(error);
+            }
         }
         review.saving_edits = false;
         if let Tab::Diff { cwd, path, .. } = tab {

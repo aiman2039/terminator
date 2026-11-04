@@ -1,7 +1,7 @@
 //! Settings → Editor: native editor font size, line spacing, caret
 //! blink, rainbow brackets and the JetBrains keymap. Saved with the appearance in `config.toml`.
 use crate::*;
-use terminator_core::editor_prefs::{FONT_SIZE, LINE_SPACING};
+use terminator_core::editor_prefs::{AUTOSAVE_DELAY_MS, Autosave, FONT_SIZE, LINE_SPACING};
 
 impl App {
     pub(super) fn editor_settings(&mut self, ui: &mut egui::Ui) {
@@ -79,6 +79,55 @@ impl App {
                 },
                 add_control: |ui| {
                     ui.checkbox(&mut prefs.editor_jetbrains_keys, "JetBrains keys");
+                },
+            });
+        }
+        self.editor_save_settings(ui);
+    }
+
+    /// Error lens and autosave rows.
+    fn editor_save_settings(&mut self, ui: &mut egui::Ui) {
+        let show = [
+            self.field_visible("Problems", "error lens inline diagnostics"),
+            self.field_visible("Autosave", "auto save focus delay"),
+        ];
+        let prefs = &mut self.theme_draft.editor;
+        if show[0] {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Problems",
+                description: "Show each line's worst problem after its text.",
+                add_control: |ui| {
+                    ui.checkbox(&mut prefs.editor_error_lens, "Inline problems");
+                },
+            });
+        }
+        if show[1] {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Autosave",
+                description: "Save native editor files on their own. A file that \
+                              changed on disk is never saved automatically.",
+                add_control: |ui| {
+                    settings_controls::segmented(
+                        ui,
+                        &mut prefs.editor_autosave,
+                        &[
+                            ("Off", Autosave::Off),
+                            ("On focus loss", Autosave::FocusLoss),
+                            ("After delay", Autosave::Delay),
+                        ],
+                    );
+                    if prefs.editor_autosave == Autosave::Delay {
+                        ui.add(
+                            egui::Slider::new(
+                                &mut prefs.editor_autosave_delay_ms,
+                                AUTOSAVE_DELAY_MS,
+                            )
+                            .logarithmic(true)
+                            .suffix(" ms"),
+                        );
+                    }
                 },
             });
         }

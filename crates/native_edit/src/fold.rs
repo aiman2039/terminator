@@ -18,6 +18,9 @@ pub struct Folds {
     lines: usize,
     /// Bumped on every change, so row layouts know to rebuild.
     generation: u64,
+    /// Lines hidden by folds, as merged `(first, last)` spans sorted by
+    /// first line (the folded region's own first line stays visible).
+    hidden_spans: Vec<(usize, usize)>,
 }
 
 impl Folds {
@@ -25,6 +28,12 @@ impl Folds {
     /// follows lines added or removed above or inside it; folds whose
     /// region cannot be found again are dropped.
     pub fn ensure<B: Buffer>(&mut self, doc: &B, language: Language) {
+        self.ensure_enabled(doc, language, true);
+    }
+
+    /// [`Folds::ensure`]; `enabled == false` (large-file mode) finds no
+    /// regions at all and skips the scan.
+    pub fn ensure_enabled<B: Buffer>(&mut self, doc: &B, language: Language, enabled: bool) {
         if self.revision == Some(doc.revision()) {
             return;
         }
@@ -32,7 +41,11 @@ impl Folds {
         let lines = doc.line_count();
         let delta = lines.cast_signed().saturating_sub(self.lines.cast_signed());
         self.lines = lines;
-        let ranges = fold_ranges(doc, language);
+        let ranges = if enabled {
+            fold_ranges(doc, language)
+        } else {
+            Vec::new()
+        };
         let folded: BTreeSet<usize> = self
             .folded
             .iter()
@@ -48,8 +61,34 @@ impl Folds {
         }
     }
 
+    /// Record a change: rebuild the hidden spans once, so per-line
+    /// lookups stay a binary search instead of a scan over every fold.
     fn bump(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for start in &self.folded {
+            let Some((first, last)) = self.region_at(*start) else {
+                continue;
+            };
+            match spans.last_mut() {
+                Some((_, end)) if first <= *end => *end = (*end).max(last),
+                _ => spans.push((first, last)),
+            }
+        }
+        self.hidden_spans = spans;
+    }
+
+    /// The merged hidden span whose first line is the last one before
+    /// `line`, when it reaches `line`.
+    fn span_hiding(&self, line: usize) -> Option<(usize, usize)> {
+        let index = self
+            .hidden_spans
+            .partition_point(|(first, _)| *first < line)
+            .checked_sub(1)?;
+        self.hidden_spans
+            .get(index)
+            .copied()
+            .filter(|(_, last)| line <= *last)
     }
 
     #[must_use]
@@ -60,10 +99,11 @@ impl Folds {
     /// The foldable region starting on `line`.
     #[must_use]
     pub fn region_at(&self, line: usize) -> Option<(usize, usize)> {
-        self.ranges
-            .iter()
-            .copied()
-            .find(|(first, _)| *first == line)
+        let index = self
+            .ranges
+            .binary_search_by_key(&line, |(first, _)| *first)
+            .ok()?;
+        self.ranges.get(index).copied()
     }
 
     #[must_use]
@@ -74,10 +114,7 @@ impl Folds {
     /// Whether a folded region hides `line`.
     #[must_use]
     pub fn hidden(&self, line: usize) -> bool {
-        self.folded.iter().any(|start| {
-            self.region_at(*start)
-                .is_some_and(|(first, last)| first < line && line <= last)
-        })
+        self.span_hiding(line).is_some()
     }
 
     /// Regions whose first line is above `line` and that still enclose
@@ -97,10 +134,7 @@ impl Folds {
     /// First line of the folded region hiding `line`, if one does.
     #[must_use]
     pub fn hiding(&self, line: usize) -> Option<usize> {
-        self.folded.iter().copied().find(|start| {
-            self.region_at(*start)
-                .is_some_and(|(first, last)| first < line && line <= last)
-        })
+        self.span_hiding(line).map(|(first, _)| first)
     }
 
     pub fn toggle(&mut self, line: usize) {
@@ -204,35 +238,34 @@ impl Regions {
     }
 
     /// A line followed by deeper indented lines (blank lines included).
+    /// One pass with a stack of open blocks: a line closes every open
+    /// block at its depth or deeper, each ending on the last non-blank
+    /// line before it.
     fn indent_regions<B: Buffer>(&mut self, doc: &B) {
+        let mut open: Vec<(usize, usize)> = Vec::new();
+        let mut last_text = 0usize;
         for line in 0..doc.line_count() {
-            let Some(depth) = Self::indent(doc, line) else {
+            let Some(depth) = Self::indent(&doc.line_text(line)) else {
                 continue;
             };
-            self.record(line, Self::indented_block_end(doc, line, depth));
+            while let Some(&(first, open_depth)) = open.last() {
+                if open_depth < depth {
+                    break;
+                }
+                open.pop();
+                self.record(first, last_text);
+            }
+            open.push((line, depth));
+            last_text = line;
+        }
+        for (first, _) in open {
+            self.record(first, last_text);
         }
     }
 
     /// Leading whitespace of a non-blank line.
-    fn indent<B: Buffer>(doc: &B, line: usize) -> Option<usize> {
-        let text = doc.line_text(line);
+    fn indent(text: &str) -> Option<usize> {
         (!text.trim().is_empty()).then(|| text.chars().take_while(|c| c.is_whitespace()).count())
-    }
-
-    /// Last line indented deeper than `depth` after `line`.
-    fn indented_block_end<B: Buffer>(doc: &B, line: usize, depth: usize) -> usize {
-        let lines = doc.line_count();
-        let mut last = line;
-        let mut next = line.saturating_add(1);
-        while next < lines {
-            match Self::indent(doc, next) {
-                Some(inner) if inner <= depth => break,
-                Some(_) => last = next,
-                None => {}
-            }
-            next = next.saturating_add(1);
-        }
-        last
     }
 
     /// Brackets opened on one line and closed on a later one.
@@ -332,86 +365,5 @@ impl BracketScan {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::doc::Doc;
-
-    #[test]
-    fn bracket_regions_span_lines_and_fold_hides_their_body() {
-        let doc = Doc::new("fn a() {\n    b(\n        1,\n    );\n}\nfn c() {}\n");
-        let mut folds = Folds::default();
-        folds.ensure(&doc, Language::Rust);
-        assert_eq!(folds.region_at(0), Some((0, 4)));
-        assert_eq!(folds.region_at(1), Some((1, 3)));
-        assert_eq!(folds.region_at(5), None);
-        folds.fold_at(2);
-        assert!(folds.is_folded(1));
-        assert!(folds.hidden(2) && folds.hidden(3) && !folds.hidden(1));
-        folds.fold_at(2);
-        assert!(folds.is_folded(0));
-        folds.unfold_at(2);
-        assert!(!folds.is_folded(0) && !folds.is_folded(1));
-        folds.fold_all();
-        assert!(folds.hidden(4));
-        folds.unfold_all();
-        assert!(!folds.hidden(4));
-    }
-
-    #[test]
-    fn fold_follows_lines_inserted_or_removed_above() {
-        let mut doc = Doc::new("fn a() {\n    x();\n}\nfn b() {\n    y();\n}\n");
-        let mut folds = Folds::default();
-        folds.ensure(&doc, Language::Rust);
-        folds.toggle(3);
-        assert!(folds.is_folded(3) && folds.hidden(4));
-        // Enter inside `fn a`, above the folded `fn b`.
-        let at = doc.char_at_line_col(1, 8);
-        doc.insert(at, "\n");
-        folds.ensure(&doc, Language::Rust);
-        assert!(folds.is_folded(4) && !folds.is_folded(3) && !folds.is_folded(0));
-        assert!(folds.hidden(5) && !folds.hidden(1));
-        // Removing the line again moves the fold back.
-        let start = doc.char_at_line_col(1, 8);
-        doc.delete(start..start + 1);
-        folds.ensure(&doc, Language::Rust);
-        assert!(folds.is_folded(3) && !folds.is_folded(0));
-    }
-
-    #[test]
-    fn enclosing_lists_open_blocks_outermost_first() {
-        let doc = Doc::new("impl S {\n    fn f() {\n        x();\n    }\n}\n");
-        let mut folds = Folds::default();
-        folds.ensure(&doc, Language::Rust);
-        assert_eq!(folds.enclosing(2), [(0, 4), (1, 3)]);
-        // A block's own first line is not "enclosed" by it.
-        assert_eq!(folds.enclosing(1), [(0, 4)]);
-        assert!(folds.enclosing(0).is_empty());
-    }
-
-    #[test]
-    fn brackets_in_strings_and_comments_do_not_make_regions() {
-        let doc = Doc::new("fn a() {\n    let s = \"{\";\n    // }\n    /* {\n    } */\n}\n");
-        assert_eq!(fold_ranges(&doc, Language::Rust), [(0, 5)]);
-    }
-
-    #[test]
-    fn indentation_regions_for_python() {
-        let doc = Doc::new("def f():\n    x = 1\n\n    return x\nprint(f())\n");
-        assert_eq!(fold_ranges(&doc, Language::Python), [(0, 3)]);
-    }
-
-    #[test]
-    fn folds_survive_edits_that_keep_their_region() {
-        let mut doc = Doc::new("if a {\n    b\n}\n");
-        let mut folds = Folds::default();
-        folds.ensure(&doc, Language::Rust);
-        folds.toggle(0);
-        doc.insert(doc.len_chars(), "x\n");
-        folds.ensure(&doc, Language::Rust);
-        assert!(folds.is_folded(0));
-        // Deleting the block's opener drops the fold with its region.
-        doc.delete(0..6);
-        folds.ensure(&doc, Language::Rust);
-        assert!(!folds.is_folded(0));
-    }
-}
+#[path = "fold_tests.rs"]
+mod tests;

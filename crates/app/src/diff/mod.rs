@@ -33,6 +33,7 @@ mod live_tests;
 mod load;
 mod moved;
 mod options;
+mod picks;
 pub(crate) mod review;
 #[cfg(test)]
 mod tests;
@@ -57,7 +58,7 @@ const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
 
 /// Wall-clock budget for one line diff; past it `similar` falls back to a
 /// coarser (still correct) diff instead of stalling on pathological input.
-const DIFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+pub(crate) const DIFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Theme the next diff build highlights with. The GUI mirrors its
 /// visuals here every frame; builds run on workers that have no `Ui`.
@@ -117,6 +118,28 @@ pub struct DiffLine {
     pub spans: Vec<DiffSpan>,
     /// Part of a block that moved to (or from) another place.
     pub moved: bool,
+    /// How the original line ended (the spans never hold the break).
+    pub end: LineEnd,
+}
+
+/// The line break of one original line, for end-of-line markers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct LineEnd {
+    /// The line ends in a carriage return (`\r\n` or a lone `\r`).
+    pub cr: bool,
+    /// The last line of its side has no final newline.
+    pub no_newline: bool,
+}
+
+impl LineEnd {
+    /// The ending of `raw`, one original line with its break.
+    pub(crate) fn of(raw: &str) -> Self {
+        let body = raw.strip_suffix('\n').unwrap_or(raw);
+        Self {
+            cr: body.ends_with('\r'),
+            no_newline: !raw.is_empty() && !raw.ends_with('\n'),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -165,6 +188,10 @@ pub(crate) const GAP_STEP: usize = 20;
 pub(crate) struct DiffView {
     pub context: usize,
     pub revealed: Vec<std::ops::Range<usize>>,
+    /// The left text `revealed` indexes, when it may differ from the text
+    /// the view is applied to (a refresh after staging); the ranges are
+    /// mapped through the change so they keep showing the same lines.
+    pub revealed_in: Option<std::sync::Arc<str>>,
     pub options: DiffOptions,
 }
 
@@ -210,6 +237,7 @@ impl DiffDocument {
             &DiffView {
                 context: self.context,
                 revealed,
+                revealed_in: None,
                 options: self.options,
             },
         ))
@@ -218,6 +246,18 @@ impl DiffDocument {
     /// The same two texts laid out again under `view`, keeping the labels,
     /// source, and read-only flag of this document.
     pub(crate) fn rebuild(&self, path: &Path, staged: bool, view: &DiffView) -> Self {
+        let mapped;
+        let view = match &view.revealed_in {
+            Some(base) if **base != *self.left_text => {
+                mapped = DiffView {
+                    revealed: review::map_revealed(base, &self.left_text, &view.revealed),
+                    revealed_in: None,
+                    ..view.clone()
+                };
+                &mapped
+            }
+            _ => view,
+        };
         let mut doc = build_with_options(BuildWithOptionsInput {
             path,
             left: &self.left_text,

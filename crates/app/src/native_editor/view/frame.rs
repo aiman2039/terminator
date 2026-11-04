@@ -27,6 +27,7 @@ impl App {
         // before the buffer borrow begins.
         let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
         let problems = self.lsp.editor_diagnostics(path);
+        let problems_generation = self.lsp.diagnostics_generation();
         let reference = self
             .selected_project()
             .and_then(|project| path.strip_prefix(&project.path).ok())
@@ -59,6 +60,7 @@ impl App {
             source_id,
             rename_applying,
             problems,
+            problems_generation,
             blame_offer,
             inlay_answer,
             remote_snapshot,
@@ -186,14 +188,11 @@ impl App {
         source_id
     }
 
-    /// Blame column for this frame (blank while a fresh blame runs).
-    fn native_view_annotations(&self, path: &Path) -> Option<Arc<Vec<Annotation>>> {
-        let blame_revision = self
-            .native_docs
-            .get(path)
-            .and_then(|doc| doc.doc.as_ref())
-            .map(Buffer::revision);
-        blame_revision.and_then(|revision| self.editor_blame_annotations(path, revision))
+    /// Blame column for this frame (the last answer, moved onto edited
+    /// lines, while a fresh blame runs).
+    fn native_view_annotations(&mut self, path: &Path) -> Option<Arc<Vec<Annotation>>> {
+        let buffer = self.native_docs.get(path)?.doc.as_ref()?;
+        Some(self.editor_blame.get_mut(path)?.column(buffer))
     }
 
     /// Take this file's popups out of the app for the buffer borrow.

@@ -162,6 +162,18 @@ pub(crate) async fn execute(input: ExecuteInput<'_>) -> Result<Outcome> {
     }
 }
 
+/// "Stage hunk 3", or "Discard 2 lines of hunk 3" for picked lines.
+pub(super) fn action_label(kind: Kind, number: usize, lines: Option<&LineSelection>) -> String {
+    match lines.filter(|picked| !picked.is_empty()) {
+        Some(picked) => format!(
+            "{} {} of hunk {number}",
+            kind.label(),
+            super::lines_label(picked.len(), "")
+        ),
+        None => format!("{} hunk {number}", kind.label()),
+    }
+}
+
 /// One hunk, or some of its lines, to stage, unstage or discard.
 struct HunkPick {
     hunk: usize,
@@ -227,6 +239,7 @@ impl Actions<'_> {
                 mode: before.mode,
             },
             before,
+            label: "Save edits".into(),
         };
         apply(self.service, &change, self.cancel).await?;
         Ok(Outcome {
@@ -257,6 +270,7 @@ impl Actions<'_> {
             "The file, HEAD, or index changed; refresh the diff before retrying",
         )
         .await?;
+        let number = hunk.saturating_add(1);
         let hunk = document
             .hunks
             .get(hunk)
@@ -267,19 +281,12 @@ impl Actions<'_> {
             hunk,
             kind,
             lines: lines.as_ref(),
+            label: action_label(kind, number, lines.as_ref()),
         });
         apply(self.service, &change, self.cancel).await?;
         Ok(Outcome {
+            message: format!("{} complete", change.label),
             undo: Some(change),
-            message: match &lines {
-                Some(picked) if !picked.is_empty() => format!(
-                    "{} complete for {} line{}",
-                    kind.label(),
-                    picked.len(),
-                    if picked.len() == 1 { "" } else { "s" }
-                ),
-                _ => format!("{} complete", kind.label()),
-            },
         })
     }
 
@@ -291,8 +298,8 @@ impl Actions<'_> {
         };
         apply(self.service, &reverse, self.cancel).await?;
         Ok(Outcome {
+            message: format!("Undo complete: {}", reverse.label),
             undo: None,
-            message: "Undo complete".into(),
         })
     }
 }

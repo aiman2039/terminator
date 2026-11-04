@@ -16,15 +16,21 @@ impl VimEngine {
         if !self.replaying {
             self.recording.clear();
         }
+        self.x.reg_sel = None;
     }
 
     /// Complete a Normal-mode change with no insert session (`x`, `dd`,
     /// `dw`, `p`): parse the recorded bits into the last change.
     pub(super) fn rec_commit(&mut self) {
         if !self.replaying {
-            self.last_change = Self::parse_repeat(&self.recording, None);
+            self.last_change = if self.x.keys_change {
+                Some(super::mode::Repeat::Keys(self.x.raw.clone()))
+            } else {
+                Self::parse_repeat(&self.recording, None)
+            };
             self.recording.clear();
         }
+        self.x.reg_sel = None;
     }
 
     /// Net typed text of the current recording: concatenated `Type` bits.

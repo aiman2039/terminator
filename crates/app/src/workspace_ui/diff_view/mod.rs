@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 mod body;
 mod files;
+mod keys;
 mod notice;
 mod options_menu;
 mod requests;
@@ -28,6 +29,8 @@ struct DiffFrame<'a> {
     count: usize,
     split: bool,
     focused: bool,
+    /// The diff is the active pane: plain letter keys act on it.
+    active: bool,
     is_md: bool,
     prev_file: Option<PathBuf>,
     next_file: Option<PathBuf>,
@@ -51,9 +54,30 @@ struct DiffPass {
     save_edits: bool,
     gap: Option<(usize, diff::GapPart)>,
     confirmed: Option<usize>,
+    stage_file: bool,
 }
 
 impl DiffPass {
+    /// Next or previous change; past the last (or first) change of this
+    /// file, continue into the next (or previous) changed file.
+    fn step_change(&mut self, frame: &DiffFrame<'_>, forward: bool) {
+        let count = frame.count;
+        let edge = if forward {
+            count.checked_sub(1)
+        } else {
+            Some(0)
+        };
+        if count == 0 || self.review.selected == edge {
+            self.navigate.clone_from(if forward {
+                &frame.next_file
+            } else {
+                &frame.prev_file
+            });
+        } else {
+            self.review.advance(forward, count);
+        }
+    }
+
     /// Line to open for the selected change, or the top of the file.
     fn selected_change_line(&self, doc: Option<&Arc<diff::DiffDocument>>) -> Option<u32> {
         self.review
@@ -100,14 +124,16 @@ impl App {
     /// expanded, and the compare options from the UI preferences.
     pub(crate) fn diff_view_for(&self, key: &str, context: Option<usize>) -> diff::DiffView {
         let review = self.diff_reviews.get(key);
+        let doc = self.diffs.get(key).and_then(|doc| doc.as_ref().ok());
+        let revealed = doc.map(|doc| doc.revealed.clone()).unwrap_or_default();
         diff::DiffView {
             context: context.unwrap_or_else(|| review.map_or(3, |review| review.context.max(3))),
-            revealed: self
-                .diffs
-                .get(key)
-                .and_then(|doc| doc.as_ref().ok())
-                .map(|doc| doc.revealed.clone())
-                .unwrap_or_default(),
+            // The ranges index this left text; a refresh maps them onto
+            // the new one (staging changes the index side).
+            revealed_in: doc
+                .filter(|_| !revealed.is_empty())
+                .map(|doc| std::sync::Arc::from(doc.left_text.as_str())),
+            revealed,
             options: self.preferences.diff_options,
         }
     }

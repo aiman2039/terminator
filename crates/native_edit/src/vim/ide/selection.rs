@@ -1,6 +1,8 @@
 //! Bracket matching, caret word, and extend/shrink selection.
 use super::super::super::doc::Buffer;
 use super::super::mode::{Cursor, Mode};
+use super::super::motion::delims::{PAIRS, Window, partner};
+use super::super::motion::stream::Stream;
 use super::super::state::VimEngine;
 use super::super::words::{WordClass, word_class};
 use super::text::IdeText;
@@ -17,86 +19,26 @@ impl VimEngine {
     pub fn matching_bracket<B: Buffer>(&self, doc: &B) -> Option<(Cursor, Cursor)> {
         let Cursor { line, col } = self.cursor;
         let chars: Vec<char> = doc.line_text(line).chars().collect();
-        let bracket = |c: char| matches!(c, '(' | ')' | '[' | ']' | '{' | '}');
+        let bracket = |c: char| PAIRS.iter().any(|(open, close)| c == *open || c == *close);
         let at = [Some(col), col.checked_sub(1)]
             .into_iter()
             .flatten()
             .find(|i| chars.get(*i).copied().is_some_and(bracket))?;
-        let open = *chars.get(at)?;
-        let start = Cursor { line, col: at };
-        if let Some(close) = IdeText::closer_for(open) {
-            return Self::closer_forward(doc, start, (open, close)).map(|end| (start, end));
-        }
-        let close = open;
-        let open = match close {
-            ')' => '(',
-            ']' => '[',
-            _ => '{',
-        };
-        Self::opener_backward(doc, start, (open, close)).map(|begin| (begin, start))
-    }
-
-    /// The closer matching the opener at `start`, scanning forward.
-    fn closer_forward<B: Buffer>(
-        doc: &B,
-        start: Cursor,
-        (open, close): (char, char),
-    ) -> Option<Cursor> {
-        let mut depth = 0usize;
-        let last = doc
-            .line_count()
-            .min(start.line.saturating_add(MATCH_SCAN_LINES));
-        for l in start.line..last {
-            let text: Vec<char> = doc.line_text(l).chars().collect();
-            let from = if l == start.line { start.col } else { 0 };
-            for (i, c) in text.iter().enumerate().skip(from) {
-                if *c == open {
-                    depth = depth.saturating_add(1);
-                    continue;
-                }
-                if *c != close {
-                    continue;
-                }
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some(Cursor { line: l, col: i });
-                }
-            }
-        }
-        None
-    }
-
-    /// The opener matching the closer at `start`, scanning backward.
-    fn opener_backward<B: Buffer>(
-        doc: &B,
-        start: Cursor,
-        (open, close): (char, char),
-    ) -> Option<Cursor> {
-        let mut depth = 0usize;
-        let first = start.line.saturating_sub(MATCH_SCAN_LINES);
-        for l in (first..=start.line).rev() {
-            let text: Vec<char> = doc.line_text(l).chars().collect();
-            let upto = if l == start.line {
-                start.col.saturating_add(1)
+        let first = line.saturating_sub(MATCH_SCAN_LINES);
+        let past = line.saturating_add(MATCH_SCAN_LINES);
+        let mut window = Window {
+            inner: Stream::new(doc),
+            lo: doc.char_at_line_col(first, 0),
+            hi: if past < doc.line_count() {
+                doc.char_at_line_col(past, 0)
             } else {
-                text.len()
-            };
-            for i in (0..upto.min(text.len())).rev() {
-                let c = text.get(i).copied();
-                if c == Some(close) {
-                    depth = depth.saturating_add(1);
-                    continue;
-                }
-                if c != Some(open) {
-                    continue;
-                }
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some(Cursor { line: l, col: i });
-                }
-            }
-        }
-        None
+                doc.len_chars()
+            },
+        };
+        let idx = doc.char_at_line_col(line, at);
+        let other = partner(&mut window, idx)?;
+        let (a, b) = (Self::cursor_at(doc, idx), Self::cursor_at(doc, other));
+        Some(if idx < other { (a, b) } else { (b, a) })
     }
 
     /// Current selection (or caret) as a flat char range, end-exclusive.

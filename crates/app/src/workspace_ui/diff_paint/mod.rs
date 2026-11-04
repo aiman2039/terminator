@@ -2,9 +2,11 @@
 use super::super::*;
 
 mod document;
+mod eol;
 mod rows;
 
 pub(super) use document::*;
+pub(super) use eol::*;
 pub(super) use rows::*;
 
 /// Change colors of a diff view. `accent` marks modified (replaced) lines

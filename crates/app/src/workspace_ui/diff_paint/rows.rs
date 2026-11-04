@@ -305,6 +305,14 @@ pub(in super::super) fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>)
         },
     );
     let pos = snap(ui, egui::pos2(rect.left() + cols.code, rect.top()));
+    paint_line_end(PaintLineEndInput {
+        ui,
+        pos,
+        code: &code,
+        line,
+        colors,
+        font: &metrics.font,
+    });
     let response = ui.interact(
         egui::Rect::from_min_size(pos, code.size()),
         ui.auto_id_with("diff-code-selection"),

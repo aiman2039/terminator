@@ -5,8 +5,6 @@
 //! revision, so frames after an edit cost nothing. Buffers over
 //! [`SYNC_HIGHLIGHT_BYTES`] parse on a worker thread; buffers over
 //! [`MAX_HIGHLIGHT_BYTES`] paint plain (large-file degradation).
-use crate::doc::Buffer;
-use crate::rows::{RowCache, VisualRow};
 use std::sync::OnceLock;
 use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter, ThemeSet};
 use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
@@ -223,6 +221,12 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
     if text.len() > MAX_HIGHLIGHT_BYTES {
         return None;
     }
+    highlight_lf(language, &crate::doc::normalize_breaks(text), dark)
+}
+
+/// [`highlight_text`] for text already split with `\n` only (see
+/// [`crate::doc::normalize_breaks`]), with no size cap.
+pub(crate) fn highlight_lf(language: Language, text: &str, dark: bool) -> Option<Vec<Vec<Span>>> {
     // tree-sitter first for supported languages (returns None when
     // the language is unsupported, so this doubles as the check);
     // syntect fallback.
@@ -271,228 +275,15 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
     Some(out)
 }
 
-/// Revision-keyed highlight cache: one per open buffer, owned by the app
-/// next to the buffer it derives from. The row layout lives here too: the
-/// app owns exactly one cache per buffer, and both derivations share the
-/// same revision key.
-#[derive(Default)]
-pub struct HighlightCache {
-    language: Option<Language>,
-    dark: bool,
-    revision: u64,
-    ready: bool,
-    rainbow: bool,
-    lines: Vec<Vec<Span>>,
-    rows: RowCache,
-    folds: crate::fold::Folds,
-    /// The worker highlight in flight, if any (see [`HighlightCache::ensure_async`]).
-    running: Option<(HighlightKey, std::sync::mpsc::Receiver<Vec<Vec<Span>>>)>,
-}
-
-/// What one highlight result was computed for.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct HighlightKey {
-    language: Language,
-    dark: bool,
-    revision: u64,
-    rainbow: bool,
-}
-
-/// Spans for `text`, with rainbow brackets when asked; empty when plain.
-fn compute_lines(language: Language, text: &str, dark: bool, rainbow: bool) -> Vec<Vec<Span>> {
-    match highlight_text(language, text, dark) {
-        Some(mut lines) => {
-            if rainbow {
-                rainbow::apply(&mut lines, text, dark);
-            }
-            lines
-        }
-        None => Vec::new(),
-    }
-}
-
-pub struct EnsureInput<'a> {
-    pub language: Language,
-    pub dark: bool,
-    pub revision: u64,
-    pub text: &'a str,
-}
-
-impl HighlightCache {
-    /// True when the cache already holds this exact revision: the view
-    /// can skip rebuilding the buffer text entirely.
-    #[must_use]
-    pub fn is_current(&self, language: Language, dark: bool, revision: u64) -> bool {
-        self.ready
-            && self.language == Some(language)
-            && self.dark == dark
-            && self.revision == revision
-    }
-
-    /// Color brackets by nesting depth. A change recomputes the spans.
-    pub fn set_rainbow(&mut self, rainbow: bool) {
-        if self.rainbow != rainbow {
-            self.rainbow = rainbow;
-            self.ready = false;
-        }
-    }
-
-    /// Recompute when the key changed; over-cap and plain buffers cache
-    /// as empty (every row paints plain).
-    pub fn ensure(&mut self, input: EnsureInput<'_>) {
-        let EnsureInput {
-            language,
-            dark,
-            revision,
-            text,
-        } = input;
-        if self.is_current(language, dark, revision) {
-            return;
-        }
-        self.running = None;
-        self.lines = compute_lines(language, text, dark, self.rainbow);
-        self.adopt(HighlightKey {
-            language,
-            dark,
-            revision,
-            rainbow: self.rainbow,
-        });
-    }
-
-    fn adopt(&mut self, key: HighlightKey) {
-        self.language = Some(key.language);
-        self.dark = key.dark;
-        self.revision = key.revision;
-        self.ready = key.rainbow == self.rainbow;
-    }
-
-    /// Take a finished worker result. A result for an older revision is
-    /// still painted (closer than nothing) but does not mark the cache
-    /// current, so the next frame starts the newest revision.
-    fn poll(&mut self) {
-        let Some((key, rx)) = self.running.as_ref() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(lines) => {
-                let key = *key;
-                self.running = None;
-                self.lines = lines;
-                self.adopt(key);
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.running = None,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        }
-    }
-
-    /// True when the caller must hand this revision's text to
-    /// [`HighlightCache::ensure_async`]: the cache is not current and no
-    /// worker is running. While one runs, the caller skips building the
-    /// text; edits made meanwhile highlight when it lands, newest only.
-    pub fn wants_text(&mut self, language: Language, dark: bool, revision: u64) -> bool {
-        self.poll();
-        !self.is_current(language, dark, revision) && self.running.is_none()
-    }
-
-    /// [`HighlightCache::ensure`], but text over [`SYNC_HIGHLIGHT_BYTES`]
-    /// is highlighted on a worker thread; `ctx` repaints when it lands.
-    /// Until then the last spans stay painted.
-    pub fn ensure_async(&mut self, input: EnsureInput<'_>, ctx: &egui::Context) {
-        if input.text.len() <= SYNC_HIGHLIGHT_BYTES || input.text.len() > MAX_HIGHLIGHT_BYTES {
-            self.ensure(input);
-            return;
-        }
-        self.poll();
-        if self.is_current(input.language, input.dark, input.revision) || self.running.is_some() {
-            return;
-        }
-        let key = HighlightKey {
-            language: input.language,
-            dark: input.dark,
-            revision: input.revision,
-            rainbow: self.rainbow,
-        };
-        let text = input.text.to_owned();
-        let ctx = ctx.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new()
-            .name("highlight".into())
-            .spawn(move || {
-                let lines = compute_lines(key.language, &text, key.dark, key.rainbow);
-                let _ = tx.send(lines);
-                ctx.request_repaint();
-            });
-        if spawned.is_ok() {
-            self.running = Some((key, rx));
-        } else {
-            self.ensure(input);
-        }
-    }
-
-    /// Highlight spans for one row; empty when plain or out of range.
-    #[must_use]
-    pub fn line(&self, line: usize) -> &[Span] {
-        match self.lines.get(line) {
-            Some(spans) => spans,
-            None => &[],
-        }
-    }
-
-    /// Lay out the painted rows for this revision and wrap width, reusing
-    /// the previous frame's rows until either changes.
-    pub fn ensure_rows<B: Buffer>(&mut self, doc: &B, wrap_columns: Option<usize>) {
-        self.ensure_rows_spaced(doc, wrap_columns, &[]);
-    }
-
-    /// [`HighlightCache::ensure_rows`] with host filler rows before some
-    /// lines (see [`crate::spacers`]).
-    pub fn ensure_rows_spaced<B: Buffer>(
-        &mut self,
-        doc: &B,
-        wrap_columns: Option<usize>,
-        spacers: &[(usize, usize)],
-    ) {
-        self.folds
-            .ensure(doc, self.language.unwrap_or(Language::Plain));
-        self.rows.ensure_spaced(
-            doc,
-            crate::rows::RowLayout {
-                wrap_columns,
-                folds: Some(&self.folds),
-                spacers,
-            },
-        );
-    }
-
-    /// This view's code folds.
-    #[must_use]
-    pub fn folds(&self) -> &crate::fold::Folds {
-        &self.folds
-    }
-
-    pub fn folds_mut(&mut self) -> &mut crate::fold::Folds {
-        &mut self.folds
-    }
-
-    /// Rows laid out by the last [`HighlightCache::ensure_rows`].
-    #[must_use]
-    pub fn rows(&self) -> &[VisualRow] {
-        self.rows.rows()
-    }
-
-    /// Widest laid-out row in display cells, for the horizontal extent.
-    #[must_use]
-    pub fn max_cells(&self) -> usize {
-        self.rows.max_cells()
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn test_assets() -> &'static (SyntaxSet, ThemeSet) {
     assets()
 }
 
+mod cache;
 mod rainbow;
+
+pub use cache::{EnsureInput, HighlightCache};
 
 #[cfg(test)]
 mod tests;

@@ -28,6 +28,7 @@ pub(super) fn line(input: LineInput<'_>) -> diff::DiffLine {
         new_no,
         spans: vec![span(text)],
         moved: false,
+        end: diff::LineEnd::default(),
     }
 }
 

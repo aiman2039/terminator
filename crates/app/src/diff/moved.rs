@@ -4,8 +4,9 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
 
-/// Lines with fewer alphanumeric characters are too common to be a move
-/// (same limit as Git's default `--color-moved` mode).
+/// A moved block needs at least this many alphanumeric characters in all
+/// (Git's `--color-moved` limit, applied per block so blank and brace
+/// lines can sit inside a block).
 const MIN_ALNUM: usize = 20;
 /// A moved block must have at least this many lines.
 const MIN_BLOCK: usize = 3;
@@ -16,9 +17,15 @@ pub(super) struct MarkMovedInput<'a> {
     pub(super) options: DiffOptions,
 }
 
-/// Interned compare key per line index: equal ids mean equal lines
-/// under the compare options. Lines too short to be a move get no id.
-type LineIds = HashMap<usize, usize>;
+/// One changed line: its interned compare key (equal ids mean equal lines
+/// under the compare options) and its alphanumeric character count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LineId {
+    id: usize,
+    alnum: usize,
+}
+
+type LineIds = HashMap<usize, LineId>;
 
 /// Computes each line key once (one allocation per line), so the block
 /// scan below compares integers instead of rebuilding strings per step.
@@ -33,27 +40,53 @@ fn line_ids(
         let text = lines
             .get(index)
             .map_or("", |line| line.trim_end_matches(['\n', '\r']));
-        if text.chars().filter(|c| c.is_alphanumeric()).count() < MIN_ALNUM {
-            continue;
-        }
+        let alnum = text.chars().filter(|c| c.is_alphanumeric()).count();
         let next = interned.len();
         let id = *interned.entry(options.normalize_line(text)).or_insert(next);
-        ids.insert(index, id);
+        ids.insert(index, LineId { id, alnum });
     }
     ids
 }
 
+/// Length and alphanumeric count of the run of equal lines starting at
+/// old `start` and new `target`.
+fn run_at(
+    old_ids: &LineIds,
+    new_ids: &LineIds,
+    moved_new: &HashSet<usize>,
+    (start, target): (usize, usize),
+) -> (usize, usize) {
+    let mut len = 0usize;
+    let mut alnum = 0usize;
+    loop {
+        let (o, n) = (start.saturating_add(len), target.saturating_add(len));
+        let Some(line) = old_ids.get(&o) else { break };
+        if moved_new.contains(&n) || new_ids.get(&n).map(|l| l.id) != Some(line.id) {
+            break;
+        }
+        alnum = alnum.saturating_add(line.alnum);
+        len = len.saturating_add(1);
+    }
+    (len, alnum)
+}
+
 /// Old and new line indices that belong to a moved block of at least
-/// [`MIN_BLOCK`] lines, scanning deleted lines in order.
+/// [`MIN_BLOCK`] lines and [`MIN_ALNUM`] alphanumeric characters,
+/// scanning deleted lines in order. Blocks start only on a line with
+/// some alphanumeric text, so runs of blank lines stay cheap.
 fn find_moved(old_ids: &LineIds, new_ids: &LineIds) -> (HashSet<usize>, HashSet<usize>) {
     let mut inserts_by_id: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (&index, &id) in new_ids {
-        inserts_by_id.entry(id).or_default().push(index);
+    for (&index, line) in new_ids {
+        inserts_by_id.entry(line.id).or_default().push(index);
     }
     for targets in inserts_by_id.values_mut() {
         targets.sort_unstable();
     }
-    let mut old_order: Vec<usize> = old_ids.keys().copied().collect();
+    let mut old_order: Vec<usize> = old_ids
+        .iter()
+        .filter(|(_, line)| line.alnum > 0)
+        .map(|(index, _)| *index)
+        .collect();
     old_order.sort_unstable();
     let mut moved_old = HashSet::new();
     let mut moved_new = HashSet::new();
@@ -61,26 +94,15 @@ fn find_moved(old_ids: &LineIds, new_ids: &LineIds) -> (HashSet<usize>, HashSet<
         if moved_old.contains(&start) {
             continue;
         }
-        let Some(targets) = old_ids.get(&start).and_then(|id| inserts_by_id.get(id)) else {
+        let Some(targets) = old_ids.get(&start).and_then(|l| inserts_by_id.get(&l.id)) else {
             continue;
         };
         for &target in targets {
             if moved_new.contains(&target) {
                 continue;
             }
-            let mut len = 1;
-            loop {
-                let (o, n) = (start.saturating_add(len), target.saturating_add(len));
-                let same = !moved_new.contains(&n)
-                    && old_ids
-                        .get(&o)
-                        .is_some_and(|id| new_ids.get(&n) == Some(id));
-                if !same {
-                    break;
-                }
-                len = len.saturating_add(1);
-            }
-            if len >= MIN_BLOCK {
+            let (len, alnum) = run_at(old_ids, new_ids, &moved_new, (start, target));
+            if len >= MIN_BLOCK && alnum >= MIN_ALNUM {
                 moved_old.extend(start..start.saturating_add(len));
                 moved_new.extend(target..target.saturating_add(len));
                 break;
@@ -153,8 +175,12 @@ mod tests {
         let right = format!("one\ntwo\nthree\nfour\nfive\nsix\nseven\n{BLOCK}");
         let doc = build(&left, &right, DiffOptions::default());
         let kinds = moved_kinds(&doc);
-        assert_eq!(kinds.iter().filter(|k| **k == LineKind::Delete).count(), 3);
-        assert_eq!(kinds.iter().filter(|k| **k == LineKind::Insert).count(), 3);
+        assert_eq!(
+            kinds.iter().filter(|k| **k == LineKind::Delete).count(),
+            4,
+            "the closing brace moves with its block"
+        );
+        assert_eq!(kinds.iter().filter(|k| **k == LineKind::Insert).count(), 4);
         assert!(
             doc.split
                 .iter()
@@ -166,11 +192,23 @@ mod tests {
     fn repeated_identical_lines_pair_each_target_once() {
         // Many identical long lines: every old line pairs with a distinct
         // new line, and no new line is claimed twice.
-        let old_ids: LineIds = (0..200).map(|i| (i, 7)).collect();
-        let new_ids: LineIds = (300..500).map(|i| (i, 7)).collect();
+        let line = LineId { id: 7, alnum: 30 };
+        let old_ids: LineIds = (0..200).map(|i| (i, line)).collect();
+        let new_ids: LineIds = (300..500).map(|i| (i, line)).collect();
         let (moved_old, moved_new) = find_moved(&old_ids, &new_ids);
         assert_eq!(moved_old.len(), 200);
         assert_eq!(moved_new.len(), 200);
+    }
+
+    #[test]
+    fn blank_and_brace_lines_inside_a_moved_block_stay_moved() {
+        let block = "fn alpha_function_name() -> usize {\n\n    compute_the_first_value(1)\n}\n\nfn beta_function_name() {}\n";
+        let left = format!("{block}one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+        let right = format!("one\ntwo\nthree\nfour\nfive\nsix\nseven\n{block}");
+        let doc = build(&left, &right, DiffOptions::default());
+        let kinds = moved_kinds(&doc);
+        assert_eq!(kinds.iter().filter(|k| **k == LineKind::Delete).count(), 6);
+        assert_eq!(kinds.iter().filter(|k| **k == LineKind::Insert).count(), 6);
     }
 
     #[test]
@@ -207,6 +245,6 @@ mod tests {
                 ..DiffOptions::default()
             },
         );
-        assert_eq!(moved_kinds(&trimmed).len(), 6);
+        assert_eq!(moved_kinds(&trimmed).len(), 8);
     }
 }

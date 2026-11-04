@@ -1,15 +1,54 @@
 //! Visual-block (rectangle) yank, delete, paste and insert.
 use super::super::doc::Buffer;
-use super::mode::{BlockPending, Cursor, Mode};
+use super::super::rows::{col_at_display_x, display_x};
+use super::mode::{BlockPending, Cursor, Mode, Register};
 use super::state::VimEngine;
 use super::words::line_len;
 
-pub(super) struct DeleteBlockRangesInput {
-    pub(super) top: usize,
-    pub(super) bottom: usize,
-    pub(super) left: usize,
-    pub(super) right_excl: usize,
+/// Per-row char ranges `(line, from, to)` of the rectangle covering display
+/// cells `left..right` on `lines`: a tab or a wide (CJK) char inside those
+/// cells counts once, so ragged and tabbed text never shifts columns.
+/// Rows ending before `left` give an empty range at their end; `eol`
+/// (`$`) reaches every line end.
+fn cell_row_ranges<B: Buffer>(
+    doc: &B,
+    lines: std::ops::RangeInclusive<usize>,
+    (left, right): (usize, usize),
+    eol: bool,
+) -> Vec<(usize, usize, usize)> {
+    let last = doc.line_count().saturating_sub(1);
+    let mut out = Vec::new();
+    for line in *lines.start()..=(*lines.end()).min(last) {
+        let text = doc.line_text(line);
+        let len = text.chars().count();
+        if display_x(&text, len) <= left {
+            out.push((line, len, len));
+            continue;
+        }
+        let from = col_at_display_x(&text, left);
+        let to = if eol {
+            len
+        } else {
+            col_at_display_x(&text, right.saturating_sub(1))
+                .saturating_add(1)
+                .min(len)
+        };
+        out.push((line, from, to.max(from)));
+    }
+    out
 }
+
+/// Delete `rows` (from [`cell_row_ranges`]); the caller owns the undo unit.
+fn delete_row_ranges<B: Buffer>(doc: &mut B, rows: &[(usize, usize, usize)]) {
+    for &(line, from, to) in rows {
+        let start = doc.char_at_line_col(line, from);
+        let end = doc.char_at_line_col(line, to);
+        if start < end {
+            doc.delete(start..end);
+        }
+    }
+}
+
 impl VimEngine {
     /// Visual-block rectangle as (top line, bottom line, left column,
     /// right-exclusive column), unclamped: short rows clamp at each use.
@@ -25,102 +64,105 @@ impl VimEngine {
         Some((top, bottom, left, right.saturating_add(1)))
     }
 
+    /// Per-row char ranges of the live block, by display cells (see
+    /// [`cell_row_ranges`]). `$` reaches each line end.
+    pub(super) fn block_row_ranges<B: Buffer>(
+        &self,
+        doc: &B,
+    ) -> Option<Vec<(usize, usize, usize)>> {
+        let (top, bottom, _, _) = self.block_span()?;
+        let cells = |c: Cursor| {
+            let text = doc.line_text(c.line);
+            (
+                display_x(&text, c.col),
+                display_x(&text, c.col.saturating_add(1)),
+            )
+        };
+        let (a0, a1) = cells(self.anchor);
+        let (c0, c1) = cells(self.cursor);
+        let cells = (a0.min(c0), a1.max(c1));
+        Some(cell_row_ranges(doc, top..=bottom, cells, self.x.block_eol))
+    }
+
     /// One entry per row in `[top..=bottom]`: short rows contribute what
-    /// they reach (possibly empty), so ragged text never shifts columns.
-    pub(super) fn block_rows<B: Buffer>(&self, doc: &B) -> Option<(usize, usize, Vec<String>)> {
-        let (top, bottom, left, right) = self.block_span()?;
-        let mut out = Vec::with_capacity(bottom.saturating_sub(top).saturating_add(1));
-        for line in top..=bottom {
-            let len = line_len(doc, line);
-            if left >= len {
-                out.push(String::new());
-            } else {
-                let text = doc.line_text(line);
-                out.push(
-                    text.chars()
-                        .skip(left)
-                        .take(right.saturating_sub(left))
-                        .collect(),
-                );
-            }
-        }
-        Some((top, bottom, out))
+    /// they reach (possibly empty).
+    pub(super) fn block_rows<B: Buffer>(&self, doc: &B) -> Option<Vec<String>> {
+        let rows = self
+            .block_row_ranges(doc)?
+            .into_iter()
+            .map(|(line, from, to)| {
+                doc.line_text(line)
+                    .chars()
+                    .skip(from)
+                    .take(to.saturating_sub(from))
+                    .collect()
+            })
+            .collect();
+        Some(rows)
     }
 
     /// Rectangle text, rows joined with newlines (for yank and IDE copy).
     pub(super) fn block_text<B: Buffer>(&self, doc: &B) -> Option<String> {
-        self.block_rows(doc).map(|(_, _, rows)| rows.join("\n"))
+        self.block_rows(doc).map(|rows| rows.join("\n"))
     }
 
-    /// Delete explicit rectangle rows. The caller owns the undo unit, so
-    /// plain deletes and change-into-insert share one code path.
-    pub(super) fn delete_block_ranges<B: Buffer>(
-        &mut self,
-        doc: &mut B,
-        input: DeleteBlockRangesInput,
-    ) {
-        let DeleteBlockRangesInput {
-            top,
-            bottom,
-            left,
-            right_excl,
-        } = input;
-        for line in top..=bottom {
-            if line >= doc.line_count() {
-                break;
-            }
-            let len = line_len(doc, line);
-            if left < len {
-                let from = doc.char_at_line_col(line, left);
-                let to = doc.char_at_line_col(line, right_excl.min(len));
-                if from < to {
-                    doc.delete(from..to);
-                }
-            }
-        }
+    /// The live block as register text and its column width.
+    pub(super) fn block_register<B: Buffer>(&self, doc: &B) -> Option<(String, usize)> {
+        let (_, _, left, right) = self.block_span()?;
+        Some((self.block_text(doc)?, right.saturating_sub(left)))
     }
 
     /// Delete the live block selection; the caller owns the undo unit.
     /// Returns the rest position (top row, left edge clamped).
     pub(super) fn delete_selection_block<B: Buffer>(&mut self, doc: &mut B) -> Cursor {
-        let Some((top, bottom, left, right)) = self.block_span() else {
+        let Some(rows) = self.block_row_ranges(doc) else {
             return self.cursor;
         };
-        self.delete_block_ranges(
-            doc,
-            DeleteBlockRangesInput {
-                top,
-                bottom,
-                left,
-                right_excl: right,
-            },
-        );
-        Cursor {
-            line: top,
-            col: left.min(line_len(doc, top)),
-        }
+        let mut rest = rows
+            .first()
+            .map_or(self.cursor, |&(line, from, _)| Cursor { line, col: from });
+        delete_row_ranges(doc, &rows);
+        rest.col = rest.col.min(line_len(doc, rest.line));
+        rest
+    }
+
+    /// Delete a replayed rectangle (`.`): columns `left..=right` on rows
+    /// `top..=bottom`, the same per-row ranges as a live block delete.
+    pub(super) fn delete_block_rect<B: Buffer>(&mut self, doc: &mut B, block: &BlockPending) {
+        let cells = (block.left, block.right.saturating_add(1));
+        let rows = cell_row_ranges(doc, block.top..=block.bottom, cells, false);
+        delete_row_ranges(doc, &rows);
     }
 
     pub(super) fn yank_block<B: Buffer>(&mut self, doc: &mut B) {
-        let Some((_, _, rows)) = self.block_rows(doc) else {
+        let Some((text, width)) = self.block_register(doc) else {
             return;
         };
-        let width = self
-            .block_span()
-            .map_or(0, |(_, _, left, right)| right.saturating_sub(left));
-        self.set_register(rows.join("\n"), false, Some(width));
+        self.write_yank(text, false, Some(width.max(1)));
         self.cursor = self.anchor;
     }
 
-    /// Paste a blockwise register: each yanked row inserts at the cursor
-    /// column of successive lines, padding short lines with spaces the way
-    /// vim does. Extends the buffer with blank lines past EOF.
-    pub(super) fn paste_block<B: Buffer>(&mut self, doc: &mut B) {
-        let rows: Vec<&str> = self.register.text.split('\n').collect();
+    /// Paste a blockwise register: each yanked row (`count` times)
+    /// inserts after the cursor column (`P`: at it) of successive lines,
+    /// padding short lines with spaces the way vim does. Extends the
+    /// buffer with blank lines past EOF.
+    pub(super) fn paste_block<B: Buffer>(
+        &mut self,
+        doc: &mut B,
+        reg: &Register,
+        (before, count): (bool, usize),
+    ) {
+        let rows: Vec<&str> = reg.text.split('\n').collect();
         if rows.iter().all(|row| row.is_empty()) {
             return;
         }
-        let col = self.cursor.col;
+        let width = reg.block_width.unwrap_or(0);
+        let here = line_len(doc, self.cursor.line);
+        let col = if before || here == 0 {
+            self.cursor.col
+        } else {
+            self.cursor.col.saturating_add(1).min(here)
+        };
         doc.begin_undo_group();
         for (i, part) in rows.iter().enumerate() {
             let line = self.cursor.line.saturating_add(i);
@@ -128,24 +170,27 @@ impl VimEngine {
                 doc.insert(doc.len_chars(), "\n");
             }
             let len = line_len(doc, line);
+            // Narrow rows pad to the block width when text follows.
+            let mut piece = String::new();
+            for _ in 0..count.max(1) {
+                piece.push_str(part);
+                if len > col {
+                    let pad = width.saturating_sub(part.chars().count());
+                    piece.extend(std::iter::repeat_n(' ', pad));
+                }
+            }
             if len >= col {
-                doc.insert(doc.char_at_line_col(line, col), part);
+                doc.insert(doc.char_at_line_col(line, col), &piece);
             } else {
                 let mut padded = " ".repeat(col.saturating_sub(len));
-                padded.push_str(part);
+                padded.push_str(&piece);
                 doc.insert(doc.char_at_line_col(line, len), &padded);
             }
         }
         doc.end_undo_group();
-        let last = (self
-            .cursor
-            .line
-            .saturating_add(rows.len())
-            .saturating_sub(1))
-        .min(doc.line_count().saturating_sub(1));
         self.cursor = Cursor {
-            line: last,
-            col: col.saturating_add(rows.last().map_or(0, |row| row.chars().count())),
+            line: self.cursor.line,
+            col,
         };
         self.enter_normal(doc);
     }
@@ -173,6 +218,10 @@ impl VimEngine {
                 break;
             }
             let len = line_len(doc, line);
+            // Vim parity: `I` skips rows that end before the block.
+            if !block.append && len < block.left {
+                continue;
+            }
             let col = if block.append {
                 block.right.saturating_add(1).min(len)
             } else {

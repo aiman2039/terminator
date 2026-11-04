@@ -25,6 +25,23 @@ pub trait Buffer {
     }
     fn line_count(&self) -> usize;
     fn line_text(&self, line: usize) -> String;
+    /// UTF-8 size of the text: the unit of the large-file cap.
+    fn len_bytes(&self) -> usize {
+        (0..self.line_count())
+            .map(|line| self.line_text(line).len().saturating_add(1))
+            .fold(0, usize::saturating_add)
+    }
+    /// The whole text with `\n` after every line (CRLF and lone CR read
+    /// as LF), numbered like [`Buffer::line_text`]: the input of
+    /// whole-text derivations such as highlighting.
+    fn lf_text(&self) -> String {
+        let mut text = String::new();
+        for line in 0..self.line_count() {
+            text.push_str(&self.line_text(line));
+            text.push('\n');
+        }
+        text
+    }
     fn char_at_line_col(&self, line: usize, col: usize) -> usize;
     fn line_col_at(&self, char_idx: usize) -> (usize, usize);
     fn insert(&mut self, char_idx: usize, text: &str);
@@ -161,17 +178,42 @@ impl Doc {
         self.revision = next_revision();
     }
 
-    /// Line `line` without its terminator (a lone `\n` is stripped; a
-    /// `\r` is kept, matching the old `String` backend).
+    /// Line `line` without its terminator (`\n`, `\r\n` or a lone `\r`,
+    /// the breaks the rope counts).
     fn raw_line(&self, line: usize) -> String {
         if line >= self.rope.len_lines() {
             return String::new();
         }
-        let mut text = self.rope.line(line).to_string();
-        if text.ends_with('\n') {
-            text.pop();
+        let slice = self.rope.line(line);
+        let len = content_len(slice);
+        slice.slice(..len).to_string()
+    }
+
+    /// Hash of the whole text, streamed from the rope chunks without
+    /// copying it. Equals [`hash_text`] of [`Doc::text`].
+    #[must_use]
+    pub fn content_hash(&self) -> u64 {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for chunk in self.rope.chunks() {
+            hasher.write(chunk.as_bytes());
         }
-        text
+        hasher.finish()
+    }
+
+    /// Hash of line `line` without its terminator, streamed from the
+    /// rope: equals [`hash_text`] of [`Buffer::line_text`].
+    #[must_use]
+    pub fn line_hash(&self, line: usize) -> u64 {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        if line < self.rope.len_lines() {
+            let slice = self.rope.line(line);
+            for chunk in slice.slice(..content_len(slice)).chunks() {
+                hasher.write(chunk.as_bytes());
+            }
+        }
+        hasher.finish()
     }
 
     fn commit(&mut self, op: UndoOp) {
@@ -246,6 +288,47 @@ impl Doc {
     }
 }
 
+/// Chars of a rope line before its terminator: a `\r\n` pair counts as
+/// one break, so a caret never lands between `\r` and `\n`.
+fn content_len(slice: ropey::RopeSlice<'_>) -> usize {
+    let total = slice.len_chars();
+    let last = total.checked_sub(1).map(|at| slice.char(at));
+    match last {
+        Some('\n') => {
+            let before = total.checked_sub(2).map(|at| slice.char(at));
+            total.saturating_sub(if before == Some('\r') { 2 } else { 1 })
+        }
+        Some('\r') => total.saturating_sub(1),
+        _ => total,
+    }
+}
+
+/// Hash of `text`, matching [`Doc::content_hash`] of a buffer holding it.
+#[must_use]
+pub fn hash_text(text: &str) -> u64 {
+    hash_bytes(text.as_bytes())
+}
+
+/// `\r\n` and lone `\r` as `\n` (the rope's `cr_lines` numbering);
+/// borrows when there is no `\r`.
+#[must_use]
+pub fn normalize_breaks(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains('\r') {
+        std::borrow::Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
+/// The byte hash behind [`hash_text`].
+#[must_use]
+pub fn hash_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(bytes);
+    hasher.finish()
+}
+
 impl Buffer for Doc {
     fn len_chars(&self) -> usize {
         self.rope.len_chars()
@@ -259,15 +342,26 @@ impl Buffer for Doc {
         self.raw_line(line)
     }
 
+    fn len_bytes(&self) -> usize {
+        self.rope.len_bytes()
+    }
+
+    fn lf_text(&self) -> String {
+        let mut text = String::with_capacity(self.rope.len_bytes().saturating_add(1));
+        for chunk in self.rope.chunks() {
+            text.push_str(chunk);
+        }
+        text.push('\n');
+        match normalize_breaks(&text) {
+            std::borrow::Cow::Borrowed(_) => text,
+            std::borrow::Cow::Owned(lf) => lf,
+        }
+    }
+
     fn char_at_line_col(&self, line: usize, col: usize) -> usize {
         let line = line.min(self.line_count().saturating_sub(1));
         // Count chars in place: copying the line is O(line) per call.
-        let slice = self.rope.line(line);
-        let total = slice.len_chars();
-        let len = match total.checked_sub(1) {
-            Some(last) if slice.char(last) == '\n' => last,
-            _ => total,
-        };
+        let len = content_len(self.rope.line(line));
         self.rope
             .line_to_char(line)
             .checked_add(col.min(len))

@@ -1,6 +1,8 @@
 //! The buffer borrow for one native view: status rows, the source view,
 //! and what its outcome asks for.
 use super::*;
+use crate::native_editor::extras::SquiggleSets;
+use crate::native_editor::file_io::LineEnding;
 use terminator_native_edit::highlight::HighlightCache;
 use terminator_native_edit::inlay::InlayCache;
 use terminator_native_edit::view::{ChangeMark, SourceOutcome};
@@ -20,13 +22,15 @@ struct SourceMarks {
     mode: markdown::Mode,
     read_only: bool,
     soft_wrap: bool,
-    squiggles: Vec<terminator_native_edit::view::Squiggle>,
+    squiggles: crate::native_editor::extras::SquiggleSets,
     inlay_hints: Arc<Vec<terminator_native_edit::inlay::InlayHint>>,
     change_marks: Arc<Vec<ChangeMark>>,
     popup_keys: bool,
     find_matches: FindMatches,
     find_current: Option<usize>,
-    crlf: bool,
+    /// Large-file mode is off (small file, or the user enabled it).
+    full_features: bool,
+    status_items: Arc<Vec<String>>,
 }
 
 struct GutterMarksInput<'a> {
@@ -65,6 +69,7 @@ impl ViewPass<'_> {
         self.jump_to_heading(ui, heading_jump);
         self.save_error_row(ui);
         self.follow_disk(ui);
+        self.large_file_bar(ui);
         if self.load_failed(ui) {
             return None;
         }
@@ -113,73 +118,37 @@ impl ViewPass<'_> {
         }
     }
 
-    fn save_error_row(&mut self, ui: &mut egui::Ui) {
-        let Some(error) = self.doc.save_error.clone() else {
-            return;
-        };
-        ui.horizontal(|ui| {
-            ui.colored_label(self.frame.failed_color, format!("Save failed: {error}"));
-            if error.contains("Changed on disk") && ui.small_button("Save anyway").clicked() {
-                self.save(true);
-                ui.memory_mut(|memory| memory.request_focus(self.file_focus()));
-            }
-        });
-    }
-
-    /// A clean buffer follows the disk without asking; nothing is lost.
-    /// A dirty one only warns.
-    fn follow_disk(&mut self, ui: &mut egui::Ui) {
-        let doc = &mut *self.doc;
-        let on_disk = doc.disk_mtime_cached(&self.frame.services);
-        if !doc.dirty() && doc.doc.is_some() && on_disk != doc.loaded_mtime && !doc.loading {
-            doc.doc = None;
-            doc.load_rx = None;
-        }
-        if doc.dirty() && doc.doc.is_some() && on_disk != doc.loaded_mtime {
-            ui.weak("Changed on disk. Reload is disabled while dirty; Save anyway overwrites.");
-        }
-    }
-
-    fn load_failed(&self, ui: &mut egui::Ui) -> bool {
-        let Some(error) = self.doc.load_error.clone() else {
-            return false;
-        };
-        ui.colored_label(self.frame.failed_color, format!("Could not open: {error}"));
-        true
-    }
-
     /// Draw the find bar and the source view (unless Markdown preview
     /// replaces it). `None` while the buffer is still loading.
     fn show_source(&mut self, ui: &mut egui::Ui, decor: SourceDecor) -> Option<SourceShown> {
         let read_only = self.read_only();
         let frame = self.frame;
+        let full_features = !self.doc.large_file();
+        let status_items = self.status_items();
         let doc = &mut *self.doc;
         let Some(buffer) = doc.doc.as_mut() else {
             ui.weak("Loading…");
             ui.ctx().request_repaint();
             return None;
         };
-        let mode = if frame.is_markdown {
-            doc.markdown_mode
+        let (mode, soft_wrap) = Self::layout_mode(frame, doc.markdown_mode, &doc.engine);
+        let squiggles = if full_features {
+            doc.extras
+                .squiggles(buffer, (&frame.problems, frame.problems_generation))
         } else {
-            markdown::Mode::Edit
+            SquiggleSets::default()
         };
-        // `:set wrap` / `:set nowrap` (also from `~/.vimrc`) override
-        // the per-type default: Markdown wraps, code does not.
-        let soft_wrap = doc.engine.wrap().unwrap_or(frame.is_markdown);
-        let squiggles = terminator_native_edit::view::squiggles(&*buffer, &frame.problems);
         let inlay_hints = Self::inlay_hints(&mut doc.inlay, buffer, frame.inlay_answer.as_ref());
         let revision_before = buffer.revision();
         // Gutter changes against HEAD, once per edit (or new base).
         let (gutter_hunks, change_marks) = Self::gutter_marks(GutterMarksInput {
             ctx: ui.ctx(),
             cache: &mut doc.gutter,
-            crlf: doc.crlf,
+            crlf: doc.line_ending == LineEnding::Crlf,
             buffer,
             base: frame.git_base.as_ref(),
         });
         let popup_keys = self.popups.popup_keys();
-        let crlf = doc.crlf;
         let (find_matches, find_current) = Self::find_pass(
             ui,
             &mut self.popups.find,
@@ -203,7 +172,8 @@ impl ViewPass<'_> {
                 popup_keys,
                 find_matches,
                 find_current,
-                crlf,
+                full_features,
+                status_items,
             },
         );
         let outcome = Self::render_source(
@@ -224,6 +194,22 @@ impl ViewPass<'_> {
             revision_before,
             gutter_hunks,
         })
+    }
+
+    /// The Markdown mode this view shows, and whether source lines wrap:
+    /// `:set wrap` / `:set nowrap` (also from `~/.vimrc`) override the
+    /// per-type default (Markdown wraps, code does not).
+    fn layout_mode(
+        frame: &ViewFrame,
+        markdown_mode: markdown::Mode,
+        engine: &VimEngine,
+    ) -> (markdown::Mode, bool) {
+        let mode = if frame.is_markdown {
+            markdown_mode
+        } else {
+            markdown::Mode::Edit
+        };
+        (mode, engine.wrap().unwrap_or(frame.is_markdown))
     }
 
     fn inlay_hints(
@@ -320,8 +306,10 @@ impl ViewPass<'_> {
             popup_keys,
             find_matches,
             find_current,
-            crlf,
+            full_features,
+            status_items,
         } = marks;
+        let (squiggles, squiggle_tails) = squiggles;
         let style = appearance::editor_style();
         // Markdown keeps its one-point bump over the code font.
         let bump = if frame.is_markdown { 1.0 } else { 0.0 };
@@ -351,9 +339,10 @@ impl ViewPass<'_> {
             jetbrains_keys: style.prefs.editor_jetbrains_keys,
             read_clipboard: Some(crate::clipboard::read_text),
             palette: Some(style.palette),
-            status_items: [if crlf { "CRLF" } else { "LF" }, "UTF-8", "4 spaces"]
-                .map(str::to_owned)
-                .to_vec(),
+            status_items,
+            large_file_override: full_features,
+            error_lens: style.prefs.editor_error_lens,
+            squiggle_tails,
             scroll_fraction: if mode == markdown::Mode::Split {
                 frame.preview.scroll
             } else {

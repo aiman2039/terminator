@@ -96,11 +96,24 @@ impl LspManager {
         true
     }
 
+    /// Indentation format requests for `path` send (the buffer's own,
+    /// from editor settings or detected from its text).
+    pub fn set_format_options(&mut self, path: &Path, options: L::FormatOptions) {
+        if self.format_options.get(path) != Some(&options) {
+            self.format_options.insert(path.to_owned(), options);
+        }
+    }
+
+    pub(super) fn format_options_for(&self, path: &Path) -> L::FormatOptions {
+        self.format_options.get(path).copied().unwrap_or_default()
+    }
+
     /// Format the whole document as of buffer `revision`.
     pub fn request_format(&mut self, path: &Path, revision: u64) -> bool {
+        let options = self.format_options_for(path);
         self.send_for(
             path,
-            L::formatting,
+            |id, uri| L::formatting(id, uri, options),
             Pending::Format {
                 path: path.to_owned(),
                 revision,

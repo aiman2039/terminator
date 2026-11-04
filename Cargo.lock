@@ -275,7 +275,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -286,7 +286,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -320,7 +320,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -936,6 +936,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "chardetng"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14b8f0b65b7b08ae3c8187e8d77174de20cb6777864c6b832d8ad365999cf1ea"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1486,7 +1497,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1951,7 +1962,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4049,7 +4060,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5039,7 +5050,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5665,7 +5676,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6162,7 +6173,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6175,7 +6186,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6244,7 +6255,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6739,7 +6750,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7240,10 +7251,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7266,13 +7277,14 @@ dependencies = [
 
 [[package]]
 name = "terminator"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "anyhow",
  "arboard",
  "base64 0.23.1",
  "biquad",
  "cargo-husky",
+ "chardetng",
  "cpal 0.17.3",
  "dispatch2",
  "eframe",
@@ -7281,6 +7293,7 @@ dependencies = [
  "egui_dock",
  "egui_extras",
  "egui_term",
+ "encoding_rs",
  "file-id",
  "flate2",
  "fs2",
@@ -7313,6 +7326,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "shlex",
  "similar",
  "spectrum-analyzer",
  "syntect",
@@ -7328,11 +7342,12 @@ dependencies = [
  "url",
  "uuid",
  "wry",
+ "x11rb",
 ]
 
 [[package]]
 name = "terminator-core"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "base64 0.23.1",
  "directories",
@@ -7358,7 +7373,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-daemon"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7398,7 +7413,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-git"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "dunce",
  "tempfile",
@@ -7408,7 +7423,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-hook"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -7429,7 +7444,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-integrations"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -7440,13 +7455,14 @@ dependencies = [
 
 [[package]]
 name = "terminator-native-edit"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "base64 0.23.1",
  "egui",
  "ignore",
  "lsp-types",
  "nucleo",
+ "regex",
  "ropey",
  "serde_json",
  "syntect",
@@ -7457,13 +7473,14 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "two-face",
+ "unicode-segmentation",
  "unicode-width",
  "url",
 ]
 
 [[package]]
 name = "terminator-sys"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
@@ -7474,7 +7491,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-updater"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "dispatch2",
  "eframe",
@@ -8025,7 +8042,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8801,7 +8818,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9448,7 +9465,7 @@ checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
 
 [[package]]
 name = "xtask"
-version = "0.154.0"
+version = "0.156.0"
 dependencies = [
  "anstream",
  "anyhow",

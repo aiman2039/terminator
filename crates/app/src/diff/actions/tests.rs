@@ -534,6 +534,7 @@ async fn whitespace_display_policy_stages_and_discards_exact_source_text() {
     let view = super::super::DiffView {
         context: exact.context,
         revealed: Vec::new(),
+        revealed_in: None,
         options: super::super::DiffOptions {
             whitespace: super::super::Whitespace::All,
             ..super::super::DiffOptions::default()
@@ -628,4 +629,85 @@ async fn filtered_file_refuses_hunk_staging_and_keeps_the_index() {
     let error = fixture.change(doc, 0, Kind::Stage).await.unwrap_err();
     assert!(error.to_string().contains("Git filter"));
     assert_eq!(fixture.index(), "pointer\n");
+}
+
+#[tokio::test]
+async fn staging_a_picked_line_after_a_missing_final_newline_keeps_lines_apart() {
+    let fixture = Fixture::new("file.txt", Some("a\nb"));
+    std::fs::write(fixture.absolute(), "a\nb\nc\n").unwrap();
+    let doc = fixture.doc(false).await;
+    assert_eq!(doc.hunks.len(), 1);
+    let last = doc.hunks[0].new.end - 1;
+    change_lines(ChangeLinesInput {
+        fixture: &fixture,
+        doc,
+        kind: Kind::Stage,
+        old: &[],
+        new: &[last],
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.index(), "a\nb\nc\n");
+}
+
+#[tokio::test]
+async fn discarding_a_picked_removal_without_final_newline_keeps_lines_apart() {
+    let fixture = Fixture::new("file.txt", Some("a\nb"));
+    std::fs::write(fixture.absolute(), "a\nc\n").unwrap();
+    let doc = fixture.doc(false).await;
+    assert_eq!(doc.hunks.len(), 1);
+    let removed = doc.hunks[0].old.start;
+    change_lines(ChangeLinesInput {
+        fixture: &fixture,
+        doc,
+        kind: Kind::Discard,
+        old: &[removed],
+        new: &[],
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        "a\nb\nc\n"
+    );
+}
+
+#[test]
+fn patch_marks_a_missing_final_newline() {
+    let version = |text: &str| Version {
+        text: text.into(),
+        exists: true,
+        mode: 0o100644,
+    };
+    let bytes = patch(Path::new("f.txt"), &version("a\nb"), &version("a\nb\nc\n"));
+    let text = String::from_utf8(bytes).unwrap();
+    assert_eq!(
+        text.matches("\\ No newline at end of file").count(),
+        1,
+        "{text}"
+    );
+    assert!(
+        text.contains("-b\n\\ No newline at end of file\n+b\n+c\n"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn staged_rename_diff_compares_with_the_rename_source() {
+    let fixture = Fixture::new("old.txt", Some(&original()));
+    fixture.git(&["mv", "old.txt", "new.txt"]);
+    let renamed = original().replace("line 5\n", "line five\n");
+    std::fs::write(fixture.dir.path().join("new.txt"), &renamed).unwrap();
+    fixture.git(&["add", "--", "new.txt"]);
+    let doc = super::super::document_async(super::super::DocumentAsyncInput {
+        service: &fixture.service,
+        cwd: fixture.dir.path().into(),
+        path: fixture.dir.path().join("new.txt"),
+        staged: true,
+        cancel: &CancellationToken::new(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(doc.left_text, original());
+    assert_eq!(doc.hunks.len(), 1);
 }

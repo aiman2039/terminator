@@ -385,6 +385,7 @@ mod tests {
             forwards: Vec::new(),
             last_connected: 0,
             command_timeout_seconds: None,
+            mosh: false,
         }
     }
     #[test]

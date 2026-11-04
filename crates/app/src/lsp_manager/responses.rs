@@ -58,10 +58,12 @@ impl LspManager {
                     })
                     .collect();
                 self.spell_diagnostics.insert(path, items);
+                self.bump_diagnostics();
             }
             PumpEvent::Diagnostics { key, path, items } => {
                 if self.docs.get(&path).is_some_and(|doc| doc.server == key) {
                     self.diagnostics.insert(path, items);
+                    self.bump_diagnostics();
                 }
             }
             PumpEvent::Down { key } => self.on_server_down(&key),

@@ -18,6 +18,19 @@ Explorer and Git use explicit daemon requests and never fall back to local
 filesystem or Git operations. Older active daemons cannot create SSH projects.
 The separate table preserves remote records if older code saves local settings.
 
+## Mosh
+
+Host Properties → "Use Mosh for terminals" (`ssh-mosh-v1`) runs new
+terminals and editors through Mosh. The PTY runs `terminator-hook mosh`: it
+resolves the host with `ssh -G`, runs `mosh-server new` over the shared
+OpenSSH connection (sign-in prompts appear in the terminal), reads
+`MOSH CONNECT <port> <key>`, then replaces itself with the local
+`mosh-client` (`MOSH_KEY` in its environment). Nothing is installed on the
+host. Requirements: `mosh-client` locally, `mosh-server` on the host, a
+UTF-8 locale, and UDP 60000–61000 open to the resolved address (a
+`ProxyJump` host is not used for UDP). Explorer, Git, editor control and
+transfers stay on OpenSSH. Older daemons ignore the setting.
+
 ## Authentication and commands
 
 OpenSSH config aliases (with their `User`, `Port`, `ProxyJump` and

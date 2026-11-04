@@ -1,7 +1,7 @@
 //! SSH host Properties on the SSH page: add, edit or duplicate a saved SSH
 //! project. Same look as VNC Properties: a titled card, section captions,
 //! labels above fields, and one accent button.
-use super::fields::{connection_fields, group_field, sign_in_fields, timeout_field};
+use super::fields::{connection_fields, group_field, mosh_field, sign_in_fields, timeout_field};
 use super::*;
 use crate::vnc_ui::form;
 use eframe::egui::RichText;
@@ -148,11 +148,9 @@ impl App {
         self.ssh_properties_error(ui, editing, actions);
         let groups = self.group_names();
         let default_timeout = self.state.settings.ssh_command_timeout_seconds;
-        let host_timeout = self
-            .state
-            .capabilities
-            .iter()
-            .any(|c| c == terminator_core::remote::HOST_TIMEOUT_CAPABILITY);
+        let has = |capability: &str| self.state.capabilities.iter().any(|c| c == capability);
+        let host_timeout = has(terminator_core::remote::HOST_TIMEOUT_CAPABILITY);
+        let mosh = has(terminator_core::remote::MOSH_CAPABILITY);
         let remote = &mut self.remote_ui;
         let Some(draft) = remote.draft.as_mut() else {
             return;
@@ -166,6 +164,7 @@ impl App {
             default_timeout,
             host_timeout,
         );
+        mosh_field(ui, &mut draft.mosh, mosh);
         let config = hosts.and_then(|h| h.iter().find(|h| h.alias == draft.ssh.host));
         if let Some(found) = remote.probe.poll(&draft.ssh.host) {
             remote.resolved = Some(found);

@@ -1,8 +1,7 @@
-//! Command-line mode: `/` search, `:set`, `:s` and the ex command table.
+//! Command-line mode: `/` and `?` search, `:set`, and the ex commands.
 use super::super::doc::Buffer;
 use super::mode::Effect;
 use super::mode::Key;
-use super::operators::JumpToMatchInput;
 use super::state::VimEngine;
 
 impl VimEngine {
@@ -25,67 +24,51 @@ impl VimEngine {
         Vec::new()
     }
 
-    fn run_command_line<B: Buffer>(&mut self, doc: &mut B) -> Vec<Effect> {
+    pub(crate) fn run_command_line<B: Buffer>(&mut self, doc: &mut B) -> Vec<Effect> {
         // Search and ex commands never join the `.` recording.
         self.rec_discard();
-        if self.command.starts_with('/') {
+        if self.command.starts_with(['/', '?']) {
             return self.run_search(doc);
         }
-        // Ex commands are not `.`-repeatable; the in-progress change (if
-        // any) is dropped, the last change keeps.
-        self.rec_discard();
-        if Self::is_substitute(&self.command) {
-            let command = self.command.clone();
-            let outcome = self.substitute(doc, &command);
-            self.command.clear();
-            self.enter_normal(doc);
-            return outcome;
-        }
+        self.x.last_ex = Some(self.command.clone());
         if let Some(args) = self.set_args() {
             return self.run_set(doc, &args);
         }
         if let Some((line, col)) = Self::line_target(&self.command) {
             self.command.clear();
             self.enter_normal(doc);
+            self.push_jump();
             let effects = self.place_cursor(doc, line.saturating_sub(1), col.saturating_sub(1));
             self.request_scroll();
             return effects;
         }
-        let effects = Self::ex_effects(&self.command);
-        let failed = effects == vec![Effect::Bell];
-        self.command.clear();
+        let command = std::mem::take(&mut self.command);
         self.enter_normal(doc);
-        if failed {
-            return vec![Effect::Bell];
-        }
-        effects
+        self.run_ex(doc, &command)
     }
 
-    /// Vim `/pattern`: jump to the next match, wrapping. An empty pattern
-    /// repeats the last search.
+    /// Vim `/pattern` and `?pattern`: jump to the next (previous) match,
+    /// wrapping. An empty pattern repeats the last search.
     fn run_search<B: Buffer>(&mut self, doc: &mut B) -> Vec<Effect> {
-        let pattern = if self.command.len() > 1 {
+        let backward = self.command.starts_with('?');
+        let pattern = if self.command.chars().count() > 1 {
             self.command.get(1..).unwrap_or("").to_string()
         } else {
             self.search_last.clone()
         };
+        self.command.clear();
+        self.enter_normal(doc);
         if pattern.is_empty() {
             return vec![Effect::Bell];
         }
-        self.search_last.clone_from(&pattern);
-        let from = self.char_idx(doc, self.cursor);
-        self.command.clear();
-        self.enter_normal(doc);
-        if !self.jump_to_match(
-            doc,
-            JumpToMatchInput {
-                pattern: &pattern,
-                from,
-                forward: true,
-            },
-        ) {
+        let Some(target) = self.search_from_cursor(doc, &pattern, backward) else {
             return vec![Effect::Bell];
-        }
+        };
+        self.push_jump();
+        self.cursor = target;
+        self.preferred_col = target.col;
+        self.clamp(doc);
+        self.scroll_request = true;
         Vec::new()
     }
 
@@ -117,7 +100,7 @@ impl VimEngine {
         }
     }
 
-    fn ex_effects(command: &str) -> Vec<Effect> {
+    pub(super) fn ex_effects(command: &str) -> Vec<Effect> {
         match command {
             "w" => vec![Effect::Save],
             "w!" => vec![Effect::SaveForce],
@@ -145,13 +128,5 @@ impl VimEngine {
             .split_once(':')
             .unwrap_or((command.trim(), "1"));
         Some((line.parse().ok()?, col.parse().ok()?))
-    }
-
-    /// True for `:s/delim/…` and `:%s/delim/…`. Anything else starting
-    /// with `s` (`split`, `sp`) belongs to the plain ex table.
-    pub(super) fn is_substitute(command: &str) -> bool {
-        let body = command.strip_prefix('%').unwrap_or(command);
-        let mut chars = body.chars();
-        matches!((chars.next(), chars.next()), (Some('s'), Some(d)) if !d.is_alphanumeric())
     }
 }

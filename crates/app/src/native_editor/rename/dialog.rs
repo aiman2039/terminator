@@ -141,10 +141,8 @@ impl App {
             doc.save_error = Some("Rename changed the file on disk while this buffer had edits. Review it before saving.".into());
             return true;
         }
-        doc.doc = None;
-        doc.load_rx = None;
-        doc.loading = false;
-        doc.load_error = None;
+        // Applied as one undoable edit, keeping the undo history.
+        doc.request_reload(false);
         false
     }
 

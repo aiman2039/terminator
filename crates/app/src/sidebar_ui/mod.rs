@@ -7,6 +7,7 @@ mod explorer;
 pub(crate) use explorer::SessionRowInTabInput;
 mod explorer_file_menu;
 mod explorer_projects;
+pub(crate) use explorer_projects::{ProjectNames, apply_project_names};
 mod explorer_prompts;
 mod explorer_rows;
 pub(crate) use explorer_rows::ExplorerToggleInput;

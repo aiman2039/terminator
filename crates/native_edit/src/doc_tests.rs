@@ -175,6 +175,27 @@ fn char_at_line_col_clamps_to_line_end_without_the_newline() {
     assert_eq!(doc.char_at_line_col(1, 99), 6);
     assert_eq!(doc.char_at_line_col(2, 99), doc.len_chars());
     let crlf = Doc::new("ab\r\ncd");
-    // Same as the line text: the `\r` stays a column.
-    assert_eq!(crlf.char_at_line_col(0, 99), 3);
+    // `\r\n` is one line break: the caret stops before the `\r`.
+    assert_eq!(crlf.char_at_line_col(0, 99), 2);
+}
+
+#[test]
+fn typing_at_the_end_of_a_crlf_line_keeps_one_line_break() {
+    let mut doc = Doc::new("one\r\ntwo\nthree\rfour");
+    assert_eq!(doc.line_text(0), "one");
+    assert_eq!(doc.line_text(2), "three");
+    let end = doc.char_at_line_col(0, usize::MAX);
+    doc.insert(end, "!");
+    assert_eq!(doc.text(), "one!\r\ntwo\nthree\rfour");
+    let end = doc.char_at_line_col(2, usize::MAX);
+    doc.insert(end, "?");
+    assert_eq!(doc.text(), "one!\r\ntwo\nthree?\rfour");
+}
+
+#[test]
+fn content_hash_streams_chunks_like_hashing_the_text() {
+    let text = "x".repeat(10_000) + "\nyé\r\n";
+    let doc = Doc::new(text.clone());
+    assert_eq!(doc.content_hash(), super::hash_text(&text));
+    assert_ne!(doc.content_hash(), super::hash_text("other"));
 }

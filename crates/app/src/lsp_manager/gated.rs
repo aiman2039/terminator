@@ -145,9 +145,10 @@ impl LspManager {
         if !self.server_supports(path, "documentRangeFormattingProvider") {
             return false;
         }
+        let options = self.format_options_for(path);
         self.send_for(
             path,
-            |id, uri| L::range_formatting(id, uri, range),
+            |id, uri| L::range_formatting(id, uri, range, options),
             Pending::Format {
                 path: path.to_owned(),
                 revision,
@@ -167,9 +168,10 @@ impl LspManager {
         if !self.on_type_triggers(path).contains(&ch) {
             return false;
         }
+        let options = self.format_options_for(path);
         self.send_for(
             path,
-            |id, uri| L::on_type_formatting(id, uri, position, ch),
+            |id, uri| L::on_type_formatting(id, uri, (position, ch), options),
             Pending::OnTypeFormat {
                 path: path.to_owned(),
                 revision,

@@ -8,6 +8,17 @@ impl LspManager {
             .map(|doc| doc.version)
     }
 
+    /// Buffer revision of the text the servers last saw for `path` (the
+    /// newest of the main and spell servers), if one has it open.
+    pub fn submitted_revision(&self, path: &Path) -> Option<u64> {
+        [self.docs.get(path), self.spell_docs.get(path)]
+            .into_iter()
+            .flatten()
+            .filter(|doc| doc.opened)
+            .map(|doc| doc.submitted)
+            .max()
+    }
+
     pub fn invalidate_paths(&mut self, paths: &[PathBuf]) {
         for path in paths {
             self.close_path(path);

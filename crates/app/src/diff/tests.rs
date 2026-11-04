@@ -99,6 +99,7 @@ fn rebuild_keeps_revealed_ranges_and_whitespace_mode() {
     let view = DiffView {
         context: 3,
         revealed: expanded.revealed.clone(),
+        revealed_in: None,
         options: DiffOptions::default(),
     };
     let refreshed = doc.rebuild(Path::new("f.txt"), false, &view);
@@ -124,6 +125,7 @@ fn ignore_whitespace_hides_indent_only_changes_and_keeps_text() {
         &DiffView {
             context: 3,
             revealed: Vec::new(),
+            revealed_in: None,
             options: DiffOptions {
                 whitespace: Whitespace::All,
                 ..DiffOptions::default()
@@ -232,6 +234,7 @@ fn build_view(left: &str, right: &str, options: DiffOptions) -> DiffDocument {
         view: &DiffView {
             context: 3,
             revealed: Vec::new(),
+            revealed_in: None,
             options,
         },
     })
@@ -365,4 +368,27 @@ fn word_marks_pair_changed_lines_by_position_and_skip_unpaired_lines() {
         .map(|line| line.spans.iter().map(|s| s.text.as_str()).collect())
         .collect();
     assert_eq!(text, ["let a = 10;", "let bb = 2;", "let c = 3;"]);
+}
+
+#[test]
+fn changed_lines_record_carriage_returns_and_a_missing_final_newline() {
+    let doc = build_view("a\r\nb", "a\r\nc\n", DiffOptions::default());
+    let removed = doc
+        .unified
+        .iter()
+        .find(|line| line.kind == LineKind::Delete)
+        .expect("removed line");
+    assert!(removed.end.no_newline && !removed.end.cr);
+    let added = doc
+        .unified
+        .iter()
+        .find(|line| line.kind == LineKind::Insert)
+        .expect("added line");
+    assert!(!added.end.no_newline);
+    let kept = doc
+        .unified
+        .iter()
+        .find(|line| line.kind == LineKind::Equal)
+        .expect("context line");
+    assert!(kept.end.cr);
 }

@@ -149,6 +149,16 @@ impl App {
             *expanded = !*expanded;
             self.preferences.expanded.insert(p.id.clone(), *expanded);
         }
+        if self
+            .project_names
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.id == p.id)
+        {
+            let left = ui.next_widget_position().x;
+            self.project_rename_field(ui);
+            return left;
+        }
         let response = self
             .project_row(ui, p, (count, *expanded))
             .on_hover_text(self.project_hover(p));
@@ -181,10 +191,12 @@ impl App {
                 },
             );
         }
+        let folder = if expanded { "FolderOpen" } else { "Folder" };
         appearance::project_row(appearance::ProjectRowInput {
             ui,
             label: &p.name,
-            icon: if expanded { "FolderOpen" } else { "Folder" },
+            icon: self.project_icon(&p.id, folder),
+            color: self.project_color(&p.id),
             selected,
             height: self.theme.row_height(),
             trailing: &count.to_string(),
@@ -211,6 +223,7 @@ impl App {
     }
 
     fn project_menu(&mut self, ui: &mut egui::Ui, p: &Project) {
+        self.project_style_menu(ui, p);
         if self.has_worktrees()
             && appearance::menu_item(appearance::MenuItemInput {
                 ui,

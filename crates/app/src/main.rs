@@ -8,6 +8,8 @@ use std::fs;
 use terminator::{App, daemon_connection, installation};
 use terminator_core::{Paths, crash, generations};
 mod renderer;
+#[cfg(target_os = "linux")]
+mod x11_nest;
 
 /// Fixture runs render on a schedule while occluded; without a held
 /// activity macOS App Nap suspends their timers mid-case (stalled
@@ -32,6 +34,10 @@ fn hold_fixture_activity() {
 }
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if let Some(code) = x11_nest::run_nested_if_needed() {
+        std::process::exit(code);
+    }
     let renderer = selected_renderer()?;
     if !installation::preflight()? {
         return Ok(());

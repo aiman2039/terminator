@@ -6,11 +6,11 @@ use super::helpers::{CaretChord, RenderHelpers};
 use crate::doc::Buffer;
 use crate::highlight::Language;
 use crate::view::{
-    IdeAction, IdeEdit, IdeEditKeyInput, comment_token, ctrl_h_is_motion, ctrl_v_is_block,
-    ide_edit_in_vim, ide_edit_key, ide_shortcut,
+    IdeAction, IdeEdit, IdeEditKeyInput, comment_token, ctrl_h_is_motion, ide_edit_in_vim,
+    ide_edit_key, ide_shortcut,
 };
 use crate::vim::ModalEngine;
-use crate::vim::{Effect, IdeMotion, Key as VKey, Mode, VimEngine};
+use crate::vim::{Effect, IdeMotion, Key as VKey, Mode, ViewScroll, VimEngine};
 
 type KeyChord = (egui::Key, egui::Modifiers);
 
@@ -90,6 +90,7 @@ impl<B: Buffer> SourceView<'_, B> {
         if !focused || self.options.read_only {
             return;
         }
+        self.report_viewport(canvas);
         let mut batch = self.read_shortcuts(canvas);
         self.route_ctrl_h(&mut batch);
         let ShortcutBatch {
@@ -102,6 +103,7 @@ impl<B: Buffer> SourceView<'_, B> {
         let selecting_block = self.run_vim_ctrls(canvas, vim_ctrls);
         self.paste_clipboard(canvas, pastes, selecting_block);
         self.handle_discrete_keys(canvas);
+        self.apply_view_scroll(canvas);
         // Keep repainting while focused so the caret stays live. The
         // caret does not blink, so a slow tick is enough: a per-frame
         // repaint keeps the whole GUI awake for nothing.
@@ -151,24 +153,19 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     fn classify_shortcut(&self, (key, modifiers): KeyChord, batch: &mut ShortcutBatch) {
-        // Control is independent of Command on macOS. Ctrl-Q is Vim's
-        // block-selection alias for backends that reserve Ctrl-V for
-        // clipboard paste.
-        let vim_ctrl = modifiers.ctrl
-            && !modifiers.mac_cmd
-            && !modifiers.alt
-            && ctrl_v_is_block(self.options.vim, self.engine.mode());
-        let vim_key = match key {
-            egui::Key::V | egui::Key::Q if vim_ctrl && !modifiers.shift => Some(VKey::CtrlV),
-            // Ctrl-6 / Ctrl-^ (Shift may be held): the alternate file.
-            egui::Key::Num6 if vim_ctrl => Some(VKey::CtrlCaret),
-            _ => None,
-        };
-        if let Some(vkey) = vim_key {
+        // Control is independent of Command on macOS; on Linux it is
+        // Command, so vim's own chords (Ctrl-R, Ctrl-D, …) must win over
+        // the IDE ones here.
+        if let Some(vkey) = self.vim_ctrl(key, modifiers) {
             batch.vim_ctrls.push((key, modifiers, vkey));
         } else if let Some(action) = ide_shortcut(key, modifiers) {
             batch.actions.push((key, modifiers, action));
         }
+    }
+
+    /// The engine key for a Ctrl chord vim owns in its current mode.
+    fn vim_ctrl(&self, key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
+        crate::view::keys::vim_ctrl_key(key, modifiers, self.options.vim, self.engine.mode())
     }
 
     /// Vim-owned Ctrl chords become engine keys before IDE actions run,
@@ -311,6 +308,7 @@ impl<B: Buffer> SourceView<'_, B> {
                         page_rows,
                     })
                     && (!self.options.vim || ide_edit_in_vim(edit, *modifiers))
+                    && self.vim_ctrl(*key, *modifiers).is_none()
                 {
                     edits.push((*key, *modifiers, edit));
                 }
@@ -372,5 +370,65 @@ impl<B: Buffer> SourceView<'_, B> {
             IdeEdit::ShrinkSelection => engine.ide_shrink_selection(doc),
         }
         None
+    }
+
+    /// Tell the engine which lines are on screen (`H`/`M`/`L`, Ctrl-D…).
+    fn report_viewport(&mut self, canvas: &Canvas<'_>) {
+        let height = self.geometry.row_height.max(1.0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Row indices from UI coordinates."
+        )]
+        let (first, last) = (
+            ((canvas.clip.top() - canvas.origin.y) / height)
+                .ceil()
+                .max(0.0) as usize,
+            ((canvas.clip.bottom() - canvas.origin.y) / height)
+                .floor()
+                .max(1.0) as usize,
+        );
+        let line = |row: usize| {
+            canvas
+                .rows
+                .get(row.min(canvas.rows.len().saturating_sub(1)))
+                .map_or(0, |r| r.line)
+        };
+        let (top, bottom) = (line(first), line(last.saturating_sub(1).max(first)));
+        self.engine.set_viewport(top, bottom.max(top));
+    }
+
+    /// Apply a scroll the keys asked for (`zz`, `zt`, `zb`, Ctrl-D/U/E/Y).
+    fn apply_view_scroll(&mut self, canvas: &Canvas<'_>) {
+        let Some(scroll) = self.engine.take_view_scroll() else {
+            return;
+        };
+        let height = self.geometry.row_height;
+        let align = match scroll {
+            ViewScroll::Lines(lines) => {
+                #[expect(clippy::cast_precision_loss, reason = "Line counts are small.")]
+                let delta = -(lines as f32) * height;
+                canvas.ui.scroll_with_delta(egui::Vec2::new(0.0, delta));
+                return;
+            }
+            ViewScroll::Top => egui::Align::Min,
+            ViewScroll::Center => egui::Align::Center,
+            ViewScroll::Bottom => egui::Align::Max,
+        };
+        let cursor = self.engine.cursor();
+        let row = canvas
+            .rows
+            .iter()
+            .position(|row| row.owns_cursor(cursor.line, cursor.col))
+            .unwrap_or(cursor.line);
+        #[expect(clippy::cast_precision_loss, reason = "Row indices are small.")]
+        let y = canvas.origin.y + row as f32 * height;
+        canvas.ui.scroll_to_rect(
+            egui::Rect::from_min_size(
+                egui::pos2(canvas.origin.x, y),
+                egui::vec2(canvas.width, height),
+            ),
+            Some(align),
+        );
     }
 }

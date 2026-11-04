@@ -58,6 +58,34 @@ pub(super) fn run_diff_frames(input: RunDiffFramesInput<'_>) {
     }
 }
 
+/// Run frames until the live diff (built on the CPU pool) describes the
+/// buffer's current revision.
+pub(super) fn settle_live_diff(app: &mut App, ctx: &egui::Context, tab: &Tab) {
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(30) {
+        let current = app
+            .diff_reviews
+            .get(&tab.key())
+            .and_then(|review| review.buffer.as_ref())
+            .is_some_and(|buffer| {
+                buffer.live.shown.as_ref().is_some_and(|(at, _)| {
+                    *at == terminator_native_edit::doc::Buffer::revision(&buffer.editor.doc)
+                })
+            });
+        if current {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let time = ctx.input(|input| input.time) + 0.1;
+        run_diff_frames(RunDiffFramesInput {
+            app,
+            ctx,
+            tab,
+            frames: &[(time, vec![])],
+        });
+    }
+}
+
 pub(super) fn buffer_text(app: &App, tab: &Tab) -> String {
     app.diff_reviews
         .get(&tab.key())
@@ -104,20 +132,16 @@ pub(super) fn click_and_key(input: ClickAndKeyInput<'_>) {
             (base + 0.3, click(true)),
             (base + 0.4, click(false)),
             (base + 0.45, vec![]),
-            (
-                base + 0.5,
-                vec![egui::Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-            ),
+            (base + 0.5, key_events(key)),
             (base + 0.6, vec![]),
             (base + 0.7, vec![]),
         ],
     });
+}
+
+/// A real keyboard sends the key press and, for a printable key, its text.
+fn key_events(key: egui::Key) -> Vec<egui::Event> {
+    terminator_native_edit::view::keyboard_events(key, egui::Modifiers::NONE)
 }
 
 pub(super) fn click_and_shortcut(input: ClickAndShortcutInput<'_>) {

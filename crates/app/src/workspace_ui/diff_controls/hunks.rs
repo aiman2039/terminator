@@ -2,9 +2,9 @@ use super::super::super::*;
 #[cfg(feature = "test-support")]
 use super::chevrons::action_target;
 use super::chevrons::{ChevronBand, action_tip};
+use super::rows::HunkLine;
 use super::{
-    ChangedLineInput, ControlsFrame, ControlsState, PaintConnectorInput, PaneOutput, change_color,
-    changed_line, paint_connector,
+    ControlsFrame, ControlsState, PaintConnectorInput, PaneOutput, change_color, paint_connector,
 };
 use diff::actions::Kind;
 
@@ -185,72 +185,87 @@ impl ControlsFrame<'_> {
                 egui::StrokeKind::Inside,
             );
         }
-        // Observe clicks without covering the text's selection widget.
-        if let Some(pos) = self.pointer.filter(|pos| visible.contains(*pos))
-            && ui.input(|input| input.pointer.primary_clicked())
-        {
-            review.selected = Some(band.index);
-            review.confirm_discard = None;
-            // Alt+click picks single changed lines for line-level
-            // stage/unstage/discard (painted views only).
-            if ui.input(|input| input.modifiers.alt) && !self.editor_pane {
-                self.pick_line_at(view, pos, review);
-            }
+        // Observe the pointer without covering the text's selection widget.
+        let pointer = self.pointer.filter(|pos| visible.contains(*pos));
+        let picked_here = matches!(&review.picked, Some((hunk, _)) if *hunk == band.index);
+        // Picks start only from a painted pane under the pointer, so the
+        // lines are needed only then or when this hunk already has picks.
+        let lines = if (pointer.is_some() && !self.editor_pane) || picked_here {
+            self.hunk_lines(band.hunk, side)
+        } else {
+            Vec::new()
+        };
+        if let Some(pos) = pointer {
+            self.pick_input(ui, (view, pos, &lines), review);
         }
-        self.mark_picked_lines(ui, view, review);
+        self.mark_picked_lines(ui, (view, &lines), review);
     }
 
-    fn pick_line_at(&self, view: &SideView<'_>, pos: egui::Pos2, review: &mut diff::review::State) {
+    /// Track the changed line under the pointer, and pick lines on the
+    /// pick-box column (or with Alt anywhere on the row): a press toggles
+    /// one line, a drag applies the same state to every line it crosses.
+    /// Painted views only; the live editor pane keeps its own clicks.
+    fn pick_input(
+        &self,
+        ui: &egui::Ui,
+        (view, pos, lines): (&SideView<'_>, egui::Pos2, &[HunkLine]),
+        review: &mut diff::review::State,
+    ) {
         let SideView {
             band, side, output, ..
         } = *view;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "Row index from UI coordinates."
-        )]
-        let row = ((pos.y - output.inner_rect.top() + output.state.unclamped_offset().y)
-            / self.row_h)
-            .floor()
-            .max(0.0) as usize;
-        let hunk = band.hunk;
-        if let Some((old, line)) = changed_line(ChangedLineInput {
-            doc: self.doc,
-            split: self.split,
-            side,
-            row,
-        }) && (if old { &hunk.old } else { &hunk.new }).contains(&line)
+        let (pressed, clicked, down, alt) = ui.input(|input| {
+            (
+                input.pointer.primary_pressed(),
+                input.pointer.primary_clicked(),
+                input.pointer.primary_down(),
+                input.modifiers.alt,
+            )
+        });
+        if clicked {
+            review.selected = Some(band.index);
+            review.confirm_discard = None;
+        }
+        if self.editor_pane {
+            return;
+        }
+        self.paint_pick_boxes(ui, (lines, output), band.color);
+        let row = self.row_at(output, pos);
+        let Some((old, line)) = self.hunk_line_at(band.hunk, side, row) else {
+            return;
+        };
+        review.hover_line = Some((band.index, old, line));
+        let in_boxes = pos.x < output.inner_rect.left() + super::rows::PICK_GUTTER;
+        if pressed && (in_boxes || alt) {
+            review.start_drag(band.index, old, line);
+        } else if down
+            && review
+                .drag
+                .is_some_and(|drag| drag.hunk == band.index && drag.old == old)
         {
-            review.toggle_line(band.index, old, line);
+            review.drag_to(line);
         }
     }
 
     /// Mark picked lines in this hunk.
-    fn mark_picked_lines(&self, ui: &egui::Ui, view: &SideView<'_>, review: &diff::review::State) {
-        let SideView {
-            band, side, output, ..
-        } = *view;
+    fn mark_picked_lines(
+        &self,
+        ui: &egui::Ui,
+        (view, hunk_lines): (&SideView<'_>, &[HunkLine]),
+        review: &diff::review::State,
+    ) {
+        let SideView { band, output, .. } = *view;
         let Some((picked_hunk, lines)) = &review.picked else {
             return;
         };
         if *picked_hunk != band.index {
             return;
         }
-        let row_h = self.row_h;
         let clip = output.inner_rect;
         let font = super::super::diff_paint::diff_row_font(ui);
-        for row in band.hunk.rows(self.split) {
-            let Some((old, line)) = changed_line(ChangedLineInput {
-                doc: self.doc,
-                split: self.split,
-                side,
-                row,
-            }) else {
-                continue;
-            };
+        for &(row, (old, line)) in hunk_lines {
             if (if old { &lines.old } else { &lines.new }).contains(&line) {
-                let y = output.inner_rect.top() + row as f32 * row_h
-                    - output.state.unclamped_offset().y;
+                let y = self.row_top(output, row);
                 ui.painter().with_clip_rect(clip).text(
                     super::super::diff_paint::snap(
                         ui,

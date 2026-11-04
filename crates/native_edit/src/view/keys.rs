@@ -70,6 +70,73 @@ fn key_name_char(key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
     }
 }
 
+/// A Ctrl chord vim owns in its current mode, as an engine key: Ctrl-V /
+/// Ctrl-Q block select and Ctrl-6 alternate file (Normal and Visual),
+/// redo, scrolling, jumps and increment (Normal), scrolling (Visual) and
+/// Ctrl-W / Ctrl-U / Ctrl-O (Insert). These win over IDE chords such as
+/// Ctrl-A select all, so Linux (where Ctrl is Command) matches macOS.
+#[must_use]
+pub fn vim_ctrl_key(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    vim: bool,
+    mode: Mode,
+) -> Option<VKey> {
+    if !(vim && modifiers.ctrl && !modifiers.mac_cmd && !modifiers.alt) {
+        return None;
+    }
+    let block = ctrl_v_is_block(vim, mode);
+    match key {
+        egui::Key::V | egui::Key::Q if block && !modifiers.shift => return Some(VKey::CtrlV),
+        // Ctrl-6 / Ctrl-^ (Shift may be held): the alternate file.
+        egui::Key::Num6 if block => return Some(VKey::CtrlCaret),
+        _ => {}
+    }
+    if modifiers.shift {
+        return None;
+    }
+    let mut name = key.name().chars();
+    let letter = match (name.next(), name.next()) {
+        (Some(c), None) if c.is_ascii_alphabetic() => c.to_ascii_lowercase(),
+        _ => return None,
+    };
+    let owned = match mode {
+        Mode::Normal => "rdufbeyoiax",
+        Mode::Visual | Mode::VisualLine | Mode::VisualBlock => "dufbey",
+        Mode::Insert => "wuo",
+        Mode::Command => "",
+    };
+    owned.contains(letter).then_some(VKey::Ctrl(letter))
+}
+
+/// True when a key press also arrives as a Text event (a printable char
+/// without Ctrl or Command): the text carries the char, in the user's
+/// keyboard layout, so the key event itself is skipped.
+#[must_use]
+pub fn arrives_as_text(key: egui::Key, modifiers: egui::Modifiers) -> bool {
+    !modifiers.ctrl && !modifiers.command && matches!(egui_key(key, modifiers), Some(VKey::Char(_)))
+}
+
+/// The events a real keyboard sends for one press: the key, then its
+/// text when the view takes the char from Text ([`arrives_as_text`]).
+/// For test fixtures that synthesize input.
+#[must_use]
+pub fn keyboard_events(key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+    let mut events = vec![egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }];
+    if arrives_as_text(key, modifiers)
+        && let Some(VKey::Char(c)) = egui_key(key, modifiers)
+    {
+        events.push(egui::Event::Text(c.to_string()));
+    }
+    events
+}
+
 /// IntelliJ-style shortcut the file view owns in every mode (vim included):
 /// the editor keeps copy/cut/paste/select/undo keys instead of yielding them.
 /// Ctrl-V and Ctrl-H are conditional (see [`ctrl_v_is_block`] and
@@ -351,20 +418,6 @@ pub fn ctrl_h_is_motion(vim: bool, mode: Mode) -> bool {
 #[must_use]
 pub fn source_focus_id(id: &str) -> egui::Id {
     egui::Id::unique(("native-source-focus", id))
-}
-
-/// True when a Text event only echoes a keypress already handled as a
-/// discrete vim key — e.g. the `i` that opened Insert mode must not type
-/// itself. Each single-char echo consumes one recorded key, in order.
-pub fn echo_of_handled_key(text: &str, handled: &mut Vec<char>) -> bool {
-    if text.chars().count() != 1 {
-        return false;
-    }
-    if let Some(pos) = handled.iter().position(|c| text.starts_with(*c)) {
-        handled.remove(pos);
-        return true;
-    }
-    false
 }
 
 /// Vim footer prompt: `:ex` commands and `/search` share the command line.

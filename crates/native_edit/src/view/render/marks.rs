@@ -44,17 +44,18 @@ pub struct RangeFill {
 
 /// One line's gutter annotation (blame): `text` in the column, `hover`
 /// on hover. Lines of one commit share `group`, which alternates the
-/// column shading between commits.
+/// column shading between commits. Shared strings: moving a column onto
+/// edited lines copies no text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Annotation {
-    pub text: String,
-    pub hover: String,
+    pub text: std::sync::Arc<str>,
+    pub hover: std::sync::Arc<str>,
     pub group: u32,
 }
 
 /// One diagnostic underline: a char-column span on one line, with the
 /// message shown when hovered. Multi-line ranges underline their first
-/// line to its end.
+/// line to its end; [`squiggle_tails`] covers the lines after it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Squiggle {
     pub line: usize,
@@ -62,6 +63,49 @@ pub struct Squiggle {
     pub end: usize,
     pub severity: crate::lsp::Severity,
     pub message: String,
+}
+
+/// Most continuation lines one multi-line diagnostic underlines.
+const MAX_TAIL_LINES: usize = 200;
+
+/// Underlines for the lines after the first of each multi-line
+/// diagnostic, whole lines up to the range end, sorted by position.
+/// Painted only: navigation (F8) stops on the first line alone.
+#[must_use]
+pub fn squiggle_tails<B: Buffer>(doc: &B, diagnostics: &[crate::lsp::Diagnostic]) -> Vec<Squiggle> {
+    let mut out = Vec::new();
+    for diagnostic in diagnostics.iter().take(1000) {
+        let (Ok(first), Ok(last)) = (
+            usize::try_from(diagnostic.range.start.line),
+            usize::try_from(diagnostic.range.end.line),
+        ) else {
+            continue;
+        };
+        let last = last
+            .min(doc.line_count().saturating_sub(1))
+            .min(first.saturating_add(MAX_TAIL_LINES));
+        for line in first.saturating_add(1)..=last {
+            let text = doc.line_text(line);
+            let len = text.chars().count();
+            let end = if line == last {
+                crate::lsp::utf16_to_char_col(&text, diagnostic.range.end.character).min(len)
+            } else {
+                len
+            };
+            let start = text.chars().take_while(|c| c.is_whitespace()).count();
+            if end > start {
+                out.push(Squiggle {
+                    line,
+                    start,
+                    end,
+                    severity: diagnostic.severity.unwrap_or(crate::lsp::Severity::Hint),
+                    message: diagnostic.message.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by_key(|squiggle| (squiggle.line, squiggle.start));
+    out
 }
 
 /// Underlines for a buffer's diagnostics, sorted by position. Empty or

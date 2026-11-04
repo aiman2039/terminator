@@ -184,7 +184,8 @@ impl App {
             && let Some(buffer) = pass.review.buffer.as_mut()
         {
             let path = panes.frame.cwd.join(panes.frame.path);
-            let (live, waiting) = buffer.live_document(&path, ui.input(|input| input.time));
+            let pool = self.services.submit();
+            let (live, waiting) = buffer.live_document(&path, ui.input(|input| input.time), &pool);
             if waiting {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(50));

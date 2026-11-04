@@ -4,22 +4,10 @@ use super::*;
 use std::io::Write;
 use terminator_core::ssh::{self, HostKey, HostKeyScan, SshOptions};
 
-fn private(mut command: Command) -> Command {
-    for key in ssh::private_environment_keys() {
-        command.env_remove(key);
-    }
-    command
-}
 /// `ssh -G` applies `~/.ssh/config`, so aliases resolve to the real endpoint.
 fn resolve(options: &SshOptions) -> Result<ssh::Resolved> {
-    let mut command = private(Command::new("ssh"));
-    command
-        .arg("-G")
-        .args(ssh::arguments(options, false, None)?)
-        .arg("--")
-        .arg(&options.host);
     let output = run_command(
-        command,
+        ssh::resolve_command(ssh::arguments(options, false, None)?, &options.host),
         CommandOptions {
             timeout: Duration::from_secs(5),
             stdout_limit: 256 * 1024,
@@ -32,7 +20,7 @@ fn resolve(options: &SshOptions) -> Result<ssh::Resolved> {
 }
 pub(crate) fn scan(options: &SshOptions) -> Result<HostKeyScan> {
     let resolved = resolve(options)?;
-    let mut command = private(Command::new("ssh-keyscan"));
+    let mut command = ssh::scrubbed(Command::new("ssh-keyscan"));
     command
         .args(["-T", "5", "-p"])
         .arg(resolved.port.to_string())
@@ -61,7 +49,7 @@ pub(crate) fn scan(options: &SshOptions) -> Result<HostKeyScan> {
         .iter()
         .map(|key| ssh::known_hosts_line(&host, key))
         .collect();
-    let mut command = private(Command::new("ssh-keygen"));
+    let mut command = ssh::scrubbed(Command::new("ssh-keygen"));
     command.args(["-l", "-E", "sha256", "-f", "-"]);
     let output = run_command(
         command,
@@ -170,7 +158,7 @@ fn known_keys(path: &Path, host: &str) -> Result<Vec<(String, String)>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let mut command = private(Command::new("ssh-keygen"));
+    let mut command = ssh::scrubbed(Command::new("ssh-keygen"));
     command.arg("-F").arg(host).arg("-f").arg(path);
     let output = run_command(
         command,

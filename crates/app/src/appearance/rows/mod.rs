@@ -206,6 +206,8 @@ pub(crate) struct ProjectRowInput<'a> {
     pub ui: &'a mut egui::Ui,
     pub label: &'a str,
     pub icon: &'a str,
+    /// Label and icon color; `None` keeps the theme colors.
+    pub color: Option<Color32>,
     pub selected: bool,
     pub height: f32,
     pub trailing: &'a str,
@@ -217,6 +219,7 @@ pub fn project_row(input: ProjectRowInput<'_>) -> egui::Response {
         ui,
         label,
         icon,
+        color,
         selected,
         height,
         trailing,
@@ -226,15 +229,25 @@ pub fn project_row(input: ProjectRowInput<'_>) -> egui::Response {
         ui.style_mut()
             .text_styles
             .insert(TextStyle::Body, FontId::proportional(14.0));
-        row(RowInput {
+        if color.is_some() {
+            ui.visuals_mut().override_text_color = color;
+        }
+        row_ext(
             ui,
-            label,
-            icon,
-            selected,
-            height,
-            trailing,
-            tint,
-        })
+            RowSpec {
+                label,
+                icon,
+                selected,
+                height,
+                trailing,
+                tint,
+                icon_tint: color,
+                spin: false,
+                subtitle: None,
+                brand: None,
+                reserve_brand: false,
+            },
+        )
     })
     .inner
 }

@@ -6,6 +6,21 @@ use serde::{Deserialize, Serialize};
 pub const FONT_SIZE: std::ops::RangeInclusive<f32> = 8.0..=32.0;
 /// Line spacing range, as a multiple of the font's row height.
 pub const LINE_SPACING: std::ops::RangeInclusive<f32> = 1.0..=2.0;
+/// Autosave delay range, in milliseconds.
+pub const AUTOSAVE_DELAY_MS: std::ops::RangeInclusive<u32> = 200..=60_000;
+
+/// When the native editor saves on its own. A buffer whose file changed
+/// on disk is never autosaved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Autosave {
+    #[default]
+    Off,
+    /// When the editor loses keyboard focus.
+    FocusLoss,
+    /// After `editor_autosave_delay_ms` without typing.
+    Delay,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -18,6 +33,10 @@ pub struct EditorPrefs {
     /// `JetBrains` keymap in a focused editor: Cmd+B, Cmd+E, Cmd+L, F2,
     /// Shift+F6, Cmd+[ / ], Shift+Cmd+A and double Shift win over app keys.
     pub editor_jetbrains_keys: bool,
+    /// Show each line's worst problem after its text ("error lens").
+    pub editor_error_lens: bool,
+    pub editor_autosave: Autosave,
+    pub editor_autosave_delay_ms: u32,
 }
 
 impl Default for EditorPrefs {
@@ -28,6 +47,9 @@ impl Default for EditorPrefs {
             editor_caret_blink: true,
             editor_rainbow_brackets: true,
             editor_jetbrains_keys: true,
+            editor_error_lens: false,
+            editor_autosave: Autosave::Off,
+            editor_autosave_delay_ms: 1000,
         }
     }
 }
@@ -55,6 +77,11 @@ impl EditorPrefs {
             editor_caret_blink: self.editor_caret_blink,
             editor_rainbow_brackets: self.editor_rainbow_brackets,
             editor_jetbrains_keys: self.editor_jetbrains_keys,
+            editor_error_lens: self.editor_error_lens,
+            editor_autosave: self.editor_autosave,
+            editor_autosave_delay_ms: self
+                .editor_autosave_delay_ms
+                .clamp(*AUTOSAVE_DELAY_MS.start(), *AUTOSAVE_DELAY_MS.end()),
         }
     }
 }
@@ -84,6 +111,22 @@ mod tests {
     }
 
     #[test]
+    fn autosave_and_error_lens_round_trip_as_appearance_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[appearance]\n").unwrap();
+        let mut file = AppearanceFile::load(&path).unwrap();
+        assert_eq!(file.config.editor.editor_autosave, Autosave::Off);
+        file.config.editor.editor_autosave = Autosave::FocusLoss;
+        file.config.editor.editor_error_lens = true;
+        let saved = AppearanceFile::save(&path, &file.config, &file.source).unwrap();
+        assert!(saved.source.contains("editor_autosave = \"focus_loss\""));
+        let again = AppearanceFile::load(&path).unwrap();
+        assert_eq!(again.config.editor.editor_autosave, Autosave::FocusLoss);
+        assert!(again.config.editor.editor_error_lens);
+    }
+
+    #[test]
     fn out_of_range_editor_prefs_clamp() {
         let prefs = EditorPrefs {
             editor_font_size: 99.0,
@@ -91,8 +134,13 @@ mod tests {
             editor_caret_blink: false,
             editor_rainbow_brackets: false,
             editor_jetbrains_keys: false,
+            editor_error_lens: true,
+            editor_autosave: Autosave::Delay,
+            editor_autosave_delay_ms: 5,
         }
         .sanitized();
+        assert_eq!(prefs.editor_autosave_delay_ms, 200);
+        assert!(prefs.editor_error_lens);
         assert_eq!(prefs.editor_font_size, 32.0);
         assert_eq!(prefs.editor_line_spacing, 1.2);
         assert!(!prefs.editor_caret_blink);

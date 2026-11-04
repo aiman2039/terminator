@@ -19,7 +19,7 @@ pub struct SourceOptions {
     pub palette: Option<EditorPalette>,
     /// Extra status-bar cells after `Ln, Col` (line ending, encoding,
     /// indent), right-aligned like the `JetBrains` status bar.
-    pub status_items: Vec<String>,
+    pub status_items: std::sync::Arc<Vec<String>>,
     pub show_line_numbers: bool,
     pub show_status: bool,
     /// Gutter marks, sorted by row; binary-searched per painted row, so
@@ -27,7 +27,7 @@ pub struct SourceOptions {
     pub diagnostics: Vec<DiagnosticMark>,
     /// Underlined diagnostic ranges, sorted (see [`super::squiggles`]); also
     /// drive the scrollbar error stripe and F8 navigation.
-    pub squiggles: Vec<Squiggle>,
+    pub squiggles: std::sync::Arc<Vec<Squiggle>>,
     /// Find-bar matches `(line, start, end)` in char columns, sorted, and
     /// the index of the selected one.
     pub find_matches: std::sync::Arc<Vec<(usize, usize, usize)>>,
@@ -85,6 +85,15 @@ pub struct SourceOptions {
     pub sticky_headers: bool,
     /// Color brackets by nesting depth.
     pub rainbow_brackets: bool,
+    /// Highlight and fold even past the large-file cap (the user chose
+    /// "enable anyway" on the large-file banner).
+    pub large_file_override: bool,
+    /// Continuation lines of multi-line diagnostics: painted like
+    /// `squiggles`, but not navigation targets.
+    pub squiggle_tails: std::sync::Arc<Vec<Squiggle>>,
+    /// Paint each line's worst diagnostic message after its text
+    /// ("error lens").
+    pub error_lens: bool,
     /// `JetBrains` keymap extras: Cmd+B, Cmd+L (Ctrl+G), F2, Shift+F6.
     pub jetbrains_keys: bool,
     /// Reads the system clipboard for vim `p`/`P`; `None` pastes only
@@ -99,7 +108,7 @@ impl Default for SourceOptions {
             line_height: 1.2,
             caret_blink: true,
             palette: None,
-            status_items: Vec::new(),
+            status_items: std::sync::Arc::default(),
             show_line_numbers: true,
             show_status: true,
             autofocus: true,
@@ -117,10 +126,13 @@ impl Default for SourceOptions {
             range_fills: std::sync::Arc::new(Vec::new()),
             sticky_headers: true,
             rainbow_brackets: false,
+            large_file_override: false,
+            squiggle_tails: std::sync::Arc::new(Vec::new()),
+            error_lens: false,
             jetbrains_keys: false,
             read_clipboard: None,
             diagnostics: Vec::new(),
-            squiggles: Vec::new(),
+            squiggles: std::sync::Arc::new(Vec::new()),
             find_matches: std::sync::Arc::new(Vec::new()),
             find_current: None,
             popup_keys: false,

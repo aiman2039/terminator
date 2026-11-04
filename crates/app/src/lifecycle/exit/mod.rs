@@ -147,7 +147,7 @@ impl App {
         self.dock_back_all_floating();
         let waiting_on_native = self.dirty_native_path().is_some()
             || self.native_close_prompt.is_some()
-            || self.native_close_after_save.is_some()
+            || !self.native_close_after_save.is_empty()
             || !self.pending_native_close.is_empty();
         if waiting_on_native {
             self.pending_app_quit = true;
@@ -165,7 +165,7 @@ impl App {
         if !self.pending_app_quit || self.exit.active() {
             return;
         }
-        if self.native_close_after_save.is_some() || !self.pending_native_close.is_empty() {
+        if !self.native_close_after_save.is_empty() || !self.pending_native_close.is_empty() {
             return;
         }
         if self.native_close_prompt.is_some() {
@@ -189,8 +189,7 @@ impl App {
             return;
         }
         self.pending_app_quit = false;
-        self.native_close_after_save = None;
-        self.native_close_after_save_issuer = None;
+        self.native_close_after_save.clear();
         crate::updater::cancel_termination();
     }
     /// Destructive shutdown steps run only after the exit is certain.

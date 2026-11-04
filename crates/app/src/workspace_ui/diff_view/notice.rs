@@ -14,6 +14,8 @@ pub(super) enum Notice {
     ConfirmDiscard(usize),
     /// A hunk request is running.
     Busy,
+    /// Lines picked in hunk `index` for a line-level action.
+    Picked { hunk: usize, count: usize },
     /// The last request's result or error.
     Message(String),
     /// A read-only snapshot hint.
@@ -28,6 +30,11 @@ pub(super) fn notice(frame: &DiffFrame<'_>, review: &diff::review::State) -> Not
         Notice::ConfirmDiscard(index)
     } else if review.busy {
         Notice::Busy
+    } else if let Some((hunk, lines)) = review.picked.as_ref().filter(|(_, l)| !l.is_empty()) {
+        Notice::Picked {
+            hunk: *hunk,
+            count: lines.len(),
+        }
     } else if let Some(message) = &review.message {
         Notice::Message(message.clone())
     } else if frame.remote {
@@ -69,11 +76,21 @@ impl App {
     ) {
         match bar {
             Notice::ConfirmDiscard(index) => {
+                let picked = pass.review.picked_in(index);
+                let what = if picked == 0 {
+                    format!("change {}", index.saturating_add(1))
+                } else {
+                    format!(
+                        "{} of change {}",
+                        diff::actions::lines_label(picked, "picked"),
+                        index.saturating_add(1)
+                    )
+                };
                 ui.colored_label(
                     ui.visuals().warn_fg_color,
-                    format!("Discard change {} from disk?", index.saturating_add(1)),
+                    format!("Discard {what} from disk? (Enter)"),
                 );
-                let discard = ui.add_enabled(frame.enabled, egui::Button::new("Discard hunk"));
+                let discard = ui.add_enabled(frame.enabled, egui::Button::new("Discard"));
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "diff-confirm-discard", discard.rect);
                 if discard.clicked() {
@@ -87,10 +104,30 @@ impl App {
                 ui.spinner();
                 ui.label("Applying hunk…");
             }
+            Notice::Picked { hunk, count } => {
+                ui.label(format!(
+                    "{} picked in change {} · Esc to clear",
+                    diff::actions::lines_label(count, ""),
+                    hunk.saturating_add(1)
+                ));
+                if appearance::sidebar_action(ui, "X", "Clear picked lines (Esc)").clicked() {
+                    pass.review.clear_picks();
+                }
+            }
             Notice::Message(message) => {
+                if pass.review.offer_undo && !pass.review.undo.is_empty() {
+                    let undo = ui.add_enabled(frame.enabled, egui::Button::new("Undo"));
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), "diff-notice-undo", undo.rect);
+                    if undo.clicked() {
+                        pass.undo = true;
+                        pass.review.offer_undo = false;
+                    }
+                }
                 ui.add(egui::Label::new(message).truncate());
                 if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
                     pass.review.message = None;
+                    pass.review.offer_undo = false;
                 }
             }
             Notice::ReadOnly(text) => {

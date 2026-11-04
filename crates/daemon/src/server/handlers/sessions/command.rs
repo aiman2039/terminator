@@ -50,6 +50,7 @@ impl Shared {
                 crate::remote::terminal::prepare(crate::remote::terminal::PrepareInput {
                     project: remote,
                     control: self.ssh_control(&remote.ssh).as_deref(),
+                    helper: &self.helper.executable,
                     sid,
                     cwd: target.requested_cwd.as_deref(),
                     file: file.as_deref(),

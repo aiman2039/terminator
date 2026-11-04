@@ -3,6 +3,7 @@ use crate::ssh::SshOptions;
 use serde::{Deserialize, Serialize};
 
 mod forward;
+pub mod mosh;
 pub use forward::{
     ActiveForward, BIND_ADDRESS, FORWARDING_CAPABILITY, Forward, ForwardError, ForwardFailure,
     ForwardStatus, MAX_FORWARDS, validate_forwards,
@@ -15,6 +16,8 @@ pub const HOSTS_CAPABILITY: &str = "ssh-hosts-v1";
 pub const EDIT_CAPABILITY: &str = "ssh-edit-v1";
 /// [`RemoteProject::command_timeout_seconds`] is stored and honored.
 pub const HOST_TIMEOUT_CAPABILITY: &str = "ssh-host-timeout-v1";
+/// [`RemoteProject::mosh`] is stored and SSH terminals honor it.
+pub const MOSH_CAPABILITY: &str = "ssh-mosh-v1";
 /// [`Operation::Upload`], [`Operation::Download`] and
 /// [`Operation::TransferStatus`].
 pub const TRANSFER_CAPABILITY: &str = "ssh-transfer-v1";
@@ -73,9 +76,18 @@ pub struct RemoteProject {
     /// SSH (`ssh-host-timeout-v1`). Omitted when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_timeout_seconds: Option<u32>,
+    /// New terminals and editors run through Mosh (`ssh-mosh-v1`): SSH
+    /// starts `mosh-server` on the host, then a local `mosh-client` carries
+    /// the session over UDP. Explorer, Git and transfers stay on SSH.
+    /// Omitted when off.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mosh: bool,
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 /// Trims a group name; blank means ungrouped.
 pub fn normalize_group(group: Option<&str>) -> Result<Option<String>, RemoteError> {
@@ -354,6 +366,7 @@ mod tests {
             forwards: Vec::new(),
             last_connected: 0,
             command_timeout_seconds: None,
+            mosh: false,
         };
         assert_ne!(p.identity_path(), std::path::PathBuf::from(&p.root));
         assert_eq!(
@@ -377,6 +390,7 @@ mod tests {
             forwards: Vec::new(),
             last_connected: 0,
             command_timeout_seconds: None,
+            mosh: false,
         };
         // Unset: older readers see the same JSON, and Settings decides.
         assert!(

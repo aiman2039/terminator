@@ -158,6 +158,7 @@ impl App {
         let name = project.name.clone();
         let project_id = project.id.clone();
         let response = appearance::project_row(appearance::ProjectRowInput {
+            color: None,
             ui,
             label: &name,
             icon: "GitBranch",

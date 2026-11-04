@@ -107,6 +107,26 @@ struct GitSnapshots<'a> {
     cancel: &'a terminator_core::async_service::CancellationToken,
 }
 
+/// `git diff --raw` arguments with rename detection, before any pathspec.
+fn raw_args(staged: bool) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = [
+        "diff",
+        "--raw",
+        "-z",
+        "--no-abbrev",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    if staged {
+        args.push("--cached".into());
+    }
+    args
+}
+
 fn git_options() -> CommandOptions {
     CommandOptions {
         stdout_limit: 4 * 1024 * 1024,
@@ -159,23 +179,7 @@ impl GitSnapshots<'_> {
     /// Left and right bytes: HEAD to index when `staged`, else index to
     /// worktree. Files without a diff record compare against the index.
     async fn sides(self, root: &Path, relative: &Path, staged: bool) -> Result<(Vec<u8>, Vec<u8>)> {
-        let mut args: Vec<std::ffi::OsString> = [
-            "diff",
-            "--raw",
-            "-z",
-            "--no-abbrev",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--find-renames",
-        ]
-        .into_iter()
-        .map(Into::into)
-        .collect();
-        if staged {
-            args.push("--cached".into());
-        }
-        let raw = self.run(root, args).await?;
-        let Some((left, right)) = terminator_git::find_record(&raw, relative)? else {
+        let Some((left, right)) = self.record(root, relative, staged).await? else {
             return self.unchanged_sides(root, relative, staged).await;
         };
         let left = self.blob(root, &left).await?;
@@ -185,6 +189,30 @@ impl GitSnapshots<'_> {
             self.worktree(root, relative).await?
         };
         Ok((left, right))
+    }
+
+    /// The raw diff record of `relative`, limited to that path. Only an
+    /// added path (a possible rename target) needs the whole-tree diff
+    /// so rename detection can pair it with its source.
+    async fn record(
+        self,
+        root: &Path,
+        relative: &Path,
+        staged: bool,
+    ) -> Result<Option<(String, String)>> {
+        let mut args = raw_args(staged);
+        args.extend(["--".into(), actions::literal(relative)]);
+        let scoped = self.run(root, args).await?;
+        let Some((before, after)) = terminator_git::find_record(&scoped, relative)? else {
+            return Ok(None);
+        };
+        if !before.bytes().all(|byte| byte == b'0') {
+            return Ok(Some((before, after)));
+        }
+        match self.run(root, raw_args(staged)).await {
+            Ok(raw) => Ok(terminator_git::find_record(&raw, relative)?.or(Some((before, after)))),
+            Err(_) => Ok(Some((before, after))),
+        }
     }
 
     async fn unchanged_sides(

@@ -8,7 +8,7 @@ const ICONS: &[&str] = &[
     "GitBranch",
     "Folder",
 ];
-const COLORS: &[(&str, &str)] = &[
+pub(crate) const TITLE_COLORS: &[(&str, &str)] = &[
     ("Blue", "#5AA9FF"),
     ("Green", "#66CC99"),
     ("Yellow", "#E8C66A"),
@@ -44,7 +44,7 @@ impl App {
     pub(super) fn terminal_style_menu(&mut self, ui: &mut egui::Ui, sid: &str) {
         ui.menu_button("Terminal appearance", |ui| {
             ui.label("Title color");
-            for &(name, hex) in COLORS {
+            for &(name, hex) in TITLE_COLORS {
                 if ui
                     .button(egui::RichText::new(name).color(appearance::color(hex)))
                     .clicked()

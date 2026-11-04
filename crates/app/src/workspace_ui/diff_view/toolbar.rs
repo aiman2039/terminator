@@ -14,6 +14,7 @@ impl App {
         self.diff_file_tree_toggle(ui, frame);
         self.diff_edit_buttons(ui, frame, pass);
         self.diff_change_buttons(ui, frame, pass);
+        Self::diff_stage_file_button(ui, frame, pass);
         ui.separator();
         Self::diff_source_buttons(ui, frame, pass);
         ui.separator();
@@ -130,6 +131,54 @@ impl App {
         }
     }
 
+    /// Stage (working tree) or unstage (staged) the whole file, mode
+    /// changes included; the only action for a mode-only change.
+    fn diff_stage_file_button(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        if frame.read_only || frame.remote {
+            return;
+        }
+        let (icon, tip) = if frame.staged {
+            ("Download", "Unstage whole file")
+        } else {
+            ("Upload", "Stage whole file")
+        };
+        let button = ui
+            .add_enabled_ui(frame.enabled && !pass.review.unsaved_edits(), |ui| {
+                appearance::sidebar_action(ui, icon, tip)
+            })
+            .inner;
+        #[cfg(feature = "test-support")]
+        diagnostics::record_response(ui.ctx(), "diff-stage-file", &button);
+        pass.stage_file = button.clicked();
+    }
+
+    /// The labeled undo history, newest first. Only the newest entry can
+    /// be undone; older ones wait their turn.
+    fn diff_undo_history(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        if pass.review.undo.is_empty() {
+            return;
+        }
+        let menu = appearance::icon_menu_button(ui, "List", |ui| {
+            ui.weak("Undo history");
+            for (at, undo) in pass.review.undo.iter().rev().enumerate() {
+                let label = undo.label.as_str();
+                if at == 0 {
+                    let item = ui.add_enabled(
+                        frame.enabled,
+                        egui::Button::new(format!("Undo {label}")).frame(false),
+                    );
+                    if item.clicked() {
+                        pass.undo = true;
+                        ui.close();
+                    }
+                } else {
+                    ui.weak(label);
+                }
+            }
+        });
+        let _ = menu.response.on_hover_text("Undo history");
+    }
+
     /// `text` with the action's current keybinding, if it has one.
     fn nav_tip(&self, text: &str, action: Action) -> String {
         let key = self.shortcut_label(action);
@@ -211,6 +260,7 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record_response(ui.ctx(), "diff-undo", &undo_button);
         pass.undo = undo_button.clicked();
+        Self::diff_undo_history(ui, frame, pass);
         ui.weak(format!(
             "Change {} of {}",
             pass.review

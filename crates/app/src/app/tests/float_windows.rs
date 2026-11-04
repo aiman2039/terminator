@@ -277,10 +277,9 @@ fn modal_save_close_stores_float_issuer_deferred() {
         delayed: false,
     };
     app.apply_native_close_choice(&path, NativeCloseChoice::SaveClose, Some(issuer));
-    assert_eq!(app.native_close_after_save.as_deref(), Some(path.as_path()));
     assert!(matches!(
-        app.native_close_after_save_issuer,
-        Some(CloseIssuer::Floating { delayed: true, .. })
+        app.native_close_after_save.get(&path),
+        Some(Some(CloseIssuer::Floating { delayed: true, .. }))
     ));
 }
 

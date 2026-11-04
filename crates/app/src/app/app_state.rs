@@ -214,6 +214,8 @@ pub struct App {
     pub(crate) diff_replacement: Option<(Tab, Tab)>,
     pub(crate) terminal_context: HashMap<String, String>,
     pub(crate) missing_projects: HashSet<String>,
+    /// Daemon project names and the sidebar rename draft.
+    pub(crate) project_names: crate::sidebar_ui::ProjectNames,
     pub(crate) texts: HashMap<String, String>,
     pub(crate) diffs: HashMap<String, Result<std::sync::Arc<diff::DiffDocument>, String>>,
     pub(crate) diff_split: HashSet<String>,
@@ -331,7 +333,11 @@ pub struct App {
     /// prompt came from a view (dock X). Flow-issued prompts (quit,
     /// workspace close) carry no issuer and keep legacy removal.
     pub(crate) native_close_prompt: Option<(PathBuf, Option<native_editor::CloseIssuer>)>,
-    pub(crate) native_close_after_save: Option<PathBuf>,
+    /// Save-then-close requests (`:wq`, Save and close) waiting on their
+    /// save, each with the view that issued it (captured when the save
+    /// starts, since it settles frames later under whichever view
+    /// renders first). Several files can wait at once.
+    pub(crate) native_close_after_save: HashMap<PathBuf, Option<native_editor::CloseIssuer>>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pub(crate) pending_app_quit: bool,
     /// Quit is waiting on "VNC sessions stay connected"; and whether that
@@ -342,10 +348,6 @@ pub struct App {
     /// `:q!` takes every view; a plain close removes only its issuing
     /// view, preserving other copies of the same file.
     pub(crate) pending_native_close: Vec<(PathBuf, bool, Option<native_editor::CloseIssuer>)>,
-    /// View that issued the pending `:wq`: captured when the save
-    /// starts, since the save settles frames later under whichever view
-    /// renders first.
-    pub(crate) native_close_after_save_issuer: Option<native_editor::CloseIssuer>,
     pub(crate) pending_native_splits: Vec<(egui::ViewportId, PathBuf, native_editor::NativeSplit)>,
     /// Finished cross-file goto jumps waiting for the workspace to be
     /// checked back in: the file view renders while its workspace is

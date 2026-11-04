@@ -62,6 +62,7 @@ Keep every toolbar icon on one row and one size. Use the shared `appearance` hel
 - VNC: the daemon owns connections, framebuffers, keychain passwords and saved-host thumbnails. Closing a VNC tab detaches the session (like a terminal); only Disconnect, the detached timeout (Settings, default 30 min) or "Disconnect all and quit" ends it. Connecting a host with a live session reattaches it. Never show VNC records of retired or unreachable generations.
 - The VNC tool opens the VNC page in the main pane (same pattern as Settings/Player): address book, host Properties, import. The VNC sidebar only lists sessions and hosts; do not add editing forms there.
 - SSH: host Properties and import open in the main pane (like VNC); the Hosts sidebar only lists hosts. Editing a host's connection is refused while it has live sessions, transfers or forwards (`ssh-edit-v1`).
+- Mosh: host Properties "Use Mosh for terminals" (`ssh-mosh-v1`) runs new terminals/editors via `terminator-hook mosh`: OpenSSH (shared master) starts `mosh-server new` on the host, then the helper execs local `mosh-client` with `MOSH_KEY`. Never install anything on the host. Explorer, Git, editor control and transfers stay on OpenSSH. Gate the checkbox on the capability.
 - Never read or write the OS keychain inside an IPC request with a short deadline; load saved passwords on the session thread. Never send an empty VNC password.
 - The VNC start command is user-entered and runs over SSH only before connecting; never generate or install server-side scripts.
 

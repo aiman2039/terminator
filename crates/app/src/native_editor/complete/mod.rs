@@ -123,22 +123,42 @@ pub(crate) fn accept(input: AcceptInput<'_>) {
         return;
     }
     let text = buffer.line_text(line);
+    let on_line = |range: &native_lsp::Range| range.start.line as usize == line;
     let from_col = item
         .edit
-        .filter(|range| range.start.line as usize == line)
+        .filter(on_line)
         .map_or(start, |range| {
             native_lsp::utf16_to_char_col(&text, range.start.character)
         })
         .min(caret.col);
+    // An insert-and-replace item also takes the rest of the word after
+    // the caret, so accepting inside a word does not duplicate its tail.
+    let to_col = item
+        .replace
+        .filter(|range| on_line(range) && range.end.line == range.start.line)
+        .map_or(caret.col, |range| {
+            native_lsp::utf16_to_char_col(&text, range.end.character)
+        })
+        .max(caret.col);
     let (insert, stop) = if item.snippet {
         native_lsp::expand_snippet(&item.insert)
     } else {
         let count = item.insert.chars().count();
         (item.insert.clone(), count)
     };
-    let from = buffer.char_at_line_col(line, from_col);
-    let to = buffer.char_at_line_col(line, caret.col);
     buffer.begin_undo_group();
+    // Auto-imports first, in the original coordinates; the caret follows
+    // its text, and the item's own range is taken relative to it.
+    super::actions::apply_edits_keep_caret(buffer, engine, &item.additional);
+    let moved = engine.cursor();
+    let from = buffer.char_at_line_col(
+        moved.line,
+        moved.col.saturating_sub(caret.col.saturating_sub(from_col)),
+    );
+    let to = buffer.char_at_line_col(
+        moved.line,
+        moved.col.saturating_add(to_col.saturating_sub(caret.col)),
+    );
     buffer.delete(from..to);
     buffer.insert(from, &insert);
     buffer.end_undo_group();

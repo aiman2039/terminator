@@ -60,7 +60,7 @@ impl VimEngine {
     #[must_use]
     pub fn fork_view(&self) -> Self {
         let mut engine = Self::new();
-        engine.options = self.options;
+        engine.options = self.options.clone();
         engine.modeless = self.modeless;
         engine.cursor = self.cursor;
         engine.anchor = self.cursor;

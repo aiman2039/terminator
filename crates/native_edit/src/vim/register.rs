@@ -1,6 +1,7 @@
-//! The unnamed register and its sync with the system clipboard
-//! (`clipboard=unnamed`).
+//! Registers: the unnamed one and its sync with the system clipboard
+//! (`clipboard=unnamed`), named, yank, small-delete and black-hole.
 use super::helpers::normalize_newlines;
+use super::mode::Register;
 use super::state::VimEngine;
 
 impl VimEngine {
@@ -80,5 +81,113 @@ impl VimEngine {
     #[must_use]
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()
+    }
+}
+
+/// Where a register write goes, from the `"x` prefix.
+enum Target {
+    Unnamed,
+    BlackHole,
+    Clipboard,
+    Named(char),
+}
+
+impl VimEngine {
+    fn target(&self) -> Target {
+        match self.x.reg_sel {
+            None | Some('"') => Target::Unnamed,
+            Some('_') => Target::BlackHole,
+            Some('+' | '*') => Target::Clipboard,
+            Some(c) => Target::Named(c),
+        }
+    }
+
+    /// A yank (`y`, `yy`, Visual `y`): the selected register, else the
+    /// unnamed one (synced to the clipboard) and `"0`.
+    pub(super) fn write_yank(&mut self, text: String, linewise: bool, block_width: Option<usize>) {
+        let reg = Register {
+            text: text.clone(),
+            linewise,
+            block_width,
+        };
+        match self.target() {
+            Target::BlackHole => {}
+            Target::Named(c) => self.write_named(c, reg),
+            Target::Unnamed | Target::Clipboard => {
+                self.x.registers.insert('0', reg);
+                self.set_register(text, linewise, block_width);
+            }
+        }
+    }
+
+    /// A delete or change: linewise and blockwise deletes sync the
+    /// clipboard like a yank; small charwise ones stay local (`"-`).
+    pub(super) fn write_delete(&mut self, text: String, linewise: bool) {
+        self.write_delete_shaped(text, linewise, None);
+    }
+
+    pub(super) fn write_delete_shaped(
+        &mut self,
+        text: String,
+        linewise: bool,
+        block_width: Option<usize>,
+    ) {
+        match self.target() {
+            Target::BlackHole => {}
+            Target::Named(c) => self.write_named(
+                c,
+                Register {
+                    text,
+                    linewise,
+                    block_width,
+                },
+            ),
+            Target::Clipboard => self.set_register(text, linewise, block_width),
+            Target::Unnamed if linewise || block_width.is_some() => {
+                self.set_register(text, linewise, block_width);
+            }
+            Target::Unnamed => {
+                self.x.registers.insert(
+                    '-',
+                    Register {
+                        text: text.clone(),
+                        linewise: false,
+                        block_width: None,
+                    },
+                );
+                self.set_register_local(text);
+            }
+        }
+    }
+
+    /// `"a`-`"z` (uppercase appends), `"0`-`"9`, `"-`; the unnamed
+    /// register follows the write without touching the clipboard.
+    fn write_named(&mut self, name: char, mut reg: Register) {
+        let key = name.to_ascii_lowercase();
+        if name.is_ascii_uppercase()
+            && let Some(old) = self.x.registers.get(&key)
+        {
+            let linewise = old.linewise || reg.linewise;
+            let sep = if linewise { "\n" } else { "" };
+            reg = Register {
+                text: format!("{}{sep}{}", old.text, reg.text),
+                linewise,
+                block_width: None,
+            };
+        }
+        self.register = reg.clone();
+        self.clipboard_snapshot = self.clipboard.is_none();
+        self.x.registers.insert(key, reg);
+    }
+
+    /// The register `p`/`P` read: the selected one, else the unnamed one
+    /// (which already adopted the clipboard for `"+`). `None` when empty.
+    pub(super) fn put_source(&self) -> Option<Register> {
+        let reg = match self.x.reg_sel {
+            None | Some('"' | '+' | '*') => self.register.clone(),
+            Some('_') => return None,
+            Some(c) => self.x.registers.get(&c.to_ascii_lowercase())?.clone(),
+        };
+        (!reg.text.is_empty()).then_some(reg)
     }
 }

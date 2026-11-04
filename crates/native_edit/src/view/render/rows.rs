@@ -309,10 +309,26 @@ impl<B: Buffer> SourceView<'_, B> {
         }
     }
 
-    /// Diagnostic underlines on this row, with their message on hover.
+    /// Diagnostic underlines on this row (first lines, then continuation
+    /// lines of multi-line ranges), with their message on hover.
     fn paint_row_squiggles(&self, canvas: &Canvas<'_>, row: &PaintRow<'_>) {
+        let tails = self.options.squiggle_tails.as_slice();
+        for list in [
+            (self.options.squiggles.as_slice(), 0),
+            (tails, usize::MAX / 2),
+        ] {
+            self.paint_squiggle_list(canvas, row, list);
+        }
+        self.paint_error_lens(canvas, row);
+    }
+
+    fn paint_squiggle_list(
+        &self,
+        canvas: &Canvas<'_>,
+        row: &PaintRow<'_>,
+        (squiggles, id_offset): (&[crate::view::Squiggle], usize),
+    ) {
         let (visual, line) = (row.visual, row.line());
-        let squiggles = &self.options.squiggles;
         let first = squiggles.partition_point(|squiggle| squiggle.line < line);
         for (index, squiggle) in squiggles
             .iter()
@@ -336,7 +352,9 @@ impl<B: Buffer> SourceView<'_, B> {
                 .ui
                 .interact(
                     rect,
-                    self.geometry.focus_id.with(("squiggle", index)),
+                    self.geometry
+                        .focus_id
+                        .with(("squiggle", index.wrapping_add(id_offset))),
                     Sense::hover(),
                 )
                 .on_hover_text(&squiggle.message);

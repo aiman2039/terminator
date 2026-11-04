@@ -1,6 +1,6 @@
 use super::super::doc::Buffer;
 use super::cursor::GotoInput;
-use super::mode::{Bit, Cursor, Effect, Key, ModalEngine};
+use super::mode::{Bit, Cursor, Effect, Key};
 use super::state::VimEngine;
 use super::words::line_len;
 
@@ -42,11 +42,14 @@ impl VimEngine {
                 );
             }
             Key::Tab => {
-                let _ = self.type_text(doc, "\t");
+                let _ = self.insert_text(doc, "\t");
             }
+            Key::Ctrl('w') => self.insert_delete_back(doc, false),
+            Key::Ctrl('u') => self.insert_delete_back(doc, true),
+            Key::Ctrl('o') => self.insert_ctrl_o(doc),
             // Unreachable through the view (Ctrl-V pastes outside vim
             // Normal/Visual); bell rather than guess.
-            Key::CtrlV | Key::CtrlCaret | Key::BackTab => return vec![Effect::Bell],
+            Key::CtrlV | Key::CtrlCaret | Key::BackTab | Key::Ctrl(_) => return vec![Effect::Bell],
             Key::Char(_) => return vec![Effect::Bell],
         }
         Vec::new()
@@ -91,6 +94,11 @@ impl VimEngine {
     }
 
     fn insert_backspace<B: Buffer>(&mut self, doc: &mut B) {
+        if self.replace_backspace(doc) {
+            self.typed_exact = false;
+            self.clamp(doc);
+            return;
+        }
         let at = self.char_idx(doc, self.cursor);
         if !self.replaying {
             self.unrecord_backspace(at);
@@ -137,5 +145,60 @@ impl VimEngine {
             doc.delete(at..at.checked_add(1).unwrap_or(at));
         }
         self.clamp(doc);
+    }
+
+    /// Insert Ctrl-W (word before the cursor) and Ctrl-U (back to the
+    /// indent, or the line start); at column 0 both join the lines.
+    fn insert_delete_back<B: Buffer>(&mut self, doc: &mut B, line: bool) {
+        let at = self.char_idx(doc, self.cursor);
+        let text: Vec<char> = doc.line_text(self.cursor.line).chars().collect();
+        let col = self.cursor.col.min(text.len());
+        let start = if col == 0 {
+            at.saturating_sub(1)
+        } else if line {
+            let indent = Self::first_non_blank(doc, self.cursor.line);
+            at.saturating_sub(if col > indent {
+                col.saturating_sub(indent)
+            } else {
+                col
+            })
+        } else {
+            let mut c = col;
+            while c > 0
+                && text
+                    .get(c.saturating_sub(1))
+                    .is_some_and(|ch| ch.is_whitespace())
+            {
+                c = c.saturating_sub(1);
+            }
+            let class = text
+                .get(c.saturating_sub(1))
+                .map(|ch| super::words::word_class(*ch));
+            while c > 0
+                && text
+                    .get(c.saturating_sub(1))
+                    .map(|ch| super::words::word_class(*ch))
+                    == class
+            {
+                c = c.saturating_sub(1);
+            }
+            at.saturating_sub(col.saturating_sub(c))
+        };
+        if start < at {
+            self.typed_exact = false;
+            self.x.keys_change = true;
+            doc.delete(start..at);
+            self.cursor = Self::cursor_at(doc, start);
+            self.preferred_col = self.cursor.col;
+        }
+        self.clamp(doc);
+    }
+
+    /// Insert Ctrl-O: run one Normal command, then come back to Insert.
+    fn insert_ctrl_o<B: Buffer>(&mut self, doc: &mut B) {
+        let insert_at = self.cursor;
+        self.x.oneshot = Some((insert_at, insert_at, false));
+        self.enter_normal(doc);
+        self.x.oneshot = Some((insert_at, self.cursor, false));
     }
 }

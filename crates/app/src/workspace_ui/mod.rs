@@ -18,6 +18,7 @@ mod tab_menu;
 mod tabs;
 mod terminal_panes;
 mod terminal_style;
+pub(crate) use terminal_style::TITLE_COLORS;
 mod terminal_view;
 mod viewer;
 mod views;

@@ -530,12 +530,14 @@ fn wq_close_uses_view_issuing_the_save() {
         }])),
     );
     // `:wq` typed in the floating window: the save settles later.
-    app.native_close_after_save = Some(path.clone());
-    app.native_close_after_save_issuer = Some(CloseIssuer::Floating {
-        viewport: float,
-        node: None,
-        delayed: true,
-    });
+    app.native_close_after_save.insert(
+        path.clone(),
+        Some(CloseIssuer::Floating {
+            viewport: float,
+            node: None,
+            delayed: true,
+        }),
+    );
     // A docked view renders first. The queued close must still target
     // the issuing floating pane — not the rendering docked copy.
     combined_frame(&mut app, &ctx, vec![]);

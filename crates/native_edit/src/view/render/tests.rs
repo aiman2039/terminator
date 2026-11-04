@@ -145,3 +145,67 @@ fn host_spacers_add_rows_and_scroll_offset_positions_the_view() {
         "the host offset positions the view: {offset}"
     );
 }
+
+#[test]
+fn multi_line_diagnostics_underline_every_line_they_cover() {
+    use crate::lsp::{Diagnostic, Position, Range, Severity};
+    let doc = Doc::new("call(\n    a,\n    b)\nnext\n");
+    let diagnostic = Diagnostic {
+        range: Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 2,
+                character: 6,
+            },
+        },
+        severity: Some(Severity::Error),
+        message: "bad call".into(),
+    };
+    let heads = super::squiggles(&doc, std::slice::from_ref(&diagnostic));
+    assert_eq!(heads.len(), 1, "F8 stops once per problem");
+    let tails = super::squiggle_tails(&doc, &[diagnostic]);
+    let spans: Vec<_> = tails.iter().map(|s| (s.line, s.start, s.end)).collect();
+    assert_eq!(spans, [(1, 4, 6), (2, 4, 6)]);
+}
+
+#[test]
+fn error_lens_and_overview_marks_paint_without_panicking() {
+    let ctx = egui::Context::default();
+    let mut doc = Doc::new("let x = 1;\nlet y = 2;\n");
+    let mut engine = VimEngine::new();
+    let mut highlight = HighlightCache::default();
+    let squiggle = super::Squiggle {
+        line: 0,
+        start: 4,
+        end: 5,
+        severity: crate::lsp::Severity::Warning,
+        message: "unused\nmore".into(),
+    };
+    let options = SourceOptions {
+        squiggles: std::sync::Arc::new(vec![squiggle]),
+        error_lens: true,
+        find_matches: std::sync::Arc::new(vec![(1, 4, 5)]),
+        change_marks: std::sync::Arc::new(vec![super::ChangeMark {
+            start: 1,
+            end: 2,
+            kind: super::ChangeKind::Added,
+        }]),
+        ..SourceOptions::default()
+    };
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let outcome = show_source(ShowSourceInput {
+            ui,
+            doc: &mut doc,
+            engine: &mut engine,
+            options: &options,
+            highlight: &mut highlight,
+            language: Language::Rust,
+            id: "lens",
+        });
+        assert!(outcome.effects.is_empty());
+    });
+    output.textures_delta.clear();
+}

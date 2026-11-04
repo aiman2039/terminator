@@ -6,6 +6,7 @@ use diff::actions::Kind;
 mod chevrons;
 mod gaps;
 mod hunks;
+mod rows;
 #[cfg(test)]
 mod tests;
 
@@ -248,8 +249,15 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
     if !editor_pane {
         frame.paint_gaps(ui, &mut state.result);
     }
+    // The hovered line and a drag pick are rebuilt from this frame's
+    // pointer; a released button ends the drag.
+    state.review.hover_line = None;
+    if !ui.input(|input| input.pointer.primary_down()) {
+        state.review.drag = None;
+    }
     for (index, hunk) in doc.hunks.iter().enumerate() {
         frame.paint_hunk(ui, (index, hunk), &mut state);
     }
+    frame.row_menu(ui, &mut state);
     state.result
 }

@@ -290,6 +290,9 @@ impl Sides<'_, '_> {
             new_no: number(new),
             spans: line_spans(highlighted, index, text),
             moved: false,
+            end: index
+                .and_then(|index| lines.get(index))
+                .map_or_else(LineEnd::default, |raw| LineEnd::of(raw)),
         }
     }
 }
@@ -314,6 +317,7 @@ fn push_gap_row(doc: &mut DiffDocument, old: std::ops::Range<usize>, new: std::o
             intra: Intra::None,
         }],
         moved: false,
+        end: LineEnd::default(),
     };
     doc.gaps.push(review::Gap {
         old,

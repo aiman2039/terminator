@@ -140,7 +140,9 @@ fn assert_shell_script_highlights(path: &str, text: &str, dark: bool) {
             assert_eq!(span.start, column);
             column = span.end;
         }
-        assert_eq!(column, source.chars().count(), "{path}: {source:?}");
+        // `\r\n` is one line break: spans cover the text before it.
+        let visible = source.trim_end_matches('\r');
+        assert_eq!(column, visible.chars().count(), "{path}: {source:?}");
     }
     assert_eq!(lines.len(), text.split('\n').count());
 }
@@ -245,7 +247,7 @@ fn cache_only_recomputes_on_key_change() {
         language: Language::Rust,
         dark: true,
         revision: 1,
-        text: "fn a() {}",
+        text: "fn a() {}".into(),
     });
     let first = cache.line(0).to_vec();
     assert!(!first.is_empty());
@@ -253,14 +255,14 @@ fn cache_only_recomputes_on_key_change() {
         language: Language::Rust,
         dark: true,
         revision: 1,
-        text: "fn replaced() {}",
+        text: "fn replaced() {}".into(),
     });
     assert_eq!(cache.line(0), first.as_slice());
     cache.ensure(EnsureInput {
         language: Language::Rust,
         dark: true,
         revision: 2,
-        text: "fn b() {}",
+        text: "fn b() {}".into(),
     });
     assert_eq!(cache.line(0).len(), first.len());
     assert!(cache.is_current(Language::Rust, true, 2));
@@ -277,7 +279,7 @@ fn a_large_buffer_highlights_on_a_worker_without_blocking_the_frame() {
         language: Language::Rust,
         dark: true,
         revision,
-        text: &text,
+        text: text.as_str().into(),
     };
     cache.ensure_async(input(1), &ctx);
     // The call returns before the parse: nothing is current yet.
@@ -305,7 +307,7 @@ fn a_small_buffer_still_highlights_in_the_same_call() {
             language: Language::Rust,
             dark: true,
             revision: 1,
-            text: "fn a() {}",
+            text: "fn a() {}".into(),
         },
         &ctx,
     );
@@ -328,4 +330,41 @@ fn stylesheet_and_html_extensions_keep_bundled_grammars() {
             "{path} has no grammar"
         );
     }
+}
+
+#[test]
+fn lone_carriage_returns_split_lines_like_the_buffer() {
+    // The rope counts `\r`, `\r\n` and `\n` as breaks: spans must line up.
+    let text = "a = 1\rb = 2\r\nc = 3\n";
+    let lines = highlight_text(Language::Toml, text, true).expect("toml highlights");
+    let doc = crate::doc::Doc::new(text);
+    assert_eq!(lines.len(), crate::doc::Buffer::line_count(&doc));
+    assert!(lines.iter().take(3).all(|spans| !spans.is_empty()));
+    assert!(lines.iter().flatten().all(|span| span.end <= 5));
+}
+
+#[test]
+fn split_views_share_one_highlight_per_revision() {
+    let mut first = HighlightCache::default();
+    first.ensure(EnsureInput {
+        language: Language::Rust,
+        dark: true,
+        revision: 7,
+        text: "fn a() {}".into(),
+    });
+    let mut second = HighlightCache::default();
+    second.share_spans(&first);
+    assert!(second.is_current(Language::Rust, true, 7));
+    assert_eq!(second.line(0), first.line(0));
+}
+
+#[test]
+fn an_over_cap_buffer_skips_building_its_text() {
+    let mut cache = HighlightCache::default();
+    assert!(cache.skip_large((Language::Rust, true), 3, MAX_HIGHLIGHT_BYTES + 1));
+    assert!(cache.is_current(Language::Rust, true, 3));
+    assert!(!cache.wants_text(Language::Rust, true, 3));
+    assert!(!cache.skip_large((Language::Rust, true), 4, 10));
+    cache.set_unlimited(true);
+    assert!(!cache.skip_large((Language::Rust, true), 5, MAX_HIGHLIGHT_BYTES + 1));
 }

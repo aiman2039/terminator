@@ -69,6 +69,8 @@ fn combined(source: &Source, doc: &DiffDocument, picks: &[BlockPick]) -> Option<
             hunk,
             kind: Kind::Stage,
             lines: lines.as_ref(),
+            // Gutter staging keeps no undo history entry.
+            label: String::new(),
         });
         work.left_text.clone_from(&step.after.text);
         change = Some(match change {

@@ -1,5 +1,5 @@
 use super::super::doc::Buffer;
-use super::mode::{Bit, Cursor, Effect, Key, ModalEngine, Mode};
+use super::mode::{Bit, Cursor, Effect, Input, Key, ModalEngine, Mode};
 use super::state::VimEngine;
 impl ModalEngine for VimEngine {
     fn mode(&self) -> Mode {
@@ -32,15 +32,20 @@ impl ModalEngine for VimEngine {
     }
 
     fn press_key<B: Buffer>(&mut self, doc: &mut B, key: Key) -> Vec<Effect> {
-        match self.mode {
-            Mode::Normal => self.normal_key(doc, key),
-            Mode::Insert => self.insert_key(doc, key),
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock => self.visual_key(doc, key),
-            Mode::Command => self.command_key(doc, key),
-        }
+        self.feed(doc, Input::Key(key))
     }
 
     fn type_text<B: Buffer>(&mut self, doc: &mut B, text: &str) -> Vec<Effect> {
+        if self.mode != Mode::Insert || text.is_empty() {
+            return Vec::new();
+        }
+        self.feed(doc, Input::Text(text.to_string()))
+    }
+}
+
+impl VimEngine {
+    /// Type `text` at the cursor in Insert mode (no mapping, no capture).
+    pub(super) fn insert_text<B: Buffer>(&mut self, doc: &mut B, text: &str) -> Vec<Effect> {
         if self.mode != Mode::Insert || text.is_empty() {
             return Vec::new();
         }
@@ -52,6 +57,7 @@ impl ModalEngine for VimEngine {
             self.ide_type_char(doc, c);
             return Vec::new();
         }
+        self.overwrite_for(doc, text);
         let at = self.char_idx(doc, self.cursor);
         if !self.replaying {
             self.recording.push(Bit::Type(text.to_string()));

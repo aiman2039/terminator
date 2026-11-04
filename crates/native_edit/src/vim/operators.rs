@@ -1,37 +1,8 @@
 use super::super::doc::Buffer;
-use super::helpers::{doc_is_empty, range_text};
-use super::mode::{Bit, Cursor, Effect, ModalEngine, Mode, PendingOp, Place, Repeat};
+use super::helpers::{doc_is_empty, grapheme_right, range_text};
+use super::mode::{Bit, Cursor, Input, ModalEngine, Mode, PendingOp, Place, Repeat};
 use super::state::VimEngine;
 use super::words::line_len;
-
-/// Byte offsets and lengths of every `pattern` match in `text`. ASCII
-/// case folding keeps the offsets valid for the original string, which
-/// is all `.vimrc` `ignorecase` needs to promise.
-pub(super) fn find_matches(text: &str, pattern: &str, ignorecase: bool) -> Vec<(usize, usize)> {
-    if ignorecase {
-        let folded = text.to_ascii_lowercase();
-        folded
-            .match_indices(&pattern.to_ascii_lowercase())
-            .map(|(byte, matched)| (byte, matched.len()))
-            .collect()
-    } else {
-        text.match_indices(pattern)
-            .map(|(byte, matched)| (byte, matched.len()))
-            .collect()
-    }
-}
-
-pub(super) struct JumpToMatchInput<'a> {
-    pub(super) pattern: &'a str,
-    pub(super) from: usize,
-    pub(super) forward: bool,
-}
-
-pub(super) struct ApplyOperatorInput {
-    pub(super) op: PendingOp,
-    pub(super) target: Cursor,
-    pub(super) inclusive: bool,
-}
 
 impl VimEngine {
     pub(super) fn delete_range<B: Buffer>(
@@ -149,6 +120,7 @@ impl VimEngine {
         if !self.replaying {
             if self.mode == Mode::Insert {
                 self.recording.push(Bit::Type(text.to_string()));
+                self.x.raw.push(Input::Text(text.to_string()));
                 if at == self.typed_end {
                     self.typed_end = self.typed_end.saturating_add(text.chars().count());
                 } else {
@@ -182,72 +154,6 @@ impl VimEngine {
         std::mem::replace(&mut self.scroll_request, false)
     }
 
-    /// All match starts (char indices) of a literal pattern, in buffer
-    /// order. Literal (no vim regex) and case-sensitive unless
-    /// `ignorecase` is set; single-line patterns only, so a pattern
-    /// containing `\n` never matches.
-    pub(super) fn search_matches<B: Buffer>(
-        doc: &B,
-        pattern: &str,
-        ignorecase: bool,
-    ) -> Vec<usize> {
-        if pattern.is_empty() || pattern.contains('\n') {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for line in 0..doc.line_count() {
-            let text = doc.line_text(line);
-            for (byte, _) in find_matches(&text, pattern, ignorecase) {
-                let col = text.get(..byte).map_or(0, |prefix| prefix.chars().count());
-                out.push(doc.char_at_line_col(line, col));
-            }
-        }
-        out
-    }
-
-    /// Jump to the next (`forward`) or previous match from `from`, wrapping
-    /// around the buffer. Forward is inclusive of `from` (landing on the
-    /// match under the cursor); backward is exclusive (so `N` steps back).
-    /// Returns false — and leaves the cursor alone — when nothing matches.
-    pub(super) fn jump_to_match<B: Buffer>(
-        &mut self,
-        doc: &mut B,
-        input: JumpToMatchInput<'_>,
-    ) -> bool {
-        let JumpToMatchInput {
-            pattern,
-            from,
-            forward,
-        } = input;
-        let matches = Self::search_matches(doc, pattern, self.ignorecase());
-        if matches.is_empty() {
-            return false;
-        }
-        let next = if forward {
-            matches
-                .iter()
-                .find(|m| **m >= from)
-                .or(matches.first())
-                .copied()
-        } else {
-            matches
-                .iter()
-                .rev()
-                .find(|m| **m < from)
-                .or(matches.last())
-                .copied()
-        };
-        let Some(at) = next else {
-            return false;
-        };
-        let (line, col) = doc.line_col_at(at);
-        self.cursor = Cursor { line, col };
-        self.preferred_col = col;
-        self.clamp(doc);
-        self.scroll_request = true;
-        true
-    }
-
     /// IDE undo/redo: same as `u`/Ctrl-R but callable in any mode, with the
     /// cursor clamped back into range afterwards. Undo is never repeatable.
     pub fn undo<B: Buffer>(&mut self, doc: &mut B) {
@@ -265,143 +171,79 @@ impl VimEngine {
         self.clamp(doc);
     }
 
-    pub(super) fn apply_operator<B: Buffer>(
-        &mut self,
-        doc: &mut B,
-        input: ApplyOperatorInput,
-    ) -> Vec<Effect> {
-        let ApplyOperatorInput {
-            op,
-            target,
-            inclusive,
-        } = input;
-        let from = self.char_idx(doc, self.cursor);
-        let mut to = self.char_idx(doc, target);
-        if inclusive {
-            to = to
-                .checked_add(1)
-                .map_or(doc.len_chars(), |next| next.min(doc.len_chars()));
-        }
-        let (from, to) = (from.min(to), from.max(to));
-        // Vim parity: `d` and `c` fill the unnamed register, so `dwp` works.
-        if from < to && op != PendingOp::Yank {
-            self.set_register_local(range_text(doc, from, to));
-        }
-        match op {
-            PendingOp::Delete => {
-                let cursor = self.delete_range(doc, from, to);
-                self.cursor = cursor;
-                self.enter_normal(doc);
-                self.rec_commit();
-            }
-            PendingOp::Change => {
-                self.begin_change_group(doc);
-                let cursor = self.delete_range(doc, from, to);
-                self.cursor = cursor;
-                self.begin_insert_session(doc);
-                self.clamp(doc);
-            }
-            PendingOp::Yank => {
-                self.set_register(range_text(doc, from, to), false, None);
-                self.cursor = target;
-                self.enter_normal(doc);
-                // Yank mutates nothing: the last change survives.
-                self.rec_discard();
-            }
-        }
-        Vec::new()
-    }
-
+    /// `count` lines from the cursor (`dd`, and `.` replay of it).
     pub(super) fn delete_lines<B: Buffer>(&mut self, doc: &mut B, count: usize) {
-        let lines = doc.line_count();
-        let start = self.cursor.line.min(lines.saturating_sub(1));
-        let end = start.checked_add(count).map_or(lines, |end| end.min(lines));
-        if lines == 0 {
-            return;
-        }
-        let from = doc.char_at_line_col(start, 0);
-        let to = if end < lines {
-            doc.char_at_line_col(end, 0)
-        } else {
-            doc.len_chars()
-        };
-        let mut yanked = range_text(doc, from, to);
-        if end < lines && yanked.ends_with('\n') {
-            yanked.pop();
-        }
-        self.set_register(yanked, true, None);
-        doc.delete(from..to);
-        doc.end_run();
-        self.cursor.line = start.min(doc.line_count().saturating_sub(1));
-        self.cursor.col = Self::first_non_blank(doc, self.cursor.line);
-        self.enter_normal(doc);
+        let first = self.cursor.line;
+        let last = first.saturating_add(count.saturating_sub(1));
+        self.operate_lines(doc, PendingOp::Delete, (first, last));
     }
 
-    pub(super) fn yank_lines<B: Buffer>(&mut self, doc: &mut B, count: usize) {
-        let lines = doc.line_count();
-        let start = self.cursor.line.min(lines.saturating_sub(1));
-        let end = start.checked_add(count).map_or(lines, |end| end.min(lines));
-        let mut yanked = Vec::new();
-        for line in start..end {
-            yanked.push(doc.line_text(line));
-        }
-        self.set_register(yanked.join("\n"), true, None);
-        self.enter_normal(doc);
+    /// `cc` with `count` (and `.` replay of it).
+    pub(super) fn change_line<B: Buffer>(&mut self, doc: &mut B, count: usize) {
+        let first = self.cursor.line;
+        let last = first
+            .saturating_add(count.saturating_sub(1))
+            .min(Self::last_addressable(doc));
+        self.change_line_range(doc, first, last);
     }
 
     /// `p` (`before == false`) or `P`, `count` copies in one insert:
     /// linewise below or above the cursor line, charwise after or at the
-    /// cursor.
+    /// cursor, blockwise as a rectangle right of (or at) the cursor.
     pub(super) fn put<B: Buffer>(&mut self, doc: &mut B, before: bool, count: usize) {
-        if self.register.text.is_empty() {
+        let Some(reg) = self.put_source() else {
             return;
-        }
+        };
         let count = count.max(1);
-        if !self.register.linewise && self.register.block_width.is_some() {
-            for _ in 0..count {
-                self.paste_block(doc);
-            }
+        if !reg.linewise && reg.block_width.is_some() {
+            self.paste_block(doc, &reg, (before, count));
             return;
         }
-        if self.register.linewise {
-            let lines = doc.line_count();
-            let line = if before {
-                self.cursor.line.min(lines.saturating_sub(1))
-            } else {
-                self.cursor
-                    .line
-                    .checked_add(1)
-                    .map_or(lines, |line| line.min(lines))
-            };
-            let at = if line < lines {
-                doc.char_at_line_col(line, 0)
-            } else {
-                doc.len_chars()
-            };
-            let prefix = if line == lines && !doc_is_empty(doc) {
-                "\n"
-            } else {
-                ""
-            };
-            let body = format!("{}\n", self.register.text).repeat(count);
-            doc.insert(at, &format!("{prefix}{body}"));
-            doc.end_run();
-            self.cursor.line = line.min(doc.line_count().saturating_sub(1));
-            self.cursor.col = Self::first_non_blank(doc, self.cursor.line);
+        if reg.linewise {
+            self.put_lines(doc, &reg.text, (before, count));
         } else {
-            let cursor_at = self.char_idx(doc, self.cursor);
-            let at = if before {
-                cursor_at
+            let text = doc.line_text(self.cursor.line);
+            let col = if before || text.is_empty() {
+                self.cursor.col
             } else {
-                cursor_at.saturating_add(1)
-            }
-            .min(doc.len_chars());
-            let text = self.register.text.repeat(count);
+                // After the cursor's grapheme, never past the line end
+                // (an empty line pastes in place, not on the next line).
+                grapheme_right(&text, self.cursor.col, 1)
+            };
+            let at = doc.char_at_line_col(self.cursor.line, col);
+            let text = reg.text.repeat(count);
             doc.insert(at, &text);
             doc.end_run();
             self.land_after_charwise_paste(doc, at, &text);
         }
         self.enter_normal(doc);
+    }
+
+    fn put_lines<B: Buffer>(&mut self, doc: &mut B, text: &str, (before, count): (bool, usize)) {
+        let lines = doc.line_count();
+        let line = if before {
+            self.cursor.line.min(lines.saturating_sub(1))
+        } else {
+            self.cursor
+                .line
+                .checked_add(1)
+                .map_or(lines, |line| line.min(lines))
+        };
+        let at = if line < lines {
+            doc.char_at_line_col(line, 0)
+        } else {
+            doc.len_chars()
+        };
+        let prefix = if line == lines && !doc_is_empty(doc) {
+            "\n"
+        } else {
+            ""
+        };
+        let body = format!("{text}\n").repeat(count);
+        doc.insert(at, &format!("{prefix}{body}"));
+        doc.end_run();
+        self.cursor.line = line.min(doc.line_count().saturating_sub(1));
+        self.cursor.col = Self::first_non_blank(doc, self.cursor.line);
     }
 
     /// Vim parity: after a charwise put the cursor is on the last pasted
@@ -416,27 +258,5 @@ impl VimEngine {
         };
         let (line, col) = doc.line_col_at(landed);
         self.cursor = Cursor { line, col };
-    }
-
-    pub(super) fn change_line<B: Buffer>(&mut self, doc: &mut B, count: usize) {
-        let lines = doc.line_count();
-        let start = self.cursor.line.min(lines.saturating_sub(1));
-        let end = start.checked_add(count).map_or(lines, |end| end.min(lines));
-        let from = doc.char_at_line_col(start, 0);
-        // Full lines including their newlines; deleting every line leaves the
-        // single empty final line, so structure is always preserved.
-        let to = if end < lines {
-            doc.char_at_line_col(end, 0)
-        } else {
-            doc.len_chars()
-        };
-        doc.delete(from..to);
-        doc.end_run();
-        self.cursor = Cursor {
-            line: start,
-            col: 0,
-        };
-        self.begin_insert_session(doc);
-        self.clamp(doc);
     }
 }

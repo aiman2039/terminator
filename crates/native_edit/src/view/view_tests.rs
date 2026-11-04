@@ -3,7 +3,7 @@ use super::super::highlight::{HighlightCache, Language};
 use super::super::vim::{Effect, Key as VKey, ModalEngine, Mode, VimEngine};
 use super::keys::{
     IdeAction, IdeEdit, IdeEditKeyInput, command_prompt, ctrl_h_is_motion, ctrl_v_is_block,
-    echo_of_handled_key, egui_key, ide_edit_key, ide_shortcut, mode_name, source_focus_id,
+    egui_key, ide_edit_key, ide_shortcut, mode_name, source_focus_id,
 };
 use super::render::{ShowSourceInput, SourceOptions, show_source};
 use super::{char_display_width, col_at_display_x, display_x};
@@ -372,17 +372,6 @@ mod tests {
         assert_eq!(col_at_display_x("aあb", 2), 1);
         assert_eq!(col_at_display_x("aあb", 3), 2);
         assert_eq!(col_at_display_x("aあb", 99), 3);
-    }
-
-    #[test]
-    fn handled_key_echo_is_dropped_once() {
-        // The `i` that opened Insert mode must not type itself.
-        let mut handled = vec!['i'];
-        assert!(echo_of_handled_key("i", &mut handled));
-        assert!(handled.is_empty());
-        assert!(!echo_of_handled_key("i", &mut handled));
-        // Multi-char input (IME/paste) is never an echo.
-        assert!(!echo_of_handled_key("xy", &mut vec!['x']));
     }
 
     #[test]
@@ -1177,7 +1166,7 @@ mod tests {
         };
         let options = super::SourceOptions {
             vim: false,
-            squiggles: vec![squiggle(1), squiggle(2)],
+            squiggles: std::sync::Arc::new(vec![squiggle(1), squiggle(2)]),
             ..super::SourceOptions::default()
         };
         let mut highlight = super::HighlightCache::default();

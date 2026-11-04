@@ -1,6 +1,5 @@
 use super::super::doc::Buffer;
-use super::block::DeleteBlockRangesInput;
-use super::mode::{Bit, BlockPending, Cursor, Effect, Key, ModalEngine, PendingOp, Place, Repeat};
+use super::mode::{Bit, BlockPending, Cursor, Effect, Key, PendingOp, Place, Repeat};
 use super::state::VimEngine;
 use super::words::line_len;
 
@@ -130,7 +129,7 @@ impl RepeatTokens {
                 }
                 let place = Self::insert_place(*place);
                 Some(Repeat::Insert {
-                    text: self.typed,
+                    text: super::edit::repeat_text(&self.typed, place, count),
                     place,
                 })
             }
@@ -231,7 +230,7 @@ impl VimEngine {
         match change {
             Repeat::Insert { text, place } => {
                 self.start_insert_place(doc, place);
-                self.type_text(doc, &text);
+                self.insert_text(doc, &text);
                 self.enter_normal(doc);
             }
             Repeat::DeleteChars { count } => self.delete_chars_forward(doc, count),
@@ -248,13 +247,13 @@ impl VimEngine {
                 self.begin_change_group(doc);
                 self.pending = Some(PendingOp::Change);
                 self.replay_motion(doc, motion, count);
-                self.type_text(doc, &text);
+                self.insert_text(doc, &text);
                 self.enter_normal(doc);
             }
             Repeat::ChangeLines { count, text } => {
                 self.begin_change_group(doc);
                 self.change_line(doc, count);
-                self.type_text(doc, &text);
+                self.insert_text(doc, &text);
                 self.enter_normal(doc);
             }
             Repeat::BlockDelete { .. }
@@ -263,6 +262,7 @@ impl VimEngine {
                 self.replay_block(doc, change);
             }
             Repeat::Paste { count, before } => self.put(doc, before, count),
+            Repeat::Keys(inputs) => self.replay_keys(doc, inputs),
         }
     }
 
@@ -357,18 +357,5 @@ impl VimEngine {
             append,
             skip_first: false,
         }
-    }
-
-    /// Delete the rectangle's columns `left..=right` on every row.
-    fn delete_block_rect<B: Buffer>(&mut self, doc: &mut B, block: &BlockPending) {
-        self.delete_block_ranges(
-            doc,
-            DeleteBlockRangesInput {
-                top: block.top,
-                bottom: block.bottom,
-                left: block.left,
-                right_excl: block.right.saturating_add(1),
-            },
-        );
     }
 }

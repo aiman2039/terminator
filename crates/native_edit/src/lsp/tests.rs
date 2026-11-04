@@ -894,3 +894,52 @@ fn spell_language_ids_cover_files_without_a_server() {
         Some(&["harper-ls"][..])
     );
 }
+
+#[test]
+fn format_options_follow_the_file_indentation() {
+    let two = crate::doc::Doc::new("a {\n  b {\n    c\n  }\n}\n");
+    assert_eq!(
+        FormatOptions::detect(&two),
+        Some(FormatOptions {
+            tab_size: 2,
+            insert_spaces: true
+        })
+    );
+    let tabs = crate::doc::Doc::new("a {\n\tb\n}\n");
+    assert_eq!(
+        FormatOptions::detect(&tabs).map(|o| o.insert_spaces),
+        Some(false)
+    );
+    assert_eq!(FormatOptions::detect(&crate::doc::Doc::new("flat\n")), None);
+    let id = RequestId::Number(1);
+    let uri = Url::parse("file:///tmp/a.rs").expect("uri");
+    let options = FormatOptions {
+        tab_size: 2,
+        insert_spaces: false,
+    };
+    let body = body_of(&formatting(&id, &uri, options));
+    assert_eq!(body["params"]["options"]["tabSize"], 2);
+    assert_eq!(body["params"]["options"]["insertSpaces"], false);
+}
+
+#[test]
+fn completion_keeps_auto_imports_and_the_replace_range() {
+    let result = serde_json::json!([{
+        "label": "HashSet",
+        "textEdit": {
+            "newText": "HashSet",
+            "insert": {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 8}},
+            "replace": {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 10}}
+        },
+        "additionalTextEdits": [{
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}},
+            "newText": "use std::collections::HashSet;\n"
+        }]
+    }]);
+    let items = parse_completion(&result);
+    let item = items.first().expect("one item");
+    assert_eq!(item.edit.map(|range| range.end.character), Some(8));
+    assert_eq!(item.replace.map(|range| range.end.character), Some(10));
+    assert_eq!(item.additional.len(), 1);
+    assert!(item.additional[0].new_text.starts_with("use std"));
+}

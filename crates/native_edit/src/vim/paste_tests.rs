@@ -170,7 +170,7 @@ fn counted_capital_p_pastes_count_times_like_its_repeat() {
 fn multi_line_charwise_paste_lands_on_the_first_pasted_char() {
     let mut eng = VimEngine::new();
     let mut doc = Doc::new("foo\nbar zz");
-    keys(&mut eng, &mut doc, "ldj");
+    keys(&mut eng, &mut doc, "lvjd");
     assert_eq!(doc.text().as_str(), "fr zz");
     keys(&mut eng, &mut doc, "P");
     assert_eq!(doc.text().as_str(), "foo\nbar zz");

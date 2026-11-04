@@ -36,6 +36,7 @@ impl App {
         };
         let frame = self.diff_frame(ui, source, &pass.review);
         self.diff_change_keys(&frame, &mut pass);
+        Self::diff_local_keys(ui, &frame, &mut pass);
         ui.horizontal(|ui| self.diff_toolbar(ui, &frame, &mut pass));
         Self::diff_open_source_key(ui, &frame, &mut pass);
         Self::diff_notice_bar(ui, &frame, &mut pass);
@@ -83,7 +84,8 @@ impl App {
             && doc.as_ref().is_some_and(|doc| doc.source.is_some());
         let count = doc.as_ref().map_or(0, |doc| doc.hunks.len());
         let split = self.diff_split.contains(&key);
-        let focused = ui.ui_contains_pointer() || self.diff_tab_active(tab);
+        let active = self.diff_tab_active(tab);
+        let focused = ui.ui_contains_pointer() || active;
         let siblings = self.diff_siblings(staged && !read_only);
         let current_abs = if path.is_absolute() {
             path.to_path_buf()
@@ -105,6 +107,7 @@ impl App {
             count,
             split,
             focused,
+            active,
             is_md: crate::markdown::supported(path),
             prev_file,
             next_file,
@@ -169,22 +172,9 @@ impl App {
         let Some(action) = self.diff_nav.take() else {
             return;
         };
-        let count = frame.count;
         match action {
-            Action::DiffNextChange => {
-                if count == 0 || pass.review.selected == count.checked_sub(1) {
-                    pass.navigate.clone_from(&frame.next_file);
-                } else {
-                    pass.review.advance(true, count);
-                }
-            }
-            Action::DiffPrevChange => {
-                if count == 0 || pass.review.selected == Some(0) {
-                    pass.navigate.clone_from(&frame.prev_file);
-                } else {
-                    pass.review.advance(false, count);
-                }
-            }
+            Action::DiffNextChange => pass.step_change(frame, true),
+            Action::DiffPrevChange => pass.step_change(frame, false),
             Action::DiffNextFile => pass.navigate.clone_from(&frame.next_file),
             Action::DiffPrevFile => pass.navigate.clone_from(&frame.prev_file),
             _ => {}
@@ -239,8 +229,28 @@ impl App {
         }
     }
 
+    /// Stage or unstage the whole file (mode changes included) through
+    /// the same workspace operation as the Git panel.
+    fn stage_diff_file(&self, frame: &DiffFrame<'_>) {
+        let root = frame
+            .doc
+            .as_ref()
+            .and_then(|doc| doc.source.as_ref())
+            .map_or_else(|| frame.cwd.to_path_buf(), |source| source.root.clone());
+        let path = frame.cwd.join(frame.path);
+        let op = if frame.staged {
+            workspace_ops::Op::Unstage(path)
+        } else {
+            workspace_ops::Op::Stage(path)
+        };
+        let _ = self.jobs.send(Job::Workspace(root, op));
+    }
+
     /// Check the review back in, then open, navigate, or swap as asked.
     fn finish_diff_view(&mut self, frame: DiffFrame<'_>, pass: DiffPass) {
+        if pass.stage_file && frame.enabled {
+            self.stage_diff_file(&frame);
+        }
         self.diff_reviews.insert(frame.key, pass.review);
         if let Some(line) = pass.open_line {
             self.open_file_mode(OpenFileModeInput {

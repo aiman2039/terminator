@@ -3,6 +3,7 @@ mod attach;
 mod browser;
 mod control;
 mod hook_event;
+mod mosh;
 mod output;
 use output::Output;
 mod shutdown;
@@ -29,6 +30,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("ctl") => control::run(args.get(1..).unwrap_or_default()),
+        Some("mosh") => mosh::run(args.get(1..).unwrap_or_default()),
         Some("attach") => attach::Attach::run(
             args.get(1).context("Missing session ID")?,
             args.get(2..).unwrap_or_default(),

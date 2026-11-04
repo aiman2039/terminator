@@ -289,10 +289,7 @@ impl App {
         {
             self.native_close_prompt = None;
         }
-        if self.native_close_after_save.as_deref() == Some(path) {
-            self.native_close_after_save = None;
-            self.native_close_after_save_issuer = None;
-        }
+        self.native_close_after_save.remove(path);
     }
 
     /// Run deferred native closes after the workspace is checked back into
@@ -366,8 +363,8 @@ impl App {
                 None => self.close_native_tab(path, true, None),
             },
             NativeCloseChoice::SaveClose => {
-                self.native_close_after_save = Some(path.to_owned());
-                self.native_close_after_save_issuer = issuer.map(CloseIssuer::deferred);
+                self.native_close_after_save
+                    .insert(path.to_owned(), issuer.map(CloseIssuer::deferred));
                 if let Some(doc) = self.native_docs.get_mut(path) {
                     doc.force_save = false;
                     doc.start_save(&self.services.clone());

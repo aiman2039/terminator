@@ -394,6 +394,29 @@ fn quoted(path: &Path) -> String {
     )
 }
 
+/// `command` without local daemon capabilities in its environment.
+#[must_use]
+pub fn scrubbed(mut command: std::process::Command) -> std::process::Command {
+    for key in private_environment_keys() {
+        command.env_remove(key);
+    }
+    command
+}
+
+/// `ssh -G ARGS -- HOST`: the endpoint after `~/.ssh/config`; parse its
+/// stdout with [`parse_resolved`].
+pub fn resolve_command<I, S>(args: I, host: &str) -> std::process::Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut command = scrubbed(std::process::Command::new(
+        crate::find_executable("ssh").unwrap_or_else(|| "ssh".into()),
+    ));
+    command.arg("-G").args(args).args(["--", host]);
+    command
+}
+
 /// Local daemon capabilities must never reach a remote host through `SendEnv`.
 pub fn private_environment_keys() -> Vec<OsString> {
     std::env::vars_os()

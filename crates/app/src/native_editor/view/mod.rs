@@ -7,8 +7,10 @@
 mod after;
 mod assist;
 mod body;
+mod disk_bar;
 mod effects;
 mod format;
+mod format_menu;
 mod frame;
 mod header;
 mod panels;
@@ -61,6 +63,8 @@ struct ViewFrame {
     source_id: String,
     rename_applying: bool,
     problems: Vec<native_lsp::Diagnostic>,
+    /// [`crate::lsp_manager::LspManager::diagnostics_generation`] of `problems`.
+    problems_generation: u64,
     blame_offer: Option<bool>,
     inlay_answer: Option<(u64, Arc<[native_lsp::InlayHint]>)>,
     remote_snapshot: bool,
@@ -223,12 +227,29 @@ impl App {
             ));
             return;
         }
-        self.native_view_follow_up(path, &frame, &mut requests);
+        self.native_view_follow_up((ui.ctx(), path), &frame, &mut requests);
+        self.native_view_autosave(ui, path, &frame);
         self.native_lsp_sync(path, frame.language);
         self.request_editor_blame(ui.ctx(), path);
         self.native_view_lsp_requests(site, frame.language, &mut requests);
         self.native_view_highlights(ui.ctx(), path, &frame.source_id);
         self.show_hover_popup(ui, path);
         self.native_view_deferred(ui, path, requests);
+    }
+}
+
+impl App {
+    /// Autosave after this view drew: focus loss or a typing pause.
+    fn native_view_autosave(&mut self, ui: &egui::Ui, path: &Path, frame: &ViewFrame) {
+        let focused = ui.memory(|memory| memory.has_focus(source_focus_id(&frame.source_id)));
+        self.native_autosave(
+            ui.ctx(),
+            autosave::AutosaveInput {
+                path,
+                source_id: &frame.source_id,
+                focused,
+                read_only: frame.rename_applying || frame.remote_snapshot,
+            },
+        );
     }
 }

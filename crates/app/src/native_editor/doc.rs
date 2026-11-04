@@ -1,27 +1,29 @@
 //! The native editor's GUI-owned buffer: load, dirty tracking, disk
 //! modification-time probes, and atomic saves.
-use super::file_io::{LoadedFile, NativeFileIo};
+use super::disk::{DiskSync, Loaded};
+use super::file_io::{LineEnding, SavedFile, TextEncoding};
 use super::gutter;
-use crate::gui_services;
 use crate::markdown;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
-use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::highlight::HighlightCache;
 use terminator_native_edit::lsp as native_lsp;
-use terminator_native_edit::vim::{
-    Key as VimKey, ModalEngine, VimEngine, VimrcOptions, parse_vimrc,
-};
+use terminator_native_edit::vim::{ModalEngine, VimEngine, VimrcOptions, parse_vimrc};
+/// Largest file the native editor opens. Saves have no cap: a buffer
+/// that grew past it while editing still saves.
 pub(super) const MAX_NATIVE_BYTES: u64 = 1024 * 1024;
+/// Above this many bytes a buffer opens in large-file mode: no
+/// highlighting, folds or underlines until the user enables them.
+pub(super) const LARGE_FILE_BYTES: usize = terminator_native_edit::highlight::MAX_HIGHLIGHT_BYTES;
 
 /// Options from `~/.vimrc`, read once per process. Only `set`/`setlocal`
-/// names the native engine implements are applied (wrap, ignorecase);
-/// mappings, plugins, and unknown options are ignored, so a large vimrc
-/// can never break the editor.
-pub(super) fn vimrc_options() -> VimrcOptions {
+/// names the native engine implements are applied (wrap, ignorecase,
+/// indentation); plugins and unknown options are ignored, so a large
+/// vimrc can never break the editor.
+pub(super) fn vimrc_options() -> &'static VimrcOptions {
     static OPTIONS: std::sync::OnceLock<VimrcOptions> = std::sync::OnceLock::new();
-    *OPTIONS.get_or_init(|| {
+    OPTIONS.get_or_init(|| {
         let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
         else {
             return VimrcOptions::default();
@@ -32,8 +34,8 @@ pub(super) fn vimrc_options() -> VimrcOptions {
     })
 }
 
-pub(super) type LoadResult = anyhow::Result<LoadedFile>;
-pub(super) type SaveResult = anyhow::Result<Option<SystemTime>>;
+pub(super) type LoadResult = anyhow::Result<Loaded>;
+pub(super) type SaveResult = anyhow::Result<SavedFile>;
 
 /// How long a disk modification-time reading stays valid. The header
 /// re-checks the file on every frame; stat-ing a network or cold volume
@@ -59,7 +61,19 @@ pub struct NativeDoc {
     /// in-flight save's text: an edit undone back to the saved text is
     /// clean again, like `IntelliJ`.
     pub(super) saved_hash: u64,
-    pub(super) save_hash: u64,
+    /// Char counts of the saved text and of the in-flight save's: a
+    /// buffer of another length is dirty without hashing it.
+    pub(super) saved_len: usize,
+    pub(super) save_len: usize,
+    /// Encoding and line breaks the next save writes, and the ones on
+    /// disk (as saved, and as the in-flight save writes them): a
+    /// conversion alone makes the buffer dirty.
+    pub(super) encoding: TextEncoding,
+    pub(super) saved_format: (TextEncoding, bool),
+    pub(super) save_format: (TextEncoding, bool),
+    pub(super) disk: DiskSync,
+    /// Per-buffer derivations cached across frames.
+    pub(super) extras: super::extras::DocExtras,
     /// Engines and layout caches of the other views of this buffer (split
     /// panes), keyed by view id. `engine`/`highlight` belong to `holder`;
     /// between frames the holder is the focused view, so LSP, find, and
@@ -72,10 +86,8 @@ pub struct NativeDoc {
     pub(super) inlay: terminator_native_edit::inlay::InlayCache,
     pub(super) holder: Option<String>,
     pub(super) focused_view: Option<String>,
-    /// Every line break in the file is CRLF: the buffer holds `\n` only
-    /// (so carets never land on a `\r`) and saves convert back. Files with
-    /// mixed endings keep their bytes unchanged.
-    pub(super) crlf: bool,
+    /// The file's line breaks (see [`LineEnding`]).
+    pub(super) line_ending: LineEnding,
     /// `(revision, dirty)` for the last revision checked against
     /// `saved_hash`, so the full-text hash runs once per edit.
     pub(super) dirty_memo: std::cell::Cell<(u64, bool)>,
@@ -83,13 +95,16 @@ pub struct NativeDoc {
     pub(super) read_limit: u64,
     pub(super) mtime_check: Option<(Instant, Option<SystemTime>)>,
     /// In-flight background stat; the GUI thread never stats the file.
-    pub(super) mtime_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Option<SystemTime>>>,
+    pub(super) mtime_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<anyhow::Result<Option<SystemTime>>>>,
     pub(super) load_error: Option<String>,
     pub(super) save_error: Option<String>,
     pub(super) loading: bool,
     pub(super) saving: bool,
     pub(super) force_save: bool,
     pub(super) load_rx: Option<tokio::sync::mpsc::UnboundedReceiver<LoadResult>>,
+    /// Indentation for format requests: detected once per load.
+    pub(super) indent: Option<native_lsp::FormatOptions>,
     pub(super) save_rx: Option<tokio::sync::mpsc::UnboundedReceiver<SaveResult>>,
 }
 
@@ -113,6 +128,9 @@ impl NativeDoc {
             .unwrap_or_else(|| (self.engine.fork_view(), HighlightCache::default()));
         let old_engine = std::mem::replace(&mut self.engine, engine);
         let old_highlight = std::mem::replace(&mut self.highlight, highlight);
+        // Split views highlight once per edit: the next view reuses spans
+        // the previous one computed for the same revision.
+        self.highlight.share_spans(&old_highlight);
         self.views.insert(previous, (old_engine, old_highlight));
     }
 
@@ -131,6 +149,7 @@ impl NativeDoc {
     pub(crate) fn loaded(path: PathBuf, text: &str) -> Self {
         let mut doc = Self::new(path, false);
         doc.doc = Some(Doc::new(text));
+        doc.mark_saved_now();
         doc
     }
 
@@ -143,7 +162,7 @@ impl NativeDoc {
     /// save writes to disk).
     pub(super) fn disk_text(&self) -> Option<String> {
         let doc = self.doc.as_ref()?;
-        Some(with_line_endings(doc.text(), self.crlf))
+        Some(self.line_ending.encode(doc.text()))
     }
 
     /// Caret line of a loaded buffer.
@@ -161,7 +180,7 @@ impl NativeDoc {
 
     pub(crate) fn new(path: PathBuf, insert_first: bool) -> Self {
         let mut engine = VimEngine::new();
-        engine.apply_vimrc(vimrc_options());
+        engine.apply_vimrc(vimrc_options().clone());
         Self {
             path,
             doc: None,
@@ -172,8 +191,15 @@ impl NativeDoc {
             saved_revision: 0,
             save_revision: 0,
             saved_hash: 0,
-            save_hash: 0,
-            crlf: false,
+            saved_len: 0,
+            save_len: 0,
+            encoding: TextEncoding::default(),
+            saved_format: (TextEncoding::default(), false),
+            save_format: (TextEncoding::default(), false),
+            disk: DiskSync::default(),
+            extras: super::extras::DocExtras::default(),
+            indent: None,
+            line_ending: LineEnding::Lf,
             views: std::collections::HashMap::new(),
             gutter: None,
             inlay: terminator_native_edit::inlay::InlayCache::default(),
@@ -194,266 +220,62 @@ impl NativeDoc {
         }
     }
 
+    /// Unsaved changes: the text differs from the saved text, or a
+    /// pending encoding / line-break conversion. Typing costs O(1): only
+    /// an edit that restores the saved length hashes the buffer.
     pub fn dirty(&self) -> bool {
         let Some(doc) = self.doc.as_ref() else {
             return false;
         };
+        if self.format() != self.saved_format {
+            return true;
+        }
         if doc.revision() == self.saved_revision {
             return false;
+        }
+        if doc.len_chars() != self.saved_len {
+            return true;
         }
         let (revision, dirty) = self.dirty_memo.get();
         if revision == doc.revision() {
             return dirty;
         }
-        let dirty = NativeFileIo::text_hash(&doc.text()) != self.saved_hash;
+        let dirty = doc.content_hash() != self.saved_hash;
         self.dirty_memo.set((doc.revision(), dirty));
         dirty
     }
 
-    /// Disk modification time, re-stat-ed on the file pool at most every
-    /// [`MTIME_TTL`]. Until the first reading lands, the loaded time stands
-    /// in, so a slow volume never blocks a frame or flags a false change.
-    pub(super) fn disk_mtime_cached(
-        &mut self,
-        services: &gui_services::Services,
-    ) -> Option<SystemTime> {
-        self.poll_mtime();
-        if self.mtime_probe_due() {
-            self.start_mtime_probe(services);
-        }
-        self.mtime_check
-            .map_or(self.loaded_mtime, |(_, mtime)| mtime)
+    /// Encoding and whether saves convert breaks to CRLF: what
+    /// `saved_format` records.
+    pub(super) fn format(&self) -> (TextEncoding, bool) {
+        (self.encoding, self.line_ending == LineEnding::Crlf)
     }
 
-    pub(super) fn mtime_probe_due(&self) -> bool {
-        self.mtime_rx.is_none()
+    /// Large-file mode: no highlighting, folds or underlines.
+    pub(super) fn large_file(&self) -> bool {
+        !self.extras.large_override
             && self
-                .mtime_check
-                .is_none_or(|(checked, _)| checked.elapsed() >= MTIME_TTL)
+                .doc
+                .as_ref()
+                .is_some_and(|doc| doc.len_bytes() > LARGE_FILE_BYTES)
     }
 
-    pub(super) fn poll_mtime(&mut self) {
-        let Some(rx) = self.mtime_rx.as_mut() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(mtime) => {
-                self.mtime_check = Some((Instant::now(), mtime));
-                self.mtime_rx = None;
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => self.mtime_rx = None,
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-        }
-    }
-
-    /// Forget the last reading after a load or save moved `loaded_mtime`;
-    /// a stat still in flight may predate the write.
-    pub(super) fn reset_mtime(&mut self) {
-        self.mtime_check = None;
-        self.mtime_rx = None;
-    }
-
-    pub(super) fn start_mtime_probe(&mut self, services: &gui_services::Services) {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let path = self.path.clone();
-        let service = services.clone();
-        let context = OperationContext::new(
-            "native-mtime",
-            path.to_string_lossy().into(),
-            Policy::ReplaceableRead,
-        );
-        if services
-            .handle()
-            .submit(context, CancellationToken::new(), async move {
-                let token = CancellationToken::new();
-                if let Ok(mtime) = service
-                    .fs()
-                    .run(&token, move || anyhow::Ok(NativeFileIo::disk_mtime(&path)))
-                    .await
-                {
-                    let _ = tx.send(mtime);
-                }
-                Ok(Vec::new())
-            })
-            .is_ok()
+    /// Indentation the buffer formats with: detected from its text once
+    /// per load, else four spaces.
+    pub(super) fn format_options(&mut self) -> native_lsp::FormatOptions {
+        if self.indent.is_none()
+            && let Some(doc) = self.doc.as_ref()
         {
-            self.mtime_rx = Some(rx);
-        } else {
-            // Busy pool: keep the last reading and retry after the TTL.
-            self.mtime_check = Some((
-                Instant::now(),
-                self.mtime_check.map_or(self.loaded_mtime, |(_, m)| m),
-            ));
+            self.indent = Some(
+                native_lsp::FormatOptions::detect(doc)
+                    .unwrap_or_else(|| vimrc_options().format_options()),
+            );
         }
-    }
-
-    pub(super) fn ensure_loading(&mut self, services: &gui_services::Services) {
-        if self.doc.is_some() || self.load_error.is_some() || self.loading {
-            return;
-        }
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.load_rx = Some(rx);
-        self.loading = true;
-        let path = self.path.clone();
-        let limit = self.read_limit;
-        let service = services.clone();
-        let context = OperationContext::new(
-            "native-load",
-            path.to_string_lossy().into(),
-            Policy::ReplaceableRead,
-        );
-        if services
-            .handle()
-            .submit(context, CancellationToken::new(), async move {
-                let token = CancellationToken::new();
-                let result = service
-                    .fs()
-                    .run(&token, move || NativeFileIo::read(&path, limit))
-                    .await;
-                let _ = tx.send(result);
-                Ok(Vec::new())
-            })
-            .is_err()
-        {
-            self.loading = false;
-            self.load_error = Some("Could not start the file read".into());
-        }
-    }
-
-    pub(super) fn poll(&mut self) {
-        if let Some(rx) = self.load_rx.as_mut()
-            && let Ok(result) = rx.try_recv()
-        {
-            self.loading = false;
-            match result {
-                Ok(loaded) => {
-                    self.loaded_mtime = loaded.mtime;
-                    self.reset_mtime();
-                    self.crlf = NativeFileIo::all_crlf(&loaded.text);
-                    let text = if self.crlf {
-                        loaded.text.replace("\r\n", "\n")
-                    } else {
-                        loaded.text
-                    };
-                    self.saved_hash = NativeFileIo::text_hash(&text);
-                    self.doc = Some(Doc::new(text));
-                    self.saved_revision = self.doc.as_ref().map_or(0, Doc::revision);
-                    self.save_revision = self.saved_revision;
-                    if self.insert_first {
-                        self.insert_first = false;
-                        if let Some(doc) = self.doc.as_mut() {
-                            self.engine.press_key(doc, VimKey::Char('i'));
-                        }
-                    }
-                    self.load_error = None;
-                }
-                Err(error) => {
-                    self.load_error = Some(format!("{error:#}"));
-                }
-            }
-        }
-        if let Some(received) = self.save_rx.as_mut().map(|rx| rx.try_recv()) {
-            self.settle_save(received);
-        }
-    }
-
-    /// Settle the in-flight save. A worker that stopped without an answer
-    /// (cancelled or timed out) ends the save with an error, so Save and
-    /// Save-and-close never wait forever.
-    fn settle_save(
-        &mut self,
-        received: Result<SaveResult, tokio::sync::mpsc::error::TryRecvError>,
-    ) {
-        let result = match received {
-            Ok(result) => result,
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                Err(anyhow::anyhow!("The save stopped before it finished"))
-            }
-        };
-        self.save_rx = None;
-        self.saving = false;
-        match result {
-            Ok(mtime) => {
-                // The written text was the snapshot taken at save start:
-                // edits typed while the write ran keep the buffer dirty.
-                self.saved_revision = self.save_revision;
-                self.saved_hash = self.save_hash;
-                self.loaded_mtime = mtime;
-                self.reset_mtime();
-                self.save_error = None;
-                self.force_save = false;
-            }
-            Err(error) => {
-                self.save_error = Some(format!("{error:#}"));
-            }
-        }
-    }
-
-    pub(super) fn start_save(&mut self, services: &gui_services::Services) {
-        let Some(doc) = self.doc.as_ref() else {
-            return;
-        };
-        if self.saving {
-            return;
-        }
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.save_rx = Some(rx);
-        self.saving = true;
-        self.save_error = None;
-        let path = self.path.clone();
-        let text = doc.text();
-        self.save_revision = doc.revision();
-        self.save_hash = NativeFileIo::text_hash(&text);
-        let text = with_line_endings(text, self.crlf);
-        let expected = self.loaded_mtime;
-        let force = self.force_save;
-        let service = services.clone();
-        // A write is a mutation: no read deadline cancels it half-way.
-        let context = OperationContext::new(
-            "native-save",
-            path.to_string_lossy().into(),
-            Policy::OrderedMutation,
-        );
-        if services
-            .handle()
-            .submit(context, CancellationToken::new(), async move {
-                let token = CancellationToken::new();
-                let result = service
-                    .fs()
-                    .run(&token, move || {
-                        if !force && NativeFileIo::disk_mtime(&path) != expected {
-                            anyhow::bail!("Changed on disk since loading");
-                        }
-                        anyhow::ensure!(
-                            text.len() as u64 <= MAX_NATIVE_BYTES,
-                            "Native editing is limited to 1 MiB"
-                        );
-                        NativeFileIo::write_atomically(&path, text.as_bytes())?;
-                        Ok(NativeFileIo::disk_mtime(&path))
-                    })
-                    .await;
-                let _ = tx.send(result);
-                Ok(Vec::new())
-            })
-            .is_err()
-        {
-            self.saving = false;
-            self.save_error = Some("Could not start the file write".into());
-        }
+        self.indent.unwrap_or_default()
     }
 }
 
 pub(super) type GutterCache = gutter::GutterState;
-
-/// Turn an LF-only buffer text back into the file's line endings.
-pub(super) fn with_line_endings(text: String, crlf: bool) -> String {
-    if crlf {
-        text.replace('\n', "\r\n")
-    } else {
-        text
-    }
-}
 
 #[cfg(test)]
 impl NativeDoc {
@@ -474,7 +296,7 @@ mod line_ending_tests {
     #[test]
     fn crlf_document_disk_text_matches_crlf_file_bytes() {
         let mut doc = NativeDoc::loaded(PathBuf::from("crlf.txt"), "one\ntwo\n");
-        doc.crlf = true;
+        doc.line_ending = LineEnding::Crlf;
         assert_eq!(doc.disk_text().as_deref(), Some("one\r\ntwo\r\n"));
     }
 

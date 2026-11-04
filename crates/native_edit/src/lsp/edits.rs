@@ -1,15 +1,87 @@
 //! Formatting and code actions: requests and their edit results.
 use super::*;
 
-/// `textDocument/formatting` for a whole document (4-space indents).
+/// `FormattingOptions` for format requests: the buffer's indentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FormatOptions {
+    pub tab_size: u32,
+    pub insert_spaces: bool,
+}
+
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            tab_size: 4,
+            insert_spaces: true,
+        }
+    }
+}
+
+impl FormatOptions {
+    /// The JSON `options` object of a format request.
+    #[must_use]
+    pub fn json(self) -> Value {
+        serde_json::to_value(lsp_types::FormattingOptions {
+            tab_size: self.tab_size,
+            insert_spaces: self.insert_spaces,
+            ..lsp_types::FormattingOptions::default()
+        })
+        .unwrap_or_default()
+    }
+
+    /// Indentation used by `doc`, from its first indented lines: tabs, or
+    /// the smallest space step (2, 4 or 8). `None` when nothing is indented.
+    #[must_use]
+    pub fn detect<B: crate::doc::Buffer>(doc: &B) -> Option<Self> {
+        let (mut tabs, mut spaces, mut step) = (0usize, 0usize, 0usize);
+        for line in (0..doc.line_count()).take(2000) {
+            let text = doc.line_text(line);
+            if text.starts_with('\t') {
+                tabs = tabs.saturating_add(1);
+            } else {
+                let width = text.chars().take_while(|c| *c == ' ').count();
+                if width >= 2 && text.chars().nth(width).is_some_and(|c| !c.is_whitespace()) {
+                    spaces = spaces.saturating_add(1);
+                    step = if step == 0 { width } else { gcd(step, width) };
+                }
+            }
+        }
+        if tabs == 0 && spaces == 0 {
+            return None;
+        }
+        if tabs > spaces {
+            return Some(Self {
+                tab_size: 4,
+                insert_spaces: false,
+            });
+        }
+        let tab_size = match step {
+            2 | 4 | 8 => u32::try_from(step).unwrap_or(4),
+            _ => 4,
+        };
+        Some(Self {
+            tab_size,
+            insert_spaces: true,
+        })
+    }
+}
+
+fn gcd(a: usize, b: usize) -> usize {
+    match a.checked_rem(b) {
+        Some(rest) => gcd(b, rest),
+        None => a,
+    }
+}
+
+/// `textDocument/formatting` for a whole document.
 #[must_use]
-pub fn formatting(id: &RequestId, uri: &Url) -> Vec<u8> {
+pub fn formatting(id: &RequestId, uri: &Url, options: FormatOptions) -> Vec<u8> {
     request(
         id,
         "textDocument/formatting",
         serde_json::json!({
             "textDocument": { "uri": uri.as_str() },
-            "options": { "tabSize": 4, "insertSpaces": true },
+            "options": options.json(),
         }),
     )
 }

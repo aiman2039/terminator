@@ -1,18 +1,22 @@
 //! GUI-owned native file editing backing Settings → Editor mode → Native.
 //!
 //! Unlike daemon editors, native tabs hold their buffer in the GUI: no PTY,
-//! no Neovim session. Files load and save on the filesystem worker pool with
-//! the same 1 MiB bound as Markdown previews. Saves refuse to overwrite a
-//! file that changed on disk unless forced, Reload is disabled while dirty,
-//! and closing a dirty tab asks first — nothing is silently discarded.
+//! no Neovim session. Files load on the filesystem worker pool with the
+//! same 1 MiB bound as Markdown previews; saves have no cap. Saves refuse
+//! to overwrite a file whose bytes changed on disk unless forced, a dirty
+//! buffer offers Reload / Compare / Keep mine instead of reloading, and
+//! closing a dirty tab asks first — nothing is silently discarded.
 mod action_popup;
 mod actions;
 mod agent_context;
+mod autosave;
 mod blame;
 mod close;
 mod close_copies;
 mod complete;
+mod disk;
 mod doc;
+mod extras;
 mod file_io;
 mod find;
 mod find_files;
@@ -31,6 +35,7 @@ use close_copies::{RemoveCopyFromFloatDockInput, RemoveCopyFromTabInput};
 pub(crate) use complete::{CompletionPopup, SignaturePopup};
 pub(crate) use doc::NativeDoc;
 use doc::*;
+pub(crate) use file_io::LineEnding;
 pub(crate) use find::FindBar;
 pub(crate) use find_files::FindInFiles;
 pub(crate) use gutter::GutterPopup;
@@ -169,14 +174,8 @@ impl App {
         {
             self.native_close_prompt = None;
         }
-        if self
-            .native_close_after_save
-            .as_ref()
-            .is_some_and(|path| !live.contains(path))
-        {
-            self.native_close_after_save = None;
-            self.native_close_after_save_issuer = None;
-        }
+        self.native_close_after_save
+            .retain(|path, _| live.contains(path));
     }
 
     /// Every path with a live native editor tab, de-duplicated. Floating
@@ -261,4 +260,10 @@ impl App {
 }
 
 #[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod view_buffer_tests;
+
+#[cfg(test)]
+mod disk_tests;

@@ -1,5 +1,7 @@
 mod expanded;
 mod playlists;
+mod styles;
+pub use styles::{ProjectStyle, TerminalStyle};
 #[cfg(test)]
 mod tests;
 
@@ -15,13 +17,6 @@ use std::{
 
 fn default_true() -> bool {
     true
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TerminalStyle {
-    pub color: Option<String>,
-    pub icon: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +159,8 @@ pub struct UiPreferences {
     pub history_expanded: HashMap<String, bool>,
     /// Terminal title colors and icons, keyed by persistent session ID.
     pub terminal_styles: HashMap<String, TerminalStyle>,
+    /// Project display name, color, and icon, keyed by project ID.
+    pub project_styles: HashMap<String, ProjectStyle>,
     pub vnc_paste_shortcut: VncPasteShortcut,
     /// Shell terminal type-ahead prediction (#83).
     #[serde(default)]
@@ -315,6 +312,7 @@ impl Default for UiPreferences {
             expanded: HashMap::new(),
             history_expanded: HashMap::new(),
             terminal_styles: HashMap::new(),
+            project_styles: HashMap::new(),
             vnc_paste_shortcut: VncPasteShortcut::default(),
             type_ahead: super::TypeAhead::default(),
             tool: SidebarTool::Explorer,

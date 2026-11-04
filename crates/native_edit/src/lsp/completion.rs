@@ -79,8 +79,14 @@ pub struct CompletionItem {
     pub filter: String,
     /// Server ordering key.
     pub sort: String,
-    /// Range the insert replaces, when the server names one.
+    /// Range the insert replaces, when the server names one (the
+    /// insert range of an insert-and-replace edit).
     pub edit: Option<Range>,
+    /// The replace range of an insert-and-replace edit: it also covers
+    /// the rest of the word after the caret.
+    pub replace: Option<Range>,
+    /// Edits elsewhere in the file applied with the item (auto-imports).
+    pub additional: Vec<RenameTextEdit>,
 }
 
 /// Parse a `textDocument/completion` result (item array or list).
@@ -97,20 +103,32 @@ pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
     items
         .into_iter()
         .map(|item| {
-            let (insert, edit) = match &item.text_edit {
+            let (insert, edit, replace) = match &item.text_edit {
                 Some(lsp_types::CompletionTextEdit::Edit(edit)) => {
-                    (edit.new_text.clone(), Some(native_range(&edit.range)))
+                    (edit.new_text.clone(), Some(native_range(&edit.range)), None)
                 }
-                Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) => {
-                    (edit.new_text.clone(), Some(native_range(&edit.insert)))
-                }
+                Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) => (
+                    edit.new_text.clone(),
+                    Some(native_range(&edit.insert)),
+                    Some(native_range(&edit.replace)),
+                ),
                 None => (
                     item.insert_text
                         .clone()
                         .unwrap_or_else(|| item.label.clone()),
                     None,
+                    None,
                 ),
             };
+            let additional = item
+                .additional_text_edits
+                .iter()
+                .flatten()
+                .map(|edit| RenameTextEdit {
+                    range: native_range(&edit.range),
+                    new_text: edit.new_text.clone(),
+                })
+                .collect();
             CompletionItem {
                 kind: item.kind.map(completion_kind_label),
                 detail: item.detail.clone().filter(|detail| !detail.is_empty()),
@@ -123,6 +141,8 @@ pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
                 label: item.label,
                 insert,
                 edit,
+                replace,
+                additional,
             }
         })
         .collect()

@@ -208,6 +208,7 @@ impl App {
         let count = live.to_string();
         let selected = self.selected.as_ref() == Some(&project.id);
         let response = appearance::project_row(appearance::ProjectRowInput {
+            color: None,
             ui,
             label: &project.name,
             icon: "GitBranch",

@@ -65,6 +65,7 @@ fn typing_in_split_diff_edits_the_buffer_and_re_diffs_live() {
         target: "diff-right-editor",
         key: egui::Key::Z,
     });
+    settle_live_diff(&mut app, &ctx, &tab);
     let text = buffer_text(&app, &tab);
     assert!(
         text.contains('z'),
@@ -113,6 +114,33 @@ fn vim_keys_edit_the_split_diff_buffer() {
         "`i` enters Insert mode, then `Q` is typed: {:?}",
         buffer_text(&app, &tab)
     );
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn vim_x_in_the_split_editor_deletes_text_without_asking_to_discard() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut app = editable_app(&ctx, dir.path(), ("a\n", "bc\n"));
+    app.state.settings.native_vim = true;
+    let tab = working_tab();
+    app.diff_split.insert(tab.key());
+    app.diff_reviews.entry(tab.key()).or_default().selected = Some(0);
+    click_and_key(ClickAndKeyInput {
+        app: &mut app,
+        ctx: &ctx,
+        tab: &tab,
+        target: "diff-right-editor",
+        key: egui::Key::X,
+    });
+    assert_eq!(buffer_text(&app, &tab).lines().count(), 1);
+    assert!(
+        !buffer_text(&app, &tab).contains("bc"),
+        "`x` deletes a char: {:?}",
+        buffer_text(&app, &tab)
+    );
+    let review = app.diff_reviews.get(&tab.key()).expect("review state");
+    assert_eq!(review.confirm_discard, None, "`x` is the editor's key");
 }
 
 #[cfg(feature = "test-support")]

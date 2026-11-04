@@ -28,11 +28,50 @@ pub(crate) fn range_text<B: Buffer>(doc: &B, from: usize, to: usize) -> String {
     out
 }
 
-/// Text with CRLF / CR line ends as LF; borrows when there is no `\r`.
-pub(crate) fn normalize_newlines(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.contains('\r') {
-        text.replace("\r\n", "\n").replace('\r', "\n").into()
-    } else {
-        text.into()
-    }
+pub(crate) use crate::doc::normalize_breaks as normalize_newlines;
+
+/// Char column where each grapheme cluster of `text` starts, so `l`, `h`
+/// and `x` step over a decomposed `é` or an emoji sequence as one cell.
+fn grapheme_starts(text: &str) -> impl Iterator<Item = usize> + '_ {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut col = 0usize;
+    text.graphemes(true).map(move |g| {
+        let at = col;
+        col = col.saturating_add(g.chars().count());
+        at
+    })
+}
+
+/// Column after `count` graphemes right of `col` (at most the line end).
+pub(crate) fn grapheme_right(text: &str, col: usize, count: usize) -> usize {
+    let len = text.chars().count();
+    grapheme_starts(text)
+        .filter(|start| *start > col)
+        .nth(count.saturating_sub(1))
+        .unwrap_or(len)
+}
+
+/// Column `count` graphemes left of `col` (at least 0).
+pub(crate) fn grapheme_left(text: &str, col: usize, count: usize) -> usize {
+    let starts: Vec<usize> = grapheme_starts(text)
+        .take_while(|start| *start < col)
+        .collect();
+    starts
+        .len()
+        .checked_sub(count.max(1))
+        .and_then(|i| starts.get(i).copied())
+        .unwrap_or(0)
+}
+
+/// Start of the grapheme that holds `col` (a cursor never rests inside one).
+pub(crate) fn grapheme_floor(text: &str, col: usize) -> usize {
+    grapheme_starts(text)
+        .take_while(|start| *start <= col)
+        .last()
+        .unwrap_or(0)
+}
+
+/// Column of the last grapheme start (Normal mode's rightmost cell).
+pub(crate) fn last_grapheme(text: &str) -> usize {
+    grapheme_starts(text).last().unwrap_or(0)
 }

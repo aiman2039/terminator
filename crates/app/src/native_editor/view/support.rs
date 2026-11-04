@@ -101,22 +101,22 @@ impl App {
     /// Queue the deferred close for a settled save-then-close (`:wq` or
     /// Save and close). Returns true when the view should stop rendering.
     pub(super) fn native_close_after_save_settled(&mut self, path: &Path) -> bool {
-        if self.native_close_after_save.as_deref() == Some(path) {
-            let settled = !self.native_dirty(path)
-                && !self.native_docs.get(path).is_some_and(|doc| doc.saving);
-            if settled {
-                // Deferred: the workspace is checked out of `layouts` while
-                // this view renders; closing runs after it is checked back in.
-                // Consumed here: every other copy rendering later must not
-                // queue its own close for the same request.
-                let issuer = self.native_close_after_save_issuer.take();
-                self.native_close_after_save = None;
-                self.pending_native_close
-                    .push((path.to_owned(), false, issuer));
-                return true;
-            }
+        if !self.native_close_after_save.contains_key(path) {
+            return false;
         }
-        false
+        let settled =
+            !self.native_dirty(path) && !self.native_docs.get(path).is_some_and(|doc| doc.saving);
+        if !settled {
+            return false;
+        }
+        // Deferred: the workspace is checked out of `layouts` while this
+        // view renders; closing runs after it is checked back in. Consumed
+        // here: every other copy rendering later must not queue its own
+        // close for the same request.
+        let issuer = self.native_close_after_save.remove(path).flatten();
+        self.pending_native_close
+            .push((path.to_owned(), false, issuer));
+        true
     }
 
     /// In-pane unsaved-changes bar for this view's pending tab close.
@@ -289,6 +289,13 @@ impl App {
     }
 
     pub(super) fn native_lsp_sync(&mut self, path: &Path, language: Language) {
+        // Format requests indent like the file (detected once per load).
+        if let Some(doc) = self.native_docs.get_mut(path)
+            && doc.doc.is_some()
+        {
+            let options = doc.format_options();
+            self.lsp.set_format_options(path, options);
+        }
         // Language-server sync for the visible buffer: clone the text
         // only when the manager actually wants it.
         if let Some(revision) = self

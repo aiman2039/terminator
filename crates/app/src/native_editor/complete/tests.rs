@@ -11,6 +11,8 @@ fn item(label: &str, sort: &str) -> native_lsp::CompletionItem {
         filter: label.into(),
         sort: sort.into(),
         edit: None,
+        replace: None,
+        additional: Vec::new(),
     }
 }
 
@@ -115,4 +117,44 @@ fn completion_badges_match_the_structure_view() {
         kind_badge(Some("Function")).map(|(_, tint)| tint),
         kind_badge(Some("Field")).map(|(_, tint)| tint)
     );
+}
+
+#[test]
+fn accepting_applies_auto_imports_and_the_replace_range() {
+    let position = |line, character| native_lsp::Position { line, character };
+    let mut buffer = Doc::new("fn main() {\n    HashSe\n}\n");
+    let mut engine = VimEngine::new();
+    engine.set_modeless(true);
+    let _ = engine.place_cursor(&mut buffer, 1, 8);
+    let mut chosen = item("HashSet", "0");
+    // Caret inside the word: the replace range covers its tail too.
+    chosen.replace = Some(native_lsp::Range {
+        start: position(1, 4),
+        end: position(1, 10),
+    });
+    chosen.additional = vec![native_lsp::RenameTextEdit {
+        range: native_lsp::Range {
+            start: position(0, 0),
+            end: position(0, 0),
+        },
+        new_text: "use std::collections::HashSet;\n".into(),
+    }];
+    accept(AcceptInput {
+        buffer: &mut buffer,
+        engine: &mut engine,
+        line: 1,
+        start: 4,
+        item: &chosen,
+    });
+    assert_eq!(
+        buffer.text(),
+        "use std::collections::HashSet;\nfn main() {\n    HashSet\n}\n"
+    );
+    assert_eq!(
+        (engine.cursor().line, engine.cursor().col),
+        (2, 11),
+        "the caret follows the inserted item"
+    );
+    engine.undo(&mut buffer);
+    assert_eq!(buffer.text(), "fn main() {\n    HashSe\n}\n");
 }

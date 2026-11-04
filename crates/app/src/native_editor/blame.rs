@@ -26,6 +26,94 @@ pub(crate) struct EditorBlame {
     annotations: Arc<Vec<Annotation>>,
     /// Blank column of the same width, shown while lines have moved.
     blank: Arc<Vec<Annotation>>,
+    /// Line hashes of the text sent with the request in flight, and of
+    /// the text the answer describes.
+    sent: Option<(u64, Arc<Vec<u64>>)>,
+    answered_lines: Arc<Vec<u64>>,
+    /// The answer moved onto a newer revision (see [`shift_annotations`]).
+    shifted: Option<(u64, Arc<Vec<Annotation>>)>,
+}
+
+impl EditorBlame {
+    /// The column at the buffer's revision: current annotations, or
+    /// while a fresh blame is pending the last answer moved onto the
+    /// edited lines (blank only where lines changed).
+    pub(crate) fn column(&mut self, buffer: &Doc) -> Arc<Vec<Annotation>> {
+        let revision = buffer.revision();
+        if self.answered.is_none() {
+            return Arc::clone(&self.blank);
+        }
+        if self.answered == Some(revision) {
+            return Arc::clone(&self.annotations);
+        }
+        if let Some((shifted, column)) = &self.shifted
+            && *shifted == revision
+        {
+            return Arc::clone(column);
+        }
+        let blank = self.blank.first().cloned().unwrap_or(Annotation {
+            text: "".into(),
+            hover: "".into(),
+            group: 0,
+        });
+        let column = Arc::new(shift_annotations(
+            &self.annotations,
+            (&self.answered_lines, buffer),
+            &blank,
+        ));
+        self.shifted = Some((revision, Arc::clone(&column)));
+        column
+    }
+}
+
+/// Hash of each buffer line, to line up an older blame with new text.
+fn line_hashes(buffer: &Doc) -> Vec<u64> {
+    (0..buffer.line_count())
+        .map(|line| buffer.line_hash(line))
+        .collect()
+}
+
+/// Move `annotations` (for line hashes `old`) onto the lines of `new`:
+/// the unchanged lines before and after the edited region keep their
+/// annotation, the edited lines in between get `blank`. Only the lines
+/// up to the first difference from each end are hashed, so typing
+/// stays cheap.
+fn shift_annotations(
+    annotations: &[Annotation],
+    (old, new): (&[u64], &Doc),
+    blank: &Annotation,
+) -> Vec<Annotation> {
+    let new_len = new.line_count();
+    let same = |hash: &u64, line: usize| new.line_hash(line) == *hash;
+    let prefix = old
+        .iter()
+        .zip(0..new_len)
+        .take_while(|(hash, line)| same(hash, *line))
+        .count();
+    let room = old.len().min(new_len).saturating_sub(prefix);
+    let suffix = old
+        .iter()
+        .rev()
+        .zip((0..new_len).rev())
+        .take(room)
+        .take_while(|(hash, line)| same(hash, *line))
+        .count();
+    let tail_start = new_len.saturating_sub(suffix);
+    (0..new_len)
+        .map(|line| {
+            let source = if line < prefix {
+                Some(line)
+            } else if line >= tail_start {
+                old.len().checked_sub(new_len.saturating_sub(line))
+            } else {
+                None
+            };
+            source
+                .and_then(|at| annotations.get(at))
+                .unwrap_or(blank)
+                .clone()
+        })
+        .collect()
 }
 
 /// `YYYY-MM-DD` for Unix seconds (UTC; proleptic Gregorian).
@@ -72,7 +160,7 @@ pub(crate) fn annotations(entries: &[BlameEntry], web_host: Option<&str>) -> Vec
             if entry.uncommitted() {
                 return Annotation {
                     text: "Not committed".into(),
-                    hover: String::new(),
+                    hover: "".into(),
                     group,
                 };
             }
@@ -83,11 +171,12 @@ pub(crate) fn annotations(entries: &[BlameEntry], web_host: Option<&str>) -> Vec
             };
             let short: String = entry.hash.chars().take(8).collect();
             Annotation {
-                text: format!("{date} {}", entry.author),
+                text: format!("{date} {}", entry.author).into(),
                 hover: format!(
                     "{short} · {} · {date}\n{}\n\nClick to show this commit's change to the file{web_hint}",
                     entry.author, entry.summary
-                ),
+                )
+                .into(),
                 group,
             }
         })
@@ -110,23 +199,21 @@ impl App {
                 commit_web: None,
                 annotations: Arc::new(Vec::new()),
                 blank: Arc::new(Vec::new()),
+                sent: None,
+                answered_lines: Arc::new(Vec::new()),
+                shifted: None,
             },
         );
     }
 
-    /// The column for `path` at buffer `revision`: current annotations, or
-    /// a blank column of the same width while a fresh blame is pending.
+    /// The blame column for `path` at its buffer's revision.
+    #[cfg(test)]
     pub(crate) fn editor_blame_annotations(
-        &self,
+        &mut self,
         path: &Path,
-        revision: u64,
+        buffer: &Doc,
     ) -> Option<Arc<Vec<Annotation>>> {
-        let blame = self.editor_blame.get(path)?;
-        Some(if blame.answered == Some(revision) {
-            Arc::clone(&blame.annotations)
-        } else {
-            Arc::clone(&blame.blank)
-        })
+        Some(self.editor_blame.get_mut(path)?.column(buffer))
     }
 
     /// Ask for blame once the buffer has been quiet for a moment (right
@@ -156,7 +243,8 @@ impl App {
         blame.pending = Some(revision);
         // `git blame --contents` matches lines against the committed bytes:
         // send the file's own line endings, not the LF-only buffer.
-        let text = super::doc::with_line_endings(buffer.text(), native.crlf);
+        blame.sent = Some((revision, Arc::new(line_hashes(buffer))));
+        let text = native.line_ending.encode(buffer.text());
         let _ = self
             .jobs
             .send(Job::EditorBlame(path.to_owned(), revision, text));
@@ -184,14 +272,18 @@ impl App {
                     .max()
                     .unwrap_or(0);
                 blame.blank = Arc::new(vec![Annotation {
-                    text: " ".repeat(width),
-                    hover: String::new(),
+                    text: " ".repeat(width).into(),
+                    hover: "".into(),
                     group: 0,
                 }]);
                 blame.annotations = Arc::new(annotations);
                 blame.entries = data.entries;
                 blame.commit_web = data.commit_web;
                 blame.answered = Some(revision);
+                blame.shifted = None;
+                if let Some((_, lines)) = blame.sent.take_if(|(sent, _)| *sent == revision) {
+                    blame.answered_lines = lines;
+                }
             }
             Err(error) => {
                 self.editor_blame.remove(path);
@@ -266,13 +358,13 @@ mod tests {
             ],
             Some("github.com"),
         );
-        assert_eq!(built[0].text, "2024-03-01 Ada");
+        assert_eq!(&*built[0].text, "2024-03-01 Ada");
         assert!(built[0].hover.starts_with("aaaaaaaa · Ada"));
         assert_eq!(
             built.iter().map(|a| a.group).collect::<Vec<_>>(),
             [0, 0, 1, 2]
         );
-        assert_eq!(built[3].text, "Not committed");
+        assert_eq!(&*built[3].text, "Not committed");
         assert!(built[3].hover.is_empty());
         assert!(built[0].hover.contains("open the commit on github.com"));
     }
@@ -320,19 +412,18 @@ mod tests {
         assert!(received.try_iter().next().is_none());
         let entries = crate::git_log::blame_with_contents(root, &path, Some(&text)).unwrap();
         app.apply_editor_blame(&path, revision, Ok(entries));
-        let shown = app.editor_blame_annotations(&path, revision).unwrap();
+        let mut buffer = app.native_docs[&path].doc.clone().unwrap();
+        let shown = app.editor_blame_annotations(&path, &buffer).unwrap();
         assert!(shown[0].text.ends_with(" Ada"), "{:?}", shown[0]);
-        assert_eq!(shown[1].text, "Not committed");
-        // After an edit the column stays, blank, until blame catches up.
-        let blank = app
-            .editor_blame_annotations(&path, revision.wrapping_add(1))
-            .unwrap();
-        assert!(
-            blank
-                .iter()
-                .all(|annotation| annotation.text.trim().is_empty())
-        );
+        assert_eq!(&*shown[1].text, "Not committed");
+        // Typing a line above keeps the column: old lines move down, and
+        // only the new line is blank until blame catches up.
+        buffer.insert(0, "zero\n");
+        let moved = app.editor_blame_annotations(&path, &buffer).unwrap();
+        assert!(moved[0].text.trim().is_empty());
+        assert_eq!(moved[1].text, shown[0].text);
+        assert_eq!(&*moved[2].text, "Not committed");
         app.toggle_editor_blame(&path);
-        assert!(app.editor_blame_annotations(&path, revision).is_none());
+        assert!(app.editor_blame_annotations(&path, &buffer).is_none());
     }
 }

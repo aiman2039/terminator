@@ -1,79 +1,12 @@
 use super::super::doc::Buffer;
 use super::mode::{BlockPending, Cursor, Mode, Place};
 use super::state::VimEngine;
-use super::words::{flat_text, line_len, word_backward, word_end, word_forward};
+use super::words::line_len;
 impl VimEngine {
     /// Drive an operator motion the way the live keys do (including the
     /// `cw`→`ce` special case), for `.` replay.
     pub(super) fn replay_motion<B: Buffer>(&mut self, doc: &mut B, motion: char, count: usize) {
-        match motion {
-            '^' | 'G' | 'g' => {
-                let target = self.goto_target(doc, motion, count);
-                self.apply_motion_to(doc, target, motion);
-            }
-            _ => {
-                self.apply_motion(doc, motion, count.max(1));
-            }
-        }
-    }
-
-    /// Cursor target for the count-aware motions (`^`, `G`, `gg`), shared
-    /// by the live keys and `.` replay. A `G` count of 0 means bare `G`
-    /// (last line); every other motion treats 0 as 1.
-    pub(super) fn goto_target<B: Buffer>(&self, doc: &B, motion: char, count: usize) -> Cursor {
-        match motion {
-            '^' => Cursor {
-                line: self.cursor.line,
-                col: Self::first_non_blank(doc, self.cursor.line),
-            },
-            'G' => {
-                let last = doc.line_count().saturating_sub(1);
-                let line = if count == 0 {
-                    last
-                } else {
-                    count.saturating_sub(1).min(last)
-                };
-                Cursor {
-                    line,
-                    col: Self::first_non_blank(doc, line),
-                }
-            }
-            _ => Cursor {
-                line: 0,
-                col: Self::first_non_blank(doc, 0),
-            },
-        }
-    }
-
-    pub(super) fn word_target<B: Buffer>(
-        &self,
-        doc: &B,
-        kind: char,
-        count: usize,
-    ) -> (Cursor, bool) {
-        let text = flat_text(doc);
-        let from = self.char_idx(doc, self.cursor);
-        let (idx, inclusive) = match kind {
-            'w' => (word_forward(&text, from, count), false),
-            'b' => (word_backward(&text, from, count), false),
-            'e' => (word_end(&text, from, count), true),
-            _ => (from, false),
-        };
-        let total: usize = text.len();
-        let idx = idx.min(total);
-        // Map the flat index back to line/col by walking line lengths.
-        let mut rest = idx;
-        let mut line = 0;
-        while line < doc.line_count() {
-            let len = line_len(doc, line);
-            if rest <= len || line.checked_add(1) == Some(doc.line_count()) {
-                break;
-            }
-            let step = len.checked_add(1).unwrap_or(len);
-            rest = rest.saturating_sub(step);
-            line = line.checked_add(1).unwrap_or(line);
-        }
-        (Cursor { line, col: rest }, inclusive)
+        self.apply_motion(doc, motion, count);
     }
 
     /// Park the cursor for an insert session and open its undo unit.
@@ -132,7 +65,12 @@ impl VimEngine {
             Some(span) => span,
             None => return,
         };
-        let right = right.saturating_sub(1);
+        // `$A` appends at every line end.
+        let right = if self.x.block_eol {
+            usize::MAX.saturating_sub(1)
+        } else {
+            right.saturating_sub(1)
+        };
         self.block_pending = Some(BlockPending {
             top,
             bottom,
@@ -152,26 +90,6 @@ impl VimEngine {
         };
         self.preferred_col = self.cursor.col;
         self.begin_insert_session(doc);
-        self.clamp(doc);
-    }
-
-    /// Forward character delete (`x` with count), shared by the live key
-    /// and `.` replay. One buffer op: already a single undo step.
-    pub(super) fn delete_chars_forward<B: Buffer>(&mut self, doc: &mut B, count: usize) {
-        let from = self.char_idx(doc, self.cursor);
-        let len = line_len(doc, self.cursor.line);
-        if self.cursor.col < len {
-            let room = len.saturating_sub(self.cursor.col);
-            let to = from
-                .checked_add(count.max(1))
-                .unwrap_or(from)
-                .min(from.checked_add(room).unwrap_or(from));
-            // Vim parity: `x` fills the unnamed register, so `xp` swaps.
-            self.set_register_local(super::helpers::range_text(doc, from, to));
-            let cursor = self.delete_range(doc, from, to);
-            self.cursor = cursor;
-        }
-        self.clear_pending();
         self.clamp(doc);
     }
 

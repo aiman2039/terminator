@@ -1,4 +1,6 @@
 use super::super::doc::Buffer;
+use super::helpers::{grapheme_floor, grapheme_left};
+use super::mode::Repeat;
 use super::mode::{Cursor, Mode};
 use super::state::VimEngine;
 use super::words::line_len;
@@ -32,13 +34,14 @@ impl VimEngine {
             Self::last_addressable(doc)
         };
         self.cursor.line = self.cursor.line.min(last);
-        let len = line_len(doc, self.cursor.line);
-        let max_col = if self.mode == Mode::Insert || self.modeless || len == 0 {
-            len
+        let text = doc.line_text(self.cursor.line);
+        let len = text.chars().count();
+        if self.mode == Mode::Insert || self.modeless || len == 0 {
+            self.cursor.col = self.cursor.col.min(len);
         } else {
-            len.saturating_sub(1)
-        };
-        self.cursor.col = self.cursor.col.min(max_col);
+            // Outside Insert the cursor rests on a whole grapheme.
+            self.cursor.col = grapheme_floor(&text, self.cursor.col.min(len.saturating_sub(1)));
+        }
         self.anchor.line = self.anchor.line.min(last);
         let alen = line_len(doc, self.anchor.line);
         self.anchor.col = self.anchor.col.min(alen);
@@ -136,6 +139,7 @@ impl VimEngine {
         }
         self.mode = Mode::Insert;
         self.clear_pending();
+        self.x.reg_sel = None;
         self.typed_exact = true;
         self.typed_start = self.char_idx(doc, self.cursor);
         self.typed_end = self.typed_start;
@@ -152,6 +156,9 @@ impl VimEngine {
 
     pub(super) fn enter_normal<B: Buffer>(&mut self, doc: &mut B) {
         let ending_insert = self.mode == Mode::Insert;
+        if self.mode.is_visual() {
+            self.x.last_visual = Some((self.mode, self.anchor, self.cursor));
+        }
         self.mode = Mode::Normal;
         self.clear_pending();
         self.command.clear();
@@ -170,21 +177,49 @@ impl VimEngine {
                     self.apply_block_insert(doc, &block, &text);
                 }
             }
+            self.finish_insert_repeat(doc);
             if !self.replaying {
-                self.last_change = if self.typed_exact {
+                self.last_change = if self.x.keys_change {
+                    Some(Repeat::Keys(self.x.raw.clone()))
+                } else if self.typed_exact {
                     Self::parse_repeat(&self.recording, pending)
                 } else {
                     None
                 };
             }
             self.recording.clear();
+            self.x.replaced = None;
             if self.insert_group {
                 doc.end_undo_group();
                 self.insert_group = false;
             }
+            // Vim parity: leaving Insert steps back onto the last char
+            // typed (not for Insert Ctrl-O, which comes right back).
+            if !self.modeless && self.x.oneshot.is_none() && self.cursor.col > 0 {
+                let text = doc.line_text(self.cursor.line);
+                self.cursor.col = grapheme_left(&text, self.cursor.col, 1);
+                self.preferred_col = self.cursor.col;
+            }
         }
+        self.x.reg_sel = None;
         doc.end_run();
         self.settle_cursor(doc);
         self.clamp(doc);
+    }
+
+    /// `3ihi<Esc>`: type the session's text `count - 1` more times (as
+    /// lines for `o`/`O`).
+    fn finish_insert_repeat<B: Buffer>(&mut self, doc: &mut B) {
+        let Some((count, place)) = self.x.insert_repeat.take() else {
+            return;
+        };
+        let text = Self::typed_text(&self.recording);
+        if !self.typed_exact || text.is_empty() {
+            return;
+        }
+        let more = super::edit::repeat_more(&text, place, count);
+        let at = self.char_idx(doc, self.cursor);
+        doc.insert(at, &more);
+        self.cursor = Self::cursor_at(doc, at.saturating_add(more.chars().count()));
     }
 }

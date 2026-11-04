@@ -13,6 +13,7 @@ fn project(id: &str, host: &str, group: Option<&str>) -> RemoteProject {
         forwards: Vec::new(),
         last_connected: 0,
         command_timeout_seconds: None,
+        mosh: false,
     }
 }
 fn names(groups: &[HostGroup<'_>]) -> Vec<(Option<String>, Vec<String>)> {

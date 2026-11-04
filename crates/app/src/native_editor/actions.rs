@@ -140,13 +140,24 @@ impl App {
 
     /// A file edit whose server version no longer matches the open
     /// buffer's synced version.
+    /// Without a version, the open buffer must still hold the text the
+    /// server last saw (a buffer it never saw cannot be checked).
     fn edit_is_stale(&self, file: &native_lsp::RenameFileEdit) -> bool {
-        let Some(version) = file.version else {
+        let Some(path) = native_lsp::uri_to_path(&file.uri) else {
             return false;
         };
-        native_lsp::uri_to_path(&file.uri)
-            .filter(|path| self.native_docs.contains_key(path))
-            .is_some_and(|path| self.lsp.document_version(&path) != Some(version))
+        let Some(doc) = self.native_docs.get(&path) else {
+            return false;
+        };
+        if let Some(version) = file.version {
+            return self.lsp.document_version(&path) != Some(version);
+        }
+        let Some(buffer) = doc.buffer() else {
+            return false;
+        };
+        self.lsp
+            .submitted_revision(&path)
+            .is_some_and(|revision| revision != buffer.revision())
     }
 
     /// The open buffer at `path` is still at `revision`.

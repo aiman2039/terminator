@@ -307,6 +307,19 @@ fn spawn_candidate(
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
+    // Nested X fallback (main.rs `x11_nest`): the daemon and its shells
+    // outlive the GUI, so give them the host display, not the nested one.
+    if let Some(display) = std::env::var_os("TERMINATOR_HOST_DISPLAY") {
+        command
+            .env("DISPLAY", display)
+            .env_remove("TERMINATOR_HOST_DISPLAY")
+            .env_remove("TERMINATOR_NESTED_X11");
+        match std::env::var_os("TERMINATOR_HOST_XAUTHORITY").filter(|x| !x.is_empty()) {
+            Some(xauthority) => command.env("XAUTHORITY", xauthority),
+            None => command.env_remove("XAUTHORITY"),
+        };
+        command.env_remove("TERMINATOR_HOST_XAUTHORITY");
+    }
     #[cfg(test)]
     command
         .env("XDG_CONFIG_HOME", paths.data.join("fixture-config"))

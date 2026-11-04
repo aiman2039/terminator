@@ -4,7 +4,7 @@ use super::SourceView;
 use super::canvas::Canvas;
 use super::helpers::RenderHelpers;
 use crate::doc::Buffer;
-use crate::view::{echo_of_handled_key, egui_key};
+use crate::view::egui_key;
 use crate::vim::{Effect, Key as VKey, ModalEngine, Mode};
 
 /// Where one key press went.
@@ -15,11 +15,11 @@ enum Routed {
     Discrete(VKey),
 }
 
-/// Key presses sorted for the engine and for consumption.
-#[derive(Default)]
-struct RoutedKeys {
-    discrete: Vec<(egui::Key, VKey)>,
-    consumed: Vec<egui::Key>,
+/// One input in arrival order: a routed key press or typed text.
+enum Ordered {
+    Consumed(egui::Key),
+    Key(egui::Key, VKey),
+    Text(String),
 }
 
 impl<B: Buffer> SourceView<'_, B> {
@@ -92,51 +92,78 @@ impl<B: Buffer> SourceView<'_, B> {
         });
     }
 
-    /// Discrete keys (edge-triggered pressed events), then typed text.
+    /// Key presses and typed text, in the order they arrived. Printable
+    /// chars come from Text events in every mode (so `<`, `"`, `~` and
+    /// non-US layouts work); key events only carry non-printable keys.
     pub(super) fn handle_discrete_keys(&mut self, canvas: &Canvas<'_>) {
-        let RoutedKeys {
-            discrete,
-            mut consumed,
-        } = self.route_keys(canvas);
-        // Printable chars handled below as discrete vim keys; their Text
-        // echo must not type a second time (the `i` in `i`).
-        let mut handled_chars: Vec<char> = Vec::new();
-        for (key, vkey) in discrete {
-            if self.press_discrete_key(vkey, &mut handled_chars) {
-                consumed.push(key);
+        let mut consumed = Vec::new();
+        for input in self.route_inputs(canvas) {
+            match input {
+                Ordered::Consumed(key) => consumed.push(key),
+                Ordered::Key(key, vkey) => {
+                    if self.press_discrete_key(vkey) {
+                        consumed.push(key);
+                    }
+                }
+                Ordered::Text(text) => self.take_text(&text),
             }
         }
         // Handled keys must not leak to egui focus/menu handling: arrows
-        // stay in the file, Escape keeps editor focus.
+        // stay in the file, Escape keeps editor focus. Typed text was all
+        // read here, so stale input never reaches a later frame.
         canvas.ui.input_mut(|input| {
             for key in consumed {
                 input.consume_key(egui::Modifiers::NONE, key);
             }
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Text(_)));
         });
-        self.take_typed_text(canvas, handled_chars);
     }
 
-    fn route_keys(&mut self, canvas: &Canvas<'_>) -> RoutedKeys {
-        let mut routed = RoutedKeys::default();
-        canvas.ui.input(|input| {
-            for event in &input.events {
-                let egui::Event::Key {
+    fn route_inputs(&mut self, canvas: &Canvas<'_>) -> Vec<Ordered> {
+        let mut ordered = Vec::new();
+        // Only key presses and text matter here: skip copying pointer
+        // and other events every frame.
+        let events: Vec<egui::Event> = canvas.ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        egui::Event::Key { pressed: true, .. } | egui::Event::Text(_)
+                    )
+                })
+                .cloned()
+                .collect()
+        });
+        for event in events {
+            match event {
+                egui::Event::Key {
                     key,
                     pressed: true,
                     modifiers,
                     ..
-                } = event
-                else {
-                    continue;
-                };
-                match self.route_key(canvas, *key, *modifiers) {
-                    Some(Routed::Consumed) => routed.consumed.push(*key),
-                    Some(Routed::Discrete(vkey)) => routed.discrete.push((*key, vkey)),
+                } => match self.route_key(canvas, key, modifiers) {
+                    Some(Routed::Consumed) => ordered.push(Ordered::Consumed(key)),
+                    Some(Routed::Discrete(_))
+                        if crate::view::keys::arrives_as_text(key, modifiers) =>
+                    {
+                        // The Text event types it; outside Insert the key
+                        // is still the editor's, not egui's.
+                        if self.options.vim && self.engine.mode() != Mode::Insert {
+                            ordered.push(Ordered::Consumed(key));
+                        }
+                    }
+                    Some(Routed::Discrete(vkey)) => ordered.push(Ordered::Key(key, vkey)),
                     None => {}
-                }
+                },
+                egui::Event::Text(text) => ordered.push(Ordered::Text(text)),
+                _ => {}
             }
-        });
-        routed
+        }
+        ordered
     }
 
     fn route_key(
@@ -253,16 +280,9 @@ impl<B: Buffer> SourceView<'_, B> {
         }
     }
 
-    /// Press one routed key; returns whether egui must not see it again.
-    fn press_discrete_key(&mut self, vkey: VKey, handled_chars: &mut Vec<char>) -> bool {
-        // Single printable chars in Insert mode arrive as Text events
-        // below; the key event only carries control keys.
-        if self.engine.mode() == Mode::Insert && matches!(vkey, VKey::Char(_)) {
-            return false;
-        }
-        if let VKey::Char(c) = vkey {
-            handled_chars.push(c);
-        }
+    /// Press one routed (non-printable) key; returns whether egui must
+    /// not see it again.
+    fn press_discrete_key(&mut self, vkey: VKey) -> bool {
         // Selection indentation also applies with Vim disabled; keep the
         // selected lines instead of opening Insert mode.
         let effects = if self.engine.mode().is_visual() && matches!(vkey, VKey::Tab | VKey::BackTab)
@@ -271,18 +291,51 @@ impl<B: Buffer> SourceView<'_, B> {
                 .for_each_caret(self.doc, |engine, doc| engine.press_key(doc, vkey))
         } else if !self.options.vim && self.engine.mode() != Mode::Command {
             // Modeless: with vim off, no key is ever a vim command.
-            // Printable keys type (replacing a selection), editing keys
-            // edit, and arrows move the IDE caret.
+            // Editing keys edit, and arrows move the IDE caret.
             self.engine
                 .for_each_caret(self.doc, |engine, doc| engine.modeless_key(doc, vkey))
         } else {
-            self.adopt_clipboard_for_paste(vkey);
             let effects = self.engine.press_key(self.doc, vkey);
             self.snapshot_clipboard();
             effects
         };
         self.out.effects.extend(effects);
         true
+    }
+
+    /// Typed text: Insert mode types it at every caret; with vim off it
+    /// types (replacing a selection); other vim modes read each char as
+    /// a command key.
+    fn take_text(&mut self, text: &str) {
+        let mode = self.engine.mode();
+        if mode == Mode::Insert {
+            let effects = self
+                .engine
+                .for_each_caret(self.doc, |engine, doc| engine.type_text(doc, text));
+            self.out.effects.extend(effects);
+            return;
+        }
+        if !self.options.vim && mode != Mode::Command {
+            for c in text.chars() {
+                let effects = self.engine.for_each_caret(self.doc, |engine, doc| {
+                    engine.modeless_key(doc, VKey::Char(c))
+                });
+                self.out.effects.extend(effects);
+            }
+            return;
+        }
+        for (at, c) in text.char_indices() {
+            if self.engine.mode() == Mode::Insert {
+                // An Insert-entering key inside one text event (`ix`):
+                // the rest types.
+                self.take_text(text.get(at..).unwrap_or_default());
+                return;
+            }
+            self.adopt_clipboard_for_paste(VKey::Char(c));
+            let effects = self.engine.press_key(self.doc, VKey::Char(c));
+            self.snapshot_clipboard();
+            self.out.effects.extend(effects);
+        }
     }
 
     /// Before a Normal-mode `p`/`P`, take the system clipboard into the
@@ -309,37 +362,8 @@ impl<B: Buffer> SourceView<'_, B> {
             self.engine.note_clipboard(read().as_deref());
         }
     }
-
-    /// In Insert mode, type the text events (minus echoes of keys already
-    /// handled); elsewhere discard them so stale input (the `:` and `q` of
-    /// `:q`) can never leak into a later Insert session.
-    fn take_typed_text(&mut self, canvas: &Canvas<'_>, mut handled_chars: Vec<char>) {
-        if self.engine.mode() != Mode::Insert {
-            canvas.ui.input_mut(|input| {
-                input
-                    .events
-                    .retain(|event| !matches!(event, egui::Event::Text(_)));
-            });
-            return;
-        }
-        let mut typed = String::new();
-        canvas.ui.input_mut(|input| {
-            input.events.retain(|event| {
-                if let egui::Event::Text(text) = event {
-                    if !echo_of_handled_key(text, &mut handled_chars) {
-                        typed.push_str(text);
-                    }
-                    false
-                } else {
-                    true
-                }
-            });
-        });
-        if !typed.is_empty() {
-            self.out.effects.extend(
-                self.engine
-                    .for_each_caret(self.doc, |engine, doc| engine.type_text(doc, &typed)),
-            );
-        }
-    }
 }
+
+#[cfg(test)]
+#[path = "routing_tests.rs"]
+mod routing_tests;

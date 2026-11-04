@@ -40,6 +40,9 @@ pub enum Key {
     CtrlV,
     /// Ctrl-^ (Ctrl-6): edit the alternate file.
     CtrlCaret,
+    /// Any other Ctrl chord vim owns in its current mode, as the lowercase
+    /// letter (`Ctrl('r')` is redo in Normal mode).
+    Ctrl(char),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +131,66 @@ pub(crate) enum PendingOp {
     Delete,
     Change,
     Yank,
+    /// `>`: shift lines right.
+    Indent,
+    /// `<`: shift lines left.
+    Outdent,
+    /// `gu`.
+    Lower,
+    /// `gU`.
+    Upper,
+    /// `g~`.
+    Toggle,
+}
+
+impl PendingOp {
+    /// The key recorded for this operator (`g`-operators use their
+    /// second key).
+    pub(crate) fn letter(self) -> char {
+        match self {
+            PendingOp::Delete => 'd',
+            PendingOp::Change => 'c',
+            PendingOp::Yank => 'y',
+            PendingOp::Indent => '>',
+            PendingOp::Outdent => '<',
+            PendingOp::Lower => 'u',
+            PendingOp::Upper => 'U',
+            PendingOp::Toggle => '~',
+        }
+    }
+}
+
+/// One input as the engine received it: a discrete key, or typed text
+/// (Insert mode). Replays (`.`, macros, mappings) feed these back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Input {
+    Key(Key),
+    Text(String),
+}
+
+/// A command waiting for one more key (the char after `f`, `r`, `m`, …).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Prefix {
+    /// `f`, `t`, `F` or `T`.
+    Find(char),
+    /// `r`: replace with the next char.
+    Replace,
+    /// `m`: set a mark.
+    Mark,
+    /// `'` (line) or `` ` `` (exact): jump to a mark.
+    Jump { exact: bool },
+    /// `q`: start recording a macro.
+    Record,
+    /// `@`: run a macro.
+    Play,
+    /// `"`: select a register.
+    Register,
+    /// `i`/`a` after an operator or in Visual: a text object.
+    Object { inner: bool },
+    /// `z`: scroll commands.
+    Z,
+    /// `g`: the `g` commands (`gg`, `gu`, `gv`, …); counts may follow.
+    G,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -204,6 +267,9 @@ pub(crate) enum Repeat {
         /// `P`: before the cursor (or above the line).
         before: bool,
     },
+    /// Any other change, replayed key by key (text objects, `r`, `~`,
+    /// `J`, `>>`, `gu`, …), exactly as vim's `.` does.
+    Keys(Vec<Input>),
 }
 
 /// Where an insert session parks the cursor before typing.

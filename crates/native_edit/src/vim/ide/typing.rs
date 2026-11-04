@@ -76,7 +76,7 @@ impl VimEngine {
                 self.ide_ensure_insert(doc);
                 return self.insert_key(doc, key);
             }
-            Key::CtrlV | Key::CtrlCaret => return vec![Effect::Bell],
+            Key::CtrlV | Key::CtrlCaret | Key::Ctrl(_) => return vec![Effect::Bell],
         }
         Vec::new()
     }
@@ -84,7 +84,7 @@ impl VimEngine {
     /// Indent unit for new indentation: a tab when the file indents with
     /// tabs (the caret line first, else the first indented line), else
     /// [`INDENT_WIDTH`] spaces.
-    pub(super) fn ide_indent_unit<B: Buffer>(doc: &B, line: usize) -> String {
+    pub(crate) fn ide_indent_unit<B: Buffer>(doc: &B, line: usize) -> String {
         let tab = |text: String| match text.chars().next() {
             Some('\t') => Some(true),
             Some(' ') => Some(false),
@@ -96,6 +96,19 @@ impl VimEngine {
             "\t".into()
         } else {
             " ".repeat(INDENT_WIDTH)
+        }
+    }
+
+    /// Chars one outdent removes from a line starting with `text`: a
+    /// leading tab, else up to one indent unit of spaces.
+    pub(crate) fn outdent_width(text: &str) -> usize {
+        if text.starts_with('\t') {
+            1
+        } else {
+            text.chars()
+                .take(INDENT_WIDTH)
+                .take_while(|c| *c == ' ')
+                .count()
         }
     }
 
@@ -259,15 +272,7 @@ impl VimEngine {
     /// caret line.
     pub(super) fn ide_outdent_line<B: Buffer>(&mut self, doc: &mut B) {
         let line = self.cursor.line;
-        let text = doc.line_text(line);
-        let width = if text.starts_with('\t') {
-            1
-        } else {
-            text.chars()
-                .take(INDENT_WIDTH)
-                .take_while(|c| *c == ' ')
-                .count()
-        };
+        let width = Self::outdent_width(&doc.line_text(line));
         if width == 0 {
             return;
         }

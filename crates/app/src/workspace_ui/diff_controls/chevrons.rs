@@ -39,10 +39,7 @@ pub(super) fn action_target(kind: Kind, index: usize) -> String {
 /// Tooltip of a hunk action: the picked lines, or the whole hunk.
 pub(super) fn action_tip(kind: Kind, picked: usize) -> String {
     let target = if picked > 0 {
-        format!(
-            "{picked} selected line{}",
-            if picked == 1 { "" } else { "s" }
-        )
+        diff::actions::lines_label(picked, "selected")
     } else {
         "this change (Alt+click lines to pick some)".to_owned()
     };

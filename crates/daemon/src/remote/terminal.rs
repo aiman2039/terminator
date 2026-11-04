@@ -37,6 +37,8 @@ fn resolve_file(project: &RemoteProject, file: Option<&Path>) -> Result<Option<S
 pub(crate) struct PrepareInput<'a> {
     pub project: &'a RemoteProject,
     pub control: Option<&'a Path>,
+    /// `terminator-hook`, which starts Mosh sessions (`RemoteProject::mosh`).
+    pub helper: &'a Path,
     pub sid: &'a str,
     pub cwd: Option<&'a Path>,
     pub file: Option<&'a Path>,
@@ -49,6 +51,7 @@ pub(crate) fn prepare(
     let PrepareInput {
         project,
         control,
+        helper,
         sid,
         cwd,
         file,
@@ -89,8 +92,22 @@ pub(crate) fn prepare(
         // interactive anyway.
         script.push_str("s=\"${SHELL:-/bin/sh}\"; case \"${s##*/}\" in csh|tcsh) exec \"$s\" -l;; esac; exec \"$s\" -il");
     }
-    let ssh = terminator_core::find_executable("ssh").context("OpenSSH client is not installed")?;
-    let mut command = CommandBuilder::new(ssh);
+    let (program, remote) = if project.mosh {
+        // The helper runs this over SSH, then becomes `mosh-client`.
+        (
+            helper.to_path_buf(),
+            terminator_core::remote::mosh::server_command(&script),
+        )
+    } else {
+        (
+            terminator_core::find_executable("ssh").context("OpenSSH client is not installed")?,
+            format!("exec sh -c {}", terminator_core::quote(&script)),
+        )
+    };
+    let mut command = CommandBuilder::new(program);
+    if project.mosh {
+        command.arg("mosh");
+    }
     command.args(terminator_core::ssh::arguments(
         &project.ssh,
         true,
@@ -98,7 +115,7 @@ pub(crate) fn prepare(
     )?);
     command.arg("--");
     command.arg(&project.ssh.host);
-    command.arg(format!("exec sh -c {}", terminator_core::quote(&script)));
+    command.arg(remote);
     for key in terminator_core::ssh::private_environment_keys() {
         command.env_remove(key);
     }
@@ -153,12 +170,12 @@ pub(crate) fn editor_rpc(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn ssh_terminals_quote_remote_roots_and_do_not_start_a_local_shell() {
-        let p = RemoteProject {
+
+    fn project(root: &str, mosh: bool) -> RemoteProject {
+        RemoteProject {
             id: "fixture".into(),
             name: "Remote".into(),
-            root: "/workspace/path with 'quotes'".into(),
+            root: root.into(),
             ssh: terminator_core::ssh::SshOptions {
                 host: "fixture".into(),
                 ..terminator_core::ssh::SshOptions::default()
@@ -168,17 +185,27 @@ mod tests {
             forwards: Vec::new(),
             last_connected: 0,
             command_timeout_seconds: None,
-        };
-        let (cmd, meta, _) = prepare(PrepareInput {
-            project: &p,
+            mosh,
+        }
+    }
+
+    fn shell<'a>(project: &'a RemoteProject, cwd: Option<&'a Path>) -> PrepareInput<'a> {
+        PrepareInput {
+            project,
             control: None,
+            helper: Path::new("/fixture/terminator-hook"),
             sid: "00000000-0000-0000-0000-000000000000",
-            cwd: None,
+            cwd,
             file: None,
             line: None,
             column: None,
-        })
-        .unwrap();
+        }
+    }
+
+    #[test]
+    fn ssh_terminals_quote_remote_roots_and_do_not_start_a_local_shell() {
+        let p = project("/workspace/path with 'quotes'", false);
+        let (cmd, meta, _) = prepare(shell(&p, None)).unwrap();
         assert!(cmd.get_argv().first().is_some_and(|s| {
             Path::new(s)
                 .file_name()
@@ -193,17 +220,28 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert!(script.contains("csh|tcsh) exec \"$s\" -l;;"), "{script}");
-        assert!(
-            prepare(PrepareInput {
-                project: &p,
-                control: None,
-                sid: "fixture",
-                cwd: Some(Path::new("/tmp/local")),
-                file: None,
-                line: None,
-                column: None,
-            })
-            .is_err()
+        assert!(prepare(shell(&p, Some(Path::new("/tmp/local")))).is_err());
+    }
+
+    #[test]
+    fn mosh_hosts_start_terminals_through_the_helper() {
+        let p = project("/workspace", true);
+        let (cmd, _, _) = prepare(shell(&p, None)).unwrap();
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            argv.first().map(String::as_str),
+            Some("/fixture/terminator-hook")
         );
+        assert_eq!(argv.get(1).map(String::as_str), Some("mosh"));
+        let split = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(argv.get(split + 1).map(String::as_str), Some("fixture"));
+        let remote = argv.get(split + 2).unwrap();
+        assert!(remote.contains("mosh-server new"), "{remote}");
+        assert!(remote.contains("/workspace"), "{remote}");
+        assert_eq!(argv.len(), split + 3);
     }
 }

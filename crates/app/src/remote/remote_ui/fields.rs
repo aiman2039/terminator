@@ -15,6 +15,7 @@ pub(crate) fn blank_project() -> RemoteProject {
         forwards: Vec::new(),
         last_connected: 0,
         command_timeout_seconds: None,
+        mosh: false,
     }
 }
 
@@ -140,6 +141,21 @@ pub(super) fn timeout_field(
     form::hint(
         ui,
         "Time for one background call (test, login directory, files, Git), sign-in included. 5–120 s. Increase it for slow or distant hosts.",
+        "",
+    );
+}
+
+/// Runs new terminals through Mosh. `enabled` only when the daemon honors
+/// it (`ssh-mosh-v1`).
+pub(super) fn mosh_field(ui: &mut egui::Ui, value: &mut bool, enabled: bool) {
+    ui.add_enabled(
+        enabled,
+        egui::Checkbox::new(value, "Use Mosh for terminals"),
+    )
+    .on_disabled_hover_text("Requires an updated session service.");
+    form::hint(
+        ui,
+        "Needs mosh on this computer and mosh-server on the host, with UDP ports 60000–61000 open. Files, Git and transfers still use SSH.",
         "",
     );
 }

@@ -47,6 +47,16 @@ impl LspManager {
         self.diagnostics.get(path).cloned().unwrap_or_default()
     }
 
+    /// Changes whenever any file's diagnostics change.
+    #[must_use]
+    pub fn diagnostics_generation(&self) -> u64 {
+        self.diagnostics_generation
+    }
+
+    pub(super) fn bump_diagnostics(&mut self) {
+        self.diagnostics_generation = self.diagnostics_generation.wrapping_add(1);
+    }
+
     /// Language diagnostics plus spelling findings, for the editor's
     /// underlines and hover.
     pub fn editor_diagnostics(&self, path: &Path) -> Vec<L::Diagnostic> {

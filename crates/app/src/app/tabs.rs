@@ -308,7 +308,10 @@ impl App {
     /// paints, and the IDE strip paints first, so a visible field still has
     /// to block input up front.
     pub(crate) fn rename_blocks_input(&self) -> bool {
-        self.rename_session.is_some() && self.rename_field_can_show() && !self.rename_missed
+        self.project_names.draft.is_some()
+            || (self.rename_session.is_some()
+                && self.rename_field_can_show()
+                && !self.rename_missed)
     }
     pub(crate) fn rename_field_can_show(&self) -> bool {
         let Some((sid, _)) = &self.rename_session else {
@@ -435,6 +438,13 @@ impl App {
         self.rename_focus = true;
     }
     pub(crate) fn note_rename_frame(&mut self, ctx: &egui::Context) {
+        // A project rename field that did not paint (sidebar hidden or
+        // scrolled away) commits, so it never blocks input.
+        match self.project_names.draft.as_mut() {
+            Some(draft) if draft.painted => draft.painted = false,
+            Some(_) => self.finish_project_rename(true),
+            None => {}
+        }
         if self.rename_session.is_none() {
             return;
         }

@@ -8,6 +8,7 @@ mod geometry;
 mod gutter;
 mod helpers;
 mod keyboard;
+mod lens;
 mod marks;
 mod menu;
 mod options;
@@ -26,7 +27,8 @@ pub use geometry::source_row_height;
 pub(super) use helpers::RenderHelpers;
 pub use helpers::status_line;
 pub use marks::{
-    Annotation, ChangeKind, ChangeMark, DiagnosticMark, LineFill, RangeFill, Squiggle, squiggles,
+    Annotation, ChangeKind, ChangeMark, DiagnosticMark, LineFill, RangeFill, Squiggle,
+    squiggle_tails, squiggles,
 };
 pub use options::{ShowSourceInput, SourceOptions, SourceOutcome};
 pub use palette::EditorPalette;
@@ -120,18 +122,19 @@ impl<B: Buffer> SourceView<'_, B> {
         let doc = &*self.doc;
         let dark = ui.visuals().dark_mode;
         highlight.set_rainbow(self.options.rainbow_brackets);
-        if highlight.wants_text(self.language, dark, doc.revision()) {
-            let mut text = String::new();
-            for line in 0..doc.line_count() {
-                text.push_str(&doc.line_text(line));
-                text.push('\n');
-            }
+        highlight.set_unlimited(self.options.large_file_override);
+        let (language, revision) = (self.language, doc.revision());
+        // Over the cap the spans stay empty: never rebuild the whole text
+        // on a keystroke just to throw it away.
+        if highlight.wants_text(language, dark, revision)
+            && !highlight.skip_large((language, dark), revision, doc.len_bytes())
+        {
             highlight.ensure_async(
                 crate::highlight::EnsureInput {
-                    language: self.language,
+                    language,
                     dark,
-                    revision: doc.revision(),
-                    text: &text,
+                    revision,
+                    text: doc.lf_text().into(),
                 },
                 ui.ctx(),
             );

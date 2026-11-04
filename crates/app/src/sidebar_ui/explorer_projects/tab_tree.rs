@@ -297,6 +297,7 @@ impl App {
     ) -> (f32, GroupRenameAction) {
         let label = header.label;
         let response = appearance::project_row(appearance::ProjectRowInput {
+            color: None,
             ui,
             label,
             icon: "LayoutDashboard",

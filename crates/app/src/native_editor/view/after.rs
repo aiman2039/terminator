@@ -183,7 +183,7 @@ impl App {
     /// Focus follow, file picker, bookmark toggle, and recent-file opens.
     pub(super) fn native_view_follow_up(
         &mut self,
-        path: &Path,
+        (ctx, path): (&egui::Context, &Path),
         frame: &ViewFrame,
         requests: &mut ViewRequests,
     ) {
@@ -216,12 +216,9 @@ impl App {
             self.queue_jump(path, &path_to_open, (0, 0));
         }
         if let Some(name) = requests.goto_file.take() {
-            let root = self.selected_project().map(|project| project.path.clone());
-            match goto_file::resolve_goto_file(&name, path, root.as_deref()) {
-                Some((target, line, column)) => self.queue_jump(path, &target, (line, column)),
-                None => self.info = Some(format!("Can't find file \"{name}\" in path")),
-            }
+            self.start_goto_file(ctx, path, name);
         }
+        self.finish_goto_file(path);
         if requests.alternate_file {
             match self.alternate_location() {
                 Some(target) if target.path != path => {
@@ -229,6 +226,40 @@ impl App {
                 }
                 _ => self.info = Some("No alternate file".to_owned()),
             }
+        }
+    }
+
+    /// `gf`: resolve the name on the file pool (it stats candidates, which
+    /// can block on slow volumes), never on the GUI thread.
+    fn start_goto_file(&mut self, ctx: &egui::Context, path: &Path, name: String) {
+        let root = self.selected_project().map(|project| project.path.clone());
+        let (current, wanted, ctx) = (path.to_owned(), name.clone(), ctx.clone());
+        let rx = super::super::disk::run_on_files(
+            &self.services,
+            ("native-goto-file", path, Policy::ReplaceableRead),
+            move || {
+                let target = goto_file::resolve_goto_file(&wanted, &current, root.as_deref());
+                ctx.request_repaint();
+                Ok(target)
+            },
+        );
+        match (rx, self.native_docs.get_mut(path)) {
+            (Some(rx), Some(doc)) => doc.extras.goto = Some((name, rx)),
+            _ => self.info = Some("Could not look up the file".to_owned()),
+        }
+    }
+
+    /// Jump once the `gf` lookup landed.
+    fn finish_goto_file(&mut self, path: &Path) {
+        let Some(doc) = self.native_docs.get_mut(path) else {
+            return;
+        };
+        match doc.extras.take_goto() {
+            Some((_, Some((target, line, column)))) => {
+                self.queue_jump(path, &target, (line, column));
+            }
+            Some((name, None)) => self.info = Some(format!("Can't find file \"{name}\" in path")),
+            None => {}
         }
     }
 
@@ -325,8 +356,10 @@ impl App {
         requests: ViewRequests,
     ) {
         if requests.defer_close_after_save {
-            self.native_close_after_save = Some(path.to_owned());
-            self.native_close_after_save_issuer = requests.wq_issuer.map(CloseIssuer::deferred);
+            self.native_close_after_save.insert(
+                path.to_owned(),
+                requests.wq_issuer.map(CloseIssuer::deferred),
+            );
         }
         // `:qa` resolves at drain time: the current workspace is checked
         // out of `layouts` here, so its tabs are invisible to the dirty
