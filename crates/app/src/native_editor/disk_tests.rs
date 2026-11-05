@@ -1,5 +1,5 @@
 use super::disk::{apply_edits, text_edits};
-use super::file_io::{NativeFileIo, TextEncoding};
+use super::file_io::TextEncoding;
 use super::test_support::{app, open, pump, save};
 use super::*;
 use std::sync::Arc;
@@ -144,7 +144,7 @@ fn saving_a_hard_linked_file_keeps_both_names_on_one_file() {
     let other = dir.path().join("b.txt");
     std::fs::write(&path, "old\n").unwrap();
     std::fs::hard_link(&path, &other).unwrap();
-    NativeFileIo::write(&path, b"new\n").unwrap();
+    super::file_io::NativeFileIo::write(&path, b"new\n").unwrap();
     assert_eq!(std::fs::read_to_string(&other).unwrap(), "new\n");
 }
 
