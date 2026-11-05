@@ -214,6 +214,47 @@ impl LspManager {
         }
     }
 
+    /// A native buffer was written to disk. Each server that has it open
+    /// and asked for saves (`textDocumentSync.save`) gets the live text
+    /// first, past the sync debounce, then `didSave` (with that text
+    /// only for `includeText`). rust-analyzer runs `cargo check` on it;
+    /// the findings arrive as ordinary diagnostics. Untracked buffers and
+    /// servers still starting get nothing: their open sends the text.
+    pub fn did_save(&mut self, path: &Path, (revision, text): (u64, &str)) {
+        for slot in [Slot::Main, Slot::Spell] {
+            self.save_slot(slot, path, (revision, text));
+        }
+    }
+
+    /// [`did_save`](Self::did_save) for one server slot.
+    fn save_slot(&mut self, slot: Slot, path: &Path, (revision, text): (u64, &str)) {
+        let Some(key) = self
+            .docs_of(slot)
+            .get(path)
+            .filter(|doc| doc.opened)
+            .map(|doc| doc.server.clone())
+        else {
+            return;
+        };
+        let Some(server) = self.servers.get(&key).filter(|server| server.ready) else {
+            return;
+        };
+        let Some(include_text) = L::save_include_text(&server.capabilities) else {
+            return;
+        };
+        let inbox = server.inbox.clone();
+        let Some(doc) = self.docs_of(slot).get_mut(path) else {
+            return;
+        };
+        if doc.submitted != revision {
+            doc.version = doc.version.saturating_add(1);
+            let _ = inbox.send(L::did_change(&doc.uri, doc.version, text));
+            doc.submitted = revision;
+            doc.observed = revision;
+        }
+        let _ = inbox.send(L::did_save(&doc.uri, include_text.then_some(text)));
+    }
+
     /// Server for one document. A tracked doc keeps its root: walking up
     /// to 20 ancestors per sync stalls typing on slow (network) disks.
     fn server_key(&self, path: &Path, language: Language, language_id: &'static str) -> ServerKey {
@@ -263,9 +304,9 @@ impl LspManager {
         if had_symbols {
             self.search_revision = self.search_revision.wrapping_add(1);
         }
-        if self.hover.as_ref().is_some_and(|popup| popup.path == path) {
-            self.hover = None;
-        }
+        self.hover.forget(path);
+        self.completion_resolved
+            .retain(|answer| answer.path != path);
         if self
             .references
             .as_ref()

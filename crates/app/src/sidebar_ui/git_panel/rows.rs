@@ -41,8 +41,13 @@ pub(super) fn tri_checkbox(ui: &mut egui::Ui, state: CheckState) -> bool {
             ),
             _ => (visuals.selection.bg_fill, egui::Stroke::NONE),
         };
-        ui.painter()
-            .rect(box_rect, 3, fill, stroke, egui::StrokeKind::Inside);
+        ui.painter().rect(
+            box_rect,
+            appearance::RADIUS_SMALL,
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
         let mark = visuals.selection.stroke.color;
         match state {
             CheckState::Checked => {
@@ -105,6 +110,8 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
     if check_clicked {
         outcome.toggle_staged(group, &change.path);
     }
+    // Cmd+9 focuses the first change, so arrow keys and Enter work at once.
+    crate::shortcuts::tool_row_focus(ui, &response);
     #[cfg(feature = "test-support")]
     diagnostics::record(
         ui.ctx(),
@@ -130,6 +137,7 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
     }
     appearance::context_menu(&response, |ui| {
         row.menu_open(ui, outcome);
+        row.menu_compare(ui, outcome);
         ui.separator();
         row.menu_stage(ui, outcome);
         ui.separator();
@@ -271,6 +279,23 @@ impl ChangeRow<'_> {
         {
             outcome.resolve = Some(path.clone());
             ui.close();
+        }
+    }
+
+    /// Compare with… and Compare with Revision… (read-only).
+    fn menu_compare(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
+        for (label, icon, mode) in crate::revision_compare::MENU_ITEMS {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label,
+                icon,
+                shortcut: "",
+            })
+            .clicked()
+            {
+                outcome.compare = Some((self.change.path.clone(), mode));
+                ui.close();
+            }
         }
     }
 

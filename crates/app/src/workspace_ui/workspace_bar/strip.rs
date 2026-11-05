@@ -21,6 +21,8 @@ struct StripTabsInput<'a> {
     frame: StripFrame<'a>,
     workspace: &'a mut Workspace,
     tab_layout: &'a [(f32, AttentionCounts)],
+    /// Folder hints for tabs that share a file name, by tab index.
+    hints: &'a [Option<String>],
     strip_rects: &'a mut Vec<(String, egui::Rect)>,
     actions: &'a mut StripActions,
 }
@@ -90,8 +92,11 @@ impl App {
             egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 32.0));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "workspace-strip", strip_rect);
-        ui.painter()
-            .rect_filled(strip_rect, 0, appearance::color(&self.theme.surface));
+        ui.painter().rect_filled(
+            strip_rect,
+            egui::CornerRadius::ZERO,
+            appearance::color(&self.theme.surface),
+        );
         strip_rect
     }
 
@@ -103,10 +108,12 @@ impl App {
             workspace,
             actions,
         } = input;
+        let hints = self.strip_folder_hints(workspace);
         let tab_layout: Vec<(f32, AttentionCounts)> = workspace
             .tabs
             .iter()
-            .map(|group| self.strip_tab_extent(ui, group))
+            .zip(&hints)
+            .map(|(group, hint)| self.strip_tab_extent(ui, group, hint.as_deref()))
             .collect();
         self.refresh_dock_back_targets(workspace);
         let (width, overflow) = Self::strip_scroll_width(ui, &tab_layout);
@@ -136,6 +143,7 @@ impl App {
                             frame,
                             workspace: &mut *workspace,
                             tab_layout: &tab_layout,
+                            hints: &hints,
                             strip_rects: &mut strip_rects,
                             actions: &mut *actions,
                         },
@@ -168,9 +176,10 @@ impl App {
         &self,
         ui: &egui::Ui,
         group: &crate::workspace::WorkspaceTab,
+        hint: Option<&str>,
     ) -> (f32, AttentionCounts) {
         let face = self.tab_face(Self::group_primary(group));
-        let width = workspace_tab_width(tab_label_width(ui, &face.label))
+        let width = workspace_tab_width(tab_label_width(ui, &face.label, hint))
             + if face.brand.is_some() { 6.0 } else { 0.0 };
         let attention = self.cached_tab_attention(&group_terminal_ids(&group.layout));
         (
@@ -266,6 +275,7 @@ impl App {
             frame,
             workspace,
             tab_layout,
+            hints,
             strip_rects,
             actions,
         } = input;
@@ -282,6 +292,7 @@ impl App {
                     index,
                     count: tab_count,
                     layout,
+                    hint: hints.get(index).and_then(Option::as_deref),
                     active_id: &mut workspace.active,
                     strip_rects: &mut *strip_rects,
                     actions: &mut *actions,

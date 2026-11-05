@@ -68,6 +68,7 @@ impl<B: Buffer> SourceView<'_, B> {
     /// With one clipboard line per caret, each caret gets its own line
     /// (`IntelliJ`); otherwise all get it all.
     fn paste_text(&mut self, text: &str) {
+        self.engine.snippet_take_selection(self.doc);
         let carets = self.engine.extra_carets().len().saturating_add(1);
         let lines: Vec<&str> = text.lines().collect();
         let per_caret = carets > 1 && lines.len() == carets;
@@ -237,6 +238,14 @@ impl<B: Buffer> SourceView<'_, B> {
             // (VS convention; F-keys are never vim input and `egui_key`
             // leaves them unmapped).
             egui::Key::F12 if bare => Some(Effect::GotoDefinition),
+            // F1 / Ctrl+J: Quick Documentation (`JetBrains` macOS keymap).
+            // Control, not Command, on macOS too; Ctrl+Shift+J joins lines.
+            egui::Key::F1 if bare && !modifiers.shift => Some(Effect::Hover),
+            egui::Key::J
+                if modifiers.ctrl && !modifiers.mac_cmd && !modifiers.alt && !modifiers.shift =>
+            {
+                Some(Effect::Hover)
+            }
             // Ctrl+Alt+H: Call Hierarchy (`IntelliJ`).
             egui::Key::H
                 if modifiers.ctrl
@@ -257,7 +266,7 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     /// F8 / Shift+F8: next / previous problem, wrapping around.
-    fn jump_to_problem(&mut self, backward: bool) {
+    pub(super) fn jump_to_problem(&mut self, backward: bool) {
         let squiggles = &self.options.squiggles;
         let here = (self.engine.cursor().line, self.engine.cursor().col);
         let target = if backward {
@@ -283,6 +292,9 @@ impl<B: Buffer> SourceView<'_, B> {
     /// Press one routed (non-printable) key; returns whether egui must
     /// not see it again.
     fn press_discrete_key(&mut self, vkey: VKey) -> bool {
+        if self.snippet_key(vkey) {
+            return true;
+        }
         // Selection indentation also applies with Vim disabled; keep the
         // selected lines instead of opening Insert mode.
         let effects = if self.engine.mode().is_visual() && matches!(vkey, VKey::Tab | VKey::BackTab)
@@ -294,6 +306,11 @@ impl<B: Buffer> SourceView<'_, B> {
             // Editing keys edit, and arrows move the IDE caret.
             self.engine
                 .for_each_caret(self.doc, |engine, doc| engine.modeless_key(doc, vkey))
+        } else if self.engine.mode() == Mode::Insert && !self.engine.extra_carets().is_empty() {
+            // vim Insert mode on the copies of a snippet stop: every
+            // caret edits.
+            self.engine
+                .for_each_caret(self.doc, |engine, doc| engine.press_key(doc, vkey))
         } else {
             let effects = self.engine.press_key(self.doc, vkey);
             self.snapshot_clipboard();
@@ -309,6 +326,8 @@ impl<B: Buffer> SourceView<'_, B> {
     fn take_text(&mut self, text: &str) {
         let mode = self.engine.mode();
         if mode == Mode::Insert {
+            // A snippet stop vim shows as selected gives way to the text.
+            self.engine.snippet_take_selection(self.doc);
             let effects = self
                 .engine
                 .for_each_caret(self.doc, |engine, doc| engine.type_text(doc, text));

@@ -79,6 +79,7 @@ impl Services {
                 Ok(())
             }
             Job::GitView(tab) => self.git_view(tab, cancel, updates).await,
+            Job::GitLog(tab, query) => self.git_log((tab, query), cancel, updates).await,
             _ => anyhow::bail!(MISROUTED),
         }
     }

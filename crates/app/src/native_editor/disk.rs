@@ -1,6 +1,6 @@
 //! Disk sync for native buffers: background loads (with retry and
 //! undo-preserving reloads), modification-time probes, and saves.
-use super::doc::{LoadResult, MTIME_TTL, NativeDoc, SaveResult};
+use super::doc::{LoadResult, MTIME_TTL, NativeDoc, SaveResult, vimrc_options};
 use super::file_io::{Fingerprint, LineEnding, LoadedFile, NativeFileIo, SaveRequest};
 use crate::gui_services;
 use std::ops::Range;
@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use terminator_native_edit::doc::{Buffer, Doc};
+use terminator_native_edit::indent::{EditorConfig, IndentStyle};
 use terminator_native_edit::vim::{Key as VimKey, ModalEngine};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -26,6 +27,9 @@ pub(super) struct Loaded {
     pub(super) file: LoadedFile,
     pub(super) line_ending: LineEnding,
     pub(super) edits: Option<(u64, Vec<TextEdit>)>,
+    /// The file's `.editorconfig` settings and its resolved indentation.
+    pub(super) config: EditorConfig,
+    pub(super) indent: IndentStyle,
 }
 
 /// Disk-side state of one buffer beyond its modification time.
@@ -74,16 +78,32 @@ pub(super) fn run_on_files<T: Send + 'static>(
 }
 
 /// Read `path` and, for a reload, diff it against `base` (the buffer
-/// text at a revision): a line diff turned into char-range edits.
-fn load(path: &Path, limit: u64, base: Option<(u64, String)>) -> anyhow::Result<Loaded> {
+/// text at a revision): a line diff turned into char-range edits. With
+/// `editorconfig`, the file's `.editorconfig` is read here too, so the
+/// GUI thread never walks the folders above the file.
+fn load(
+    path: &Path,
+    limit: u64,
+    base: Option<(u64, String)>,
+    editorconfig: bool,
+) -> anyhow::Result<Loaded> {
     let mut file = NativeFileIo::read(path, limit)?;
     let (text, line_ending) = LineEnding::decode(std::mem::take(&mut file.text));
     file.text = text;
+    let config = if editorconfig {
+        EditorConfig::for_file(path)
+    } else {
+        EditorConfig::default()
+    };
+    let indent = config.indent(path, &file.text, IndentStyle::from_vimrc(vimrc_options()));
+    let line_ending = line_ending.or_configured(&file.text, config.end_of_line);
     let edits = base.map(|(revision, old)| (revision, text_edits(&old, &file.text)));
     Ok(Loaded {
         file,
         line_ending,
         edits,
+        config,
+        indent,
     })
 }
 
@@ -213,12 +233,12 @@ impl NativeDoc {
             _ => {}
         }
         let path = self.path.clone();
-        let limit = self.read_limit;
+        let (limit, editorconfig) = (self.read_limit, self.read_editorconfig);
         let base = self.doc.as_ref().map(|doc| (doc.revision(), doc.text()));
         match run_on_files(
             services,
             ("native-load", &self.path, Policy::ReplaceableRead),
-            move || load(&path, limit, base),
+            move || load(&path, limit, base, editorconfig),
         ) {
             Some(rx) => {
                 self.load_rx = Some(rx);
@@ -280,6 +300,8 @@ impl NativeDoc {
             file,
             line_ending,
             edits,
+            config,
+            indent,
         } = loaded;
         let discard = std::mem::take(&mut self.disk.reload_discards);
         self.disk.reload_wanted = false;
@@ -301,6 +323,10 @@ impl NativeDoc {
             }
             (None, _) => self.doc = Some(Doc::new(file.text.as_str())),
         }
+        if let Some(doc) = self.doc.as_mut() {
+            doc.set_indent_style(indent);
+        }
+        self.file_config = config;
         self.loaded_mtime = file.mtime;
         self.reset_mtime();
         self.disk.fingerprint = Some(file.fingerprint);
@@ -308,7 +334,6 @@ impl NativeDoc {
         self.line_ending = line_ending;
         self.encoding = file.encoding;
         self.saved_format = self.format();
-        self.indent = None;
         self.load_error = None;
         self.mark_saved_now();
         self.clamp_carets();
@@ -373,6 +398,7 @@ impl NativeDoc {
                 self.reset_mtime();
                 self.save_error = None;
                 self.force_save = false;
+                self.lsp_saved = true;
             }
             Err(error) => {
                 self.save_error = Some(format!("{error:#}"));
@@ -380,13 +406,25 @@ impl NativeDoc {
         }
     }
 
+    /// Revision and text to announce to the language servers as saved:
+    /// once per finished write, after any reload it asked for landed (a
+    /// rename rewrites the file on disk, then reloads the buffer).
+    pub(super) fn take_lsp_saved(&mut self) -> Option<(u64, String)> {
+        if !self.lsp_saved || self.loading || self.disk.reload_wanted {
+            return None;
+        }
+        self.lsp_saved = false;
+        self.doc.as_ref().map(|doc| (doc.revision(), doc.text()))
+    }
+
     pub(super) fn start_save(&mut self, services: &gui_services::Services) {
-        let Some(doc) = self.doc.as_ref() else {
-            return;
-        };
         if self.saving || self.loading {
             return;
         }
+        self.apply_save_rules();
+        let Some(doc) = self.doc.as_ref() else {
+            return;
+        };
         let text = doc.text();
         self.save_revision = doc.revision();
         self.save_len = doc.len_chars();
@@ -411,6 +449,42 @@ impl NativeDoc {
                 self.saving = true;
             }
             None => self.save_error = Some("Could not start the file write".into()),
+        }
+    }
+
+    /// The `.editorconfig` save rules, as one undo step: a final newline,
+    /// and no trailing spaces or tabs except on lines with a caret on
+    /// screen (the user may be typing there). A save never drops undone
+    /// steps: while
+    /// one waits to be redone (an autosave after Undo), the rules wait.
+    /// They also wait while a vim Insert change is open, so they never
+    /// join the typed change.
+    fn apply_save_rules(&mut self) {
+        if self
+            .doc
+            .as_ref()
+            .is_none_or(|doc| doc.can_redo() || doc.undo_group_open())
+        {
+            return;
+        }
+        // Views that stopped drawing (closed, split away) keep no line.
+        let shown = self
+            .views
+            .iter()
+            .filter(|(id, _)| self.shows_view(id))
+            .map(|(_, (engine, _))| engine);
+        let engines = std::iter::once(&self.engine).chain(shown);
+        let mut keep = Vec::new();
+        for engine in engines {
+            keep.push(engine.cursor().line);
+            keep.extend(engine.extra_carets().iter().map(|caret| caret.cursor.line));
+        }
+        let Some(doc) = self.doc.as_mut() else {
+            return;
+        };
+        let edits = self.file_config.save_edits(doc, &keep);
+        if !edits.is_empty() {
+            apply_edits(doc, &edits);
         }
     }
 

@@ -1,15 +1,28 @@
 //! Background file index and fuzzy go-to-file.
 //!
 //! [`FileIndex::scan`] walks workspace roots gitignore-aware (the `ignore`
-//! crate: hidden files skipped, `.gitignore`/`.ignore` honored) and caps
-//! the file count so pathological trees stay cheap. [`spawn_scan`] runs
-//! that walk on a worker thread and delivers the index over a channel;
-//! the host polls the receiver once per frame and swaps on arrival, so
-//! the UI never blocks on the filesystem. Ranking is a synchronous
-//! `nucleo::Matcher` over the indexed display paths.
+//! crate: `.gitignore`/`.ignore` honored, dotfiles kept unless ignored,
+//! version control metadata skipped) and caps the file count so
+//! pathological trees stay cheap. [`spawn_scan`] runs that walk on a
+//! worker thread and delivers the index over a channel; the host polls
+//! the receiver once per frame and swaps on arrival, so the UI never
+//! blocks on the filesystem. Ranking is a synchronous `nucleo::Matcher`
+//! over the indexed display paths.
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
+
+/// Version control metadata names: Git (a folder, or a linked worktree's
+/// file), Subversion, Mercurial, Bazaar, Darcs, Jujutsu, and CVS.
+const VCS_METADATA: &[&str] = &[".git", ".svn", ".hg", ".bzr", "_darcs", ".jj", "CVS"];
+
+/// A walked entry named `name` is version control metadata: never a file
+/// to list, search, or replace in.
+#[must_use]
+pub fn is_vcs_metadata(name: &OsStr) -> bool {
+    VCS_METADATA.iter().any(|vcs| name == *vcs)
+}
 
 /// One indexed file: workspace-anchored display path plus absolute path.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,14 +81,23 @@ impl FileIndex {
             let mut taken = 0usize;
             let mut walker = ignore::WalkBuilder::new(root);
             // Ignore files count even outside git checkouts: a file finder
-            // must be predictable in plain directories too.
+            // must be predictable in plain directories too. Dotfiles stay
+            // listed unless an ignore rule excludes them, as in Explorer.
             walker
-                .hidden(true)
+                .hidden(false)
                 .parents(true)
                 .git_global(true)
                 .require_git(false);
             walker.filter_entry(|entry| {
-                if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                // Version control metadata (a `.git` folder, a linked
+                // worktree's `.git` file, `.svn`, …) is never a file to open.
+                if is_vcs_metadata(entry.file_name()) {
+                    return false;
+                }
+                if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
                     return true;
                 }
                 !matches!(
@@ -250,7 +272,57 @@ mod tests {
         let index = FileIndex::scan(&[root], MAX_INDEX_FILES);
         let hits = index.query("", 2);
         assert_eq!(hits.len(), 2);
-        assert!(hits[0].ends_with("README.md"));
+        assert!(hits[0].ends_with(".gitignore"));
+        assert!(hits[1].ends_with("README.md"));
+    }
+
+    #[test]
+    fn scan_lists_dotfiles_but_skips_ignored_ones_and_git_metadata() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dir.path().join("proj");
+        for folder in [
+            ".github/workflows",
+            ".git/refs",
+            ".svn/pristine",
+            ".hg",
+            "sub",
+        ] {
+            fs::create_dir_all(root.join(folder)).expect("mkdir");
+        }
+        for (file, body) in [
+            (".github/workflows/ci.yml", ""),
+            (".editorconfig", ""),
+            (".secret", ""),
+            (".gitignore", ".secret\n"),
+            (".git/HEAD", "ref: refs/heads/main\n"),
+            // Other version control metadata is not a file to open either.
+            (".svn/pristine/a.svn-base", ""),
+            (".hg/dirstate", ""),
+            // A linked worktree's `.git` is a file.
+            ("sub/.git", "gitdir: ../.git/worktrees/sub\n"),
+            ("sub/lib.rs", ""),
+        ] {
+            fs::write(root.join(file), body).expect("write");
+        }
+        let index = FileIndex::scan(&[root], MAX_INDEX_FILES);
+        let displays: Vec<PathBuf> = index
+            .files()
+            .iter()
+            .map(|file| PathBuf::from(&file.display))
+            .collect();
+        let expected: Vec<PathBuf> = [
+            ".editorconfig",
+            ".github/workflows/ci.yml",
+            ".gitignore",
+            "sub/lib.rs",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(displays, expected);
+        let hits = index.query("ci.yml", 5);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].ends_with(".github/workflows/ci.yml"));
     }
 
     #[test]

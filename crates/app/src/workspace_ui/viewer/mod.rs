@@ -4,6 +4,7 @@ use super::super::*;
 mod caption;
 mod chrome;
 mod dead_session;
+mod file_tab;
 mod pane_menu;
 mod tab_viewer;
 mod terminal_pane;

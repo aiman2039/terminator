@@ -115,7 +115,18 @@ impl JobRouting {
                 tab.key(),
                 crate::GitView::failed(tab, busy()),
             )],
+            Job::GitLog(tab, query) => vec![Update::GitView(
+                tab.key(),
+                crate::GitView::Log(query.failed(busy())),
+            )],
             Job::LocalHistory(op) => vec![Update::LocalHistory(op.failed(busy()))],
+            Job::Workspace(root, op @ crate::workspace_ops::Op::Commit { .. }) => {
+                vec![Update::Workspace(root.clone(), op.clone(), Err(busy()))]
+            }
+            // The Compare popup waits for its answer, too.
+            Job::Workspace(root, op) if crate::revision_compare::answers(op) => {
+                vec![Update::Workspace(root.clone(), op.clone(), Err(busy()))]
+            }
             _ => Vec::new(),
         }
     }
@@ -130,6 +141,14 @@ impl JobRouting {
         if Self::remote_deadline(job) {
             context.deadline =
                 std::time::Instant::now().checked_add(std::time::Duration::from_secs(45));
+        }
+        if matches!(
+            job,
+            Job::Workspace(_, crate::workspace_ops::Op::Commit { .. })
+        ) {
+            // A queued commit still runs and replies, however long the
+            // actions before it take; the Git panel waits for that reply.
+            context.deadline = None;
         }
         context
     }
@@ -159,6 +178,12 @@ impl JobRouting {
             ),
             Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
             Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
+            // A newer filter or Go to Hash replaces the query still running.
+            Job::GitLog(tab, _) => (
+                crate::git_log::LOG_SUBSYSTEM,
+                tab.key(),
+                Policy::ReplaceableRead,
+            ),
             Job::LocalHistory(op) => crate::local_history::route(op),
             Job::LinePreviews(..) => ("files", "line-previews".into(), Policy::ReplaceableRead),
             Job::WorktreeProbe(path, _) => (
@@ -336,6 +361,7 @@ impl JobRouting {
                 }
             }
             Job::OpenProject(_, generation) => context.generation = *generation,
+            Job::GitLog(_, query) => context.generation = query.generation,
             _ => {}
         }
     }
@@ -409,6 +435,52 @@ mod tests {
         ];
         for job in &slow {
             assert_ne!(key(job), create);
+        }
+    }
+
+    #[test]
+    fn commit_waits_for_earlier_root_actions_without_a_queue_deadline() {
+        let root = PathBuf::from("/repo");
+        let commit = Job::Workspace(
+            root.clone(),
+            crate::workspace_ops::Op::Commit {
+                message: "m".into(),
+                amend: false,
+                signoff: false,
+                push: true,
+                cancel: terminator_core::async_service::CancellationToken::new(),
+            },
+        );
+        let stage = Job::Workspace(
+            root.clone(),
+            crate::workspace_ops::Op::Stage(root.join("a")),
+        );
+        // Same queue: a Stage clicked before Commit finishes first.
+        assert_eq!(key(&commit), key(&stage));
+        assert!(JobRouting::context(&commit).deadline.is_none());
+        assert!(JobRouting::context(&stage).deadline.is_some());
+        // A refused commit still replies, so the panel leaves "Committing…".
+        assert!(matches!(
+            JobRouting::rejection(&commit).as_slice(),
+            [Update::Workspace(
+                _,
+                crate::workspace_ops::Op::Commit { .. },
+                Err(_)
+            )]
+        ));
+        assert!(JobRouting::rejection(&stage).is_empty());
+    }
+
+    #[test]
+    fn a_refused_compare_query_still_answers_the_popup() {
+        use crate::workspace_ops::Op;
+        let folder = PathBuf::from("/repo/src");
+        for op in [Op::CompareTargets, Op::VerifyRevision("HEAD~1".into())] {
+            let refused = JobRouting::rejection(&Job::Workspace(folder.clone(), op));
+            assert!(
+                matches!(refused.as_slice(), [Update::Workspace(_, _, Err(_))]),
+                "the popup leaves its spinner"
+            );
         }
     }
 }

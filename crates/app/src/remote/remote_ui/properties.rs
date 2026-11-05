@@ -103,7 +103,7 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 form::card(ui, |ui| {
-                    ui.label(RichText::new(title).size(16.0).strong());
+                    ui.label(RichText::new(title).size(appearance::FONT_HEADING).strong());
                     ui.add_space(6.0);
                     self.ssh_properties_form(ui, editing, &mut actions);
                 });

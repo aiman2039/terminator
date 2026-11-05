@@ -1,7 +1,8 @@
 //! `JetBrains`-style popup lists (code completion, Find Usages): a lifted
 //! popup layer with a hairline border, full-width selection rows, and the
 //! typed prefix painted in the popup match blue.
-use super::super::theme::{MENU_RADIUS, menu_fill, menu_line, menu_muted, menu_text};
+use super::super::scale::{MENU_RADIUS, RADIUS_SMALL};
+use super::super::theme::{menu_fill, menu_line, menu_muted, menu_text};
 use eframe::egui::{self, Color32, FontId, text::LayoutJob};
 
 /// Islands Dark `popup-completion-match-text` (`blue-90`).
@@ -47,7 +48,7 @@ pub fn popup_row(ui: &mut egui::Ui, height: f32, selected: bool) -> egui::Respon
         } else {
             menu_line()
         };
-        ui.painter().rect_filled(rect, 4, fill);
+        ui.painter().rect_filled(rect, RADIUS_SMALL, fill);
     }
     response
 }
@@ -138,7 +139,7 @@ mod tests {
         let job = highlighted_label(HighlightedLabelInput {
             text: "pub(crate)",
             query: "pu",
-            font: FontId::monospace(13.0),
+            font: FontId::monospace(crate::appearance::FONT_BODY),
             color: Color32::WHITE,
             matched: MATCH_DARK,
         });
@@ -153,7 +154,7 @@ mod tests {
         let split = highlighted_label(HighlightedLabelInput {
             text: "partition_kind_update",
             query: "pu",
-            font: FontId::monospace(13.0),
+            font: FontId::monospace(crate::appearance::FONT_BODY),
             color: Color32::WHITE,
             matched: MATCH_DARK,
         });

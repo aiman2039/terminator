@@ -180,7 +180,8 @@ fn revision_text(root: &Path, revision: &str, relative: &str) -> Option<String> 
 
 /// The name `relative` (its current name) had at `revision`, following
 /// renames: `C` is the name after commit `C`, `C^` the name before it.
-/// Other revisions, and files never renamed, keep `relative`.
+/// Another revision (a branch, a tag) takes the rename Git finds between
+/// it and the working tree. Files never renamed keep `relative`.
 fn name_at(root: &Path, relative: &str, revision: &str) -> String {
     if revision.is_empty() || revision_text(root, revision, relative).is_some() {
         return relative.to_owned();
@@ -233,7 +234,37 @@ fn name_at(root: &Path, relative: &str, revision: &str) -> String {
         };
         return (*name).to_owned();
     }
-    relative.to_owned()
+    renamed_from(root, relative, revision).unwrap_or_else(|| relative.to_owned())
+}
+
+/// The name `relative` was renamed from since `revision`, as Git's rename
+/// detection sees `revision` against the working tree.
+fn renamed_from(root: &Path, relative: &str, revision: &str) -> Option<String> {
+    let bytes = terminator_core::git::run_blocking(
+        root,
+        &[
+            "diff",
+            "--find-renames",
+            "--diff-filter=R",
+            "--name-status",
+            "-z",
+            revision,
+            "--",
+        ],
+        CommandOptions {
+            stdout_limit: 4 * 1024 * 1024,
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    // `R<score>`, then the old and the new name.
+    let fields: Vec<&str> = text.split('\0').collect();
+    fields
+        .chunks(3)
+        .find(|entry| entry.get(2) == Some(&relative))
+        .and_then(|entry| entry.get(1))
+        .map(|old| (*old).to_owned())
 }
 
 pub struct RevisionDocumentInput<'a> {

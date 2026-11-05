@@ -16,7 +16,7 @@ impl ViewPass<'_> {
             Effect::Vsplit => self.requests.splits.push(NativeSplit::Beside),
             Effect::TabNew => self.requests.splits.push(NativeSplit::NewTab),
             Effect::OpenFilePicker => self.requests.open_file_picker = true,
-            Effect::Hover => self.request_hover(),
+            Effect::Hover => self.request_hover(ui),
             Effect::GotoDefinition => self.requests.goto_at = Some(self.caret_at()),
             Effect::GotoFile(name) => self.requests.goto_file = Some(name),
             Effect::AlternateFile => self.requests.alternate_file = true,
@@ -28,7 +28,12 @@ impl ViewPass<'_> {
                 self.requests.locate_at =
                     Some((self.caret_at(), native_lsp::Locate::TypeDefinition));
             }
-            Effect::FindInFiles => self.requests.find_in_files = Some(self.one_line_selection()),
+            Effect::FindInFiles => {
+                self.requests.find_in_files = Some((self.one_line_selection(), false));
+            }
+            Effect::ReplaceInFiles => {
+                self.requests.find_in_files = Some((self.one_line_selection(), true));
+            }
             Effect::FindReferences => self.requests.references_at = Some(self.caret_at()),
             Effect::Hierarchy { types } => self.request_hierarchy(types),
             Effect::RenameSymbol => self.requests.rename_at = Some(self.caret_at()),
@@ -68,9 +73,26 @@ impl ViewPass<'_> {
         });
     }
 
-    fn request_hover(&mut self) {
+    /// Quick Documentation at the caret: the word that holds it, or the
+    /// word just before it, else the one char under it. The popup goes
+    /// under the caret (under the view's corner when the caret is off
+    /// screen).
+    fn request_hover(&mut self, ui: &egui::Ui) {
+        let Some(live) = self.doc.doc.as_ref() else {
+            return;
+        };
         let cursor = self.doc.engine.cursor();
-        self.requests.hover_at = Some((self.caret_at(), (cursor.line, cursor.col)));
+        let (start, end, word) = quick_doc::caret_span(&live.line_text(cursor.line), cursor.col);
+        let corner = egui::Rect::from_min_size(ui.min_rect().min, egui::Vec2::ZERO);
+        self.requests.quick_doc_at = Some(quick_doc::Spot {
+            view: self.frame.source_id.clone(),
+            line: cursor.line,
+            col: cursor.col,
+            start,
+            end,
+            word,
+            anchor: self.requests.caret_rect.unwrap_or(corner),
+        });
     }
 
     fn request_hierarchy(&mut self, types: bool) {

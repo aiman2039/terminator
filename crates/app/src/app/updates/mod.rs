@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::*;
 
+mod commit;
 mod editors;
 mod git;
 mod notifications;
@@ -247,6 +248,30 @@ impl App {
         {
             self.attention_requested = Some(Instant::now());
             self.attention_pending = self.jobs.send(Job::MigrateAttention).is_ok();
+        }
+    }
+
+    /// Moves saved bindings still at an old default once
+    /// ([`shortcuts::migrate_moved_defaults`]). The marker is set when the
+    /// daemon's bindings need no move, so a lost save retries at the next
+    /// launch. The save waits for the older settings migrations and shares
+    /// their one-save-per-launch flag. It also skips a launch that ran the
+    /// Attention migration: this save copies the last published settings,
+    /// so it must not race a save made from a fresh snapshot.
+    pub(crate) fn migrate_keymap(&mut self) {
+        if !self.preferences_writable || self.preferences.keymap_migrated {
+            return;
+        }
+        let mut settings = self.state.settings.clone();
+        if !shortcuts::migrate_moved_defaults(&mut settings.keybindings) {
+            self.preferences.keymap_migrated = true;
+        } else if self.preferences.typography_migrated
+            && self.preferences.attention_migrated
+            && self.attention_requested.is_none()
+            && !self.migration_requested
+        {
+            self.migration_requested = true;
+            self.send(Request::Settings(settings));
         }
     }
 }

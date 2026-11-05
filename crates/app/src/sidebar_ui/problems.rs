@@ -27,6 +27,14 @@ pub(super) fn lsp_panel_header(ui: &mut egui::Ui, title: &str, tip: &str) -> boo
     clicked
 }
 
+/// The first problem row on screen takes a tool window key's focus
+/// (Cmd+6), so arrow keys and Enter work at once; a focused row shows an
+/// outline.
+fn problem_row_focus(ui: &egui::Ui, response: &egui::Response) {
+    crate::shortcuts::tool_row_focus(ui, response);
+    appearance::paint_focus(ui, response);
+}
+
 impl App {
     pub(crate) fn problems_panel(&mut self, ui: &mut egui::Ui) {
         if lsp_panel_header(
@@ -79,9 +87,10 @@ impl App {
                         let response = match color {
                             Some(color) => ui.colored_label(color, label),
                             None => ui.weak(label),
-                        };
+                        }
+                        .interact(egui::Sense::click());
+                        problem_row_focus(ui, &response);
                         if response
-                            .interact(egui::Sense::click())
                             .on_hover_text("Open file at this problem")
                             .clicked()
                         {

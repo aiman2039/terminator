@@ -1,6 +1,10 @@
 //! The single-row Markdown pane header: title, view tabs, refresh, close.
+use super::super::scale::{FONT_BODY, FONT_SMALL};
 use super::icon_color;
 use eframe::egui::{self, Color32, FontId};
+
+/// Width of the refresh and close cells; both use one size.
+const ICON_CELL: f32 = 28.0;
 
 /// Responses for the single-row Markdown header.
 pub struct MarkdownHeader {
@@ -29,12 +33,13 @@ pub fn markdown_header(input: MarkdownHeaderInput<'_>) -> MarkdownHeader {
     } = input;
     let (rect, row) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 0, ui.visuals().panel_fill);
-    let fixed = 28.0 + 24.0;
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::ZERO, ui.visuals().panel_fill);
+    let fixed = 2.0 * ICON_CELL;
     let scale = ((rect.width() - fixed - 32.0) / 162.0).clamp(0.0, 1.0);
     let title_width = (ui
         .painter()
-        .layout_no_wrap(title.into(), FontId::proportional(12.0), icon_color())
+        .layout_no_wrap(title.into(), FontId::proportional(FONT_SMALL), icon_color())
         .size()
         .x
         + 16.0)
@@ -62,10 +67,10 @@ pub fn markdown_header(input: MarkdownHeaderInput<'_>) -> MarkdownHeader {
     );
     let refresh_rect = egui::Rect::from_min_size(
         egui::pos2(left, rect.top()),
-        egui::vec2(28.0_f32.min(rect.width()), rect.height()),
+        egui::vec2(ICON_CELL.min(rect.width()), rect.height()),
     );
     let close_rect = egui::Rect::from_min_max(
-        egui::pos2(rect.right() - 24.0_f32.min(rect.width()), rect.top()),
+        egui::pos2(rect.right() - ICON_CELL.min(rect.width()), rect.top()),
         rect.max,
     );
     MarkdownHeader {
@@ -115,7 +120,7 @@ fn header_title(ui: &egui::Ui, input: HeaderTitle<'_>) -> egui::Response {
             ui,
             rect: rect.shrink2(egui::vec2(8.0, 0.0)),
             text: title,
-            font: FontId::proportional(12.0),
+            font: FontId::proportional(FONT_SMALL),
             tint: if active {
                 ui.visuals().selection.stroke.color
             } else {
@@ -198,7 +203,7 @@ fn mode_tab(ui: &egui::Ui, tab: ModeTab<'_>) -> egui::Response {
     if selected || response.hovered() {
         ui.painter().rect_filled(
             rect,
-            0,
+            egui::CornerRadius::ZERO,
             if selected {
                 ui.visuals().window_fill
             } else {
@@ -217,7 +222,7 @@ fn mode_tab(ui: &egui::Ui, tab: ModeTab<'_>) -> egui::Response {
         ui,
         rect: rect.shrink2(egui::vec2(8.0 * scale, 0.0)),
         text: label,
-        font: FontId::proportional(13.0),
+        font: FontId::proportional(FONT_BODY),
         tint: if selected {
             ui.visuals().text_color()
         } else {
@@ -280,14 +285,20 @@ fn header_icon(input: HeaderIconInput<'_>) -> egui::Response {
         .on_hover_text(label)
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 0, ui.visuals().widgets.hovered.bg_fill);
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::ZERO,
+            ui.visuals().widgets.hovered.bg_fill,
+        );
     }
     egui::Image::new(crate::icons::source(icon))
         .tint(icon_color())
         .paint_at(
             ui,
-            egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0)),
+            egui::Rect::from_center_size(
+                rect.center(),
+                egui::Vec2::splat(super::super::TOOLBAR_ICON),
+            ),
         );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     response

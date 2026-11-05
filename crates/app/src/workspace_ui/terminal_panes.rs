@@ -67,7 +67,7 @@ impl Viewer<'_> {
                 [appearance::TERMINAL_BRANCH_MAX, appearance::TERMINAL_BUTTON],
                 egui::Label::new(
                     egui::RichText::new(branch.as_deref().unwrap_or(""))
-                        .size(12.0)
+                        .size(appearance::FONT_SMALL)
                         .color(ui.visuals().weak_text_color()),
                 )
                 .truncate()

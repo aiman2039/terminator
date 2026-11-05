@@ -52,6 +52,9 @@ impl App {
         if let Some(path) = outcome.resolve.take() {
             self.open_merge(path);
         }
+        if let Some((path, mode)) = outcome.compare.take() {
+            self.open_compare_picker(&path, mode);
+        }
         if let Some(history) = outcome.history {
             self.git.history = history;
         }
@@ -67,6 +70,12 @@ impl App {
         }
         if outcome.load_head_message {
             self.queue_workspace(workspace_ops::Op::HeadMessage);
+        }
+        if outcome.cancel_commit {
+            self.git.cancel_commit();
+        }
+        if outcome.dismiss_commit_failure {
+            self.git.commit_failure = None;
         }
         if outcome.commit || outcome.commit_push {
             self.commit_draft(outcome.commit_push);
@@ -85,7 +94,15 @@ impl App {
     }
 
     /// Commits the draft message and records it in the message history.
-    fn commit_draft(&mut self, push: bool) {
+    /// One commit or push runs at a time; a second request is ignored.
+    pub(super) fn commit_draft(&mut self, push: bool) {
+        let Some(root) = self.op_root() else {
+            self.error = Some("Open a project folder first.".into());
+            return;
+        };
+        let Some(cancel) = self.git.start_commit(root, self.git.commit.clone()) else {
+            return;
+        };
         let message = std::mem::take(&mut self.git.commit);
         let kept = message.trim();
         if !kept.is_empty() {
@@ -94,14 +111,22 @@ impl App {
             history.insert(0, kept.to_owned());
             history.truncate(COMMIT_HISTORY_LIMIT);
         }
-        self.git.commit_inflight = Some(message.clone());
         self.queue_workspace(workspace_ops::Op::Commit {
             message,
             amend: self.git.amend,
             signoff: self.git.signoff,
             push,
+            cancel,
         });
         self.git.amend = false;
+    }
+
+    /// Stage every change but conflicts (Stage All).
+    pub(super) fn stage_all_changes(&mut self) {
+        let paths = self.changed_paths(|change| !change.conflict());
+        if !paths.is_empty() {
+            self.queue_workspace(workspace_ops::Op::StageAll(paths));
+        }
     }
 
     /// Paths of the current changes that `keep` selects.
@@ -125,10 +150,7 @@ impl App {
             self.queue_workspace(workspace_ops::Op::Stage(path));
         }
         if outcome.stage_all {
-            let paths = self.changed_paths(|change| !change.conflict());
-            if !paths.is_empty() {
-                self.queue_workspace(workspace_ops::Op::StageAll(paths));
-            }
+            self.stage_all_changes();
         }
         if outcome.toggle_list {
             self.preferences.git_view_list = !self.preferences.git_view_list;
@@ -173,6 +195,11 @@ impl App {
         let Some(project) = self.selected.clone() else {
             return;
         };
+        if self.selected_remote_project().is_some() {
+            // Git log and its filters run locally; the daemon has no log.
+            self.info = Some(crate::git_log::REMOTE_LOG_NOTE.into());
+            return;
+        }
         let Some(context) = &self.context else {
             return;
         };

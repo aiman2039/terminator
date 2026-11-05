@@ -9,8 +9,9 @@ pub(crate) enum PopupAction {
 }
 
 /// Keys and clicks for a visible popup: Up/Down move, Enter/Tab accept,
-/// Escape closes. Paints the list under the caret.
+/// Escape closes. Paints the list under the caret and records where.
 pub(crate) fn popup_ui(ui: &egui::Ui, popup: &mut CompletionPopup) -> PopupAction {
+    popup.rect = None;
     if popup.visible.is_empty() {
         return PopupAction::None;
     }
@@ -19,7 +20,7 @@ pub(crate) fn popup_ui(ui: &egui::Ui, popup: &mut CompletionPopup) -> PopupActio
     let Some(anchor) = popup.anchor else {
         return action;
     };
-    egui::Area::new(egui::Id::unique(("native-completion", &popup.path)))
+    let shown = egui::Area::new(egui::Id::unique(("native-completion", &popup.path)))
         .order(egui::Order::Foreground)
         .fixed_pos(anchor.left_bottom())
         .show(ui.ctx(), |ui| {
@@ -38,6 +39,7 @@ pub(crate) fn popup_ui(ui: &egui::Ui, popup: &mut CompletionPopup) -> PopupActio
                 popup_footer(ui);
             });
         });
+    popup.rect = Some(shown.response.rect);
     action
 }
 
@@ -106,8 +108,15 @@ pub(crate) fn kind_badge(kind: Option<&str>) -> Option<(char, egui::Color32)> {
     }
 }
 
-/// Kind badge, label with the typed prefix in the match color, and the
-/// detail right-aligned in muted text; returns the row's response.
+/// The muted text on the right of a row: the label description (a type,
+/// or the path an import comes from), else the detail.
+pub(crate) fn right_text(item: &native_lsp::CompletionItem) -> Option<&str> {
+    item.label_description.as_deref().or(item.detail.as_deref())
+}
+
+/// Kind badge, label with the typed prefix in the match color and its
+/// label detail (parameters) muted after it, and [`right_text`]
+/// right-aligned in muted text; returns the row's response.
 fn item_row(
     ui: &mut egui::Ui,
     item: &native_lsp::CompletionItem,
@@ -125,26 +134,32 @@ fn item_row(
         egui::vec2(15.0, 15.0),
     );
     if let Some((letter, tint)) = kind_badge(item.kind.as_deref()) {
-        painter.rect_filled(badge, 3, tint.gamma_multiply(0.22));
+        painter.rect_filled(badge, appearance::RADIUS_SMALL, tint.gamma_multiply(0.22));
         painter.text(
             badge.center(),
             egui::Align2::CENTER_CENTER,
             letter,
-            egui::FontId::monospace(10.0),
+            egui::FontId::monospace(appearance::FONT_CAPTION),
             tint,
         );
     }
     let text = ui.visuals().text_color();
     let muted = ui.visuals().weak_text_color();
-    let label = ui.painter().layout_job(appearance::highlighted_label(
-        appearance::HighlightedLabelInput {
-            text: &item.label,
-            query: prefix,
-            font: egui::FontId::monospace(13.0),
-            color: text,
-            matched: appearance::popup_match_color(ui.visuals()),
-        },
-    ));
+    let mut label_job = appearance::highlighted_label(appearance::HighlightedLabelInput {
+        text: &item.label,
+        query: prefix,
+        font: egui::FontId::monospace(appearance::FONT_BODY),
+        color: text,
+        matched: appearance::popup_match_color(ui.visuals()),
+    });
+    if let Some(tail) = &item.label_detail {
+        label_job.append(
+            tail,
+            0.0,
+            egui::TextFormat::simple(egui::FontId::monospace(appearance::FONT_BODY), muted),
+        );
+    }
+    let label = ui.painter().layout_job(label_job);
     let label_left = badge.right() + 7.0;
     let label_width = label.size().x;
     painter.galley(
@@ -152,11 +167,12 @@ fn item_row(
         label,
         text,
     );
-    if let Some(detail) = &item.detail {
-        let room = (rect.right() - 8.0 - (label_left + label_width + 16.0)).max(0.0);
+    let room = (rect.right() - 8.0 - (label_left + label_width + 16.0)).max(0.0);
+    // No room for a few characters: leave it out instead of a lone "…".
+    if let Some(detail) = right_text(item).filter(|_| room >= 24.0) {
         let mut job = egui::text::LayoutJob::simple_singleline(
-            detail.clone(),
-            egui::FontId::proportional(12.0),
+            detail.to_owned(),
+            egui::FontId::proportional(appearance::FONT_SMALL),
             muted,
         );
         job.wrap.max_width = room;

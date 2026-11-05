@@ -66,11 +66,16 @@ impl TabViewer for Viewer<'_> {
     fn tab_leading_width(&self, tab: &Tab) -> f32 {
         match tab {
             Tab::Terminal(sid) => self.app.tab_leading(sid).width(),
+            Tab::NativeEditor { .. } | Tab::Image { .. } => appearance::TERMINAL_LEADING_SLOT,
             _ => 0.0,
         }
     }
     fn paint_tab_leading(&mut self, ui: &mut egui::Ui, rect: egui::Rect, tab: &mut Tab) {
         self.paint_terminal_leading(ui, rect, tab);
+        self.paint_file_leading(ui, rect, tab);
+    }
+    fn tab_modified(&self, tab: &Tab) -> bool {
+        matches!(tab, Tab::NativeEditor { path } if self.app.native_dirty(path))
     }
     fn allowed_in_windows(&self, _: &mut Tab) -> bool {
         false

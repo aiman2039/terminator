@@ -44,8 +44,8 @@ pub fn parse_diagnostics(params: &Value) -> Option<(String, Vec<Diagnostic>)> {
     Some((parsed.uri.as_str().to_owned(), items))
 }
 
-/// Parse a `textDocument/hover` result. `None` means null
-/// or an unrecognized shape (no hover available).
+/// Parse a `textDocument/hover` result. `None` means null, an
+/// unrecognized shape, or blank contents (no docs to show).
 #[must_use]
 pub fn parse_hover(result: &Value) -> Option<Hover> {
     if result.is_null() {
@@ -53,21 +53,28 @@ pub fn parse_hover(result: &Value) -> Option<Hover> {
     }
     let parsed: lsp_types::Hover = serde_json::from_value(result.clone()).ok()?;
     let (text, markdown) = match parsed.contents {
-        lsp_types::HoverContents::Scalar(marked) => (marked_text(&marked), true),
-        lsp_types::HoverContents::Array(marked) => (
-            marked
-                .iter()
-                .map(marked_text)
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-            true,
-        ),
+        lsp_types::HoverContents::Scalar(marked) => (filled(std::slice::from_ref(&marked)), true),
+        lsp_types::HoverContents::Array(marked) => (filled(&marked), true),
         lsp_types::HoverContents::Markup(content) => (
             content.value,
             content.kind == lsp_types::MarkupKind::Markdown,
         ),
     };
-    Some(Hover { text, markdown })
+    (!text.trim().is_empty()).then_some(Hover { text, markdown })
+}
+
+/// The marked strings that are not blank, as Markdown paragraphs.
+fn filled(marked: &[lsp_types::MarkedString]) -> String {
+    let blank = |value: &&lsp_types::MarkedString| match value {
+        lsp_types::MarkedString::String(text) => text.trim().is_empty(),
+        lsp_types::MarkedString::LanguageString(content) => content.value.trim().is_empty(),
+    };
+    marked
+        .iter()
+        .filter(|value| !blank(value))
+        .map(marked_text)
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 pub(super) fn marked_text(value: &lsp_types::MarkedString) -> String {

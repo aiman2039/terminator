@@ -159,7 +159,11 @@ fn paint_chevron(paint: ChevronPaint<'_>) {
     } = paint;
     let painter = ui.painter();
     if hovered {
-        painter.rect_filled(rect, 2.0, super::super::diff_paint::tint(color, tints.edge));
+        painter.rect_filled(
+            rect,
+            appearance::RADIUS_XSMALL,
+            super::super::diff_paint::tint(color, tints.edge),
+        );
     }
     let stroke_color = if enabled {
         color

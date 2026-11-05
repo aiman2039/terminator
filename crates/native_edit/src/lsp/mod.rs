@@ -24,6 +24,7 @@ mod parsing;
 mod requests;
 mod server;
 mod servers;
+mod snippet;
 mod types;
 mod wire;
 
@@ -35,8 +36,13 @@ pub use parsing::*;
 pub use requests::*;
 pub use server::*;
 pub use servers::*;
+pub use snippet::*;
 pub use types::*;
 pub use wire::*;
 
+#[cfg(test)]
+mod completion_tests;
+#[cfg(test)]
+mod snippet_tests;
 #[cfg(test)]
 mod tests;

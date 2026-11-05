@@ -359,6 +359,20 @@ fn split_views_share_one_highlight_per_revision() {
 }
 
 #[test]
+fn restored_folds_carry_into_a_forked_view_but_not_into_large_files() {
+    let doc = crate::doc::Doc::new("fn a() {\n    x();\n}\n");
+    let mut cache = HighlightCache::default();
+    cache.restore_folds(&doc, Language::Rust, &[0]);
+    assert_eq!(cache.folds().folded_starts(), [0]);
+    assert_eq!(cache.fork_folds().folds().folded_starts(), [0]);
+    // Large-file mode finds no regions, so nothing folds.
+    let big = crate::doc::Doc::new(format!("fn a() {{\n{}}}\n", "    x();\n".repeat(40_000)));
+    let mut large = HighlightCache::default();
+    large.restore_folds(&big, Language::Rust, &[0]);
+    assert!(large.folds().folded_starts().is_empty());
+}
+
+#[test]
 fn an_over_cap_buffer_skips_building_its_text() {
     let mut cache = HighlightCache::default();
     assert!(cache.skip_large((Language::Rust, true), 3, MAX_HIGHLIGHT_BYTES + 1));

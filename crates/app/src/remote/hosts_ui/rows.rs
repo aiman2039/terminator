@@ -28,7 +28,7 @@ impl App {
             ui.add(
                 egui::Label::new(
                     RichText::new(subtitle(project, terminator_core::now()))
-                        .size(11.0)
+                        .size(appearance::FONT_CAPTION)
                         .color(ui.visuals().weak_text_color()),
                 )
                 .truncate(),

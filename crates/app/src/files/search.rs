@@ -33,6 +33,9 @@ impl Query {
 pub struct Hit {
     pub path: PathBuf,
     pub line: u32,
+    /// UTF-16 offset of the first match in the line (0-based, as language
+    /// servers count), so opening the hit can place the caret on it.
+    pub column: u32,
     pub text: String,
 }
 
@@ -73,23 +76,19 @@ pub(crate) fn build_set(patterns: &[&str]) -> Option<GlobSet> {
     if any { builder.build().ok() } else { None }
 }
 
-/// Include pattern that keeps one folder below the search root (empty for
-/// the root itself). Spaces and commas split patterns, so they match as `?`.
-pub(crate) fn folder_include_pattern(root: &Path, folder: &Path) -> String {
-    let Ok(relative) = folder.strip_prefix(root) else {
-        return String::new();
-    };
-    if relative.as_os_str().is_empty() {
-        return String::new();
-    }
-    let relative = relative.to_string_lossy().replace('\\', "/");
-    let escaped = globset::escape(&relative).replace([' ', ',', '\n'], "?");
-    format!("{escaped}/**")
+pub(crate) fn build_regex(query: &Query) -> Result<Regex, String> {
+    regex_for(query, query.text.trim())
 }
 
-pub(crate) fn build_regex(query: &Query) -> Result<Regex, String> {
-    let text = query.text.trim();
-    if text.is_empty() {
+/// [`build_regex`] for the text as typed. Find and Replace in Files keep
+/// the spaces around it, as `JetBrains` does: `int ` must not replace the
+/// `int` in `print`.
+pub(crate) fn build_typed_regex(query: &Query) -> Result<Regex, String> {
+    regex_for(query, &query.text)
+}
+
+fn regex_for(query: &Query, text: &str) -> Result<Regex, String> {
+    if text.trim().is_empty() {
         return Err("Type to search in files".into());
     }
     let mut pattern = if query.use_regex {
@@ -196,15 +195,20 @@ fn search_file(path: &Path, regex: &Regex, hits: &mut Vec<Hit>) -> bool {
     }
     let text = String::from_utf8_lossy(&bytes);
     for (index, line) in text.lines().enumerate() {
-        if regex.is_match(line) {
-            hits.push(Hit {
-                path: path.to_path_buf(),
-                line: u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1),
-                text: truncate(line),
-            });
-            if hits.len() >= MAX_HITS {
-                return true;
-            }
+        let Some(found) = regex.find(line) else {
+            continue;
+        };
+        let column = line
+            .get(..found.start())
+            .map_or(0, |head| head.encode_utf16().count());
+        hits.push(Hit {
+            path: path.to_path_buf(),
+            line: u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1),
+            column: u32::try_from(column).unwrap_or(u32::MAX),
+            text: truncate(line),
+        });
+        if hits.len() >= MAX_HITS {
+            return true;
         }
     }
     false
@@ -235,6 +239,21 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].line, 2);
         assert_eq!(hits[0].text, "find.me here");
+    }
+
+    #[test]
+    fn hits_carry_the_utf16_column_of_the_first_match() {
+        let dir = tempfile::tempdir().unwrap();
+        // Two spaces, `é` (1 unit), an emoji (2 units) and a space: 6.
+        write(dir.path(), "a.txt", "none\n  é😀 needle needle\n");
+        let query = Query {
+            text: "needle".into(),
+            ..Default::default()
+        };
+        let hits = run(dir.path(), &query, false, &CancellationToken::new()).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!((hits[0].line, hits[0].column), (2, 6));
+        assert_eq!(hits[0].text, "é😀 needle needle");
     }
 
     #[test]

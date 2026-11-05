@@ -4,6 +4,7 @@ use super::test_support::{app, open, pump, save};
 use super::*;
 use std::sync::Arc;
 use std::time::SystemTime;
+use terminator_native_edit::indent::IndentStyle;
 
 #[test]
 fn a_buffer_grown_past_one_mib_still_saves() {
@@ -234,10 +235,173 @@ fn squiggles_rebuild_only_when_the_text_or_problems_change() {
 
 #[test]
 fn format_options_follow_the_file_or_the_vimrc() {
-    let mut tabs = NativeDoc::loaded(PathBuf::from("/tmp/t.c"), "int f() {\n\treturn 1;\n}\n");
+    let tabs = NativeDoc::loaded(PathBuf::from("/tmp/t.c"), "int f() {\n\treturn 1;\n}\n");
     assert!(!tabs.format_options().insert_spaces);
-    let mut two = NativeDoc::loaded(PathBuf::from("/tmp/t.js"), "a {\n  b {\n    c\n  }\n}\n");
+    let two = NativeDoc::loaded(PathBuf::from("/tmp/t.js"), "a {\n  b {\n    c\n  }\n}\n");
     assert_eq!(two.format_options().tab_size, 2);
+}
+
+#[test]
+fn loading_follows_editorconfig_and_saving_applies_its_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".editorconfig"),
+        "root = true\n[*.txt]\nindent_style = tab\ntab_width = 8\n\
+         insert_final_newline = true\ntrim_trailing_whitespace = true\n",
+    )
+    .unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "one  \n    two\nthree ").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    // `.editorconfig` wins over the four spaces the text uses.
+    let style = native.doc.as_ref().unwrap().indent_style();
+    assert_eq!(style, IndentStyle::tabs(8));
+    assert_eq!(
+        native.format_options(),
+        native_lsp::FormatOptions {
+            tab_size: 8,
+            insert_spaces: false
+        }
+    );
+    // The caret's line keeps its trailing spaces; the last line gets a
+    // newline.
+    save(&mut native, &app);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "one  \n    two\nthree\n"
+    );
+    assert!(!native.dirty());
+    let buffer = native.doc.as_mut().unwrap();
+    assert!(buffer.undo(), "the cleanup is one undo step");
+    assert_eq!(buffer.text(), "one  \n    two\nthree ");
+}
+
+#[test]
+fn a_save_after_undo_keeps_redo_and_defers_the_save_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".editorconfig"),
+        "root = true\n[*]\ntrim_trailing_whitespace = true\n",
+    )
+    .unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "one\ntwo  \n").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    native.doc.as_mut().unwrap().insert(3, "!");
+    assert!(native.doc.as_mut().unwrap().undo());
+    // An autosave (or Save) right after Undo: the redo step survives.
+    save(&mut native, &app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo  \n");
+    let buffer = native.doc.as_mut().unwrap();
+    assert!(buffer.redo(), "the undone edit can still be redone");
+    assert_eq!(buffer.text(), "one!\ntwo  \n");
+    // With nothing to redo, the next save trims again.
+    save(&mut native, &app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "one!\ntwo\n");
+}
+
+#[test]
+fn a_save_during_a_vim_insert_keeps_the_cleanup_out_of_the_typed_change() {
+    use terminator_native_edit::vim::Key as VimKey;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".editorconfig"),
+        "root = true\n[*]\ntrim_trailing_whitespace = true\n",
+    )
+    .unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "one  \ntwo\n").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    let buffer = native.doc.as_mut().unwrap();
+    native.engine.press_key(buffer, VimKey::Char('j'));
+    native.engine.press_key(buffer, VimKey::Char('o'));
+    native.engine.type_text(buffer, "foo");
+    // Cmd+S (or an autosave) while Insert mode is still on.
+    save(&mut native, &app);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "one  \ntwo\nfoo\n",
+        "the cleanup waits for the change to end"
+    );
+    let buffer = native.doc.as_mut().unwrap();
+    native.engine.press_key(buffer, VimKey::Escape);
+    save(&mut native, &app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\nfoo\n");
+    // Undo takes the cleanup back first, then the typing alone.
+    let buffer = native.doc.as_mut().unwrap();
+    assert!(buffer.undo());
+    assert_eq!(buffer.text(), "one  \ntwo\nfoo\n");
+    assert!(buffer.undo());
+    assert_eq!(buffer.text(), "one  \ntwo\n");
+}
+
+#[test]
+fn a_view_that_stopped_drawing_keeps_no_line_from_the_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".editorconfig"),
+        "root = true\n[*]\ntrim_trailing_whitespace = true\n",
+    )
+    .unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "one  \ntwo\nthree\n").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    // A split view left its caret on line 1; its pane closed since.
+    native.enter_view("closed");
+    native.enter_view("open");
+    let buffer = native.doc.as_mut().unwrap();
+    let _ = native.engine.place_cursor(buffer, 2, 0);
+    native.drawn.insert("closed".into(), 1);
+    native.drawn.insert("open".into(), 9);
+    save(&mut native, &app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\nthree\n");
+}
+
+#[test]
+fn a_file_without_line_breaks_takes_the_editorconfig_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".editorconfig"),
+        "root = true\n[*]\nend_of_line = crlf\n",
+    )
+    .unwrap();
+    let new = dir.path().join("new.txt");
+    std::fs::write(&new, "").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &new);
+    assert_eq!(native.line_ending, LineEnding::Crlf);
+    assert!(!native.dirty());
+    native.doc.as_mut().unwrap().insert(0, "a\nb");
+    save(&mut native, &app);
+    assert_eq!(std::fs::read(&new).unwrap(), b"a\r\nb");
+    // A file with breaks keeps its own.
+    let old = dir.path().join("old.txt");
+    std::fs::write(&old, "a\nb\n").unwrap();
+    assert_eq!(open(&app, &old).line_ending, LineEnding::Lf);
+}
+
+#[test]
+fn remote_snapshots_detect_indentation_without_editorconfig() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(dir.path());
+    let path = crate::remote_ui::snapshot_root(&app.paths.data, "fixture").join("x.c");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path.with_file_name(".editorconfig"),
+        "root = true\n[*]\nindent_style = tab\n",
+    )
+    .unwrap();
+    std::fs::write(&path, "a {\n  b;\n}\n").unwrap();
+    app.native_doc(&path, true);
+    let mut native = app.native_docs.remove(&path).unwrap();
+    assert!(!native.read_editorconfig);
+    pump(&mut native, &app, |native| native.doc.is_some());
+    let style = native.doc.as_ref().unwrap().indent_style();
+    assert_eq!(style, IndentStyle::spaces(2));
 }
 
 #[test]
@@ -252,4 +416,84 @@ fn two_save_and_close_requests_both_wait_for_their_saves() {
     }
     assert!(app.native_close_after_save.contains_key(&first));
     assert!(app.native_close_after_save.contains_key(&second));
+}
+
+#[test]
+fn a_finished_save_is_announced_to_language_servers_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    assert_eq!(native.take_lsp_saved(), None, "a load is not a save");
+    native.doc.as_mut().unwrap().insert(0, "// note\n");
+    save(&mut native, &app);
+    let revision = native.doc.as_ref().unwrap().revision();
+    assert_eq!(
+        native.take_lsp_saved(),
+        Some((revision, "// note\nfn main() {}\n".to_owned()))
+    );
+    assert_eq!(native.take_lsp_saved(), None, "announced once");
+    // A refused write is not announced.
+    std::fs::write(&path, "theirs\n").unwrap();
+    native.doc.as_mut().unwrap().insert(0, "x");
+    save(&mut native, &app);
+    assert!(native.save_error.is_some());
+    assert_eq!(native.take_lsp_saved(), None);
+}
+
+#[test]
+fn a_rewrite_on_disk_is_announced_once_the_reload_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    std::fs::write(&path, "fn foo() {}\n").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    // What an applied rename does to a clean open buffer.
+    std::fs::write(&path, "fn bar() {}\n").unwrap();
+    native.request_reload(false);
+    native.lsp_saved = true;
+    assert_eq!(
+        native.take_lsp_saved(),
+        None,
+        "the buffer is not reloaded yet"
+    );
+    pump(&mut native, &app, |native| {
+        !native.disk.reload_wanted && !native.loading
+    });
+    let announced = native.take_lsp_saved().map(|(_, text)| text);
+    assert_eq!(announced.as_deref(), Some("fn bar() {}\n"));
+}
+
+#[test]
+fn a_landed_save_sends_did_save_to_the_language_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let mut app = app(dir.path());
+    let mut native = open(&app, &path);
+    native.doc.as_mut().unwrap().insert(0, "// saved\n");
+    save(&mut native, &app);
+    app.native_docs.insert(path.clone(), native);
+    let sync = serde_json::json!({"textDocumentSync": {"change": 2, "save": {}}});
+    let mut outbox = app.lsp.open_on_fake_server(&path, sync);
+    app.native_lsp_saved(&path);
+    app.native_lsp_saved(&path);
+    let mut decoder = native_lsp::FrameDecoder::default();
+    let mut methods = Vec::new();
+    while let Ok(framed) = outbox.try_recv() {
+        for body in decoder.feed(&framed) {
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            methods.push(value["method"].as_str().unwrap().to_owned());
+        }
+    }
+    let saves = methods
+        .iter()
+        .filter(|method| *method == "textDocument/didSave")
+        .count();
+    assert_eq!(saves, 1, "one write, one didSave: {methods:?}");
+    assert_eq!(
+        methods.last().map(String::as_str),
+        Some("textDocument/didSave")
+    );
 }

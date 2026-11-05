@@ -1,6 +1,7 @@
 use super::super::super::*;
 use super::super::tab_menu::WorkspaceTabMenuSpec;
-use super::super::tabs::{TabFace, tab_attention_text, tab_tooltip};
+use super::super::tabs::{TabFace, tab_attention_text, tab_label_job, tab_tooltip};
+use super::close_slot::CloseSlot;
 use super::{StripActions, StripFrame};
 use crate::agent_presence::AttentionCounts;
 use crate::workspace::WorkspaceTab;
@@ -12,6 +13,7 @@ pub(super) struct StripTabInput<'a> {
     pub(super) index: usize,
     pub(super) count: usize,
     pub(super) layout: (f32, AttentionCounts),
+    pub(super) hint: Option<&'a str>,
     pub(super) active_id: &'a mut String,
     pub(super) strip_rects: &'a mut Vec<(String, egui::Rect)>,
     pub(super) actions: &'a mut StripActions,
@@ -61,11 +63,13 @@ impl App {
             index,
             count,
             layout: (width, attention),
+            hint,
             active_id,
             strip_rects,
             actions,
         } = input;
-        let face = self.tab_face(Self::group_primary(group));
+        let mut face = self.tab_face(Self::group_primary(group));
+        face.hint = hint.map(str::to_owned);
         let badge = tab_attention_text(attention);
         let active = *active_id == group.id;
         let (rect, response) =
@@ -153,7 +157,7 @@ impl App {
         active_id.clone_from(&group.id);
         ui.painter().rect_stroke(
             *rect,
-            0,
+            egui::CornerRadius::ZERO,
             egui::Stroke::new(2.0, appearance::color(&self.theme.accent)),
             egui::StrokeKind::Inside,
         );
@@ -168,7 +172,7 @@ impl App {
         if paint.active || paint.response.hovered() {
             ui.painter().rect_filled(
                 paint.rect,
-                0,
+                egui::CornerRadius::ZERO,
                 if paint.active {
                     appearance::color(&self.theme.window)
                 } else {
@@ -228,9 +232,14 @@ impl App {
         } else if let Some(image) = &face.image {
             egui::Image::new(image.clone()).paint_at(ui, icon_rect.shrink(1.0));
         } else {
-            egui::Image::new(icons::source(face.icon))
-                .tint(terminal_tint.unwrap_or(appearance::icon_color()))
-                .paint_at(ui, icon_rect);
+            // File-type icons keep their own colors.
+            appearance::paint_status_icon(appearance::PaintStatusIconInput {
+                ui,
+                rect: icon_rect,
+                icon: face.icon,
+                tint: terminal_tint.unwrap_or(appearance::icon_color()),
+                spin: false,
+            });
         }
     }
 
@@ -265,14 +274,9 @@ impl App {
         } else {
             &self.theme.secondary
         });
-        let mut text = egui::text::LayoutJob::simple(
-            face.label.clone(),
-            egui::FontId::proportional(13.0),
-            tint,
-            rect.width() - 58.0 - (label_x - 30.0) - badge_reserve,
-        );
-        text.wrap.max_rows = 1;
-        text.wrap.break_anywhere = true;
+        let weak = appearance::color(&self.theme.secondary);
+        let width = rect.width() - 58.0 - (label_x - 30.0) - badge_reserve;
+        let text = tab_label_job(&face.label, face.hint.as_deref(), [tint, weak], width);
         let galley = ui.painter().layout_job(text);
         ui.painter().galley(
             egui::pos2(
@@ -304,7 +308,7 @@ impl App {
             badge_rect.right_center(),
             egui::Align2::RIGHT_CENTER,
             count,
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(appearance::FONT_CAPTION),
             appearance::color(if attention.waiting() > 0 {
                 &self.theme.status_waiting
             } else {
@@ -330,8 +334,11 @@ impl App {
             egui::pos2(rect.left() + 8.0, rect.bottom() - 3.0),
             egui::pos2(rect.right() - 8.0, rect.bottom() - 1.0),
         );
-        ui.painter()
-            .rect_filled(underline, 1.0, appearance::color(&self.theme.accent));
+        ui.painter().rect_filled(
+            underline,
+            appearance::RADIUS_XSMALL,
+            appearance::color(&self.theme.accent),
+        );
         #[cfg(feature = "test-support")]
         diagnostics::record(
             ui.ctx(),
@@ -340,7 +347,7 @@ impl App {
         );
     }
 
-    /// The close glyph, or the pin mark on pinned tabs until hovered.
+    /// The close glyph, or the unsaved dot or pin mark until hovered.
     fn strip_tab_close(&self, ui: &egui::Ui, paint: &TabPaint<'_>, editing: bool) -> TabHits {
         let TabPaint {
             frame,
@@ -363,22 +370,13 @@ impl App {
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text("Close tab");
-        if group.pinned && !close_response.hovered() {
-            ui.painter().text(
-                close_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "◆",
-                egui::FontId::proportional(12.0),
-                appearance::color(&self.theme.accent),
-            );
-        } else if response.hovered() || close_response.hovered() || *active {
-            egui::Image::new(icons::source("X"))
-                .tint(appearance::icon_color())
-                .paint_at(
-                    ui,
-                    egui::Rect::from_center_size(close_rect.center(), egui::vec2(16.0, 16.0)),
-                );
-        }
+        let slot = CloseSlot::pick(
+            self.group_unsaved(group),
+            group.pinned,
+            close_response.hovered(),
+            response.hovered() || *active,
+        );
+        self.paint_close_slot(ui, close_rect, slot);
         TabHits {
             close_rect,
             close_clicked: close_response.clicked(),

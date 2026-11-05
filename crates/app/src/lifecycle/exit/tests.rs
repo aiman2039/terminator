@@ -505,6 +505,27 @@ fn timed_out_exit_can_be_retried() {
     assert!(matches!(app.exit, Exit::Waiting(_)));
 }
 #[test]
+fn quit_during_a_commit_says_to_cancel_it_first() {
+    let (mut app, ctx, _dir, _) = fixture();
+    let cancel = app.git.start_commit("/repo".into(), "msg".into()).unwrap();
+    app.exit = Exit::Waiting(
+        Instant::now()
+            .checked_sub(Duration::from_secs(16))
+            .unwrap_or_else(Instant::now),
+    );
+    app.advance_exit(&ctx);
+    assert!(!app.exit.active());
+    assert!(
+        app.error
+            .as_deref()
+            .is_some_and(|error| error.contains("cancel it in the Git panel")),
+        "{:?}",
+        app.error
+    );
+    // Quitting never stops the commit by itself.
+    assert!(!cancel.is_cancelled());
+}
+#[test]
 fn unknown_project_layout_save_does_not_abort_exit() {
     let (mut app, ctx, _dir, _) = fixture();
     app.begin_exit();

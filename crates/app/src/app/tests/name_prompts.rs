@@ -529,6 +529,52 @@ fn inline_rename_saves_with_enter_and_cancels_with_escape() {
 }
 
 #[test]
+fn escape_in_a_history_rename_cancels_it() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.sessions = vec![ended_session_fixture()];
+    app.state.agents = vec![stopped_agent_fixture()];
+    app.preferences.right_projects = false;
+    app.preferences.tool = SidebarTool::History;
+    app.preferences.visible = true;
+    app.begin_rename("named", RenameSurface::Sidebar);
+    let frame = |app: &mut App, events| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.dispatch_shortcuts(ui.ctx(), true);
+                app.workspace_sidebars(ui);
+            },
+        );
+        output.textures_delta.clear();
+    };
+    frame(&mut app, Vec::new());
+    frame(&mut app, vec![egui::Event::Text("foo".into())]);
+    assert!(app.rename_painted, "the History row shows the field");
+    let escape = egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(&mut app, vec![escape]);
+    assert!(app.rename_session.is_none());
+    let renamed = std::iter::from_fn(|| requests.try_recv().ok()).any(
+        |job| matches!(job, Job::Control(request, _) if matches!(*request, Request::Rename { .. })),
+    );
+    assert!(!renamed, "Esc cancels the rename");
+}
+
+#[test]
 fn rename_targets_the_requested_session() {
     let (mut app, _, _dir) = fixture();
     app.state

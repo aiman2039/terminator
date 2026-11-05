@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::highlight::HighlightCache;
+use terminator_native_edit::indent::EditorConfig;
 use terminator_native_edit::lsp as native_lsp;
 use terminator_native_edit::vim::{ModalEngine, VimEngine, VimrcOptions, parse_vimrc};
 /// Largest file the native editor opens. Saves have no cap: a buffer
@@ -86,6 +87,12 @@ pub struct NativeDoc {
     pub(super) inlay: terminator_native_edit::inlay::InlayCache,
     pub(super) holder: Option<String>,
     pub(super) focused_view: Option<String>,
+    /// When a view of this buffer last had keyboard focus: Find Action's
+    /// editor commands act on the editor focused last.
+    pub(super) focused_at: Option<Instant>,
+    /// The frame pass each view last drew in: a view that stopped drawing
+    /// (closed, split away, or in a hidden tab) is not on screen.
+    pub(super) drawn: std::collections::HashMap<String, u64>,
     /// The file's line breaks (see [`LineEnding`]).
     pub(super) line_ending: LineEnding,
     /// `(revision, dirty)` for the last revision checked against
@@ -102,16 +109,27 @@ pub struct NativeDoc {
     pub(super) loading: bool,
     pub(super) saving: bool,
     pub(super) force_save: bool,
+    /// A finished write the language servers have not heard about yet
+    /// (see `take_lsp_saved`).
+    pub(super) lsp_saved: bool,
     pub(super) load_rx: Option<tokio::sync::mpsc::UnboundedReceiver<LoadResult>>,
-    /// Indentation for format requests: detected once per load.
-    pub(super) indent: Option<native_lsp::FormatOptions>,
+    /// Loads read the file's `.editorconfig` (local files only; remote
+    /// snapshots detect their indentation from the text).
+    pub(super) read_editorconfig: bool,
+    /// The `.editorconfig` settings of the last load: its save rules.
+    pub(super) file_config: EditorConfig,
     pub(super) save_rx: Option<tokio::sync::mpsc::UnboundedReceiver<SaveResult>>,
+    /// The caret, top line and folds the file was left with, put back
+    /// once the buffer loads (see `reopen`).
+    pub(super) restore: Option<crate::preferences::EditorState>,
+    /// Top line the next frame that draws the source scrolls to.
+    pub(super) top_line: Option<usize>,
 }
 
 impl NativeDoc {
     /// Make view `id`'s caret and layout the live ones, stashing the
     /// previous holder's. A view seen for the first time starts as a fork
-    /// of the current caret.
+    /// of the current caret, folds and top line.
     pub(super) fn enter_view(&mut self, id: &str) {
         if self.holder.as_deref() == Some(id) {
             return;
@@ -122,16 +140,25 @@ impl NativeDoc {
         let Some(previous) = self.holder.replace(id.to_owned()) else {
             return;
         };
-        let (engine, highlight) = self
-            .views
-            .remove(id)
-            .unwrap_or_else(|| (self.engine.fork_view(), HighlightCache::default()));
+        let (engine, highlight) = match self.views.remove(id) {
+            Some(parts) => parts,
+            None => self.fork_view(),
+        };
         let old_engine = std::mem::replace(&mut self.engine, engine);
         let old_highlight = std::mem::replace(&mut self.highlight, highlight);
         // Split views highlight once per edit: the next view reuses spans
         // the previous one computed for the same revision.
         self.highlight.share_spans(&old_highlight);
         self.views.insert(previous, (old_engine, old_highlight));
+    }
+
+    /// View `id` drew in this buffer's latest frame: it is on screen.
+    pub(super) fn shows_view(&self, id: &str) -> bool {
+        let latest = self.drawn.values().max();
+        self.drawn
+            .get(id)
+            .zip(latest)
+            .is_some_and(|(pass, latest)| pass.saturating_add(1) >= *latest)
     }
 
     /// Put the focused view's caret back in place after another view drew.
@@ -198,13 +225,16 @@ impl NativeDoc {
             save_format: (TextEncoding::default(), false),
             disk: DiskSync::default(),
             extras: super::extras::DocExtras::default(),
-            indent: None,
+            read_editorconfig: true,
+            file_config: EditorConfig::default(),
             line_ending: LineEnding::Lf,
             views: std::collections::HashMap::new(),
             gutter: None,
             inlay: terminator_native_edit::inlay::InlayCache::default(),
             holder: None,
             focused_view: None,
+            focused_at: None,
+            drawn: std::collections::HashMap::new(),
             dirty_memo: std::cell::Cell::new((0, false)),
             loaded_mtime: None,
             read_limit: MAX_NATIVE_BYTES,
@@ -215,8 +245,11 @@ impl NativeDoc {
             loading: false,
             saving: false,
             force_save: false,
+            lsp_saved: false,
             load_rx: None,
             save_rx: None,
+            restore: None,
+            top_line: None,
         }
     }
 
@@ -260,18 +293,13 @@ impl NativeDoc {
                 .is_some_and(|doc| doc.len_bytes() > LARGE_FILE_BYTES)
     }
 
-    /// Indentation the buffer formats with: detected from its text once
-    /// per load, else four spaces.
-    pub(super) fn format_options(&mut self) -> native_lsp::FormatOptions {
-        if self.indent.is_none()
-            && let Some(doc) = self.doc.as_ref()
-        {
-            self.indent = Some(
-                native_lsp::FormatOptions::detect(doc)
-                    .unwrap_or_else(|| vimrc_options().format_options()),
-            );
-        }
-        self.indent.unwrap_or_default()
+    /// Indentation the buffer formats with: its indent style (chosen at
+    /// load from `.editorconfig`, the text, or the language).
+    pub(super) fn format_options(&self) -> native_lsp::FormatOptions {
+        self.doc
+            .as_ref()
+            .map(|doc| doc.indent_style().format_options())
+            .unwrap_or_default()
     }
 }
 

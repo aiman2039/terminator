@@ -52,6 +52,8 @@ pub struct RowCache {
     columns: Option<usize>,
     folds: u64,
     spacers: u64,
+    /// Tab width the rows were laid out with.
+    tab: usize,
     ready: bool,
     rows: Vec<VisualRow>,
     max_cells: usize,
@@ -88,22 +90,30 @@ impl RowCache {
         } = layout;
         let fold_generation = folds.map_or(0, crate::fold::Folds::generation);
         let spacer_key = crate::spacers::spacer_key(spacers);
+        let tab = doc.indent_style().tab_cells();
         if self.ready
             && self.revision == doc.revision()
             && self.columns == wrap_columns
             && self.folds == fold_generation
             && self.spacers == spacer_key
+            && self.tab == tab
         {
             return;
         }
         self.folds = fold_generation;
         self.spacers = spacer_key;
+        self.tab = tab;
         self.rows = crate::spacers::insert_spacers(
             visual_rows_folded(doc, wrap_columns, folds),
             spacers,
             folds,
         );
-        self.max_cells = self.rows.iter().map(row_cells).max().unwrap_or(0);
+        self.max_cells = self
+            .rows
+            .iter()
+            .map(|row| row_cells(row, tab))
+            .max()
+            .unwrap_or(0);
         self.revision = doc.revision();
         self.columns = wrap_columns;
         self.ready = true;
@@ -123,9 +133,9 @@ impl RowCache {
 }
 
 /// Display cells one row occupies, its wrap offset included.
-fn row_cells(row: &VisualRow) -> usize {
+fn row_cells(row: &VisualRow, tab: usize) -> usize {
     row.start
-        .saturating_add(display_x(&row.text, row.text.chars().count()))
+        .saturating_add(display_x(&row.text, row.text.chars().count(), tab))
 }
 
 /// Lay out buffer rows: one row per line, or the wrapped pieces of a line
@@ -143,6 +153,7 @@ pub fn visual_rows_folded<B: Buffer>(
     folds: Option<&crate::fold::Folds>,
 ) -> Vec<VisualRow> {
     let mut rows = Vec::new();
+    let tab = doc.indent_style().tab_cells();
     for line in 0..doc.line_count() {
         if folds.is_some_and(|folds| folds.hidden(line)) {
             continue;
@@ -180,7 +191,7 @@ pub fn visual_rows_folded<B: Buffer>(
                 let Some(ch) = chars.get(end).copied() else {
                     break;
                 };
-                let next = advance_cell(cells, ch);
+                let next = advance_cell(cells, ch, tab);
                 if end > start && next > limit {
                     break;
                 }
@@ -239,9 +250,6 @@ fn mark_folded(input: MarkFoldedInput<'_>) {
     }
 }
 
-/// Tab stop width in display cells.
-pub const TAB_WIDTH: usize = 4;
-
 /// Display cells of one char outside a tab: East Asian wide chars take two
 /// columns, everything else takes one. Control chars fall back to one
 /// cell. Tabs are position-dependent; see [`advance_cell`].
@@ -253,33 +261,37 @@ pub fn char_display_width(c: char) -> usize {
 }
 
 /// Display cell after placing `c` at cell `at`: a tab advances to the
-/// next [`TAB_WIDTH`] stop, every other char by its own width.
+/// next stop of a `tab`-cell grid (the document's tab width), every
+/// other char by its own width.
 #[must_use]
-pub fn advance_cell(at: usize, c: char) -> usize {
+pub fn advance_cell(at: usize, c: char, tab: usize) -> usize {
     if c == '\t' {
-        at.saturating_add(TAB_WIDTH.saturating_sub(at % TAB_WIDTH))
+        let tab = tab.max(1);
+        at.saturating_add(tab.saturating_sub(at.checked_rem(tab).unwrap_or(0)))
     } else {
         at.saturating_add(char_display_width(c))
     }
 }
 
-/// Display-column x (in cells) of char column `col`.
+/// Display-column x (in cells) of char column `col`, tabs `tab` wide.
 #[must_use]
-pub fn display_x(text: &str, col: usize) -> usize {
-    text.chars().take(col).fold(0usize, advance_cell)
+pub fn display_x(text: &str, col: usize, tab: usize) -> usize {
+    text.chars()
+        .take(col)
+        .fold(0usize, |at, c| advance_cell(at, c, tab))
 }
 
 /// `text` as painted when it starts at display cell `at`: tabs become the
 /// spaces that reach their stop, so glyph advances match [`display_x`].
 #[must_use]
-pub fn expand_tabs(text: &str, at: usize) -> std::borrow::Cow<'_, str> {
+pub fn expand_tabs(text: &str, at: usize, tab: usize) -> std::borrow::Cow<'_, str> {
     if !text.contains('\t') {
         return std::borrow::Cow::Borrowed(text);
     }
-    let mut out = String::with_capacity(text.len().saturating_add(TAB_WIDTH));
+    let mut out = String::with_capacity(text.len().saturating_add(tab));
     let mut cell = at;
     for c in text.chars() {
-        let next = advance_cell(cell, c);
+        let next = advance_cell(cell, c, tab);
         if c == '\t' {
             out.extend(std::iter::repeat_n(' ', next.saturating_sub(cell)));
         } else {
@@ -291,13 +303,13 @@ pub fn expand_tabs(text: &str, at: usize) -> std::borrow::Cow<'_, str> {
 }
 
 /// Char column at display cell `x` (floor: a click on the second cell of
-/// a wide char or inside a tab lands on that char).
+/// a wide char or inside a tab lands on that char), tabs `tab` wide.
 #[must_use]
-pub fn col_at_display_x(text: &str, x: usize) -> usize {
+pub fn col_at_display_x(text: &str, x: usize, tab: usize) -> usize {
     let mut acc = 0usize;
     let mut col = 0usize;
     for c in text.chars() {
-        let next = advance_cell(acc, c);
+        let next = advance_cell(acc, c, tab);
         if next > x {
             break;
         }
@@ -342,6 +354,8 @@ pub fn row_hints<'a>(hints: &'a [crate::inlay::InlayHint], row: &VisualRow) -> V
 pub struct RowCells<'a> {
     pub text: &'a str,
     pub hints: &'a [RowHint<'a>],
+    /// Tab width in cells (the document's indent style).
+    pub tab: usize,
 }
 
 impl RowCells<'_> {
@@ -356,14 +370,14 @@ impl RowCells<'_> {
     /// Cell where the char at `col` is painted (after any hint before it).
     #[must_use]
     pub fn char_x(&self, col: usize) -> usize {
-        display_x(self.text, col).saturating_add(self.shift(col, true))
+        display_x(self.text, col, self.tab).saturating_add(self.shift(col, true))
     }
 
     /// Cell of a caret before `col`, which is also where a span ending at
     /// `col` ends: a hint before the char stays right of the caret.
     #[must_use]
     pub fn caret_x(&self, col: usize) -> usize {
-        display_x(self.text, col).saturating_add(self.shift(col, false))
+        display_x(self.text, col, self.tab).saturating_add(self.shift(col, false))
     }
 
     /// Char column at display cell `x`; a click on a hint lands before the
@@ -379,7 +393,7 @@ impl RowCells<'_> {
                     return col;
                 }
             }
-            let next = advance_cell(base, c);
+            let next = advance_cell(base, c, self.tab);
             if next.saturating_add(shift) > x {
                 return col;
             }
@@ -391,100 +405,5 @@ impl RowCells<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::doc::Doc;
-
-    #[test]
-    fn hints_shift_the_chars_after_them_but_not_the_caret_before() {
-        let hints = [RowHint {
-            col: 1,
-            cells: 5,
-            label: ": i32",
-        }];
-        let row = RowCells {
-            text: "x = 1",
-            hints: &hints,
-        };
-        assert_eq!(row.caret_x(1), 1);
-        assert_eq!(row.char_x(1), 6);
-        assert_eq!(row.char_x(0), 0);
-        assert_eq!(row.caret_x(2), 7);
-        // Clicks on the hint land before the char it annotates.
-        assert_eq!(row.col_at(3), 1);
-        assert_eq!(row.col_at(6), 1);
-        assert_eq!(row.col_at(7), 2);
-        assert_eq!(row.col_at(0), 0);
-        assert_eq!(row.col_at(99), 5);
-        // Tab stops ignore hint cells.
-        let tabbed = RowCells {
-            text: "a\tb",
-            hints: &[RowHint {
-                col: 1,
-                cells: 2,
-                label: "  ",
-            }],
-        };
-        assert_eq!(tabbed.char_x(2), TAB_WIDTH + 2);
-    }
-
-    #[test]
-    fn tabs_advance_to_the_next_tab_stop() {
-        assert_eq!(display_x("\tfoo", 1), TAB_WIDTH);
-        assert_eq!(display_x("ab\tc", 3), TAB_WIDTH);
-        assert_eq!(display_x("abcd\tx", 5), TAB_WIDTH * 2);
-        assert_eq!(col_at_display_x("\tfoo", 2), 0);
-        assert_eq!(col_at_display_x("\tfoo", TAB_WIDTH), 1);
-        assert_eq!(expand_tabs("a\tb", 0), "a   b");
-        assert_eq!(expand_tabs("\tb", 2), "  b");
-    }
-
-    #[test]
-    fn row_cache_reuses_rows_until_the_buffer_or_width_changes() {
-        let mut doc = Doc::new("alpha\nbeta\n");
-        let mut cache = RowCache::default();
-        cache.ensure(&doc, None, None);
-        let first = cache.rows().to_vec();
-        assert_eq!(first.len(), doc.line_count());
-        assert_eq!(cache.max_cells(), "alpha".chars().count());
-
-        // Same revision and width: the rows are reused, not rebuilt.
-        cache.ensure(&doc, None, None);
-        assert_eq!(cache.rows(), first.as_slice());
-
-        doc.insert(doc.char_at_line_col(1, 4), "!");
-        cache.ensure(&doc, None, None);
-        assert_ne!(cache.rows(), first.as_slice());
-        assert_eq!(cache.max_cells(), "beta!".chars().count());
-
-        // A narrower wrap width re-lays the rows out.
-        cache.ensure(&doc, Some(2), None);
-        assert!(cache.rows().len() > doc.line_count());
-    }
-
-    #[test]
-    fn wrapped_rows_preserve_source_and_cursor_columns() {
-        let doc = Doc::new("# Heading\n- Long words remain in one logical line\n");
-        let rows = visual_rows(&doc, Some(10));
-        for line in 0..doc.line_count() {
-            let joined: String = rows
-                .iter()
-                .filter(|row| row.line == line)
-                .map(|row| row.text.as_str())
-                .collect();
-            assert_eq!(joined, doc.line_text(line));
-        }
-        assert!(rows.iter().filter(|row| row.line == 1).count() > 1);
-        for col in 0..=doc.line_text(1).chars().count() {
-            assert_eq!(
-                rows.iter().filter(|row| row.owns_cursor(1, col)).count(),
-                1,
-                "cursor column {col} must have one visual row"
-            );
-        }
-        assert!(
-            rows.iter()
-                .all(|row| display_x(&row.text, row.text.chars().count()) <= 10)
-        );
-    }
-}
+#[path = "rows_tests.rs"]
+mod tests;

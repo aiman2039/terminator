@@ -121,7 +121,7 @@ impl App {
     fn finish_rename_apply(&mut self, paths: &[PathBuf]) -> RenameStage {
         let mut retained_dirty = false;
         for path in paths {
-            retained_dirty |= self.reload_renamed_doc(path);
+            retained_dirty |= self.reload_renamed_doc(path, "Rename");
         }
         self.lsp.invalidate_paths(paths);
         self.info = Some(if retained_dirty {
@@ -132,17 +132,26 @@ impl App {
         RenameStage::Input
     }
 
-    /// Returns true when the open buffer had edits and was kept.
-    fn reload_renamed_doc(&mut self, path: &Path) -> bool {
+    /// Reload the open buffer of a file `change` ("Rename") rewrote.
+    /// Returns true when the buffer had edits and was kept.
+    pub(in crate::native_editor) fn reload_renamed_doc(
+        &mut self,
+        path: &Path,
+        change: &str,
+    ) -> bool {
         let Some(doc) = self.native_docs.get_mut(path) else {
             return false;
         };
         if doc.dirty() {
-            doc.save_error = Some("Rename changed the file on disk while this buffer had edits. Review it before saving.".into());
+            doc.save_error = Some(format!(
+                "{change} changed the file on disk while this buffer had edits. Review it before saving."
+            ));
             return true;
         }
         // Applied as one undoable edit, keeping the undo history.
         doc.request_reload(false);
+        // The rename wrote the file: servers hear of it once reloaded.
+        doc.lsp_saved = true;
         false
     }
 

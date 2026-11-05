@@ -99,6 +99,7 @@ impl App {
         self.state_loaded = true;
         let ended_sessions = self.reconcile_projects(&state, initial);
         self.retire_ended_sessions(&state, ended_sessions);
+        shortcuts::fill_moved_defaults(&mut state.settings.keybindings);
         shortcuts::fill_defaults(&mut state.settings.keybindings);
         self.lsp.set_server_overrides(&state.settings.lsp_servers);
         self.lsp.set_spell_enabled(state.settings.spell_check);
@@ -112,8 +113,10 @@ impl App {
             .get_mut()
             .retain(|id, _| state.projects.iter().any(|p| &p.id == id));
         self.state = state;
+        self.prune_terminal_folders();
         self.reconcile_presentations();
         self.migrate_attention();
+        self.migrate_keymap();
         if initial && self.preferences.ide_mode {
             // First state load under IDE layout (the default for fresh
             // preferences): main-dock shells belong in the terminal strip.

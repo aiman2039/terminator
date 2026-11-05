@@ -208,13 +208,13 @@ impl RowPass<'_> {
             (columns.theirs, theirs_changed),
         ] {
             if tinted {
-                painter.rect_filled(rect, 0.0, fill);
+                painter.rect_filled(rect, egui::CornerRadius::ZERO, fill);
             }
         }
         if *self.current == Some(index) {
             painter.rect_stroke(
                 columns.result,
-                0.0,
+                egui::CornerRadius::ZERO,
                 egui::Stroke::new(1.0, self.colors.current),
                 egui::StrokeKind::Inside,
             );

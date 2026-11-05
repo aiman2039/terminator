@@ -18,7 +18,8 @@ pub struct SourceOptions {
     /// from the egui visuals.
     pub palette: Option<EditorPalette>,
     /// Extra status-bar cells after `Ln, Col` (line ending, encoding,
-    /// indent), right-aligned like the `JetBrains` status bar.
+    /// indent), right-aligned like the `JetBrains` status bar. Their
+    /// painted rects come back in [`SourceOutcome::status_rects`].
     pub status_items: std::sync::Arc<Vec<String>>,
     pub show_line_numbers: bool,
     pub show_status: bool,
@@ -42,8 +43,9 @@ pub struct SourceOptions {
     /// Gutter annotations by buffer line (blame), or `None` for no
     /// column. Lines past the end get a blank cell.
     pub annotations: Option<std::sync::Arc<Vec<Annotation>>>,
-    /// Offer "Annotate with Git Blame" in the context menu: `Some(on)`
-    /// when the file is under Git, `on` when annotations are showing.
+    /// Offer the Git items in the context menu ("Annotate with Git Blame",
+    /// "Compare with…", "Compare with Revision…"): `Some(on)` when the
+    /// file is under Git, `on` when annotations are showing.
     pub blame: Option<bool>,
     /// The file as "Copy reference" names it (project-relative path):
     /// copies `reference:line` (`IntelliJ` Copy Reference).
@@ -72,6 +74,10 @@ pub struct SourceOptions {
     /// Set the vertical scroll offset in points (a pane scrolled in step
     /// with another one); wins over `scroll_fraction`.
     pub scroll_offset: Option<f32>,
+    /// Scroll so this buffer line is the first row (a reopened file's
+    /// remembered position); wins over `scroll_offset`. Hosts set it for
+    /// one frame.
+    pub top_line: Option<usize>,
     /// Host filler rows `(line, rows)` before buffer lines, sorted by line
     /// (see [`crate::spacers`]); lines past the end fill after the last.
     pub spacers: std::sync::Arc<Vec<(usize, usize)>>,
@@ -99,6 +105,13 @@ pub struct SourceOptions {
     /// Reads the system clipboard for vim `p`/`P`; `None` pastes only
     /// the editor's own register.
     pub read_clipboard: Option<fn() -> Option<String>>,
+    /// The host shows a popup (docs and problems) for the text under a
+    /// resting pointer: the view reports it in [`SourceOutcome::hover`]
+    /// and shows no problem tooltip of its own.
+    pub hover_popup: bool,
+    /// Text selected in a host popup owns Copy: the view leaves Copy
+    /// events for it.
+    pub yield_copy: bool,
 }
 
 impl Default for SourceOptions {
@@ -120,6 +133,7 @@ impl Default for SourceOptions {
             soft_wrap: false,
             scroll_fraction: None,
             scroll_offset: None,
+            top_line: None,
             spacers: std::sync::Arc::new(Vec::new()),
             spacer_fill: None,
             line_fills: std::sync::Arc::new(Vec::new()),
@@ -131,6 +145,8 @@ impl Default for SourceOptions {
             error_lens: false,
             jetbrains_keys: false,
             read_clipboard: None,
+            hover_popup: false,
+            yield_copy: false,
             diagnostics: Vec::new(),
             squiggles: std::sync::Arc::new(Vec::new()),
             find_matches: std::sync::Arc::new(Vec::new()),
@@ -164,6 +180,9 @@ pub struct SourceOutcome {
     pub hover_action_rect: Option<egui::Rect>,
     /// Command/search row, fixed to the pane bottom when enabled.
     pub footer_rect: Option<egui::Rect>,
+    /// Painted rect of each host status cell (`SourceOptions::status_items`,
+    /// in order; empty without a footer), so hosts can attach menus.
+    pub status_rects: Vec<egui::Rect>,
     /// Current vertical position in the scrollable document, from 0 to 1.
     pub scroll_fraction: f32,
     /// Number of painted rows after optional source wrapping.
@@ -178,11 +197,25 @@ pub struct SourceOutcome {
     pub annotation_clicked: Option<usize>,
     /// The context menu asked to show or hide blame annotations.
     pub toggle_blame: bool,
+    /// The context menu asked to compare the file with another revision.
+    pub git_compare: Option<GitCompare>,
     /// The source scroll area this frame: id, offset, viewport and
     /// content size, for hosts that keep another pane in step.
     pub scroll: egui::scroll_area::ScrollAreaOutput<()>,
     /// Painted row pitch, filler rows included.
     pub row_height: f32,
+    /// The text under the pointer while no button is down, when
+    /// [`SourceOptions::hover_popup`] asks for it.
+    pub hover: Option<super::HoverSpot>,
+}
+
+/// A Git comparison picked in the context menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitCompare {
+    /// "Compare with…": a branch, a tag, or a typed revision.
+    Refs,
+    /// "Compare with Revision…": a commit from the file's history.
+    History,
 }
 
 pub struct ShowSourceInput<'a, B> {

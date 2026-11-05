@@ -136,7 +136,7 @@ mod tests {
     fn layout_text_is_the_buffer_even_with_stale_spans() {
         let text = "fn a() {}\r\nlet b = 1;\n\nend";
         let spans = crate::diff::highlight_spans(Path::new("x.rs"), "fn a() {}\nchanged\n");
-        let font = egui::FontId::monospace(12.0);
+        let font = egui::FontId::monospace(crate::appearance::FONT_SMALL);
         for spans in [&spans[..], &[]] {
             let job = job(text, spans, font.clone(), Color32::WHITE);
             assert_eq!(job.text, text);

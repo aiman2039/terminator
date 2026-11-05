@@ -84,7 +84,7 @@ fn editor_settings_draft(h: &Harness, o: &Options) -> Result<()> {
         h,
         opts: o,
         name: "editor-settings",
-        actions: json!([{"at_ms":900,"target":"tool-Git"},{"at_ms":1200,"target":"header-overflow"},{"at_ms":1400,"target":"settings"},{"at_ms":2000,"target":"settings-section:Terminal & Editor"},{"at_ms":2300,"target":"external-program"},{"at_ms":2600,"target":"external-program","text":"/draft/editor with spaces"}]),
+        actions: json!([{"at_ms":900,"target":"tool-Git"},{"at_ms":1400,"target":"settings"},{"at_ms":2000,"target":"settings-section:Terminal & Editor"},{"at_ms":2300,"target":"external-program"},{"at_ms":2600,"target":"external-program","text":"/draft/editor with spaces"}]),
         after: 4300,
     })?;
     ensure!(

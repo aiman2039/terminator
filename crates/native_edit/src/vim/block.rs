@@ -17,19 +17,20 @@ fn cell_row_ranges<B: Buffer>(
     eol: bool,
 ) -> Vec<(usize, usize, usize)> {
     let last = doc.line_count().saturating_sub(1);
+    let tab = doc.indent_style().tab_cells();
     let mut out = Vec::new();
     for line in *lines.start()..=(*lines.end()).min(last) {
         let text = doc.line_text(line);
         let len = text.chars().count();
-        if display_x(&text, len) <= left {
+        if display_x(&text, len, tab) <= left {
             out.push((line, len, len));
             continue;
         }
-        let from = col_at_display_x(&text, left);
+        let from = col_at_display_x(&text, left, tab);
         let to = if eol {
             len
         } else {
-            col_at_display_x(&text, right.saturating_sub(1))
+            col_at_display_x(&text, right.saturating_sub(1), tab)
                 .saturating_add(1)
                 .min(len)
         };
@@ -71,11 +72,12 @@ impl VimEngine {
         doc: &B,
     ) -> Option<Vec<(usize, usize, usize)>> {
         let (top, bottom, _, _) = self.block_span()?;
+        let tab = doc.indent_style().tab_cells();
         let cells = |c: Cursor| {
             let text = doc.line_text(c.line);
             (
-                display_x(&text, c.col),
-                display_x(&text, c.col.saturating_add(1)),
+                display_x(&text, c.col, tab),
+                display_x(&text, c.col.saturating_add(1), tab),
             )
         };
         let (a0, a1) = cells(self.anchor);

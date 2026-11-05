@@ -19,6 +19,10 @@ impl App {
             focus,
             egui::Sense::focusable_noninteractive(),
         );
+        // Find in Files from the keyboard then searches the selected folder.
+        if ui.memory(|memory| memory.has_focus(focus)) {
+            crate::native_editor::note_explorer_focus(ui.ctx(), focus);
+        }
         self.explorer_keys(ExplorerKeysInput {
             ui,
             rows: &rows,
@@ -29,14 +33,20 @@ impl App {
             rows: &rows,
             focus,
             focused_file: self.focused_local_file(),
-            open_shortcut: self.shortcut_label(Action::OpenFile),
-            split_shortcut: self.shortcut_label(Action::SplitRight),
         };
         let mut drop_dir: Option<PathBuf> = None;
         // An open rename / new-item prompt paints as a tree row: in place
         // of the renamed row, or inserted under its folder.
         let layout = TreeLayout::new(self.name_prompt_slot(&rows, path), rows.len());
-        let scroll_to = self.explorer_scroll_to.take();
+        // A target not listed while folders still load waits for a later
+        // paint instead of being dropped.
+        let loading = rows.iter().any(|row| row.entry.is_none());
+        let scroll_to = self.explorer_scroll_to.take_if(|target| {
+            !loading
+                || rows
+                    .iter()
+                    .any(|row| row.path == *target || row.chain.contains(target))
+        });
         let reveal = self
             .explorer_reveal
             .as_ref()
@@ -224,7 +234,7 @@ impl App {
         let clip = ui.clip_rect();
         let galley = ui.painter().layout_no_wrap(
             format!("Search: {text}"),
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(appearance::FONT_SMALL),
             ui.visuals().strong_text_color(),
         );
         let size = galley.size();
@@ -320,44 +330,10 @@ impl App {
                         drop_dir,
                     });
                 } else {
-                    self.explorer_directory_status(ui, &row.path);
+                    self.explorer_directory_status(ui, &row.path, row.depth == 0);
                 }
             });
         });
-    }
-
-    pub(super) fn explorer_directory_status(&mut self, ui: &mut egui::Ui, path: &Path) {
-        if let Some(error) = self.directory_errors.get(path).cloned() {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                format!(
-                    "Cannot refresh {} ({:?}): {}",
-                    error.path.display(),
-                    error.kind,
-                    error.message
-                ),
-            );
-            if self.dirs.contains_key(path) {
-                ui.weak("Showing the last successful listing.");
-            }
-            ui.horizontal(|ui| {
-                let retry = ui.button("Retry");
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "directory-retry", retry.rect);
-                if retry.clicked() {
-                    self.refresh_request = None;
-                }
-                if ui.button("Choose folder again").clicked() {
-                    self.add_project = true;
-                }
-            });
-            if cfg!(target_os = "macos") {
-                ui.weak("Check System Settings → Privacy & Security → Files and Folders. Full Disk Access is optional troubleshooting; this error may have another cause. Shells and editors can have separate access.");
-            }
-        }
-        if !self.dirs.contains_key(path) && !self.directory_errors.contains_key(path) {
-            ui.weak("Loading…");
-        }
     }
 }
 

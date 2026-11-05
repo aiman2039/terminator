@@ -3,8 +3,12 @@ use super::super::*;
 use crate::app::OpenFileModeInput;
 
 mod browser;
+mod commit_graph;
+#[cfg(test)]
+mod commit_graph_tests;
 mod commit_log;
 mod local_history;
+mod log_filters;
 mod revisions;
 
 impl App {

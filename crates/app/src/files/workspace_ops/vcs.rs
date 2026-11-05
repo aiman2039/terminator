@@ -1,9 +1,14 @@
-//! Git actions run from the sidebar: stage, commit, shelve, branches, compare.
+//! Git actions run from the sidebar: stage, shelve, branches, compare.
+//! Commit and push are long jobs; see `commit.rs`.
 use super::*;
+
+/// Cap for quick Git calls (staging, shelves, branches, log): a hung call
+/// fails fast. Commit and push have their own long cap.
+pub(super) const QUICK_GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub(super) fn git_options() -> CommandOptions {
     CommandOptions {
-        timeout: std::time::Duration::from_secs(20),
+        timeout: QUICK_GIT_TIMEOUT,
         ..Default::default()
     }
 }
@@ -58,56 +63,6 @@ pub(super) fn stage_paths(root: &Path, paths: &[PathBuf]) -> Result<Report> {
     let count = paths.len();
     let plural = if count == 1 { "" } else { "s" };
     Ok(Report::Message(format!("Staged {count} file{plural}")))
-}
-
-/// Error prefix for a push that failed after its commit succeeded; the draft
-/// must not be restored then, or committing again would duplicate the commit.
-pub(crate) const PUSH_FAILED: &str = "Committed, but push failed";
-
-pub(super) struct CommitInput<'a> {
-    pub(super) root: &'a Path,
-    pub(super) message: &'a str,
-    pub(super) amend: bool,
-    pub(super) signoff: bool,
-    pub(super) push: bool,
-}
-
-pub(super) fn commit(input: CommitInput<'_>) -> Result<Report> {
-    let CommitInput {
-        root,
-        message,
-        amend,
-        signoff,
-        push,
-    } = input;
-
-    let message = message.trim();
-    ensure!(amend || !message.is_empty(), "Commit message is empty");
-    ensure!(
-        !message.contains('\0'),
-        "Commit message contains a null byte"
-    );
-    // Amending with no message keeps the previous message untouched.
-    let mut args: Vec<&str> = vec!["commit"];
-    if amend {
-        args.push("--amend");
-    }
-    if signoff {
-        args.push("--signoff");
-    }
-    let mut options = git_options();
-    if amend && message.is_empty() {
-        args.push("--no-edit");
-    } else {
-        args.extend(["-F", "-"]);
-        options.input = Some(message.as_bytes().to_vec());
-    }
-    run_command(git::command(root, &args), options)?;
-    if push {
-        git_text(root, &["push"]).context(PUSH_FAILED)?;
-        return Ok(Report::Message("Committed and pushed".into()));
-    }
-    Ok(Report::Message("Committed".into()))
 }
 
 /// Only `stash@{N}` references may reach `git stash pop/drop`.

@@ -7,18 +7,23 @@
 //! inclusive cell semantics; [`VimEngine::set_modeless`] picks the model.
 mod lines;
 mod selection;
+mod snippet;
+#[cfg(test)]
+mod snippet_tests;
 #[cfg(test)]
 mod tests;
 mod text;
+mod tracked;
 mod typing;
+
+pub use snippet::SnippetMark;
+pub use tracked::CaretOffsets;
+pub(crate) use tracked::SnippetSession;
 
 use super::super::doc::Buffer;
 use super::mode::{Cursor, Mode};
 use super::state::VimEngine;
 use super::words::{line_len, word_class};
-
-/// Width of one indent level when a file does not indent with tabs.
-const INDENT_WIDTH: usize = 4;
 
 /// Caret motion for IDE navigation keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

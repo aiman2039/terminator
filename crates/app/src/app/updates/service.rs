@@ -32,6 +32,9 @@ impl App {
         if matches!(context.subsystem, "diff" | "files") {
             self.loading.remove(key);
         }
+        if context.subsystem == git_log::LOG_SUBSYSTEM {
+            self.log_job_ended(key, context.generation, None);
+        }
         if context.subsystem == "vnc"
             && let Some(sid) = context.resource.strip_prefix("frame:")
             && let Some(view) = self.vnc_views.get_mut(sid)
@@ -54,6 +57,16 @@ impl App {
         context: &async_service::OperationContext,
         error: &async_service::Failure,
     ) {
+        if context.subsystem == gui_services::COMMIT_SUBSYSTEM {
+            // The commit or push run ended without its reply.
+            self.handle_commit_reply(Err(error.to_string()));
+            return;
+        }
+        if context.subsystem == git_log::LOG_SUBSYSTEM {
+            let error = format!("Log query stopped: {error}");
+            self.log_job_ended(&context.resource, context.generation, Some(error));
+            return;
+        }
         let Some(update) = service_failure_update(context, error) else {
             return;
         };

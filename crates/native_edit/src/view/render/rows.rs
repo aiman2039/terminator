@@ -1,5 +1,5 @@
-//! Row painting: indent guides, selections, match highlights, text, fold
-//! placeholders, diagnostic underlines and carets.
+//! Row painting: selections, match highlights, text, fold placeholders,
+//! diagnostic underlines and carets (indent guides: [`super::guides`]).
 use super::SourceView;
 use super::canvas::{Canvas, PaintRow};
 use super::geometry::snap;
@@ -8,7 +8,7 @@ use super::palette::EditorPalette;
 use super::row_paint::RowPaint;
 use crate::doc::Buffer;
 use crate::highlight::Span;
-use crate::rows::{display_x, row_hints};
+use crate::rows::row_hints;
 use crate::vim::ModalEngine;
 use crate::vim::{Caret, Cursor, Mode};
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
@@ -47,6 +47,8 @@ pub(super) struct RowMarks {
     guide_color: Color32,
     /// A bar caret sits before a hint; a block covers the char after it.
     bar: bool,
+    /// Snippet stops to outline.
+    pub(super) snippet: Vec<crate::vim::SnippetMark>,
 }
 
 impl<B: Buffer> SourceView<'_, B> {
@@ -101,6 +103,7 @@ impl<B: Buffer> SourceView<'_, B> {
                 .color
                 .gamma_multiply(0.6),
             bar: engine.mode() == Mode::Insert || !self.options.vim,
+            snippet: engine.snippet_marks(&*self.doc),
         }
     }
 
@@ -111,7 +114,7 @@ impl<B: Buffer> SourceView<'_, B> {
         for (visual_line, visual) in canvas.visible_rows() {
             let hints = row_hints(canvas.inlay_hints, visual);
             let y = canvas.origin.y + visual_line as f32 * row_height;
-            let row = PaintRow::new(visual, &hints, y);
+            let row = PaintRow::new(visual, &hints, y, self.geometry.tab);
             if y + row_height < canvas.clip.top() || y > canvas.clip.bottom() {
                 continue;
             }
@@ -138,6 +141,7 @@ impl<B: Buffer> SourceView<'_, B> {
             self.paint_fills(canvas, &row);
             guide_cells = canvas.paint_indent_guides(&row, guide_cells, marks.guide_color);
             self.paint_selections(canvas, &row, marks);
+            self.paint_snippet_marks(canvas, &row, &marks.snippet);
             self.paint_match_marks(canvas, &row, marks);
             self.paint_row_text(canvas, &row, marks);
             self.paint_fold_placeholder(canvas, &row);
@@ -310,7 +314,8 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     /// Diagnostic underlines on this row (first lines, then continuation
-    /// lines of multi-line ranges), with their message on hover.
+    /// lines of multi-line ranges), with their message on hover unless
+    /// the host shows it in its own popup.
     fn paint_row_squiggles(&self, canvas: &Canvas<'_>, row: &PaintRow<'_>) {
         let tails = self.options.squiggle_tails.as_slice();
         for list in [
@@ -348,6 +353,9 @@ impl<B: Buffer> SourceView<'_, B> {
             let rect = row.cell_rect(canvas, start, end.saturating_sub(start));
             let color = RenderHelpers::severity_color(canvas.ui.visuals(), squiggle.severity);
             RenderHelpers::paint_squiggle(&canvas.painter, rect, color);
+            if self.options.hover_popup {
+                continue;
+            }
             canvas
                 .ui
                 .interact(
@@ -439,38 +447,6 @@ impl<B: Buffer> SourceView<'_, B> {
                 visuals.window_fill,
             );
         }
-    }
-}
-
-impl Canvas<'_> {
-    /// One guide per indent level the line sits inside; returns the
-    /// guide width the next row inherits.
-    fn paint_indent_guides(&self, row: &PaintRow<'_>, guide_cells: usize, color: Color32) -> usize {
-        if row.visual.start != 0 {
-            return guide_cells;
-        }
-        let text = &row.visual.text;
-        let lead: String = text
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect();
-        let guide_cells = if lead.chars().count() < text.chars().count() {
-            display_x(&lead, lead.chars().count())
-        } else {
-            guide_cells
-        };
-        let y = row.y;
-        let ppp = self.geometry.ppp;
-        for cell in (0..guide_cells).step_by(crate::rows::TAB_WIDTH) {
-            // Centered on a physical pixel so the 1px guide stays sharp.
-            let x = snap(self.text_x(cell) + 1.0, ppp) + 0.5 / ppp;
-            self.painter.vline(
-                x,
-                y..=y + self.geometry.row_height,
-                egui::Stroke::new(1.0 / ppp, color),
-            );
-        }
-        guide_cells
     }
 }
 

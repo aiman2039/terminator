@@ -44,7 +44,11 @@ impl<B: Buffer> SourceView<'_, B> {
                 }
                 CaretChord::RemoveLast => self.engine.remove_last_occurrence(),
                 CaretChord::AddAll => self.engine.add_all_occurrences(self.doc),
-                CaretChord::Collapse => self.engine.clear_extra_carets(),
+                CaretChord::Collapse => {
+                    // Escape: the copies of a snippet stop lose their carets.
+                    self.engine.end_snippet();
+                    self.engine.clear_extra_carets();
+                }
             }
             canvas.ui.input_mut(|input| {
                 input.consume_key(modifiers, key);
@@ -90,7 +94,6 @@ impl<B: Buffer> SourceView<'_, B> {
         if !focused || self.options.read_only {
             return;
         }
-        self.report_viewport(canvas);
         let mut batch = self.read_shortcuts(canvas);
         self.route_ctrl_h(&mut batch);
         let ShortcutBatch {
@@ -116,6 +119,7 @@ impl<B: Buffer> SourceView<'_, B> {
     fn read_shortcuts(&self, canvas: &Canvas<'_>) -> ShortcutBatch {
         let mut batch = ShortcutBatch::default();
         let mut clipboard = Vec::new();
+        let yield_copy = self.options.yield_copy;
         canvas.ui.input(|input| {
             for event in &input.events {
                 match event {
@@ -128,12 +132,17 @@ impl<B: Buffer> SourceView<'_, B> {
                     egui::Event::Paste(text) => batch.pastes.push(text.clone()),
                     // egui-winit turns Cmd/Ctrl+C and +X into these events
                     // without a key event.
-                    egui::Event::Copy => clipboard.push(IdeAction::Copy),
+                    egui::Event::Copy if !yield_copy => clipboard.push(IdeAction::Copy),
                     egui::Event::Cut => clipboard.push(IdeAction::Cut),
                     _ => {}
                 }
             }
         });
+        if yield_copy {
+            batch
+                .actions
+                .retain(|(_, _, action)| *action != IdeAction::Copy);
+        }
         for action in clipboard {
             if !batch.actions.iter().any(|(_, _, queued)| *queued == action) {
                 let key = if action == IdeAction::Copy {
@@ -144,10 +153,13 @@ impl<B: Buffer> SourceView<'_, B> {
                 batch.actions.push((key, egui::Modifiers::COMMAND, action));
             }
         }
+        // A popup that holds Copy reads the event at the end of the frame.
         canvas.ui.input_mut(|input| {
-            input
-                .events
-                .retain(|event| !matches!(event, egui::Event::Copy | egui::Event::Cut));
+            input.events.retain(|event| match event {
+                egui::Event::Copy => yield_copy,
+                egui::Event::Cut => false,
+                _ => true,
+            });
         });
         batch
     }
@@ -201,7 +213,7 @@ impl<B: Buffer> SourceView<'_, B> {
         }
     }
 
-    fn run_ide_action(&mut self, canvas: &Canvas<'_>, action: IdeAction) {
+    pub(super) fn run_ide_action(&mut self, canvas: &Canvas<'_>, action: IdeAction) {
         match action {
             IdeAction::Copy => {
                 let text = self.caret_copy_text();
@@ -307,7 +319,7 @@ impl<B: Buffer> SourceView<'_, B> {
                         mac: cfg!(target_os = "macos"),
                         page_rows,
                     })
-                    && (!self.options.vim || ide_edit_in_vim(edit, *modifiers))
+                    && (!self.options.vim || ide_edit_in_vim(edit, *modifiers, self.engine.mode()))
                     && self.vim_ctrl(*key, *modifiers).is_none()
                 {
                     edits.push((*key, *modifiers, edit));
@@ -318,7 +330,7 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     /// Every caret runs the edit (one undo step for all).
-    fn apply_ide_edit(&mut self, edit: IdeEdit) {
+    pub(super) fn apply_ide_edit(&mut self, edit: IdeEdit) {
         let language = self.language;
         let vertical_move = &mut self.out.vertical_move;
         self.engine.for_each_caret(self.doc, |engine, doc| {
@@ -354,6 +366,7 @@ impl<B: Buffer> SourceView<'_, B> {
                 }
             }
             IdeEdit::JoinLines => engine.ide_join_lines(doc),
+            IdeEdit::StartNewLine { above } => engine.ide_start_new_line(doc, above),
             IdeEdit::Fold { .. } | IdeEdit::Unfold { .. } => {}
             IdeEdit::Move(
                 motion @ (IdeMotion::Up
@@ -372,21 +385,23 @@ impl<B: Buffer> SourceView<'_, B> {
         None
     }
 
-    /// Tell the engine which lines are on screen (`H`/`M`/`L`, Ctrl-D…).
-    fn report_viewport(&mut self, canvas: &Canvas<'_>) {
+    /// Tell the engine which lines are on screen (`H`/`M`/`L`, Ctrl-D…),
+    /// and the line at the top edge (where a reopened file scrolls back
+    /// to; rounded, so a half-pixel shift never moves it a row).
+    pub(super) fn report_viewport(&mut self, canvas: &Canvas<'_>) {
         let height = self.geometry.row_height.max(1.0);
+        let scrolled = (canvas.clip.top() - canvas.origin.y) / height;
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "Row indices from UI coordinates."
         )]
-        let (first, last) = (
-            ((canvas.clip.top() - canvas.origin.y) / height)
-                .ceil()
-                .max(0.0) as usize,
+        let (first, last, edge) = (
+            scrolled.ceil().max(0.0) as usize,
             ((canvas.clip.bottom() - canvas.origin.y) / height)
                 .floor()
                 .max(1.0) as usize,
+            scrolled.round().max(0.0) as usize,
         );
         let line = |row: usize| {
             canvas
@@ -396,6 +411,7 @@ impl<B: Buffer> SourceView<'_, B> {
         };
         let (top, bottom) = (line(first), line(last.saturating_sub(1).max(first)));
         self.engine.set_viewport(top, bottom.max(top));
+        self.engine.set_scroll_line(line(edge));
     }
 
     /// Apply a scroll the keys asked for (`zz`, `zt`, `zb`, Ctrl-D/U/E/Y).

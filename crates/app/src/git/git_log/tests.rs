@@ -71,7 +71,7 @@ fn parse_log_keeps_multi_line_messages_parents_and_refs() {
     let hash = "1111111111111111111111111111111111111111";
     let parent = "2222222222222222222222222222222222222222";
     let text = format!(
-        "{hash}\n1111111\nJane\njane@example.invalid\n1700000000\n{parent}\nHEAD -> main, tag: v1\nsubject line\n\nbody line one\nbody line two\n>>>>>END<<<<<\n"
+        "{hash}\n1111111\nJane\njane@example.invalid\n1700000000\n{parent}\nHEAD -> refs/heads/main, tag: refs/tags/v1\nsubject line\n\nbody line one\nbody line two\n>>>>>END<<<<<\n"
     );
     let commits = parse_log(&text);
     assert_eq!(commits.len(), 1);
@@ -85,8 +85,116 @@ fn parse_log_keeps_multi_line_messages_parents_and_refs() {
         "subject line\n\nbody line one\nbody line two"
     );
     assert_eq!(commit.parents, vec![parent.to_string()]);
-    assert_eq!(commit.refs, vec!["HEAD -> main", "tag: v1"]);
+    let refs: Vec<(&str, RefLabelKind)> = commit
+        .refs
+        .iter()
+        .map(|label| (label.name.as_str(), label.kind))
+        .collect();
+    assert_eq!(
+        refs,
+        [
+            ("HEAD", RefLabelKind::Head),
+            ("main", RefLabelKind::LocalBranch),
+            ("v1", RefLabelKind::Tag)
+        ]
+    );
     assert_eq!(commit.timestamp, 1_700_000_000);
+    // The parent is outside the log: its lane runs off the bottom.
+    assert_eq!(commit.graph.down, [LaneLine { col: 0, color: 0 }]);
+}
+
+fn labels(decorations: &str) -> Vec<(String, RefLabelKind)> {
+    parse_ref_labels(decorations)
+        .into_iter()
+        .map(|label| (label.name, label.kind))
+        .collect()
+}
+
+#[test]
+fn ref_labels_list_head_then_local_remote_and_tag_refs() {
+    use RefLabelKind::{Head, LocalBranch, RemoteBranch, Tag};
+    let parsed = labels(
+        "tag: refs/tags/v1.0, HEAD -> refs/heads/main, refs/remotes/origin/main, \
+         refs/remotes/origin/HEAD, refs/heads/feature/login, tag: refs/tags/nightly",
+    );
+    let want = [
+        ("HEAD", Head),
+        ("main", LocalBranch),
+        // A slash in a local branch name does not make it remote.
+        ("feature/login", LocalBranch),
+        ("origin/main", RemoteBranch),
+        ("v1.0", Tag),
+        ("nightly", Tag),
+    ];
+    assert_eq!(
+        parsed,
+        want.map(|(name, kind)| (name.to_owned(), kind)).to_vec()
+    );
+}
+
+#[test]
+fn ref_labels_show_a_detached_head_and_skip_other_refs() {
+    use RefLabelKind::{Head, RemoteBranch};
+    assert_eq!(
+        labels("HEAD, grafted, refs/notes/commits, refs/remotes/upstream/dev"),
+        [
+            ("HEAD".to_owned(), Head),
+            ("upstream/dev".to_owned(), RemoteBranch)
+        ]
+    );
+    assert!(labels("").is_empty());
+}
+
+#[test]
+fn fetch_log_lays_out_merge_lanes_and_leaves_out_stash_entries() {
+    let dir = repo();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "a\n").unwrap();
+    git_cmd(root, &["add", "."]);
+    git_cmd(root, &["commit", "-qm", "base"]);
+    git_cmd(root, &["checkout", "-qb", "feature/x"]);
+    std::fs::write(root.join("b.txt"), "b\n").unwrap();
+    git_cmd(root, &["add", "."]);
+    git_cmd(root, &["commit", "-qm", "on feature"]);
+    git_cmd(root, &["checkout", "-q", "main"]);
+    std::fs::write(root.join("c.txt"), "c\n").unwrap();
+    git_cmd(root, &["add", "."]);
+    git_cmd(root, &["commit", "-qm", "on main"]);
+    git_cmd(root, &["tag", "v1"]);
+    git_cmd(
+        root,
+        &["merge", "-q", "--no-ff", "feature/x", "-m", "merge x"],
+    );
+    std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
+    git_cmd(root, &["stash", "-q"]);
+
+    let log = fetch_log(root).expect("log should load");
+    let subjects: Vec<&str> = log.commits.iter().map(|c| c.subject.as_str()).collect();
+    assert_eq!(
+        subjects.len(),
+        4,
+        "stash entries are not history: {subjects:?}"
+    );
+    // Children always come before their parents.
+    for (index, commit) in log.commits.iter().enumerate() {
+        for parent in &commit.parents {
+            let at = log.commits.iter().position(|c| &c.hash == parent);
+            assert!(at.is_none_or(|at| at > index), "{subjects:?}");
+        }
+    }
+    let row = |subject: &str| {
+        let commit = log.commits.iter().find(|c| c.subject == subject).unwrap();
+        let names: Vec<&str> = commit.refs.iter().map(|r| r.name.as_str()).collect();
+        (commit.graph.clone(), names)
+    };
+    let (merge, merge_refs) = row("merge x");
+    assert_eq!(merge.down.len(), 2, "{merge:?}");
+    assert_eq!(merge_refs, ["HEAD", "main"]);
+    assert_eq!(row("on feature").1, ["feature/x"]);
+    assert_eq!(row("on main").1, ["v1"]);
+    let (base, _) = row("base");
+    assert_eq!(base.up.len(), 2, "both lines join at the fork: {base:?}");
+    assert_eq!(log.lanes, 2);
 }
 
 #[test]
@@ -250,6 +358,31 @@ fn revision_diffs_before_a_rename_read_the_old_name() {
     assert_eq!(moved.left_text, moved.right_text);
     assert!(moved.left_label.ends_with("old.txt"));
     assert!(!moved.right_label.contains("old.txt"));
+}
+
+#[test]
+fn compare_with_a_branch_reads_the_name_the_file_had_there() {
+    let dir = repo();
+    let root = dir.path();
+    let text = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\n";
+    std::fs::write(root.join("old.txt"), text).unwrap();
+    git_cmd(root, &["add", "."]);
+    git_cmd(root, &["commit", "-qm", "add old"]);
+    git_cmd(root, &["branch", "base"]);
+    git_cmd(root, &["mv", "old.txt", "new.txt"]);
+    git_cmd(root, &["commit", "-qm", "rename"]);
+    std::fs::write(root.join("new.txt"), format!("{text}line 9\n")).unwrap();
+    let file = root.join("new.txt");
+    // Compare with… → `base`: no commit of the file's own log.
+    let diff = revision_document(RevisionDocumentInput {
+        cwd: root,
+        path: &file,
+        left: "base",
+        right: "",
+    })
+    .unwrap();
+    assert_eq!(diff.left_text, text, "not an empty, all-new left side");
+    assert!(diff.left_label.ends_with("old.txt"), "{}", diff.left_label);
 }
 
 #[test]

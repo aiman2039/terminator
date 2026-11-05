@@ -1,3 +1,5 @@
+mod commit;
+pub(crate) use commit::COMMIT_SUBSYSTEM;
 mod daemon;
 pub(crate) use daemon::CloseEditorsInput;
 pub(crate) use daemon::CloseIdleInput;
@@ -64,3 +66,5 @@ impl ImageJobs {
     }
 }
 pub(in crate::gui_services) use git::DiffExpandInput;
+#[cfg(test)]
+pub(in crate::gui_services) use git::JobGit;

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 /// Regions recompute on edits; `folded` holds the start lines the user
 /// folded and survives edits that keep those regions.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Folds {
     revision: Option<u64>,
     /// Foldable `(first, last)` line ranges, by first line.
@@ -109,6 +109,27 @@ impl Folds {
     #[must_use]
     pub fn is_folded(&self, line: usize) -> bool {
         self.folded.contains(&line)
+    }
+
+    /// First lines of the folded regions, top to bottom.
+    #[must_use]
+    pub fn folded_starts(&self) -> Vec<usize> {
+        self.folded.iter().copied().collect()
+    }
+
+    /// Fold the regions that start on `starts` (a remembered view). A
+    /// line that does not start a region now is ignored.
+    pub fn restore(&mut self, starts: &[usize]) {
+        let before = self.folded.len();
+        let ranges = &self.ranges;
+        self.folded.extend(starts.iter().copied().filter(|start| {
+            ranges
+                .binary_search_by_key(start, |(first, _)| *first)
+                .is_ok()
+        }));
+        if self.folded.len() != before {
+            self.bump();
+        }
     }
 
     /// Whether a folded region hides `line`.

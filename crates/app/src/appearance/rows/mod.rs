@@ -1,6 +1,7 @@
 mod list;
 mod markdown_header;
 
+use super::scale::{FONT_CAPTION, FONT_LARGE, FONT_SMALL, RADIUS_SMALL};
 use super::theme::icon_color;
 use eframe::egui::{self, Color32, FontId, TextStyle};
 pub(crate) use list::RowInput;
@@ -18,7 +19,7 @@ pub fn target_header(ui: &mut egui::Ui, label: &str, tooltip: &str) {
         ui,
         path: label,
         tooltip,
-        font: FontId::proportional(11.0),
+        font: FontId::proportional(FONT_CAPTION),
     });
     ui.separator();
 }
@@ -107,7 +108,7 @@ pub fn wrapping_path_row<R>(
             path_response = Some(wrapping_path(WrappingPathInput {
                 ui,
                 path,
-                font: FontId::proportional(12.0),
+                font: FontId::proportional(FONT_SMALL),
                 color,
             }));
             add_actions(ui)
@@ -197,8 +198,10 @@ pub fn folder_row(input: FolderRowInput<'_>) -> egui::Response {
         })
         .inner;
     if let Some(fill) = folder.fill {
-        ui.painter()
-            .set(background, egui::Shape::rect_filled(response.rect, 4, fill));
+        ui.painter().set(
+            background,
+            egui::Shape::rect_filled(response.rect, RADIUS_SMALL, fill),
+        );
     }
     response
 }
@@ -228,7 +231,7 @@ pub fn project_row(input: ProjectRowInput<'_>) -> egui::Response {
     ui.scope(|ui| {
         ui.style_mut()
             .text_styles
-            .insert(TextStyle::Body, FontId::proportional(14.0));
+            .insert(TextStyle::Body, FontId::proportional(FONT_LARGE));
         if color.is_some() {
             ui.visuals_mut().override_text_color = color;
         }

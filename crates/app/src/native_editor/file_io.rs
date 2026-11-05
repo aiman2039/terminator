@@ -5,6 +5,7 @@ use anyhow::Context as _;
 use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE};
 use std::path::Path;
 use std::time::SystemTime;
+use terminator_native_edit::indent::EndOfLine;
 
 pub(super) struct LoadedFile {
     pub(super) text: String,
@@ -167,6 +168,17 @@ impl LineEnding {
             (text.replace("\r\n", "\n"), ending)
         } else {
             (text, ending)
+        }
+    }
+
+    /// Breaks for `text` as loaded: a file with no break yet (a new or
+    /// one-line file) takes `.editorconfig`'s `end_of_line` when it asks
+    /// for CRLF. Files with breaks keep their own.
+    pub(super) fn or_configured(self, text: &str, configured: Option<EndOfLine>) -> Self {
+        if configured == Some(EndOfLine::Crlf) && !text.contains(['\n', '\r']) {
+            Self::Crlf
+        } else {
+            self
         }
     }
 

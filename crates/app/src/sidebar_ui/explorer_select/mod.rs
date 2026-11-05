@@ -328,6 +328,9 @@ impl App {
                 *path = next;
             }
         }
+        self.preferences
+            .editor_states
+            .remap(|path| moved(path, from, to));
         self.preferences.pinned_native_files =
             std::mem::take(&mut self.preferences.pinned_native_files)
                 .into_iter()
@@ -338,6 +341,8 @@ impl App {
                 *path = next;
             }
         }
+        // The pane maps cache tab paths: rebuild them on the next paint.
+        self.pane_index = None;
         let expanded: Vec<PathBuf> = self
             .expanded_dirs
             .iter()

@@ -265,7 +265,8 @@ fn tab_strip_sits_below_the_drag_band_and_beside_full_height_sidebars() {
 #[cfg(feature = "test-support")]
 fn narrow_header_puts_search_behind_the_overflow_menu() {
     let (mut app, ctx, _dir) = fixture();
-    app.preferences.width = UiPreferences::default().width;
+    // Six header squares and the overflow menu fit; all eight actions do not.
+    app.preferences.width = 280.0;
     paint_header(&mut app, &ctx, &[]);
     let rect = header_target(&ctx);
     assert!(rect("tool-Info").is_some());
@@ -332,6 +333,98 @@ fn wide_header_shows_search_without_an_overflow_menu() {
     let rect = header_target(&ctx);
     assert!(rect("palette").is_some());
     assert!(rect("header-overflow").is_none());
+}
+
+/// Every window-header control with a glyph, left to right.
+#[cfg(feature = "test-support")]
+const HEADER_SQUARES: [&str; 13] = [
+    "toggle-left-sidebar",
+    "player-chrome",
+    "left-agent-bar",
+    "toolbar-search",
+    "tool-Explorer",
+    "tool-Agents",
+    "tool-Git",
+    "tool-History",
+    "tool-Info",
+    "settings",
+    "palette",
+    "tool-ide-mode",
+    "toggle-right-sidebar",
+];
+
+/// Paint the window header like `paint_header`; returns the size of every
+/// painted icon in the frame.
+#[cfg(feature = "test-support")]
+fn header_icon_sizes(app: &mut App, ctx: &egui::Context) -> Vec<egui::Vec2> {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 480.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            let rect =
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(ui.available_width(), 40.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                app.window_header(ui);
+            });
+        },
+    );
+    output.textures_delta.clear();
+    painted_icon_rects(&output.shapes)
+        .iter()
+        .map(egui::Rect::size)
+        .collect()
+}
+
+/// Each named control is one header square on the header's center line, and
+/// every painted icon has the shared toolbar glyph size.
+#[cfg(feature = "test-support")]
+fn assert_one_header_size(ctx: &egui::Context, names: &[&str], icons: &[egui::Vec2]) {
+    let square = egui::Vec2::splat(appearance::HEADER_BUTTON);
+    let rect = header_target(ctx);
+    for name in names {
+        let found = rect(name).unwrap_or_else(|| panic!("{name} is not painted"));
+        assert_eq!(found.size(), square, "{name}");
+        assert!((found.center().y - 20.0).abs() < 0.5, "{name}: {found:?}");
+    }
+    assert!(icons.len() >= names.len(), "icons not painted: {icons:?}");
+    for size in icons {
+        assert_eq!(
+            *size,
+            egui::Vec2::splat(appearance::TOOLBAR_ICON),
+            "{icons:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "test-support")]
+fn window_header_buttons_share_one_square_and_icon_size() {
+    let (mut app, ctx, _dir) = fixture();
+    app.metadata = Some(terminator_core::metadata::Metadata {
+        cwd: PathBuf::from("/a"),
+        branch: Some("main".into()),
+        ..Default::default()
+    });
+    // The first frame loads the icon textures.
+    header_icon_sizes(&mut app, &ctx);
+    let icons = header_icon_sizes(&mut app, &ctx);
+    assert_one_header_size(&ctx, &HEADER_SQUARES, &icons);
+    // At the default sidebar width every header tool fits beside the toggle.
+    assert!(header_target(&ctx)("header-overflow").is_none());
+    let branch = header_target(&ctx)("toolbar-branch").expect("branch button");
+    assert_eq!(branch.height(), appearance::HEADER_BUTTON);
+    assert!((branch.center().y - 20.0).abs() < 0.5, "{branch:?}");
+    // Narrow sidebars fold controls into the two header menus, same size.
+    app.project_width = 120.0;
+    app.preferences.width = 220.0;
+    header_icon_sizes(&mut app, &ctx);
+    let icons = header_icon_sizes(&mut app, &ctx);
+    assert_one_header_size(&ctx, &["project-header-menu", "header-overflow"], &icons);
 }
 
 #[test]

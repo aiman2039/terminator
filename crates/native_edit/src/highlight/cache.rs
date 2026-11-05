@@ -299,6 +299,26 @@ impl HighlightCache {
         &mut self.folds
     }
 
+    /// Fold the regions that start on `starts` (a remembered view) before
+    /// the first frame: this revision's regions are found first, for
+    /// `language`. Starts that begin no region are ignored, and large
+    /// files get no folds, as in [`HighlightCache::ensure_rows_spaced`].
+    pub fn restore_folds<B: Buffer>(&mut self, doc: &B, language: Language, starts: &[usize]) {
+        let foldable = doc.len_chars() <= self.cap();
+        self.folds.ensure_enabled(doc, language, foldable);
+        self.folds.restore(starts);
+    }
+
+    /// A cache for a new view of the same buffer that starts with this
+    /// view's folds (a split, or the file opened again).
+    #[must_use]
+    pub fn fork_folds(&self) -> Self {
+        Self {
+            folds: self.folds.clone(),
+            ..Self::default()
+        }
+    }
+
     /// Rows laid out by the last [`HighlightCache::ensure_rows`].
     #[must_use]
     pub fn rows(&self) -> &[VisualRow] {

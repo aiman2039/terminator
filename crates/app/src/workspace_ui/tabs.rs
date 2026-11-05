@@ -38,16 +38,32 @@ pub(super) fn workspace_tab_width(text_width: f32) -> f32 {
     30.0 + text + 4.0 + 16.0 + 8.0
 }
 
-pub(super) fn tab_label_width(ui: &egui::Ui, label: &str) -> f32 {
-    let mut text = egui::text::LayoutJob::simple(
-        label.to_owned(),
-        egui::FontId::proportional(13.0),
-        egui::Color32::WHITE,
-        TAB_TEXT_MAX,
-    );
+pub(super) fn tab_label_width(ui: &egui::Ui, label: &str, hint: Option<&str>) -> f32 {
+    let text = tab_label_job(label, hint, [egui::Color32::WHITE; 2], TAB_TEXT_MAX);
+    ui.painter().layout_job(text).size().x
+}
+
+/// One-line strip label: the name, then the weak folder hint when another
+/// open tab shows the same file name. Ellipsizes past `width`.
+pub(super) fn tab_label_job(
+    label: &str,
+    hint: Option<&str>,
+    [name, weak]: [egui::Color32; 2],
+    width: f32,
+) -> egui::text::LayoutJob {
+    let mut text = match hint {
+        Some(hint) => super::file_tabs::hinted_title(label, hint, name, weak),
+        None => egui::text::LayoutJob::simple(
+            label.to_owned(),
+            egui::FontId::proportional(appearance::FONT_BODY),
+            name,
+            width,
+        ),
+    };
+    text.wrap.max_width = width;
     text.wrap.max_rows = 1;
     text.wrap.break_anywhere = true;
-    ui.painter().layout_job(text).size().x
+    text
 }
 
 /// Workspace tab hover tooltip: the label plus the session working
@@ -68,6 +84,8 @@ pub(crate) struct TabFace {
     pub(crate) sid: Option<String>,
     pub(crate) brand: Option<&'static str>,
     pub(crate) status: Option<(AgentState, &'static str, Color32)>,
+    /// Weak folder text after a file name that another strip tab shows.
+    pub(crate) hint: Option<String>,
 }
 
 /// Leading icons for one terminal tab, shared by the main-canvas caption,

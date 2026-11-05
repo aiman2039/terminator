@@ -3,6 +3,7 @@
 use super::{ANNOTATION_CELLS, SourceOptions};
 use crate::doc::Buffer;
 use crate::highlight::HighlightCache;
+use crate::rows::VisualRow;
 use crate::view::{BOLD_FAMILY, ITALIC_FAMILY, source_focus_id};
 use egui::FontId;
 
@@ -71,6 +72,10 @@ pub(super) struct Geometry {
     pub gutter: f32,
     /// Soft-wrap width in cells, `None` when long lines pan instead.
     pub wrap_columns: Option<usize>,
+    /// Tab stop width in cells, and the cells between indent guides: the
+    /// document's indent style.
+    pub tab: usize,
+    pub indent: usize,
     /// One status row outside the source viewport (0 without status).
     pub footer_height: f32,
     /// Stable keyboard target of this view.
@@ -131,6 +136,7 @@ impl Geometry {
                 .max(1.0) as usize
         });
         let focus_id = source_focus_id(id);
+        let style = doc.indent_style();
         Self {
             font,
             italic_font,
@@ -143,6 +149,8 @@ impl Geometry {
             rule_x,
             gutter,
             wrap_columns,
+            tab: style.tab_cells(),
+            indent: style.level(),
             footer_height: if options.show_status {
                 snap(font_row.max(STATUS_HEIGHT), ppp)
             } else {
@@ -226,6 +234,12 @@ impl Viewport {
             );
         }
         scroll
+    }
+
+    /// Scroll offset that shows buffer `line` on the first row: its first
+    /// row, or the next shown line's when a fold hides it.
+    pub fn line_offset(rows: &[VisualRow], line: usize, row_height: f32) -> f32 {
+        rows.partition_point(|row| row.line < line) as f32 * row_height
     }
 
     /// Current vertical position in the scrollable document, from 0 to 1.

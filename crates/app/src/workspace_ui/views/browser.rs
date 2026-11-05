@@ -161,8 +161,11 @@ impl App {
             x.max(rect.left())..=(x + span).min(rect.right()),
             rect.y_range(),
         );
-        ui.painter()
-            .rect_filled(bar, 0.0, ui.visuals().selection.bg_fill);
+        ui.painter().rect_filled(
+            bar,
+            egui::CornerRadius::ZERO,
+            ui.visuals().selection.bg_fill,
+        );
         ui.ctx().request_repaint();
     }
 

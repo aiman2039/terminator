@@ -106,7 +106,8 @@ impl ControlsFrame<'_> {
             ),
             egui::vec2(rail.width(), 6.0),
         );
-        ui.painter().rect_filled(marker, 1.0, color);
+        ui.painter()
+            .rect_filled(marker, appearance::RADIUS_XSMALL, color);
         let click = ui
             .interact(
                 marker.expand(2.0),
@@ -180,7 +181,7 @@ impl ControlsFrame<'_> {
         if band.selected {
             ui.painter().with_clip_rect(clip).rect_stroke(
                 rect,
-                0.0,
+                egui::CornerRadius::ZERO,
                 egui::Stroke::new(1.0, band.color),
                 egui::StrokeKind::Inside,
             );

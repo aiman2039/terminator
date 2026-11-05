@@ -200,7 +200,6 @@ pub struct App {
     pub(crate) strip_pane_by_tab: HashMap<String, egui_dock::NodePath>,
     pub(crate) strip_pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pub(crate) pane_by_tab: HashMap<String, egui_dock::NodePath>,
-
     pub(crate) pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pub(crate) pane_index: Option<PaneIndex>,
     pub(crate) pane_action_source: Option<PaneSource>,
@@ -214,6 +213,7 @@ pub struct App {
     pub(crate) diff_replacement: Option<(Tab, Tab)>,
     pub(crate) terminal_context: HashMap<String, String>,
     pub(crate) missing_projects: HashSet<String>,
+    pub(crate) missing_folder: super::missing_folder::MissingFolder,
     /// Daemon project names and the sidebar rename draft.
     pub(crate) project_names: crate::sidebar_ui::ProjectNames,
     pub(crate) texts: HashMap<String, String>,

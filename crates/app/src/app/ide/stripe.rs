@@ -109,18 +109,15 @@ impl App {
         } else {
             label
         };
+        let tip = self.stripe_tip(tool, label);
         let response = appearance::stripe_button(appearance::StripeButtonInput {
             ui,
             icon,
             label: caption,
+            tip: &tip,
             selected,
             badge,
         });
-        let response = if tool == StripeTool::Tool(SidebarTool::Git) {
-            response.on_hover_text("Git / Perforce")
-        } else {
-            response
-        };
         #[cfg(feature = "test-support")]
         Self::record_stripe_tool(RecordStripeToolInput {
             ui,
@@ -130,6 +127,15 @@ impl App {
         });
         if response.clicked() {
             self.stripe_activate(right, tool);
+        }
+    }
+
+    /// Hover text: the tool name and the key that toggles it.
+    pub(crate) fn stripe_tip(&self, tool: StripeTool, label: &str) -> String {
+        match tool {
+            StripeTool::Tool(SidebarTool::Git) => self.tool_tip("Git / Perforce", SidebarTool::Git),
+            StripeTool::Tool(tool) => self.tool_tip(label, tool),
+            StripeTool::Projects => label.to_owned(),
         }
     }
 
@@ -184,11 +190,16 @@ impl App {
                 .layout(egui::Layout::top_down(egui::Align::Center)),
         );
         search_ui.set_clip_rect(ui.clip_rect().intersect(search_rect));
+        let tip = appearance::shortcut_tip(
+            Action::OpenPalette.label(),
+            &self.shortcut_label(Action::OpenPalette),
+        );
         search_ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
             let search = appearance::stripe_button(appearance::StripeButtonInput {
                 ui,
                 icon: "Search",
                 label: "Search",
+                tip: &tip,
                 selected: false,
                 badge: None,
             });

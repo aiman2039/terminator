@@ -2,7 +2,7 @@
 use super::*;
 use terminator_native_edit::vim::Mode;
 
-/// One formatting action from the header buttons.
+/// One formatting action from the Markdown toolbar buttons.
 #[derive(Clone, Copy)]
 enum Format {
     /// Set the caret line's heading level; 0 makes it body text.
@@ -14,12 +14,13 @@ enum Format {
 }
 
 impl ViewPass<'_> {
-    pub(super) fn markdown_format(&mut self, ui: &mut egui::Ui) {
+    /// The format buttons. Returns whether one of them edited the buffer.
+    pub(super) fn markdown_format(&mut self, ui: &mut egui::Ui) -> bool {
         if self.read_only() || self.doc.markdown_mode == markdown::Mode::Preview {
-            return;
+            return false;
         }
-        // The header lays out right to left; draw in reverse there so the
-        // buttons still read Heading, Bold, Italic, List.
+        // A right-to-left row draws them in reverse, so the buttons still
+        // read Heading, Bold, Italic, List.
         let mut buttons: [fn(&mut egui::Ui) -> Option<Format>; 4] =
             [heading_button, bold_button, italic_button, list_button];
         if ui.layout().prefer_right_to_left() {
@@ -30,7 +31,7 @@ impl ViewPass<'_> {
             action = button(ui).or(action);
         }
         let Some(action) = action else {
-            return;
+            return false;
         };
         let focus = self.file_focus();
         let doc = &mut *self.doc;
@@ -38,6 +39,7 @@ impl ViewPass<'_> {
             apply(&mut doc.engine, buffer, action);
         }
         ui.memory_mut(|memory| memory.request_focus(focus));
+        true
     }
 }
 

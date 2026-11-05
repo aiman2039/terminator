@@ -112,8 +112,11 @@ impl ControlsFrame<'_> {
                 .on_hover_text(tip)
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.hovered() {
-                ui.painter()
-                    .rect_filled(button, 2.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                ui.painter().rect_filled(
+                    button,
+                    crate::appearance::RADIUS_XSMALL,
+                    ui.visuals().widgets.hovered.weak_bg_fill,
+                );
             }
             ui.painter().text(
                 button.center(),

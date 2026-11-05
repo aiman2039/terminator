@@ -15,10 +15,11 @@ impl App {
             ));
         }
         self.picker_active = false;
-        if let Some(path) = path
-            && generation == self.selection_generation
-        {
-            let _ = self.jobs.send(Job::OpenProject(path, generation));
+        match path {
+            Some(path) if generation == self.selection_generation => {
+                let _ = self.jobs.send(Job::OpenProject(path, generation));
+            }
+            path => self.drop_folder_pick(path.as_deref()),
         }
     }
 

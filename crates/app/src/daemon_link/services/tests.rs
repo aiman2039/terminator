@@ -99,6 +99,43 @@ fn reopening_a_project_through_a_path_alias_preserves_its_identity() {
     assert!(project_for_directory(&projects, dir.path()).is_none());
 }
 
+/// A removed managed worktree cannot be selected. A pick of its folder must
+/// not resolve to it: the folder is added again, or a newer checkout at the
+/// same path opens.
+#[test]
+fn a_folder_pick_skips_a_removed_worktree_at_that_path() {
+    let project = |id: &str| terminator_core::Project {
+        id: id.into(),
+        name: id.into(),
+        path: "/work/task".into(),
+        layout: serde_json::Value::Null,
+    };
+    let mut state = terminator_core::State {
+        projects: vec![project("removed")],
+        worktrees: vec![terminator_core::worktrees::Registration {
+            project_id: "removed".into(),
+            common_dir: "/work/repo/.git".into(),
+            path: "/work/task".into(),
+            created: 0,
+            removed: true,
+        }],
+        ..Default::default()
+    };
+    let folder = Path::new("/work/task");
+    assert_eq!(
+        project_for_directory(&state.projects, folder).unwrap().id,
+        "removed"
+    );
+    assert!(project_for_directory(openable_projects(&state), folder).is_none());
+    state.projects.push(project("checkout"));
+    assert_eq!(
+        project_for_directory(openable_projects(&state), folder)
+            .unwrap()
+            .id,
+        "checkout"
+    );
+}
+
 #[test]
 fn untracked_descendants_get_individual_decorations() {
     let dir = tempfile::tempdir().unwrap();

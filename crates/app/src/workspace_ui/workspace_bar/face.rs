@@ -12,6 +12,7 @@ impl TabFace {
             sid: None,
             brand: None,
             status: None,
+            hint: None,
         }
     }
 
@@ -34,6 +35,22 @@ impl App {
             .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab))
     }
 
+    /// Folder hints for strip tabs, by tab index: a tab named after its
+    /// file gets one when another strip tab shows the same file name.
+    pub(super) fn strip_folder_hints(&self, workspace: &Workspace) -> Vec<Option<String>> {
+        let files: Vec<Option<&std::path::Path>> = workspace
+            .tabs
+            .iter()
+            .map(|group| Self::group_primary(group).and_then(|tab| self.tab_file(tab)))
+            .collect();
+        files
+            .iter()
+            .map(|file| {
+                file.and_then(|path| self.tab_folder_hint(path, files.iter().flatten().copied()))
+            })
+            .collect()
+    }
+
     /// Workspace strip tab face: the focused terminal's label, kind icon,
     /// stable agent brand, and hook lifecycle status, all from the shared
     /// agent presentation model.
@@ -41,14 +58,13 @@ impl App {
         match primary {
             Some(Tab::Terminal(sid)) => self.terminal_tab_face(sid),
             Some(Tab::Diff { path, .. }) => TabFace::plain(TabFace::file_name(path), "FileDiff"),
-            Some(Tab::Image { path }) => TabFace::plain(TabFace::file_name(path), "FileImage"),
+            Some(Tab::Image { path } | Tab::NativeEditor { path }) => {
+                TabFace::plain(TabFace::file_name(path), icons::file_icon(path))
+            }
             Some(Tab::Browser { id, target }) => TabFace {
                 image: self.browser_favicon(id),
                 ..TabFace::plain(self.browser_title(id, target), "Globe")
             },
-            Some(Tab::NativeEditor { path }) => {
-                TabFace::plain(TabFace::file_name(path), "FileCode")
-            }
             Some(Tab::Player) => TabFace::plain("Player".into(), "FileMusic"),
             Some(Tab::CommitLog { .. }) => TabFace::plain("Commit Log".into(), "FileDiff"),
             Some(Tab::Blame { path, .. }) => TabFace::plain(
@@ -80,6 +96,7 @@ impl App {
                 sid: None,
                 brand: None,
                 status: self.vnc_tab_status(session),
+                hint: None,
             },
             None => TabFace::plain("Workspace".into(), "Terminal"),
         }
@@ -94,14 +111,7 @@ impl App {
                 let presented = self.present_session(sid);
                 TabFace {
                     label: s.label.clone(),
-                    icon: self.terminal_title_icon(
-                        sid,
-                        if s.kind == SessionKind::Editor {
-                            "FileCode"
-                        } else {
-                            "Terminal"
-                        },
-                    ),
+                    icon: self.terminal_title_icon(sid, Self::session_kind_icon(s)),
                     image: None,
                     sid: Some(sid.clone()),
                     brand: presented.brand_icon,
@@ -112,6 +122,7 @@ impl App {
                             crate::sidebar_ui::state_color(lifecycle, &self.theme),
                         )
                     }),
+                    hint: None,
                 }
             })
             .unwrap_or(TabFace::plain("Terminal".into(), "Terminal"))
@@ -157,13 +168,12 @@ impl App {
     /// to no icons.
     pub(in super::super) fn tab_leading(&self, sid: &str) -> TabLeading {
         let presented = self.present_session(sid);
-        let kind = self.state.sessions.iter().find(|s| s.id == sid).map(|s| {
-            if s.kind == SessionKind::Editor {
-                "FileCode"
-            } else {
-                "Terminal"
-            }
-        });
+        let kind = self
+            .state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(Self::session_kind_icon);
         let status = presented.lifecycle.map(|lifecycle| {
             (
                 presented.status_icon,

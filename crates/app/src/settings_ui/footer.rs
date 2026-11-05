@@ -51,8 +51,11 @@ impl App {
         let mut frame = SettingsFrame::default();
         let outer = ui.available_rect_before_wrap();
         let card = settings_card_rect(outer);
-        ui.painter()
-            .rect_filled(outer, 0.0, appearance::color(&self.theme.window));
+        ui.painter().rect_filled(
+            outer,
+            egui::CornerRadius::ZERO,
+            appearance::color(&self.theme.window),
+        );
         let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card));
         egui::Frame::new()
             .fill(appearance::color(&self.theme.surface))
@@ -60,7 +63,7 @@ impl App {
                 self.theme.border_width.max(1.0),
                 appearance::color(&self.theme.border),
             ))
-            .corner_radius(8.0)
+            .corner_radius(appearance::PANEL_RADIUS)
             .inner_margin(egui::Margin::same(14))
             .show(&mut card_ui, |ui| {
                 ui.set_max_size(card.shrink(SETTINGS_CARD_PADDING).size());

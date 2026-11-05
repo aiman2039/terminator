@@ -2,7 +2,8 @@
 use super::*;
 
 impl App {
-    /// Put this file's popups back, and act on blame clicks.
+    /// Put this file's popups back, show or hide blame, and act on blame
+    /// clicks.
     pub(super) fn native_view_check_in(
         &mut self,
         path: &Path,
@@ -22,6 +23,10 @@ impl App {
         if completion.is_some() {
             self.completion = completion;
         }
+        // The menu's Annotate needs no gutter popup.
+        if requests.blame_toggle {
+            self.toggle_editor_blame(path);
+        }
         if gutter.is_some() {
             self.gutter_popup = gutter;
             self.native_view_blame(path, requests);
@@ -35,9 +40,6 @@ impl App {
     }
 
     fn native_view_blame(&mut self, path: &Path, requests: &ViewRequests) {
-        if requests.blame_toggle {
-            self.toggle_editor_blame(path);
-        }
         if let Some((line, web)) = requests.blame_click {
             self.open_blame_commit(path, line, web);
         }
@@ -67,6 +69,12 @@ impl App {
         language: Language,
         requests: &mut ViewRequests,
     ) {
+        // First, before anything sends the text with the accepted item in
+        // it: the server resolves against the text it listed the item for.
+        if let Some(accepted) = requests.accepted_completion.take() {
+            self.lsp
+                .request_completion_resolve(path, &accepted.raw, accepted.target);
+        }
         if let Some((item, revision)) = requests.picked_action.take() {
             self.run_code_action(path, &item, revision);
         }
@@ -146,45 +154,10 @@ impl App {
         }
     }
 
-    /// Completion asks with the live text: push it past the sync debounce
-    /// first so the server sees what was just typed.
-    pub(super) fn native_view_completion(
-        &mut self,
-        path: &Path,
-        language: Language,
-        requests: &ViewRequests,
-    ) {
-        if let Some((position, line, start)) = requests.completion_request
-            && self.push_live_text(path, language).is_some()
-            && let Some(generation) = self.lsp.request_completion(path, position)
-        {
-            self.completion = Some(CompletionPopup {
-                path: path.to_owned(),
-                generation: Some(generation),
-                items: Vec::new(),
-                line,
-                start,
-                visible: Vec::new(),
-                selected: 0,
-                anchor: requests.caret_rect,
-                prefix: String::new(),
-            });
-        }
-        if let Some(results) = self.lsp.take_completion()
-            && let Some(popup) = self.completion.as_mut()
-            && popup.generation == Some(results.generation)
-            && popup.path == results.path
-        {
-            popup.items = results.items;
-            popup.generation = None;
-        }
-    }
-
-    /// Focus follow, file picker, bookmark toggle, and recent-file opens.
+    /// Focus follow, file picker, gutter actions, and file jumps.
     pub(super) fn native_view_follow_up(
         &mut self,
         (ctx, path): (&egui::Context, &Path),
-        frame: &ViewFrame,
         requests: &mut ViewRequests,
     ) {
         if requests.activated_editor {
@@ -195,8 +168,9 @@ impl App {
         if requests.open_file_picker {
             self.open_path = true;
         }
-        if requests.open_local_history {
-            self.open_local_history(path.to_owned());
+        // The picker opens a tab only later, outside the workspace render.
+        if let Some(pick) = requests.git_compare.take() {
+            self.open_compare_picker(path, pick.into());
         }
         // The diff tab opens once the workspace is checked back in.
         if requests.gutter_diff {
@@ -205,16 +179,6 @@ impl App {
         if let Some((mark, text)) = requests.gutter_stage.take() {
             self.stage_gutter_block(path, mark, text);
         }
-        if requests.toggle_pin {
-            if frame.files.pinned {
-                self.preferences.pinned_native_files.remove(path);
-            } else {
-                self.preferences.pinned_native_files.insert(path.to_owned());
-            }
-        }
-        if let Some(path_to_open) = requests.recent_open.take() {
-            self.queue_jump(path, &path_to_open, (0, 0));
-        }
         if let Some(name) = requests.goto_file.take() {
             self.start_goto_file(ctx, path, name);
         }
@@ -222,7 +186,7 @@ impl App {
         if requests.alternate_file {
             match self.alternate_location() {
                 Some(target) if target.path != path => {
-                    self.queue_jump(path, &target.path, (target.line, target.character));
+                    self.queue_jump(path, &target.path, Some((target.line, target.character)));
                 }
                 _ => self.info = Some("No alternate file".to_owned()),
             }
@@ -256,7 +220,7 @@ impl App {
         };
         match doc.extras.take_goto() {
             Some((_, Some((target, line, column)))) => {
-                self.queue_jump(path, &target, (line, column));
+                self.queue_jump(path, &target, Some((line, column)));
             }
             Some((name, None)) => self.info = Some(format!("Can't find file \"{name}\" in path")),
             None => {}
@@ -264,11 +228,13 @@ impl App {
     }
 
     /// Open `target` at an LSP (zero-based, UTF-16) position once the
-    /// workspace is checked back in; the jump is recorded for Back.
-    fn queue_jump(&mut self, from: &Path, target: &Path, (line, character): (u32, u32)) {
+    /// workspace is checked back in; the jump is recorded for Back. With
+    /// no position, the file opens where it was left.
+    pub(super) fn queue_jump(&mut self, from: &Path, target: &Path, position: Option<(u32, u32)>) {
         let Some(uri) = native_lsp::file_uri(target) else {
             return;
         };
+        let (line, character) = position.unwrap_or_default();
         let at = native_lsp::Position { line, character };
         self.pending_goto.push(lsp_manager::GotoJump {
             from: from.to_owned(),
@@ -276,11 +242,13 @@ impl App {
                 uri: uri.to_string(),
                 range: native_lsp::Range { start: at, end: at },
             }],
+            at_position: position.is_some(),
         });
     }
 
-    /// Inlay, hover, goto, references, hierarchy, and rename requests,
-    /// then the answers that already landed.
+    /// Inlay, goto, references, hierarchy, and rename requests, then the
+    /// answers that already landed. Quick Documentation asks on its own
+    /// ([`Self::native_quick_doc`]).
     pub(super) fn native_view_lsp_requests(
         &mut self,
         site: ViewSite<'_>,
@@ -291,16 +259,12 @@ impl App {
         self.native_view_inlay_request(path);
         // Positions come from the live buffer: send text still waiting on
         // the sync debounce so the server answers for the same text.
-        if requests.hover_at.is_some()
-            || requests.goto_at.is_some()
+        if requests.goto_at.is_some()
             || requests.references_at.is_some()
             || requests.locate_at.is_some()
             || requests.hierarchy_at.is_some()
         {
             let _ = self.push_live_text(path, language);
-        }
-        if let Some((position, cursor)) = requests.hover_at.take() {
-            self.lsp.request_hover(path, position, cursor);
         }
         if let Some(position) = requests.goto_at.take() {
             self.lsp.request_definition(path, position);
@@ -313,8 +277,10 @@ impl App {
         {
             self.info = Some(note);
         }
-        if let Some(seed) = requests.find_in_files.take() {
-            self.open_find_in_files(site.project, seed);
+        match requests.find_in_files.take() {
+            Some((seed, true)) => self.open_replace_in_files(site.project, seed),
+            Some((seed, false)) => self.open_find_in_files(site.project, seed),
+            None => {}
         }
         if let Some((position, kind)) = requests.hierarchy_at.take() {
             self.start_hierarchy(path, position, kind);
@@ -374,5 +340,36 @@ impl App {
             self.pending_native_splits
                 .push((viewport, path.to_owned(), split));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_annotate_toggles_blame_without_a_gutter_popup() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, terminator_core::Paths::at(dir.path().into()));
+        let path = dir.path().join("a.rs");
+        let popups = || ViewPopups {
+            find: None,
+            completion: None,
+            signature: None,
+            actions: None,
+            gutter: None,
+        };
+        let requests = ViewRequests {
+            blame_toggle: true,
+            ..Default::default()
+        };
+        app.native_view_check_in(&path, popups(), &requests);
+        assert!(app.editor_blame.contains_key(&path), "Annotate shows blame");
+        app.native_view_check_in(&path, popups(), &requests);
+        assert!(
+            !app.editor_blame.contains_key(&path),
+            "Annotate again hides it"
+        );
     }
 }

@@ -1,5 +1,6 @@
 //! Workspace strip: the project's top-level tabs, their drag and drop,
 //! and the new-tab and recent-tab controls.
+mod close_slot;
 mod drop;
 mod face;
 mod strip;

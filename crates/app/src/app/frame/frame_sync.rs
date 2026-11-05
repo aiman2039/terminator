@@ -78,7 +78,7 @@ impl App {
         let _ = self.metadata_jobs.send(self.metadata_request.clone());
     }
 
-    pub(super) fn sync_refresh_request(&mut self) {
+    pub(crate) fn sync_refresh_request(&mut self) {
         self.visible_dirs.sort();
         self.visible_dirs.dedup();
         let right_files = self.preferences.visible

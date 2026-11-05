@@ -78,7 +78,7 @@ impl ControlsFrame<'_> {
             );
             painter.rect_stroke(
                 rect,
-                1.0,
+                appearance::RADIUS_XSMALL,
                 egui::Stroke::new(1.0, color.gamma_multiply(0.7)),
                 egui::StrokeKind::Inside,
             );

@@ -1,8 +1,19 @@
 //! Parse, display, and consume Settings keybinding strings.
+mod jetbrains;
+mod meta;
+mod migrate;
+mod shared;
 #[cfg(test)]
 mod tests;
+mod tool_focus;
+
+pub use jetbrains::{JetBrainsCommand, jetbrains_app_chords, mark_terminal, terminal_has_focus};
+pub use meta::terminal_keeps;
+pub use migrate::{fill_moved_defaults, migrate_moved_defaults};
+pub use tool_focus::*;
 
 use eframe::egui::{self, Key, Modifiers};
+pub use shared::{fill_defaults, yields};
 use std::collections::{BTreeMap, HashMap};
 
 macro_rules! actions {
@@ -50,6 +61,11 @@ actions! {
     SplitRight => "split_right", "Split right", "PanelRightClose";
     NextPane => "next_pane", "Next pane", "ArrowRight";
     SelectAll => "select_all", "Select all", "TextSelect";
+    // Before Find in terminal: egui ignores an extra Shift, so Cmd+F
+    // would also take Cmd+Shift+F on macOS. On Linux both are
+    // Ctrl+Shift+F, and focus picks one (see `shared`).
+    FindInFiles => "find_in_files", "Find in Files", "Search";
+    ReplaceInFiles => "replace_in_files", "Replace in Files", "Pencil";
     FindInTerminal => "find_in_terminal", "Find in terminal", "Search";
     SearchScrollback => "search_scrollback", "Search scrollback", "Search";
     CopyWorkingDirectory => "copy_working_directory", "Copy working directory", "Folder";
@@ -77,10 +93,27 @@ actions! {
     DiffPrevChange => "diff_prev_change", "Diff: previous change", "ArrowUp";
     DiffNextFile => "diff_next_file", "Diff: next file", "ArrowRight";
     DiffPrevFile => "diff_prev_file", "Diff: previous file", "ArrowLeft";
+    GitCommit => "git_commit", "Git: Commit…", "CircleCheck";
+    GitCommitPush => "git_commit_push", "Git: Commit and Push", "Upload";
+    GitRefresh => "git_refresh", "Git: Refresh", "RefreshCw";
+    GitShowLog => "git_show_log", "Git: Show Log", "ListTree";
+    GitCompareWith => "git_compare_with", "Git: Compare with…", "GitCompareArrows";
+    GitCompareRevision => "git_compare_revision", "Git: Compare with Revision…", "History";
+    GitShowHistory => "git_show_history", "Git: Show History", "History";
+    GitAnnotate => "git_annotate", "Git: Annotate with Git Blame", "History";
+    GitStageAll => "git_stage_all", "Git: Stage All", "Plus";
     // Backward first: egui ignores extra Shift, so Ctrl+Tab would also
     // consume Ctrl+Shift+Tab.
     SwitcherBack => "tab_switcher_back", "Recent tab switcher (backward)", "Files";
     SwitcherNext => "tab_switcher", "Recent tab switcher", "Files";
+    // Tool window keys come last, so a chord a user already gave to an
+    // older action keeps working for it.
+    ToolExplorer => "tool_explorer", "Explorer tool window", "Files";
+    ToolProblems => "tool_problems", "Problems tool window", "CircleAlert";
+    ToolStructure => "tool_structure", "Structure tool window", "ListTree";
+    ToolGit => "tool_git", "Git tool window", "GitBranch";
+    ToolTerminal => "tool_terminal", "Terminal tool window", "Terminal";
+    SelectIn => "select_in", "Select in Explorer", "LocateFixed";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -299,6 +332,9 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
     if alt_variant {
         return false;
     }
+    if meta::types_text(chord) {
+        return ctx.input_mut(|input| meta::consume_with_text(input, chord));
+    }
     ctx.input_mut(|input| input.consume_key(chord.modifiers, chord.key))
 }
 
@@ -338,25 +374,6 @@ pub fn editor_owns(value: &str, jetbrains: bool) -> bool {
             )
             .is_some()
     })
-}
-
-/// App actions the `JetBrains` keymap moves onto editor chords, checked
-/// before the normal bindings while a native editor has focus. Shift
-/// chords come first: egui ignores an extra Shift.
-pub fn jetbrains_app_chords() -> &'static [(&'static str, Action)] {
-    if cfg!(target_os = "macos") {
-        &[
-            ("command+shift+A", Action::OpenPalette),
-            ("command+E", Action::RecentFiles),
-            ("command+[", Action::NavigateBack),
-            ("command+]", Action::NavigateForward),
-        ]
-    } else {
-        &[
-            ("ctrl+shift+A", Action::OpenPalette),
-            ("ctrl+E", Action::RecentFiles),
-        ]
-    }
 }
 
 /// Double Shift (`JetBrains` Search Everywhere): two Shift taps with no
@@ -399,14 +416,12 @@ impl DoubleShift {
 }
 
 pub fn binding(map: &BTreeMap<String, String>, action: &str) -> String {
+    // Built once: shortcuts look up unbound actions here every frame.
+    static DEFAULTS: std::sync::LazyLock<BTreeMap<String, String>> =
+        std::sync::LazyLock::new(|| terminator_core::Settings::default().keybindings);
     map.get(action)
+        .or_else(|| DEFAULTS.get(action))
         .cloned()
-        .or_else(|| {
-            terminator_core::Settings::default()
-                .keybindings
-                .get(action)
-                .cloned()
-        })
         .unwrap_or_default()
 }
 
@@ -434,7 +449,9 @@ pub fn conflicts(map: &BTreeMap<String, String>) -> Vec<(String, String)> {
             .push(action.clone());
     }
     let mut out = Vec::new();
-    for actions in by_chord.into_values() {
+    for mut actions in by_chord.into_values() {
+        // Focus picks one action of a shared pair; they never compete.
+        shared::drop_partners(&mut actions);
         if actions.len() > 1 {
             for pair in actions.windows(2) {
                 let (Some(left), Some(right)) = (pair.first(), pair.get(1)) else {
@@ -463,10 +480,4 @@ pub fn invalid(map: &BTreeMap<String, String>) -> Option<String> {
         ));
     }
     None
-}
-
-pub fn fill_defaults(map: &mut BTreeMap<String, String>) {
-    for (action, value) in terminator_core::Settings::default().keybindings {
-        map.entry(action).or_insert(value);
-    }
 }

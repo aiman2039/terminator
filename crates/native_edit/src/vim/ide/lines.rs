@@ -1,5 +1,5 @@
-//! IDE line operations: duplicate, delete, move, comment, join, and
-//! line/word selection helpers.
+//! IDE line operations: duplicate, delete, move, comment, join, start a
+//! new line, and line/word selection helpers.
 use super::super::super::doc::Buffer;
 use super::super::helpers::range_text;
 use super::super::mode::{Cursor, Mode};
@@ -196,6 +196,42 @@ impl VimEngine {
         };
         self.cursor = Cursor { line, col: trimmed };
         self.anchor = self.cursor;
+        self.ide_edit_end(doc);
+    }
+
+    /// Start New Line (`IntelliJ` Shift+Enter): the caret goes to the line
+    /// end, then a smart Enter opens an indented line below. `above` is
+    /// Start New Line Before Current: a line above with the caret line's
+    /// indent, one level deeper when that line starts with a closer. A
+    /// selection is dropped, not deleted. Modeless, or vim Insert mode.
+    pub fn ide_start_new_line<B: Buffer>(&mut self, doc: &mut B, above: bool) {
+        if !(self.modeless || self.mode == Mode::Insert) {
+            return;
+        }
+        self.ide_edit_begin(doc);
+        self.ide_ensure_insert(doc);
+        if let Some(replaced) = self.x.replaced.as_mut() {
+            // Vim `R`: Backspace must not put old chars back elsewhere.
+            replaced.clear();
+        }
+        let line = self.cursor.line;
+        if above {
+            let text = doc.line_text(line);
+            let mut indent = IdeText::leading_whitespace(&text);
+            if text.trim_start().starts_with(IdeText::is_closer) {
+                indent.push_str(&doc.indent_style().unit());
+            }
+            let at = doc.char_at_line_col(line, 0);
+            doc.insert(at, &format!("{indent}\n"));
+            self.cursor = Cursor {
+                line,
+                col: indent.chars().count(),
+            };
+            self.anchor = self.cursor;
+        } else {
+            self.cursor.col = line_len(doc, line);
+            self.ide_enter(doc);
+        }
         self.ide_edit_end(doc);
     }
 

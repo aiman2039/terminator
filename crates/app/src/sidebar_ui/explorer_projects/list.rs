@@ -1,5 +1,6 @@
 //! The project list: toolbar, project rows, and their worktrees.
 use super::*;
+use crate::app::missing_folder::{MISSING_ICON, MISSING_TOOLTIP};
 use terminator_core::Project;
 
 impl App {
@@ -114,7 +115,10 @@ impl App {
             ui.indent(&p.id, |ui| {
                 self.project_sessions_tree(ui, &p.id);
                 for child in children.unwrap_or_default() {
-                    self.worktree_card(ui, child);
+                    // A worktree removed from the sidebar leaves it here too.
+                    if !self.preferences.hidden_projects.contains(&child.id) {
+                        self.worktree_card(ui, child);
+                    }
                 }
             });
         });
@@ -171,10 +175,14 @@ impl App {
         response.rect.left()
     }
 
-    /// The agent face when a live session runs an agent, else a folder.
+    /// A warning icon and a dim name when the folder is missing, else the
+    /// agent face when a live session runs an agent, else a folder.
     fn project_row(&self, ui: &mut egui::Ui, p: &Project, state: (usize, bool)) -> egui::Response {
         let (count, expanded) = state;
         let selected = self.selected.as_ref() == Some(&p.id);
+        if self.project_folder_missing(&p.id) {
+            return self.missing_project_row(ui, p, (count, selected));
+        }
         if let Some((brand, agent)) = self.project_agent_face(&p.id) {
             return appearance::session_row_spec(
                 ui,
@@ -204,9 +212,46 @@ impl App {
         })
     }
 
-    fn project_hover(&self, p: &Project) -> String {
+    /// `state` is the live-terminal count and the selected flag.
+    fn missing_project_row(
+        &self,
+        ui: &mut egui::Ui,
+        p: &Project,
+        state: (usize, bool),
+    ) -> egui::Response {
+        let (count, selected) = state;
+        let response = ui
+            .scope(|ui| {
+                ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
+                appearance::project_row(appearance::ProjectRowInput {
+                    ui,
+                    label: &p.name,
+                    icon: MISSING_ICON,
+                    color: None,
+                    selected,
+                    height: self.theme.row_height(),
+                    trailing: &count.to_string(),
+                    tint: appearance::color(&self.theme.secondary),
+                })
+            })
+            .inner;
+        #[cfg(feature = "test-support")]
+        diagnostics::record(
+            ui.ctx(),
+            &format!("project-missing:{}", p.id),
+            response.rect,
+        );
+        response
+    }
+
+    pub(crate) fn project_hover(&self, p: &Project) -> String {
         format!(
-            "{}\n{}{}",
+            "{}{}\n{}{}",
+            if self.project_folder_missing(&p.id) {
+                format!("{MISSING_TOOLTIP}\n")
+            } else {
+                String::new()
+            },
             p.name,
             self.project_location_label(&p.id),
             self.state

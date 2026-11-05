@@ -11,16 +11,21 @@ impl GitPanelPass<'_, '_> {
         self.commit_message(ui);
         ui.horizontal(|ui| self.commit_options(ui));
         ui.horizontal(|ui| self.commit_buttons(ui, staged));
+        self.commit_progress(ui);
+        self.commit_failure(ui);
         self.shelves(ui);
     }
 
     fn commit_message(&mut self, ui: &mut egui::Ui) {
-        ui.add(
+        let message = ui.add(
             egui::TextEdit::multiline(self.input.commit_draft)
                 .hint_text("Message")
                 .desired_width(ui.available_width())
                 .desired_rows(4),
         );
+        if self.input.focus_message {
+            message.request_focus();
+        }
         // Subject length guide: Git tools truncate long first lines.
         let subject = self
             .input
@@ -100,8 +105,9 @@ impl GitPanelPass<'_, '_> {
             outcome.stage_all = true;
         }
         // Amending with an empty message keeps the previous message.
-        let can_commit =
-            !input.committing && staged && (*input.amend || !input.commit_draft.trim().is_empty());
+        let can_commit = input.commit_run.is_none()
+            && staged
+            && (*input.amend || !input.commit_draft.trim().is_empty());
         let commit = ui.add_enabled(can_commit, egui::Button::new("Commit"));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-commit", commit.rect);
@@ -113,9 +119,6 @@ impl GitPanelPass<'_, '_> {
         diagnostics::record(ui.ctx(), "git-commit-push", commit_push.rect);
         if commit_push.clicked() {
             outcome.commit_push = true;
-        }
-        if input.committing {
-            ui.spinner().on_hover_text("Committing…");
         }
         let shelve = ui
             .add_enabled(staged, egui::Button::new("Shelve"))

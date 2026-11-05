@@ -45,18 +45,30 @@ impl App {
         });
     }
 
-    pub(super) fn run_shortcuts(&mut self, ctx: &egui::Context) {
+    pub(crate) fn run_shortcuts(&mut self, ctx: &egui::Context) {
+        let jetbrains = crate::appearance::editor_style()
+            .prefs
+            .editor_jetbrains_keys;
+        self.dispatch_shortcuts(ctx, jetbrains);
+    }
+
+    /// The Settings bindings, after the `JetBrains` keymap chords and
+    /// double Shift when `jetbrains` is on. VNC shortcut capture takes
+    /// every key. Esc out of a tool window comes first, before any pane
+    /// can read it.
+    pub(crate) fn dispatch_shortcuts(&mut self, ctx: &egui::Context, jetbrains: bool) {
+        self.escape_tool_window(ctx);
         let capture_vnc = self.vnc_captures_shortcuts(ctx);
         let editor_focus = terminator_native_edit::view::source_has_focus(ctx);
-        let jetbrains = editor_focus
-            && crate::appearance::editor_style()
-                .prefs
-                .editor_jetbrains_keys;
+        let terminal_focus = shortcuts::terminal_has_focus(ctx);
         if jetbrains && !capture_vnc {
-            self.run_jetbrains_shortcuts(ctx);
+            self.run_jetbrains_shortcuts(ctx, editor_focus);
         } else {
             self.double_shift = Default::default();
         }
+        // Shared chords go by the looser keyboard owner: the terminal's own
+        // find bar counts as the terminal.
+        let terminal_keyboard = self.terminal_has_keyboard(ctx);
         for &action in Action::ALL {
             if capture_vnc {
                 continue;
@@ -71,6 +83,13 @@ impl App {
             if editor_focus && shortcuts::editor_owns(&key, jetbrains) {
                 continue;
             }
+            if terminal_focus && shortcuts::terminal_keeps(&key) {
+                continue;
+            }
+            // Shared chords (Cmd+Shift+R; Ctrl+Shift+F on Linux) go by focus.
+            if shortcuts::yields(&self.state.settings.keybindings, action, terminal_keyboard) {
+                continue;
+            }
             if key.is_empty() || !shortcuts::consume(ctx, &key) {
                 continue;
             }
@@ -78,12 +97,35 @@ impl App {
         }
     }
 
-    /// `JetBrains` keymap app chords and double Shift, while a native
-    /// editor has focus; they run before the normal bindings.
-    fn run_jetbrains_shortcuts(&mut self, ctx: &egui::Context) {
-        for &(chord, action) in shortcuts::jetbrains_app_chords() {
-            if shortcuts::consume(ctx, chord) {
-                self.run_shortcut(ctx, action);
+    /// A terminal has the keyboard: its pane is the focused one, and no
+    /// text field, Explorer tree or tool window row took the keys from it.
+    /// The terminal's own find bar (see `find_in_active_terminal`) counts
+    /// as the terminal.
+    pub(crate) fn terminal_has_keyboard(&self, ctx: &egui::Context) -> bool {
+        let Some(sid) = self.active_session.as_deref() else {
+            return false;
+        };
+        let find_bar = egui::Id::unique(("terminal-find", sid));
+        ctx.memory(|memory| memory.has_focus(find_bar))
+            || shortcuts::terminal_has_focus(ctx)
+            || (!self.text_input_focused(ctx)
+                && !crate::native_editor::explorer_has_focus(ctx)
+                && shortcuts::focused_sidebar(ctx).is_none())
+    }
+
+    /// `JetBrains` keymap app chords and double Shift, before the Settings
+    /// bindings. Each chord has its own reach: the palette chords work in
+    /// every pane, Back and Forward only in a focused editor.
+    fn run_jetbrains_shortcuts(&mut self, ctx: &egui::Context, editor_focus: bool) {
+        let terminal_focus = shortcuts::terminal_has_focus(ctx);
+        for &(chord, command, reach) in shortcuts::jetbrains_app_chords() {
+            let gate = command.gate();
+            if reach.applies(editor_focus, terminal_focus)
+                && self.shortcut_allowed(gate)
+                && self.shortcut_applies(gate)
+                && shortcuts::consume(ctx, chord)
+            {
+                self.run_jetbrains_command(ctx, command);
             }
         }
         let (shift, other) = ctx.input(|input| {
@@ -103,8 +145,23 @@ impl App {
         if self
             .double_shift
             .update(shift, other, std::time::Instant::now())
+            && self.shortcut_allowed(Action::OpenPalette)
         {
             self.run_shortcut(ctx, Action::OpenPalette);
         }
+    }
+
+    /// Find Action and Go to File open the palette with one filter on.
+    fn run_jetbrains_command(&mut self, ctx: &egui::Context, command: shortcuts::JetBrainsCommand) {
+        let filter = match command {
+            shortcuts::JetBrainsCommand::Run(action) => {
+                self.run_shortcut(ctx, action);
+                return;
+            }
+            shortcuts::JetBrainsCommand::FindAction => crate::palette::FILTER_ACTIONS,
+            shortcuts::JetBrainsCommand::GotoFile => crate::palette::FILTER_FILES,
+        };
+        self.open_command_palette();
+        self.palette.filters = filter;
     }
 }

@@ -234,21 +234,22 @@ impl VimEngine {
         self.clamp(doc);
     }
 
-    /// Shift lines right (or left) by one indent unit; blank lines stay
-    /// empty when shifting right, like vim.
+    /// Shift lines right (or left) by one level of the document's indent
+    /// style; blank lines stay empty when shifting right, like vim.
     pub(crate) fn shift_lines<B: Buffer>(
         &mut self,
         doc: &mut B,
         (first, last): (usize, usize),
         left: bool,
     ) {
-        let unit = Self::ide_indent_unit(doc, first);
+        let style = doc.indent_style();
+        let unit = style.unit();
         doc.begin_undo_group();
         for line in first..=last {
             let text = doc.line_text(line);
             let at = doc.char_at_line_col(line, 0);
             if left {
-                let take = Self::outdent_width(&text);
+                let take = style.outdent_width(&text);
                 doc.delete(at..at.saturating_add(take));
             } else if !text.is_empty() {
                 doc.insert(at, &unit);

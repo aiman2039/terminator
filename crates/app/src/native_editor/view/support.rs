@@ -1,5 +1,5 @@
 //! Per-frame helpers around the native editor view: load, close prompts,
-//! Markdown preview, language-server sync, and the hover window.
+//! Markdown preview, language-server sync, and the docs renderer.
 use super::*;
 
 pub(super) struct NativeClosePromptBarInput<'a> {
@@ -21,8 +21,9 @@ pub(super) struct NativeMarkdownPreviewInput<'a> {
 
 impl App {
     /// Per-frame load/poll for one native view, plus the language-server
-    /// pump, the workspace-trust bar, and any pending goto cursor
-    /// placement. Repaints while language-server events remain queued.
+    /// pump, the workspace-trust bar, the remembered caret/scroll/folds,
+    /// and any pending goto cursor placement. Repaints while
+    /// language-server events remain queued.
     pub(super) fn native_view_load(
         &mut self,
         ui: &mut egui::Ui,
@@ -35,12 +36,16 @@ impl App {
             doc.ensure_loading(services);
             doc.poll();
         }
+        // A write that just landed reaches the servers before a settled
+        // `:wq` closes this view and its document.
+        self.native_lsp_saved(path);
         // Language servers pump even while the file loads: slow serving
         // must never stall typing, and diagnostics arrive when they do.
         if self.lsp.poll() {
             ui.ctx().request_repaint();
         }
         self.native_trust_bar(ui, path);
+        self.restore_native_state(path);
         if let Some(line) = self.native_pending_line.remove(path) {
             let col = self.native_pending_col.remove(path).unwrap_or(0);
             let mut keep = false;
@@ -48,6 +53,8 @@ impl App {
                 if let Some(buffer) = doc.doc.as_mut() {
                     let chars = native_lsp::utf16_to_char_col(&buffer.line_text(line), col);
                     doc.engine.place_cursor(buffer, line, chars);
+                    // The target line wins over a remembered scroll.
+                    doc.engine.request_scroll();
                 } else if doc.load_error.is_none() {
                     keep = true;
                 }
@@ -288,8 +295,20 @@ impl App {
             )
     }
 
+    /// Tell the language servers about a write that just landed, so they
+    /// check the saved file again (rust-analyzer runs `cargo check`).
+    pub(in crate::native_editor) fn native_lsp_saved(&mut self, path: &Path) {
+        let saved = self
+            .native_docs
+            .get_mut(path)
+            .and_then(NativeDoc::take_lsp_saved);
+        if let Some((revision, text)) = saved {
+            self.lsp.did_save(path, (revision, &text));
+        }
+    }
+
     pub(super) fn native_lsp_sync(&mut self, path: &Path, language: Language) {
-        // Format requests indent like the file (detected once per load).
+        // Format requests use the buffer's indent style (set at load).
         if let Some(doc) = self.native_docs.get_mut(path)
             && doc.doc.is_some()
         {
@@ -318,38 +337,21 @@ impl App {
             });
         }
     }
+}
 
-    /// Hover answer window for one file: cursor moves and the X both
-    /// dismiss; the manager owns the text.
-    pub(super) fn show_hover_popup(&mut self, ui: &mut egui::Ui, path: &Path) {
-        let cursor = self.native_docs.get(path).map(|doc| doc.engine.cursor());
-        let Some(cursor) = cursor else {
-            return;
-        };
-        let Some((text, markdown)) = self.lsp.hover_popup(path, (cursor.line, cursor.col)) else {
-            return;
-        };
-        let mut open = true;
-        self.popups
-            .window(ui.ctx(), "Hover")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ui.ctx(), |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(500.0)
-                    .show(ui, |ui| {
-                        ui.set_max_width(700.0);
-                        if markdown {
-                            egui_commonmark::CommonMarkViewer::new()
-                                .explicit_image_uri_scheme(true)
-                                .show(ui, &mut self.native_hover_markdown_cache, &text);
-                        } else {
-                            ui.monospace(&text);
-                        }
-                    });
-            });
-        if !open {
-            self.lsp.close_hover();
-        }
+/// Language-server text as the Quick Documentation popup shows it:
+/// Markdown with highlighted code blocks, or plain text in the code font.
+/// The completion docs panel uses it too.
+pub(super) fn lsp_markup(
+    ui: &mut egui::Ui,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    (text, markdown): (&str, bool),
+) {
+    if markdown {
+        egui_commonmark::CommonMarkViewer::new()
+            .explicit_image_uri_scheme(true)
+            .show(ui, cache, text);
+    } else {
+        ui.monospace(text);
     }
 }

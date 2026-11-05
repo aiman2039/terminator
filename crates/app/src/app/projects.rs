@@ -246,11 +246,13 @@ impl App {
             })
             .filter(|s| self.project_available(&s.project_id))
     }
+    /// The Explorer root: the focused shell's folder, else (also when that
+    /// folder is gone) the project folder.
     pub(crate) fn cwd(&self) -> Option<PathBuf> {
         if self.selected_remote_project().is_some() {
             return None;
         }
-        self.context_session()
+        self.folder_session()
             .map(|s| s.cwd.clone())
             .or_else(|| self.selected_project().map(|p| p.path.clone()))
     }

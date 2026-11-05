@@ -329,6 +329,9 @@ impl OutlineView<'_> {
         if selected && current.scroll {
             response.scroll_to_me(None);
         }
+        // Cmd+7 focuses the first row on screen, so arrow keys and Enter
+        // work at once.
+        crate::shortcuts::tool_row_focus(ui, &response);
         if response.clicked() {
             let chevron_end = response.rect.left() + depth as f32 * INDENT + CHEVRON;
             let on_chevron = response

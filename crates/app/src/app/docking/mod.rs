@@ -304,7 +304,7 @@ impl App {
         {
             ui.painter().rect_stroke(
                 leaf.rect.shrink(1.0),
-                2,
+                appearance::RADIUS_XSMALL,
                 appearance::focus_stroke(
                     appearance::color(&self.theme.accent),
                     self.highlight_since.elapsed(),

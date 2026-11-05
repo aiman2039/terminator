@@ -14,7 +14,7 @@ pub(super) struct DocHighlights {
 
 impl LspManager {
     /// The ready server for `path`, when one tracks it.
-    fn ready_server(&self, path: &Path) -> Option<&Server> {
+    pub(super) fn ready_server(&self, path: &Path) -> Option<&Server> {
         let doc = self.docs.get(path)?;
         self.servers.get(&doc.server).filter(|server| server.ready)
     }

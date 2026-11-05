@@ -1,13 +1,15 @@
 //! Process and process-group signals. Pid 0 and pid 1 are refused for group signals.
 //!
-//! Windows has no POSIX signals. `Kill`, `Term`, and `Hangup` terminate the
-//! target (`taskkill /F`; process trees with `/T` for groups), while
-//! `Stop`/`Cont` have no counterpart and fail as unsupported. Liveness uses
-//! `sysinfo`, which is cross-platform.
+//! Windows has no POSIX signals. `Kill`, `Term`, `Interrupt`, and `Hangup`
+//! terminate the target (`taskkill /F`; process trees with `/T` for
+//! groups), while `Stop`/`Cont` have no counterpart and fail as
+//! unsupported. Liveness uses `sysinfo`, which is cross-platform.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcSignal {
     Hangup,
+    /// Ctrl-C (`SIGINT`): programs clean up before they exit.
+    Interrupt,
     Kill,
     Term,
     Stop,
@@ -18,6 +20,7 @@ pub enum ProcSignal {
 fn rustix_signal(signal: ProcSignal) -> rustix::process::Signal {
     match signal {
         ProcSignal::Hangup => rustix::process::Signal::HUP,
+        ProcSignal::Interrupt => rustix::process::Signal::INT,
         ProcSignal::Kill => rustix::process::Signal::KILL,
         ProcSignal::Term => rustix::process::Signal::TERM,
         ProcSignal::Stop => rustix::process::Signal::STOP,
@@ -96,7 +99,7 @@ fn refuse_system(pid: u32) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn check_supported(signal: ProcSignal) -> std::io::Result<()> {
     match signal {
-        ProcSignal::Hangup | ProcSignal::Kill | ProcSignal::Term => Ok(()),
+        ProcSignal::Hangup | ProcSignal::Interrupt | ProcSignal::Kill | ProcSignal::Term => Ok(()),
         ProcSignal::Stop | ProcSignal::Cont => Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "job suspension is not supported on Windows",

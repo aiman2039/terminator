@@ -86,7 +86,7 @@ pub(super) fn branch_width(ui: &egui::Ui, branch: Option<&str>) -> f32 {
     branch
         .map(|text| {
             ui.painter()
-                .layout_no_wrap(text.into(), FontId::proportional(12.0), icon_color())
+                .layout_no_wrap(text.into(), FontId::proportional(FONT_SMALL), icon_color())
                 .size()
                 .x
                 + 6.0
@@ -201,8 +201,12 @@ pub(super) fn paint_title(ui: &egui::Ui, input: BarTitle<'_>) {
     } = input;
     let dot_gap = if status.is_some() { 14.0 } else { 0.0 };
     let title_width = (git_left - dot_gap - lead - 4.0).max(0.0);
-    let mut job =
-        egui::text::LayoutJob::simple(title.into(), FontId::proportional(12.0), tint, title_width);
+    let mut job = egui::text::LayoutJob::simple(
+        title.into(),
+        FontId::proportional(FONT_SMALL),
+        tint,
+        title_width,
+    );
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     let galley = ui.painter().layout_job(job);
@@ -255,7 +259,7 @@ pub(super) fn bar_button(ui: &egui::Ui, input: BarButton<'_>) -> egui::Response 
             ui,
             egui::Rect::from_center_size(
                 egui::pos2(rect.left() + TERMINAL_BUTTON / 2.0, rect.center().y),
-                egui::vec2(14.0, 14.0),
+                egui::Vec2::splat(super::super::TOOLBAR_ICON),
             ),
         );
     response
@@ -264,7 +268,7 @@ pub(super) fn bar_button(ui: &egui::Ui, input: BarButton<'_>) -> egui::Response 
 pub(super) fn paint_branch(ui: &egui::Ui, git_rect: egui::Rect, branch: &str) {
     let mut job = egui::text::LayoutJob::simple(
         branch.into(),
-        FontId::proportional(12.0),
+        FontId::proportional(FONT_SMALL),
         ui.visuals().weak_text_color(),
         (git_rect.width() - TERMINAL_BUTTON).max(0.0),
     );

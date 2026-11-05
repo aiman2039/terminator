@@ -147,6 +147,7 @@ impl App {
         }
     }
 
+    /// Status-bar Player icon: the shared compact square, filled while audio is on.
     pub(crate) fn player_toggle_button(&mut self, ui: &mut egui::Ui) {
         // Only playback needs a steady frame cadence for the now-playing stamp.
         // Requesting this unconditionally pinned the window to 5 fps even with
@@ -154,16 +155,12 @@ impl App {
         if matches!(self.player.status, Status::Playing { .. }) {
             ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
-        let icon = Self::paint_player_icon(
+        let icon = appearance::selectable_icon(appearance::SelectableIconInput {
             ui,
-            PlayerIconButton {
-                name: "AudioLines",
-                tip: self.player_chrome_tip(),
-                lit: self.player_active(),
-                size: 28.0,
-                glyph: 16.0,
-            },
-        );
+            icon: "AudioLines",
+            tip: self.player_chrome_tip(),
+            selected: self.player_active(),
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "player-chrome", icon.rect);
         if icon.clicked() {
@@ -242,7 +239,7 @@ impl App {
         ui.weak(
             egui::RichText::new(format_clock(position))
                 .monospace()
-                .size(12.0),
+                .size(appearance::FONT_SMALL),
         );
         ui.add(egui::Label::new(title).truncate())
             .on_hover_text(format!("{title} / {total}"));
@@ -252,13 +249,17 @@ impl App {
         } else {
             ("Play", "Play")
         };
-        let toggle = Self::player_tool_button(ui, icon, tip);
+        // Status-bar size, like the other status icons; not the Player view's.
+        let toggle = appearance::sidebar_action(ui, icon, tip);
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "status-player", toggle.rect);
         if toggle.clicked() {
             self.player_play_pause();
         }
-        if Self::player_tool_button(ui, "SkipForward", "Next").clicked() {
+        let next = appearance::sidebar_action(ui, "SkipForward", "Next");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "status-player-next", next.rect);
+        if next.clicked() {
             self.player_skip(1);
         }
     }
@@ -306,7 +307,11 @@ impl App {
             egui::vec2(ui.available_width(), 18.0),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.weak(egui::RichText::new(clock).monospace().size(12.0));
+                ui.weak(
+                    egui::RichText::new(clock)
+                        .monospace()
+                        .size(appearance::FONT_SMALL),
+                );
                 ui.add(egui::Label::new(title).truncate())
                     .on_hover_text(title);
             },
@@ -381,11 +386,17 @@ impl App {
             .allocate_response(egui::vec2(size, size), egui::Sense::click())
             .on_hover_text(tip);
         if lit {
-            ui.painter()
-                .rect_filled(response.rect, 6.0, ui.visuals().selection.bg_fill);
+            ui.painter().rect_filled(
+                response.rect,
+                appearance::WIDGET_RADIUS,
+                ui.visuals().selection.bg_fill,
+            );
         } else if response.hovered() {
-            ui.painter()
-                .rect_filled(response.rect, 6.0, ui.visuals().widgets.hovered.bg_fill);
+            ui.painter().rect_filled(
+                response.rect,
+                appearance::WIDGET_RADIUS,
+                ui.visuals().widgets.hovered.bg_fill,
+            );
         }
         let tint = if lit {
             ui.visuals().selection.stroke.color

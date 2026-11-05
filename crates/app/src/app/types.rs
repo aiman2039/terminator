@@ -233,7 +233,6 @@ pub(crate) enum Job {
     /// Download a browser tab icon; answers with `Update::Favicon`.
     Favicon(String),
     PasteClipboard(String),
-
     Diff(Tab),
     DiffContext(Tab, diff::DiffView),
     DiffExpand(
@@ -333,6 +332,7 @@ pub(crate) enum Job {
     },
     /// Load a commit-log or blame tab off the GUI thread.
     GitView(Tab),
+    GitLog(Tab, git_log::LogQuery),
     LocalHistory(crate::local_history::Op),
 }
 /// Loaded contents of a commit-log or blame tab.

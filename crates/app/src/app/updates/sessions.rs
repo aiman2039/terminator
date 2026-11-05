@@ -38,12 +38,14 @@ impl App {
     }
 
     pub(super) fn handle_opened_project(&mut self, state: State, project: String, generation: u64) {
+        let reopened = self.selected.as_deref() == Some(project.as_str());
         self.missing_projects.remove(&project);
         self.preferences.setup_completed = true;
         self.refresh_request = None;
         self.apply_state(state);
         if generation == self.selection_generation {
-            self.reveal_project(project);
+            self.reveal_project(project.clone());
+            self.finish_folder_pick(&project, generation, reopened);
         } else if let Some(project) = self.selected.clone() {
             // Undo older AddProject selection side effects on the daemon.
             self.send(Request::SelectProject { project });
@@ -59,8 +61,10 @@ impl App {
         self.worktree_draft = None;
         self.missing_projects.remove(&project);
         self.apply_state(state);
-        self.reveal_project(project);
-        if open_terminal {
+        self.reveal_project(project.clone());
+        // A project that cannot be selected keeps the old selection: its
+        // terminal must not start there.
+        if open_terminal && self.selected.as_deref() == Some(project.as_str()) {
             self.create(None);
         }
     }

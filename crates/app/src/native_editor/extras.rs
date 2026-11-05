@@ -29,6 +29,9 @@ pub(crate) struct DocExtras {
     pub(super) compare: Option<CompareView>,
     /// Status-bar cells and the format they describe.
     pub(super) status: Option<(StatusKey, Arc<Vec<String>>)>,
+    /// The Quick Documentation pointer timer and popup of this file's
+    /// views.
+    pub(super) quick_doc: super::quick_doc::QuickDoc,
 }
 
 /// What the status-bar cells show: line breaks, encoding, indentation.

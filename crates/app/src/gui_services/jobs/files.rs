@@ -86,7 +86,8 @@ impl Services {
             .fs()
             .run(&cancel, move || {
                 let project =
-                    services::project_for_directory(&state.projects, &lookup).map(|p| p.id.clone());
+                    services::project_for_directory(services::openable_projects(&state), &lookup)
+                        .map(|p| p.id.clone());
                 anyhow::Ok((state, project))
             })
             .await?;
@@ -101,10 +102,11 @@ impl Services {
             };
             self.fs()
                 .run(&cancel, move || {
-                    let project = services::project_for_directory(&state.projects, &path)
-                        .context("Opened project missing from inventory")?
-                        .id
-                        .clone();
+                    let project =
+                        services::project_for_directory(services::openable_projects(&state), &path)
+                            .context("Opened project missing from inventory")?
+                            .id
+                            .clone();
                     anyhow::Ok((state, project))
                 })
                 .await?
@@ -123,6 +125,11 @@ impl Services {
             cancel,
             updates,
         } = input;
+        if let workspace_ops::Op::Commit { .. } = op {
+            // The long run replies from its own queue.
+            self.commit(root, op, updates);
+            return Ok(());
+        }
         let reply = op.clone();
         let reply_root = root.clone();
         let result = match op {

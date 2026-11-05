@@ -13,6 +13,7 @@ mod autosave;
 mod blame;
 mod close;
 mod close_copies;
+mod commands;
 mod complete;
 mod disk;
 mod doc;
@@ -25,7 +26,10 @@ mod gutter;
 mod hierarchy;
 mod jumps;
 mod navigation;
+mod quick_doc;
 mod rename;
+mod reopen;
+mod status;
 mod view;
 pub(crate) use actions::ActionsPopup;
 pub(crate) use blame::{EditorBlame, ymd};
@@ -37,7 +41,7 @@ pub(crate) use doc::NativeDoc;
 use doc::*;
 pub(crate) use file_io::LineEnding;
 pub(crate) use find::FindBar;
-pub(crate) use find_files::FindInFiles;
+pub(crate) use find_files::{FindInFiles, explorer_has_focus, note_explorer_focus};
 pub(crate) use gutter::GutterPopup;
 pub(crate) use hierarchy::HierarchyView;
 pub(crate) use navigation::{NavLocation, UsagesView, read_line_previews};
@@ -57,8 +61,7 @@ use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::highlight::{Language, language_for_path};
 use terminator_native_edit::lsp as native_lsp;
 use terminator_native_edit::view::{
-    DiagnosticMark, ShowSourceInput, SourceOptions, mode_color, mode_name, show_source,
-    source_focus_id,
+    DiagnosticMark, ShowSourceInput, SourceOptions, show_source, source_focus_id,
 };
 
 pub(crate) struct OpenNativeInput<'a> {
@@ -105,8 +108,13 @@ impl App {
         let remote_snapshot = crate::remote_ui::is_snapshot(&self.paths.data, path);
         self.native_docs.entry(path.to_owned()).or_insert_with(|| {
             let mut doc = NativeDoc::new(path.to_owned(), !vim);
+            // Where the file was left, put back once it loads.
+            doc.restore = self.preferences.editor_states.get(path).cloned();
             if remote_snapshot {
                 doc.read_limit = terminator_core::remote::MAX_FILE_BYTES as u64;
+                // The `.editorconfig` files above a snapshot are local
+                // folders, not the host's: detect from the text instead.
+                doc.read_editorconfig = false;
             }
             doc
         })
@@ -161,6 +169,7 @@ impl App {
                 }
             }
         }
+        self.remember_dropped_native(&live);
         self.native_docs.retain(|path, _| live.contains(path));
         self.native_pending_line
             .retain(|path, _| live.contains(path));
@@ -267,3 +276,6 @@ mod view_buffer_tests;
 
 #[cfg(test)]
 mod disk_tests;
+
+#[cfg(test)]
+mod reopen_tests;

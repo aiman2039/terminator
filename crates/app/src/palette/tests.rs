@@ -68,6 +68,96 @@ fn fuzzy_index_ranks_go_to_file() {
 }
 
 #[test]
+fn go_to_file_reads_a_typed_line_and_column() {
+    use super::results::{FileQuery, file_query};
+    let at = |pattern: &str, line, column| FileQuery {
+        pattern: pattern.into(),
+        line,
+        column,
+    };
+    assert_eq!(
+        file_query("src/main.rs:42:5"),
+        at("src/main.rs", Some(42), Some(5))
+    );
+    assert_eq!(file_query("main.rs:42"), at("main.rs", Some(42), None));
+    assert_eq!(file_query("main.rs:42:"), at("main.rs", Some(42), None));
+    // Typing toward a line keeps the file list; other text stays as typed.
+    assert_eq!(file_query("main.rs:"), at("main.rs", None, None));
+    assert_eq!(file_query("main.rs"), at("main.rs", None, None));
+    assert_eq!(file_query(":"), at(":", None, None));
+    assert_eq!(file_query("host:port"), at("host:port", None, None));
+}
+
+#[test]
+fn go_to_file_with_a_line_ranks_on_the_path_and_opens_at_that_line() {
+    use terminator_native_edit::finder::FileIndex;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    for name in ["src/main.rs", "src/lib.rs"] {
+        std::fs::write(root.join(name), "").unwrap();
+    }
+    let ctx = egui::Context::default();
+    let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+    project_at(&mut app, "p", root.clone());
+    app.selected = Some("p".into());
+    app.file_index = FileIndex::scan(std::slice::from_ref(&root), MAX_INDEX_FILES);
+    app.palette.query = "main.rs:42:5".into();
+    let files: Vec<PathBuf> = app
+        .filtered_palette()
+        .into_iter()
+        .filter_map(|item| match item {
+            PaletteItem::File(path) => Some(path),
+            _ => None,
+        })
+        .collect();
+    let main = root.join("src/main.rs");
+    assert_eq!(files, std::slice::from_ref(&main));
+    app.state.settings.editor_mode = EditorMode::Native;
+    app.run_palette(&ctx, PaletteItem::File(main.clone()));
+    // Typed 1-based; the native editor takes zero-based.
+    assert_eq!(app.native_pending_line.get(&main), Some(&41));
+    assert_eq!(app.native_pending_col.get(&main), Some(&4));
+    // Daemon editors get the line.
+    let (jobs, received) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.settings.editor_mode = EditorMode::Embedded;
+    app.palette.query = "lib.rs:7".into();
+    let lib = root.join("src/lib.rs");
+    app.run_palette(&ctx, PaletteItem::File(lib.clone()));
+    assert!(received.try_iter().any(|job| matches!(
+        job,
+        Job::Control(request, _) if matches!(
+            *request,
+            Request::Create { ref file, line: Some(7), .. } if file.as_ref() == Some(&lib)
+        )
+    )));
+}
+
+#[test]
+fn line_suffix_ranks_unindexed_files_on_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+    project_at(&mut app, "p", dir.path().into());
+    app.selected = Some("p".into());
+    let notes = dir.path().join("notes.md");
+    app.dirs.insert(
+        dir.path().into(),
+        vec![terminator_git::Entry {
+            path: notes.clone(),
+            directory: false,
+            ignored: false,
+        }],
+    );
+    app.palette.query = "notes.md:3".into();
+    assert!(
+        app.filtered_palette()
+            .iter()
+            .any(|item| matches!(item, PaletteItem::File(path) if path == &notes))
+    );
+}
+
+#[test]
 fn background_refresh_delivers_an_index() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a.rs"), "").unwrap();

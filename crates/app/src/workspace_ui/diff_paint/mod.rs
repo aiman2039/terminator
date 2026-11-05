@@ -85,7 +85,7 @@ impl DiffMetrics {
             .cloned()
         else {
             return Self {
-                font: egui::FontId::monospace(12.0),
+                font: egui::FontId::monospace(appearance::FONT_SMALL),
                 digit_w: 0.0,
                 row_h: 0.0,
                 digits,

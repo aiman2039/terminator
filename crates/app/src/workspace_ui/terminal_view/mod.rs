@@ -281,7 +281,10 @@ impl Viewer<'_> {
             .set_font(font)
             .set_size(ui.available_size())
             .find_highlight(find_paint);
-        Some(ui.add_enabled(gates.input_enabled, view))
+        let response = ui.add_enabled(gates.input_enabled, view);
+        // Shortcuts run before panes paint; this tells them a terminal has focus.
+        shortcuts::mark_terminal(ui.ctx(), response.id);
+        Some(response)
     }
 
     #[cfg(feature = "test-support")]

@@ -91,7 +91,23 @@ impl VimEngine {
 
     /// Report the shown lines (the view calls this every frame).
     pub fn set_viewport(&mut self, top: usize, bottom: usize) {
-        self.x.viewport = super::super::state::Viewport { top, bottom };
+        self.x.viewport = super::super::state::Viewport {
+            top,
+            bottom,
+            ..self.x.viewport
+        };
+    }
+
+    /// Report the line of the row at the top edge, rounded to the nearest
+    /// row, so a restored scroll position reads back unchanged.
+    pub fn set_scroll_line(&mut self, line: usize) {
+        self.x.viewport.scroll = line;
+    }
+
+    /// The line at the top edge as the view last reported it (0 before).
+    #[must_use]
+    pub fn scroll_line(&self) -> usize {
+        self.x.viewport.scroll
     }
 
     /// Take a pending view scroll (`zz`, Ctrl-D, …) for the view to apply.

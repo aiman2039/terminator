@@ -249,13 +249,8 @@ impl Services {
         let Response::State(state) = client.rpc(Request::Snapshot).await? else {
             anyhow::bail!("Expected worktree snapshot")
         };
-        let project = state
-            .projects
-            .iter()
-            .find(|p| p.path == canonical)
-            .context("Created worktree missing from inventory")?
-            .id
-            .clone();
+        let project = checkout_project(&state, &canonical)
+            .context("Created worktree missing from inventory")?;
         updates.push(Update::WorktreeCreated(state, project, draft.open_terminal));
         Ok(())
     }
@@ -276,10 +271,116 @@ impl Services {
         updates.push(Update::GitView(key, view));
         Ok(())
     }
+
+    /// A Commit Log tab's filtered load or Go to Hash. Git runs locally,
+    /// also for logs that a daemon could serve: no daemon request is made.
+    pub(in crate::gui_services) async fn git_log(
+        &self,
+        (tab, query): (Tab, crate::git_log::LogQuery),
+        cancel: CancellationToken,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let key = tab.key();
+        let Tab::CommitLog { cwd } = &tab else {
+            let log = query.failed("Not a Commit Log tab".into());
+            updates.push(Update::GitView(key, crate::GitView::Log(log)));
+            return Ok(());
+        };
+        let git = JobGit::new(self, &cancel);
+        let (cwd, task) = (cwd.clone(), query.clone());
+        let log = self
+            .fs()
+            .run(&cancel, move || {
+                anyhow::Ok(crate::git_log::query_log(&git, &cwd, &task))
+            })
+            .await
+            .unwrap_or_else(|error| query.failed(format!("{error:#}")));
+        updates.push(Update::GitView(key, crate::GitView::Log(log)));
+        Ok(())
+    }
+}
+
+/// Git for a Commit Log job. When a newer query replaces the job, its
+/// cancellation kills the Git process group at once.
+pub(in crate::gui_services) struct JobGit {
+    processes: terminator_core::async_process::Processes,
+    runtime: tokio::runtime::Handle,
+    cancel: CancellationToken,
+}
+
+impl JobGit {
+    /// Call on a runtime thread; use the result on a file-pool thread.
+    pub(in crate::gui_services) fn new(service: &Services, cancel: &CancellationToken) -> Self {
+        Self {
+            processes: service.processes().clone(),
+            runtime: tokio::runtime::Handle::current(),
+            cancel: cancel.clone(),
+        }
+    }
+}
+
+impl crate::git_log::LogGit for JobGit {
+    fn git(
+        &self,
+        dir: &std::path::Path,
+        args: &[&str],
+        options: terminator_core::CommandOptions,
+    ) -> std::result::Result<Vec<u8>, String> {
+        let command = terminator_core::git::command(dir, args);
+        // A file-pool thread, not a runtime thread: it may wait here.
+        self.runtime
+            .block_on(
+                self.processes
+                    .run_cancellable(command, options, &self.cancel),
+            )
+            .map(|output| output.stdout)
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The project of the checkout at `path`. A removed worktree at the same
+/// path cannot be selected, so it never matches.
+fn checkout_project(state: &terminator_core::State, path: &std::path::Path) -> Option<String> {
+    crate::services::openable_projects(state)
+        .find(|project| project.path == path)
+        .map(|project| project.id.clone())
 }
 
 #[cfg(test)]
 mod tests {
+    /// A removed worktree stays in the inventory with its old path. A new
+    /// checkout at that path must open the new project, which can be
+    /// selected, not the removed one.
+    #[test]
+    fn a_new_checkout_at_a_removed_worktree_path_opens_the_new_project() {
+        let project = |id: &str| terminator_core::Project {
+            id: id.into(),
+            name: id.into(),
+            path: "/work/task".into(),
+            layout: serde_json::Value::Null,
+        };
+        let registration = |id: &str, removed| terminator_core::worktrees::Registration {
+            project_id: id.into(),
+            common_dir: "/work/repo/.git".into(),
+            path: "/work/task".into(),
+            created: 0,
+            removed,
+        };
+        let state = terminator_core::State {
+            projects: vec![project("removed"), project("checkout")],
+            worktrees: vec![
+                registration("removed", true),
+                registration("checkout", false),
+            ],
+            ..Default::default()
+        };
+        let path = std::path::Path::new("/work/task");
+        assert_eq!(
+            super::checkout_project(&state, path).as_deref(),
+            Some("checkout")
+        );
+    }
+
     #[tokio::test]
     async fn git_base_reads_head_and_skips_untracked_files() {
         let dir = tempfile::tempdir().unwrap();

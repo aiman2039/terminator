@@ -711,32 +711,39 @@ async fn live_rust_analyzer_diagnostics() {
             .collect::<Vec<_>>()
     );
     assert!(!manager.row_marks(&file).is_empty());
-    // Hover the `bad` binding (line 1, chars 8..11), retrying the
-    // request like a user pressing K again: early answers are null
-    // until analysis settles.
+    // Hover the `bad` binding (line 1, chars 8..11). Early answers are
+    // null until analysis settles; a new key (as after an edit) asks
+    // again, since an answer stays with the key it came for.
     let start = Instant::now();
     let mut hover = None;
-    while hover.is_none() {
+    for revision in 1_u64.. {
         assert!(start.elapsed() < Duration::from_mins(1), "no hover");
-        manager.request_hover(
-            &file,
-            L::Position {
-                line: 1,
-                character: 9,
-            },
-            (1, 8),
-        );
+        let key = HoverKey {
+            path: file.clone(),
+            revision,
+            line: 1,
+            start: 8,
+            end: 11,
+        };
+        let at = L::Position {
+            line: 1,
+            character: 9,
+        };
+        assert_eq!(manager.request_hover(&key, at), Ok(true));
         for _ in 0..10 {
             manager.poll();
-            hover = manager.hover_popup(&file, (1, 8));
+            hover = manager.hover_docs(&key).flatten();
             if hover.is_some() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        if hover.is_some() {
+            break;
+        }
     }
     assert!(
-        hover.as_ref().is_some_and(|(text, _)| text.contains("i32")),
+        hover.as_ref().is_some_and(|docs| docs.text.contains("i32")),
         "hover: {hover:?}"
     );
     manager.prune(&std::collections::HashSet::new());
@@ -919,7 +926,10 @@ async fn live_rust_analyzer_completion() {
             start.elapsed() < Duration::from_secs(90),
             "no completion: {labels:?}"
         );
-        if manager.request_completion(&file, at).is_none() {
+        if manager
+            .request_completion(&file, at, L::CompletionTrigger::Invoked)
+            .is_none()
+        {
             manager.poll();
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;

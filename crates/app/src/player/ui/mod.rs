@@ -87,7 +87,13 @@ fn title_row(ui: &mut Ui, status: &Status) {
         Status::Stopped => ("Not playing", ui.visuals().weak_text_color()),
     };
     ui.add(
-        egui::Label::new(egui::RichText::new(title).strong().color(color).size(14.0)).truncate(),
+        egui::Label::new(
+            egui::RichText::new(title)
+                .strong()
+                .color(color)
+                .size(appearance::FONT_LARGE),
+        )
+        .truncate(),
     );
 }
 
@@ -173,7 +179,7 @@ fn paint_seek_bar(input: PaintSeekBarInput<'_>) {
     let visuals = ui.visuals();
     let track = Rect::from_center_size(rect.center(), vec2(rect.width(), 8.0));
     ui.painter()
-        .rect_filled(track, 4.0, visuals.extreme_bg_color);
+        .rect_filled(track, appearance::RADIUS_SMALL, visuals.extreme_bg_color);
     let filled_w = if seekable {
         track.width() * fraction.clamp(0.0, 1.0)
     } else {
@@ -185,7 +191,8 @@ fn paint_seek_bar(input: PaintSeekBarInput<'_>) {
     } else {
         visuals.weak_text_color().gamma_multiply(0.45)
     };
-    ui.painter().rect_filled(filled, 4.0, fill);
+    ui.painter()
+        .rect_filled(filled, appearance::RADIUS_SMALL, fill);
     if seekable {
         let x = track.min.x + track.width() * fraction.clamp(0.0, 1.0);
         ui.painter()
@@ -348,7 +355,7 @@ fn eq_panel(app: &mut App, ui: &mut Ui) {
             pos2(x, rect.max.y - 2.0),
             egui::Align2::CENTER_BOTTOM,
             *label,
-            egui::FontId::monospace(9.0),
+            egui::FontId::monospace(appearance::FONT_MINI),
             muted,
         );
     }

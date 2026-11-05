@@ -42,7 +42,9 @@ impl VimEngine {
                 );
             }
             Key::Tab => {
-                let _ = self.insert_text(doc, "\t");
+                // The document's indent style, like `expandtab`.
+                let text = self.tab_text_at_caret(doc);
+                let _ = self.insert_text(doc, &text);
             }
             Key::Ctrl('w') => self.insert_delete_back(doc, false),
             Key::Ctrl('u') => self.insert_delete_back(doc, true),

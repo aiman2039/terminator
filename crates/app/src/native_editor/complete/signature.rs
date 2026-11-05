@@ -79,7 +79,7 @@ pub(crate) fn signature_ui(ui: &egui::Ui, popup: &SignaturePopup) {
     let (Some(help), Some(anchor)) = (&popup.help, popup.anchor) else {
         return;
     };
-    let font = egui::FontId::monospace(12.0);
+    let font = egui::FontId::monospace(crate::appearance::FONT_SMALL);
     let mut job = egui::text::LayoutJob::default();
     let chars: Vec<char> = help.label.chars().collect();
     let (start, end) = help.active.as_ref().map_or((0, 0), |range| {

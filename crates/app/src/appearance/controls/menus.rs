@@ -1,20 +1,14 @@
 //! Context and dropdown menus in the Orca recipe.
 use super::super::rows::{RowInput, row};
-use super::super::theme::{
-    MENU_RADIUS, WIDGET_RADIUS, icon_color, menu_fill, menu_line, menu_muted, menu_text,
-};
-use super::TOOLBAR_BUTTON;
-use eframe::egui::{self, Color32, FontId, TextStyle};
+use super::super::scale::{MENU_RADIUS, WIDGET_RADIUS, apply_menu_text_styles};
+use super::super::theme::{icon_color, menu_fill, menu_line, menu_muted, menu_text};
+use super::{TOOLBAR_BUTTON, TOOLBAR_ICON};
+use eframe::egui::{self, Color32, FontId};
 
 /// Orca dark menu recipe from `ui/context-menu.tsx` and `.dark` tokens in `main.css`.
 pub fn menu_style(style: &mut egui::Style) {
     egui::menu::menu_style(style);
-    for role in [TextStyle::Body, TextStyle::Button] {
-        style.text_styles.insert(role, FontId::proportional(12.0));
-    }
-    style
-        .text_styles
-        .insert(TextStyle::Small, FontId::proportional(11.0));
+    apply_menu_text_styles(style);
     style.spacing.menu_margin = egui::Margin::same(4);
     style.visuals.window_fill = menu_fill();
     style.visuals.override_text_color = Some(menu_text());
@@ -110,7 +104,7 @@ pub fn compact_menu_button<R>(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         label,
-        FontId::proportional(14.0),
+        FontId::proportional(TOOLBAR_ICON),
         icon_color(),
     );
     let popup = egui::Popup::menu(&response)

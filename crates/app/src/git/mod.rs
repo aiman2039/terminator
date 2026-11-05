@@ -2,4 +2,5 @@
 pub(super) mod git_log;
 pub(super) mod local_history;
 pub(super) mod merge;
+pub(super) mod revision_compare;
 pub(super) mod worktree_ui;

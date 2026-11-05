@@ -166,17 +166,21 @@ impl App {
         }
         self.pending_delete_bar(ui);
         let host = ui.scope_id();
+        // A status-bar breadcrumb reveal goes to the first Explorer painted.
+        if let Some(reveal) = self.explorer_reveal.as_mut()
+            && reveal.host == egui::Id::NULL
+        {
+            reveal.host = host;
+        }
         self.explorer_autoreveal(host);
-        // Branches for "Compare with branch" (loaded once per repo).
-        let git_root = self
-            .context
-            .as_ref()
-            .and_then(|context| context.root.clone());
-        self.ensure_git_lists(git_root);
         let root_override = self.explorer_reveal_root(host);
         let Some(cwd) = root_override.or_else(|| self.cwd()) else {
             return;
         };
+        if let Some(gone) = self.missing_terminal_folder() {
+            ui.weak(crate::app::missing_folder::terminal_folder_note(gone));
+        }
+        self.explorer_key_focus(ui, host);
         self.explorer_toolbar(ui, &cwd);
         let cwd = self.explorer_reveal_root(host).unwrap_or(cwd);
         if self.preferences.explorer_search_mode == ExplorerSearchMode::Contents {
@@ -190,6 +194,30 @@ impl App {
         }
     }
 
+    /// A tool window key aimed here (Cmd+1, Alt+F1): select the current
+    /// file for Select In, then give the tree (or, in a contents search,
+    /// the search field) keyboard focus, so arrow keys work at once.
+    fn explorer_key_focus(&mut self, ui: &egui::Ui, host: egui::Id) {
+        let Some(claim) = crate::shortcuts::take_tool_focus(ui.ctx()) else {
+            return;
+        };
+        if claim.reveal && self.reveal_current_file_in_explorer(host) {
+            let file = self
+                .explorer_reveal
+                .as_ref()
+                .map(|reveal| reveal.file.clone());
+            self.explorer_selection = file.iter().cloned().collect();
+            self.explorer_anchor = file;
+        }
+        if self.preferences.explorer_search_mode == ExplorerSearchMode::Contents {
+            self.explorer_focus_find = true;
+        } else {
+            ui.memory_mut(|memory| memory.request_focus(tree_focus_id(host)));
+        }
+        // The tree locks its keys from its next paint on.
+        ui.ctx().request_repaint();
+    }
+
     /// Root of a reveal aimed at this Explorer host, if any.
     fn explorer_reveal_root(&self, host: egui::Id) -> Option<PathBuf> {
         self.explorer_reveal
@@ -200,7 +228,7 @@ impl App {
 
     /// The Git (or Perforce) panel for the selected terminal's context.
     fn git_tool(&mut self, ui: &mut egui::Ui) {
-        if self.context_session().is_some_and(|s| !s.cwd_confirmed) {
+        if self.folder_session().is_some_and(|s| !s.cwd_confirmed) {
             ui.label(RichText::new("Last known directory").small().weak());
         }
         ui.separator();
@@ -214,13 +242,13 @@ impl App {
             return;
         };
         let outcome = if context.perforce.is_some() {
-            let open_shortcut = self.shortcut_label(Action::OpenFile);
             crate::sidebar_ui::perforce_panel::panel(
                 ui,
                 crate::sidebar_ui::perforce_panel::PerforcePanelInput {
                     context: &context,
                     theme: &self.theme,
-                    open_shortcut: &open_shortcut,
+                    // No key opens a listed file: Open file is the file picker.
+                    open_shortcut: "",
                 },
             )
         } else {
@@ -244,7 +272,6 @@ impl App {
             std::sync::Arc::clone(git)
         };
         self.ensure_git_lists(context.root.clone());
-        let open_shortcut = self.shortcut_label(Action::OpenFile);
         let mut draft = std::mem::take(&mut self.git.commit);
         let recent_messages = self.preferences.commit_messages.clone();
         let outcome = git_panel(
@@ -269,17 +296,26 @@ impl App {
                 amend: &mut self.git.amend,
                 signoff: &mut self.git.signoff,
                 collapse_generation: self.git.collapse,
-                open_shortcut: &open_shortcut,
+                // No key opens a listed file: Open file is the file picker.
+                open_shortcut: "",
                 compare: self
                     .git
                     .compare
                     .as_ref()
                     .filter(|_| self.git.compare_root == context.root),
                 base_ref: self.git.base_ref.as_deref(),
-                committing: self.git.commit_inflight.is_some(),
+                focus_message: self.git.focus_message,
+                commit_run: self
+                    .git
+                    .run
+                    .as_ref()
+                    .map(crate::app::git_panel_state::CommitRun::progress),
+                commit_failure: self.git.commit_failure.as_deref(),
             },
         );
         self.git.commit = draft;
+        // A focus request is for this paint only.
+        self.git.focus_message = false;
         outcome
     }
 }

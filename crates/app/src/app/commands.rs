@@ -1,8 +1,5 @@
-use crate::agent_presence::AttentionInput;
-use crate::agent_presence::GetInput;
 use eframe::egui::{self};
 use egui_dock::NodeIndex;
-use std::collections::{HashMap, HashSet};
 use terminator_core::*;
 
 use super::super::*;
@@ -54,7 +51,10 @@ impl App {
             return switcher
                 || matches!(
                     action,
-                    Action::OpenSettings | Action::OpenPalette | Action::ToggleIdeMode
+                    Action::OpenSettings
+                        | Action::OpenPalette
+                        | Action::RecentFiles
+                        | Action::ToggleIdeMode
                 );
         }
         true
@@ -74,6 +74,9 @@ impl App {
                     .is_some_and(|session| self.session_action_applies(action, session))
             }
             action if SESSION_ACTIONS.contains(&action) => self.active_session.is_some(),
+            action if super::actions::GIT_ACTIONS.contains(&action) => {
+                self.git_action_applies(action)
+            }
             _ => true,
         }
     }
@@ -180,6 +183,8 @@ impl App {
                 self.open_command_palette();
                 self.palette.filters = crate::palette::FILTER_FILES;
             }
+            Action::FindInFiles => self.find_in_files_action(ctx),
+            Action::ReplaceInFiles => self.replace_in_files_action(ctx),
             Action::FindInTerminal => self.find_in_active_terminal(ctx),
             Action::NextPane => self.focus_next_pane(),
             Action::SelectAll => self.select_all_active(),
@@ -208,6 +213,12 @@ impl App {
             Action::NewVnc => self.open_new_vnc_tab(None),
             Action::SwitcherNext => self.step_switcher(false),
             Action::SwitcherBack => self.step_switcher(true),
+            Action::ToolExplorer
+            | Action::ToolProblems
+            | Action::ToolStructure
+            | Action::ToolGit
+            | Action::ToolTerminal
+            | Action::SelectIn => self.run_tool_window_key(ctx, action),
             Action::DiffNextChange
             | Action::DiffPrevChange
             | Action::DiffNextFile
@@ -215,105 +226,16 @@ impl App {
                 self.diff_nav = Some(action);
                 ctx.request_repaint();
             }
+            Action::GitCommit
+            | Action::GitCommitPush
+            | Action::GitRefresh
+            | Action::GitShowLog
+            | Action::GitCompareWith
+            | Action::GitCompareRevision
+            | Action::GitShowHistory
+            | Action::GitAnnotate
+            | Action::GitStageAll => self.run_git_action(action),
         }
-    }
-
-    pub(crate) fn present_session(
-        &self,
-        id: &str,
-    ) -> std::sync::Arc<agent_presence::AgentPresentation> {
-        self.presentations.borrow_mut().get(GetInput {
-            state: &self.state,
-            id,
-            now: now(),
-            fresh: self.services.presence_fresh(),
-        })
-    }
-
-    pub(crate) fn reconcile_presentations(&mut self) {
-        let fresh = self.services.presence_fresh();
-        let moment = now();
-        self.presentations
-            .get_mut()
-            .reconcile(&self.state, moment, fresh);
-    }
-
-    pub(crate) fn cached_tab_attention(
-        &self,
-        session_ids: &[String],
-    ) -> agent_presence::AttentionCounts {
-        self.presentations.borrow_mut().attention(AttentionInput {
-            state: &self.state,
-            session_ids,
-            now: now(),
-            fresh: self.services.presence_fresh(),
-        })
-    }
-
-    /// Global cycle order for attention navigation: distinct live terminals
-    /// with pending permission/input requests first, then failures; oldest
-    /// first within each group. Dismissal and snooze are respected.
-    pub(crate) fn attention_order(&self) -> Vec<String> {
-        let live: HashSet<&str> = self
-            .state
-            .sessions
-            .iter()
-            .filter(|s| s.lifecycle.live())
-            .map(|s| s.id.as_str())
-            .collect();
-        let mut earliest_waiting: HashMap<&str, u64> = HashMap::new();
-        let mut earliest_failed: HashMap<&str, u64> = HashMap::new();
-        for notice in &self.state.notifications {
-            if !live.contains(notice.session_id.as_str())
-                || !agent_presence::notice_pending(notice, now())
-            {
-                continue;
-            }
-            let slot = match notice.state {
-                AgentState::WaitingInput | AgentState::WaitingPermission => &mut earliest_waiting,
-                AgentState::Failed => &mut earliest_failed,
-                _ => continue,
-            };
-            slot.entry(notice.session_id.as_str())
-                .and_modify(|seen| *seen = (*seen).min(notice.created))
-                .or_insert(notice.created);
-        }
-        let mut order: Vec<(&str, u64)> = earliest_waiting.into_iter().collect();
-        order.sort_by_key(|(id, created)| (*created, *id));
-        let mut failed: Vec<(&str, u64)> = earliest_failed
-            .into_iter()
-            .filter(|(session, _)| !order.iter().any(|(waiting, _)| waiting == session))
-            .collect();
-        failed.sort_by_key(|(id, created)| (*created, *id));
-        order
-            .into_iter()
-            .chain(failed)
-            .map(|(session, _)| session.to_string())
-            .collect()
-    }
-
-    /// Reveal the next terminal needing attention, cycling globally through
-    /// [`Self::attention_order`] and reusing session navigation.
-    pub(crate) fn next_attention(&mut self) {
-        let order = self.attention_order();
-        if order.is_empty() {
-            self.info = Some("No agents need attention".into());
-            return;
-        }
-        let next = self
-            .active_session
-            .as_ref()
-            .and_then(|active| order.iter().position(|id| id == active))
-            .map_or(0, |index| {
-                index
-                    .saturating_add(1)
-                    .checked_rem(order.len())
-                    .unwrap_or(0)
-            });
-        let Some(target) = order.get(next).cloned() else {
-            return;
-        };
-        self.go_session(&target);
     }
 
     /// Go to Symbol: Search Everywhere with only the Symbols chip.
@@ -333,6 +255,10 @@ impl App {
     }
 
     pub(crate) fn open_command_palette(&mut self) {
+        // Settings and the Player draw above the palette in the center pane.
+        if self.settings_open || self.player_open {
+            self.hide_center_overlay();
+        }
         self.palette.open = true;
         self.palette.focus_pending = true;
         self.palette.file_scope = None;

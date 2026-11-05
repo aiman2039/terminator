@@ -3,8 +3,8 @@
 use super::super::super::doc::Buffer;
 use super::super::mode::{Cursor, Effect, Key, Mode};
 use super::super::state::VimEngine;
+use super::IdeMotion;
 use super::text::IdeText;
-use super::{INDENT_WIDTH, IdeMotion};
 
 impl VimEngine {
     /// Delete a non-empty modeless selection (typing or Backspace over it).
@@ -81,35 +81,13 @@ impl VimEngine {
         Vec::new()
     }
 
-    /// Indent unit for new indentation: a tab when the file indents with
-    /// tabs (the caret line first, else the first indented line), else
-    /// [`INDENT_WIDTH`] spaces.
-    pub(crate) fn ide_indent_unit<B: Buffer>(doc: &B, line: usize) -> String {
-        let tab = |text: String| match text.chars().next() {
-            Some('\t') => Some(true),
-            Some(' ') => Some(false),
-            _ => None,
-        };
-        let uses_tab = tab(doc.line_text(line))
-            .or_else(|| (0..doc.line_count().min(1000)).find_map(|line| tab(doc.line_text(line))));
-        if uses_tab == Some(true) {
-            "\t".into()
-        } else {
-            " ".repeat(INDENT_WIDTH)
-        }
-    }
-
-    /// Chars one outdent removes from a line starting with `text`: a
-    /// leading tab, else up to one indent unit of spaces.
-    pub(crate) fn outdent_width(text: &str) -> usize {
-        if text.starts_with('\t') {
-            1
-        } else {
-            text.chars()
-                .take(INDENT_WIDTH)
-                .take_while(|c| *c == ' ')
-                .count()
-        }
+    /// What Tab inserts at the caret, in the document's indent style: a
+    /// tab, or the spaces up to the next indent stop.
+    pub(in crate::vim) fn tab_text_at_caret<B: Buffer>(&self, doc: &B) -> String {
+        let style = doc.indent_style();
+        let text = doc.line_text(self.cursor.line);
+        let column = crate::rows::display_x(&text, self.cursor.col, style.tab_cells());
+        style.tab_text(column)
     }
 
     pub(super) fn ide_insert_at_caret<B: Buffer>(
@@ -193,7 +171,7 @@ impl VimEngine {
             self.ide_insert_at_caret(doc, &text, caret);
             return;
         };
-        let inner = format!("\n{indent}{}", Self::ide_indent_unit(doc, line));
+        let inner = format!("\n{indent}{}", doc.indent_style().unit());
         let caret = inner.chars().count();
         if next == Some(close) {
             self.ide_insert_at_caret(doc, &format!("{inner}\n{indent}"), caret);
@@ -204,13 +182,8 @@ impl VimEngine {
 
     /// Modeless Tab: one indent unit (spaces up to the next stop).
     pub(in crate::vim) fn ide_tab<B: Buffer>(&mut self, doc: &mut B) {
-        let unit = Self::ide_indent_unit(doc, self.cursor.line);
-        if unit == "\t" {
-            self.ide_insert_at_caret(doc, "\t", 1);
-        } else {
-            let width = INDENT_WIDTH.saturating_sub(self.cursor.col % INDENT_WIDTH);
-            self.ide_insert_at_caret(doc, &" ".repeat(width), width);
-        }
+        let text = self.tab_text_at_caret(doc);
+        self.ide_insert_at_caret(doc, &text, text.chars().count());
     }
 
     /// Modeless Backspace extras: delete an empty bracket or quote pair as
@@ -233,9 +206,10 @@ impl VimEngine {
             .get(..col)
             .is_some_and(|head| head.iter().all(|c| *c == ' '))
         {
-            let width = match col % INDENT_WIDTH {
-                0 => INDENT_WIDTH,
-                rest => rest,
+            let level = doc.indent_style().level();
+            let width = match col.checked_rem(level) {
+                Some(0) | None => level,
+                Some(rest) => rest,
             };
             (at.saturating_sub(width.min(col)), at)
         } else {
@@ -272,7 +246,7 @@ impl VimEngine {
     /// caret line.
     pub(super) fn ide_outdent_line<B: Buffer>(&mut self, doc: &mut B) {
         let line = self.cursor.line;
-        let width = Self::outdent_width(&doc.line_text(line));
+        let width = doc.indent_style().outdent_width(&doc.line_text(line));
         if width == 0 {
             return;
         }

@@ -22,9 +22,9 @@ impl App {
     /// move the selection (Shift extends), Left/Right collapse, expand, and
     /// walk the hierarchy, Enter or Cmd/Ctrl+Down opens, F2 renames, Delete
     /// trashes, Cmd/Ctrl+C/X/V copy, cut, and paste files, Cmd/Ctrl+Z
-    /// undoes the last rename or move, Escape clears,
-    /// and typed text searches the visible rows (Up/Down then step between
-    /// matches).
+    /// undoes the last rename or move, Escape ends a search or returns
+    /// focus to the editor or terminal, and typed text searches the
+    /// visible rows (Up/Down then step between matches).
     pub(in crate::sidebar_ui) fn explorer_keys(&mut self, input: ExplorerKeysInput<'_>) {
         let ExplorerKeysInput {
             ui,
@@ -143,10 +143,13 @@ impl App {
                 self.explorer_undo_last();
             }
             egui::Key::Escape => {
-                if self.explorer_speed.is_empty() {
-                    self.explorer_selection.clear();
-                } else {
-                    self.explorer_speed.clear();
+                // The first Esc ends a live search. Else leave the tool
+                // window; a timed-out search shows nothing, so it does not
+                // take an Esc. The selection stays.
+                let searching = self.explorer_speed_text().is_some();
+                self.explorer_speed.clear();
+                if !searching {
+                    self.return_focus_to_work(ui.ctx());
                 }
             }
             egui::Key::Backspace if !self.explorer_speed.is_empty() => {

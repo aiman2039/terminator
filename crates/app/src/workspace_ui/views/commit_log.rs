@@ -9,6 +9,8 @@ struct CommitLogPane<'a> {
     theme: &'a AppearanceConfig,
     commit_files: &'a HashMap<String, Option<CommitFiles>>,
     cwd: &'a Path,
+    /// Scroll the list to this row (Go to Hash).
+    reveal: Option<usize>,
 }
 
 /// What the commit log asked for this frame: changed files to fetch for
@@ -20,27 +22,37 @@ struct CommitLogPick {
 }
 
 impl App {
-    pub(in super::super) fn commit_log_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+    pub(crate) fn commit_log_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
         let Tab::CommitLog { cwd } = tab else {
             return;
         };
         let mut pick = CommitLogPick::default();
         let key = tab.key();
-        if !self.git_view_ready(ui, &key, tab) {
-            return;
-        }
+        self.log_filter_bar(ui, tab);
+        ui.separator();
         let Some(crate::GitView::Log(log)) = self.git_views.get(&key) else {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak("Loading…");
+            });
             return;
         };
         if let Some(error) = &log.error {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
             return;
         }
+        let reveal = self
+            .git
+            .logs
+            .get_mut(&key)
+            .and_then(|view| view.reveal.take())
+            .and_then(|hash| log.commits.iter().position(|c| c.hash == hash));
         let pane = CommitLogPane {
             log,
             theme: &self.theme,
             commit_files: &self.commit_files,
             cwd,
+            reveal,
         };
         let selected = &mut self.selected_commit;
         ui.columns(3, |cols| {
@@ -92,46 +104,24 @@ impl CommitLogPane<'_> {
         });
     }
 
+    /// The commit list with its lane graph and ref labels.
     fn commits(&self, col: &mut egui::Ui, selected: &mut Option<String>) {
         col.strong("Commits");
         col.separator();
-        let selected_hash = selected.clone();
-        appearance::sidebar_scroll("commits").show(col, |ui| {
-            for commit in &self.log.commits {
-                let is_selected = selected_hash.as_deref() == Some(&commit.hash);
-                if self.commit_row(ui, commit, is_selected).clicked() {
-                    *selected = Some(commit.hash.clone());
-                }
-            }
-        });
-    }
-
-    fn commit_row(
-        &self,
-        ui: &mut egui::Ui,
-        commit: &git_log::CommitEntry,
-        selected: bool,
-    ) -> egui::Response {
-        ui.horizontal(|ui| {
-            if selected {
-                ui.colored_label(appearance::color(&self.theme.accent), "\u{25CF}");
-            } else {
-                ui.add(egui::Label::new(
-                    egui::RichText::new("\u{25CF}")
-                        .size(10.0)
-                        .color(appearance::color(&self.theme.text)),
-                ));
-            }
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(&commit.subject));
-                ui.horizontal(|ui| {
-                    ui.weak(&commit.short_hash);
-                    ui.weak(&commit.date);
-                    ui.weak(&commit.author);
-                });
-            });
-        })
-        .response
+        if self.log.commits.is_empty() {
+            col.weak("No commits");
+            return;
+        }
+        let clicked = super::commit_graph::CommitList {
+            log: self.log,
+            theme: self.theme,
+            selected: selected.as_deref(),
+            reveal: self.reveal,
+        }
+        .show(col);
+        if let Some(hash) = clicked {
+            *selected = Some(hash);
+        }
     }
 
     fn details(&self, col: &mut egui::Ui, selected: &mut Option<String>, pick: &mut CommitLogPick) {

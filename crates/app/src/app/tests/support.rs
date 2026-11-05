@@ -611,6 +611,30 @@ pub(crate) fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::
     out
 }
 
+/// The rect of every texture (icon) painted into `shapes`, in paint order.
+#[cfg(feature = "test-support")]
+pub(crate) fn painted_icon_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
+    fn walk(out: &mut Vec<egui::Rect>, shape: &egui::Shape) {
+        match shape {
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(out, shape);
+                }
+            }
+            egui::Shape::Rect(rect) if rect.brush.is_some() => out.push(rect.rect),
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                out.push(mesh.calc_bounds());
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&mut out, &clipped.shape);
+    }
+    out
+}
+
 /// The strings of [`painted_text`], without positions.
 pub(crate) fn painted_strings(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
     painted_text(shapes)

@@ -29,6 +29,13 @@ pub trait TabViewer {
     /// No-op by default.
     fn paint_tab_leading(&mut self, _ui: &mut Ui, _rect: Rect, _tab: &mut Self::Tab) {}
 
+    /// Unsaved changes in `_tab`. A modified tab shows a dot in place of
+    /// its close button; pointing at the dot shows the close button again.
+    /// A tab without a close button shows no dot. `false` by default.
+    fn tab_modified(&self, _tab: &Self::Tab) -> bool {
+        false
+    }
+
     /// Actual tab content.
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab);
 

@@ -151,8 +151,10 @@ impl App {
         if query.is_empty() {
             return self.idle_palette(items);
         }
-        let mut ranked = self.rank_palette_items(query, items);
-        self.rank_index_files(query, &mut ranked);
+        // Files rank on the path part of `main.rs:42`.
+        let files = file_query(query).pattern;
+        let mut ranked = self.rank_palette_items(query, &files, items);
+        self.rank_index_files(&files, &mut ranked);
         ranked.sort_by(|a, b| {
             b.0.cmp(&a.0)
                 .then_with(|| a.1.cmp(&b.1))
@@ -165,20 +167,34 @@ impl App {
             .collect()
     }
 
-    fn rank_palette_items(&self, query: &str, items: Vec<PaletteItem>) -> Vec<RankedItem> {
+    /// `files` is the query that file items rank on (see [`file_query`]).
+    fn rank_palette_items(
+        &self,
+        query: &str,
+        files: &str,
+        items: Vec<PaletteItem>,
+    ) -> Vec<RankedItem> {
         let mut matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let mut needle_buf = Vec::new();
         let needle = nucleo::Utf32Str::new(query, &mut needle_buf);
+        let mut file_needle_buf = Vec::new();
+        let file_needle = nucleo::Utf32Str::new(files, &mut file_needle_buf);
         let mut haystack_buf = Vec::new();
         let mut ranked = Vec::new();
         for item in items {
             if !self.palette_accept(&item) {
                 continue;
             }
+            let file = matches!(item, PaletteItem::File(_));
             // A ready index ranks files on its own, under the current project.
-            if !self.file_index.is_empty() && matches!(item, PaletteItem::File(_)) {
+            if !self.file_index.is_empty() && file {
                 continue;
             }
+            let (needle, query) = if file {
+                (file_needle, files)
+            } else {
+                (needle, query)
+            };
             let text = self.palette_match_text(&item);
             let haystack = nucleo::Utf32Str::new(&text, &mut haystack_buf);
             let Some(score) = matcher.fuzzy_match(haystack, needle) else {
@@ -242,3 +258,33 @@ impl App {
 
 /// Score, kind rank, and title: the sort keys for a matched item.
 type RankedItem = (u16, u8, String, PaletteItem);
+
+/// A Go to File query: the text files rank on, plus a 1-based line and
+/// column typed as `main.rs:42` or `main.rs:42:5`.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct FileQuery {
+    pub(super) pattern: String,
+    pub(super) line: Option<u32>,
+    pub(super) column: Option<u32>,
+}
+
+/// Split `query` like a terminal link (`path:line[:col]`). A trailing `:`
+/// alone is dropped, so typing toward a line number keeps the file list.
+pub(super) fn file_query(query: &str) -> FileQuery {
+    if let Some(found) = crate::services::links::colon_location(query) {
+        return FileQuery {
+            pattern: found.path.trim_end().to_owned(),
+            line: found.line,
+            column: found.column,
+        };
+    }
+    let pattern = query
+        .strip_suffix(':')
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(query);
+    FileQuery {
+        pattern: pattern.to_owned(),
+        line: None,
+        column: None,
+    }
+}

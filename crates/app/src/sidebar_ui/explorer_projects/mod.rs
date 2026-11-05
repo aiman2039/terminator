@@ -176,7 +176,7 @@ impl App {
                 ui.ctx()
                     .copy_text(workspace_ops::relative_display(&root, path));
             }
-            ExplorerLocal::History | ExplorerLocal::CompareWith(_) => {
+            ExplorerLocal::History => {
                 let Some(cwd) = self
                     .context
                     .as_ref()
@@ -184,20 +184,12 @@ impl App {
                 else {
                     return;
                 };
-                let tab = match local {
-                    ExplorerLocal::CompareWith(branch) => Tab::RevisionDiff {
-                        cwd,
-                        path: path.to_owned(),
-                        left: branch,
-                        right: String::new(),
-                    },
-                    _ => Tab::FileHistory {
-                        cwd,
-                        path: path.to_owned(),
-                    },
-                };
-                self.open_git_tab(tab);
+                self.open_git_tab(Tab::FileHistory {
+                    cwd,
+                    path: path.to_owned(),
+                });
             }
+            ExplorerLocal::Compare(mode) => self.open_compare_picker(path, mode),
             ExplorerLocal::CopyName => {
                 ui.ctx().copy_text(
                     path.file_name()

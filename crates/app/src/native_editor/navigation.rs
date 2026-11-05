@@ -285,7 +285,7 @@ pub(crate) fn preview_job(
     spans: &[Span],
     plain: egui::Color32,
 ) -> egui::text::LayoutJob {
-    let font = egui::FontId::monospace(12.5);
+    let font = egui::FontId::monospace(appearance::FONT_SMALL);
     let mut job = egui::text::LayoutJob::default();
     let chars: Vec<char> = text.chars().collect();
     let mut col = 0usize;
@@ -331,7 +331,7 @@ fn usage_row(ui: &mut egui::Ui, number: u32, preview: &str, spans: &[Span]) -> e
         egui::pos2(rect.left() + 44.0, rect.center().y),
         egui::Align2::RIGHT_CENTER,
         number.to_string(),
-        egui::FontId::monospace(12.0),
+        egui::FontId::monospace(appearance::FONT_SMALL),
         muted,
     );
     let text_left = rect.left() + 58.0;
@@ -439,6 +439,7 @@ mod tests {
         app.apply_goto_jump(lsp_manager::GotoJump {
             from: dir.path().join("main.rs"),
             targets: vec![target("a.rs", 4), target("b.rs", 1), target("a.rs", 9)],
+            at_position: true,
         });
         let view = app.usages.as_ref().expect("chooser");
         assert_eq!(view.title, DECLARATION_TITLE);

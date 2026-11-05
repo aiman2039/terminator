@@ -11,10 +11,7 @@ impl App {
         services: gui_services::Services,
     ) -> (ViewFrame, SourceDecor) {
         let path = site.path;
-        let files = self.native_view_files(ui, path);
-        // The breadcrumb needs the outline whether or not the Structure
-        // panel is open; the request is revision-gated, so this is cheap.
-        let outline = self.document_outline(path);
+        self.native_remote_banner(ui, path);
         let language: Language = language_for_path(&path.to_string_lossy());
         let is_markdown = markdown::supported(path);
         let preview = self.native_view_preview(ui, path);
@@ -52,8 +49,6 @@ impl App {
             vim: self.state.settings.native_vim,
             failed_color: appearance::color(&self.theme.status_failed),
             services,
-            files,
-            outline,
             language,
             is_markdown,
             preview,
@@ -63,8 +58,8 @@ impl App {
             problems_generation,
             blame_offer,
             inlay_answer,
+            completion_triggers: self.lsp.completion_triggers(path),
             remote_snapshot,
-            local_history: !remote_snapshot && self.local_history_supported(),
             git_base,
             change_colors: [
                 appearance::color(&self.theme.git_added),
@@ -80,47 +75,9 @@ impl App {
         (frame, decor)
     }
 
-    /// The remote-snapshot banner, then the breadcrumb and the
-    /// pinned/recent file lists for the header.
-    fn native_view_files(&mut self, ui: &mut egui::Ui, path: &Path) -> ViewFiles {
-        let (remote, file_location) = self.native_remote_banner(ui, path);
-        let breadcrumb = if remote {
-            file_location.clone()
-        } else {
-            self.selected_project()
-                .and_then(|project| path.strip_prefix(&project.path).ok())
-                .unwrap_or(path)
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join(" › ")
-        };
-        let project_root = self.selected_project().map(|project| project.path.clone());
-        let pinned_files = self.preferences.pinned_native_files.clone();
-        let mut recent_files = self.preferences.recent_native_files.clone();
-        if let Some(root) = project_root.as_ref() {
-            recent_files.retain(|item| item.starts_with(root) && item != path);
-        } else {
-            recent_files.clear();
-        }
-        recent_files.sort_by_key(|item| !pinned_files.contains(item));
-        let pinned = pinned_files.contains(path);
-        ViewFiles {
-            file_location,
-            breadcrumb,
-            pinned_files,
-            recent_files,
-            pinned,
-        }
-    }
-
-    /// Read-only banner for a remote snapshot. Returns whether the file is
-    /// one, and its display location.
-    fn native_remote_banner(&mut self, ui: &mut egui::Ui, path: &Path) -> (bool, String) {
+    /// Read-only banner for a remote snapshot.
+    fn native_remote_banner(&mut self, ui: &mut egui::Ui, path: &Path) {
         let remote_source = self.remote_file_source(path);
-        let file_location = self
-            .remote_file_label(path)
-            .unwrap_or_else(|| path.display().to_string());
         if let Some((remote, relative)) = &remote_source {
             ui.horizontal(|ui| {
                 ui.weak("Remote snapshot · read-only");
@@ -135,7 +92,6 @@ impl App {
                 }
             });
         }
-        (remote_source.is_some(), file_location)
     }
 
     fn native_view_preview(&self, ui: &egui::Ui, path: &Path) -> ViewPreview {

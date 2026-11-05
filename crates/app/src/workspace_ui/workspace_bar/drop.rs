@@ -168,7 +168,7 @@ impl App {
         if drop.plus_rect.contains(pos) {
             ui.painter().rect_stroke(
                 drop.plus_rect,
-                4,
+                appearance::RADIUS_SMALL,
                 egui::Stroke::new(2.0, accent),
                 egui::StrokeKind::Inside,
             );
@@ -185,7 +185,7 @@ impl App {
         {
             ui.painter().rect_stroke(
                 *rect,
-                0,
+                egui::CornerRadius::ZERO,
                 egui::Stroke::new(2.0, accent),
                 egui::StrokeKind::Inside,
             );

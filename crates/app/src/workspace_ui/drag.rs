@@ -152,7 +152,7 @@ impl App {
         ));
         let mut job = egui::text::LayoutJob::simple(
             self.drag_title(pane),
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(appearance::FONT_BODY),
             appearance::color(&self.theme.text),
             320.0,
         );
@@ -164,7 +164,7 @@ impl App {
                 &format!("\n{}", self.drag.pane_snapshot.join("\n")),
                 0.0,
                 egui::TextFormat {
-                    font_id: egui::FontId::monospace(11.0),
+                    font_id: egui::FontId::monospace(appearance::FONT_CAPTION),
                     color: appearance::color(&self.theme.secondary),
                     ..Default::default()
                 },
@@ -250,7 +250,7 @@ impl App {
         ));
         let mut job = egui::text::LayoutJob::simple(
             title,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(appearance::FONT_BODY),
             appearance::color(&self.theme.text),
             TAB_TEXT_MAX,
         );

@@ -610,6 +610,7 @@ fn deferred_goto_jump_opens_cross_file_target() {
                 },
             },
         }],
+        at_position: true,
     };
     app.layouts.insert(
         "a".into(),

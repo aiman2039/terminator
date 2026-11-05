@@ -2,10 +2,9 @@ use super::super::*;
 #[cfg(not(target_os = "macos"))]
 use super::header::paint_window_controls;
 use super::header::{
-    HEADER_ACTIONS, HEADER_GAP, HEADER_MENU_SLOT, HEADER_SLOT, HeaderAction, HeaderActionView,
-    HeaderIconButton, HeaderToolBounds, PROJECT_HEADER_GAP, PROJECT_HEADER_SLOT,
-    ProjectHeaderChrome, header_action_view, header_icon_button, header_tool_bounds,
-    header_visible_count, project_header_chrome, project_title_width,
+    HEADER_ACTIONS, HEADER_GAP, HeaderAction, HeaderActionView, HeaderToolBounds,
+    PROJECT_HEADER_GAP, PROJECT_HEADER_SLOT, ProjectHeaderChrome, header_action_view,
+    header_tool_bounds, header_visible_count, project_header_chrome, project_title_width,
 };
 /// Narrower than this, the center toolbar and its project switcher are hidden.
 const TOOLBAR_MIN_WIDTH: f32 = 120.0;
@@ -84,7 +83,7 @@ impl App {
             .unwrap_or(ui.ctx().pixels_per_point());
         let width = Self::WINDOW_CONTROL_RESERVE * native / ui.ctx().pixels_per_point();
         let row = ui.cursor();
-        let height = 28.0_f32.min(row.height());
+        let height = appearance::HEADER_BUTTON.min(row.height());
         // macOS without the fixture harness consumes neither use below;
         // the underscore keeps plain builds warning-free.
         let _rect = egui::Rect::from_min_size(
@@ -317,15 +316,12 @@ impl App {
             })
         });
         if let Some(label) = label {
-            let branch_button = ui.add(
-                egui::Button::image_and_text(
-                    egui::Image::new(crate::icons::source("GitBranch"))
-                        .tint(appearance::icon_color())
-                        .fit_to_exact_size(egui::vec2(13.0, 13.0)),
-                    label,
-                )
-                .frame(false),
-            );
+            let branch_button = appearance::icon_label_button(appearance::IconLabelButtonInput {
+                ui,
+                icon: "GitBranch",
+                label: &label,
+                height: appearance::HEADER_BUTTON,
+            });
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "toolbar-branch", branch_button.rect);
             if branch_button
@@ -371,14 +367,7 @@ impl App {
         let Some(hidden) = HEADER_ACTIONS.get(visible..) else {
             return;
         };
-        let response = header_icon_button(
-            ui,
-            HeaderIconButton {
-                icon: "Menu",
-                tip: "More",
-                width: HEADER_MENU_SLOT,
-            },
-        );
+        let response = appearance::framed_icon(ui, "Menu", "More");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "header-overflow", response.rect);
         egui::Popup::menu(&response)
@@ -406,14 +395,7 @@ impl App {
         let response = match action {
             HeaderAction::Tool(tool) => self.header_tool_button(ui, tool, &view),
             HeaderAction::IdeMode | HeaderAction::Settings | HeaderAction::Palette => {
-                header_icon_button(
-                    ui,
-                    HeaderIconButton {
-                        icon: view.icon,
-                        tip: &self.header_tip(action),
-                        width: HEADER_SLOT,
-                    },
-                )
+                appearance::framed_icon(ui, view.icon, &self.header_tip(action))
             }
         };
         #[cfg(feature = "test-support")]
@@ -432,7 +414,7 @@ impl App {
         let response = appearance::tool_button(appearance::ToolButtonInput {
             ui,
             tool,
-            label: view.label,
+            label: &self.tool_tip(view.label, tool),
             active: self.header_tool_selected(tool),
         });
         if tool == SidebarTool::Explorer {
@@ -475,7 +457,7 @@ impl App {
             HeaderAction::Settings => self.shortcut_label(Action::OpenSettings),
             HeaderAction::Palette => self.shortcut_label(Action::OpenPalette),
             HeaderAction::IdeMode => self.shortcut_label(Action::ToggleIdeMode),
-            HeaderAction::Tool(_) => String::new(),
+            HeaderAction::Tool(tool) => self.tool_keys(tool),
         }
     }
 

@@ -275,6 +275,7 @@ fn search_results_preserve_headers_and_row_heights_when_clipped() {
         .map(|i| search::Hit {
             path: PathBuf::from(format!("/a/{}.rs", i / 5)),
             line: i + 1,
+            column: 0,
             text: format!("hit {i}"),
         })
         .collect();
@@ -295,6 +296,78 @@ fn search_results_preserve_headers_and_row_heights_when_clipped() {
     }
     assert_eq!(heights[0], heights[1]);
     assert!(heights[0] > 50.0 * 20.0); // includes all ten file headers
+}
+
+#[test]
+#[cfg(feature = "test-support")]
+fn contents_hit_click_opens_the_file_at_the_match() {
+    for native in [true, false] {
+        let (mut app, ctx, dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        // Wider than both clicks on a slow runner.
+        ctx.options_mut(|options| options.input_options.max_double_click_delay = 60.0);
+        if native {
+            app.state.settings.editor_mode = EditorMode::Native;
+        }
+        let path = dir.path().join("lib.rs");
+        app.explorer_search = vec![search::Hit {
+            path: path.clone(),
+            line: 12,
+            column: 4,
+            text: "let needle = 1;".into(),
+        }];
+        let draw = |app: &mut App, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300.0, 200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.explorer_results(ui, dir.path()),
+            );
+            output.textures_delta.clear();
+        };
+        draw(&mut app, vec![]);
+        let row = app
+            .fixture_rect(&ctx, &format!("search-hit:{}:12", path.display()))
+            .expect("hit row");
+        let pos = egui::pos2(row[0] + row[2] / 2.0, row[1] + row[3] / 2.0);
+        draw(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        // A double-click on the hit opens it once.
+        for pressed in [true, false, true, false] {
+            draw(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+        }
+        let creates: Vec<_> = received
+            .try_iter()
+            .filter_map(|job| match job {
+                Job::Control(request, _) => match *request {
+                    Request::Create { file, line, .. } => Some((file, line)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        if native {
+            // Zero-based line; the UTF-16 column puts the caret on the match.
+            assert_eq!(app.native_pending_line.get(&path), Some(&11));
+            assert_eq!(app.native_pending_col.get(&path), Some(&4));
+            assert!(creates.is_empty());
+        } else {
+            assert_eq!(creates, [(Some(path.clone()), Some(12))]);
+        }
+    }
 }
 
 #[test]
@@ -1078,18 +1151,18 @@ fn name_filter_keeps_only_folders_on_the_path_to_a_match() {
 
 #[test]
 fn find_in_folder_scopes_the_search_to_that_folder() {
-    use crate::search::folder_include_pattern;
-    let root = Path::new("/repo");
-    assert_eq!(folder_include_pattern(root, root), "");
-    assert_eq!(folder_include_pattern(root, Path::new("/other")), "");
-    assert_eq!(
-        folder_include_pattern(root, Path::new("/repo/src/ui")),
-        "src/ui/**"
-    );
-    assert_eq!(
-        folder_include_pattern(root, Path::new("/repo/my dir,[x]")),
-        "my?dir?[[]x[]]/**"
-    );
+    let (mut app, _ctx, _dir) = fixture();
+    // Project `a` lives at `/a`: the folder narrows Find in Files.
+    app.open_find_in_folder(Path::new("/a/src/ui"));
+    let find = app.find_in_files.as_ref().expect("Find in Files opens");
+    assert!(find.shown);
+    assert_eq!(find.root, Path::new("/a"));
+    assert_eq!(find.walk_folder(), Path::new("/a/src/ui"));
+    // The project root itself searches the whole project.
+    app.open_find_in_folder(Path::new("/a"));
+    let find = app.find_in_files.as_ref().expect("still open");
+    assert_eq!(find.folder, None);
+    assert_eq!(find.walk_folder(), Path::new("/a"));
 }
 
 #[test]
