@@ -86,17 +86,20 @@ impl GitPanelPass<'_, '_> {
         }
     }
 
-    /// Stage All, Commit, Commit and Push, and Shelve.
+    /// Stage All, Commit, Commit and Push, and Shelve. A commit running
+    /// in this repository disables Stage All and Shelve.
     fn commit_buttons(&mut self, ui: &mut egui::Ui, staged: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let input = &*self.input;
         let outcome = &mut *self.outcome;
-        let stage_all = ui
-            .add_enabled(
+        let lock = input.commit_lock;
+        let stage_all = appearance::enabled_unless(ui, lock.index, |ui| {
+            ui.add_enabled(
                 !input.context.changes.is_empty(),
                 egui::Button::new("Stage All"),
             )
-            .on_hover_text("Stage every change");
+            .on_hover_text("Stage every change")
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-stage-all", stage_all.rect);
         #[cfg(not(feature = "test-support"))]
@@ -120,9 +123,10 @@ impl GitPanelPass<'_, '_> {
         if commit_push.clicked() {
             outcome.commit_push = true;
         }
-        let shelve = ui
-            .add_enabled(staged, egui::Button::new("Shelve"))
-            .on_hover_text("Shelve staged changes (git stash)");
+        let shelve = appearance::enabled_unless(ui, lock.stash, |ui| {
+            ui.add_enabled(staged, egui::Button::new("Shelve"))
+                .on_hover_text("Shelve staged changes (git stash)")
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-shelve", shelve.rect);
         if shelve.clicked() {
@@ -148,18 +152,21 @@ impl GitPanelPass<'_, '_> {
         }
     }
 
+    /// One shelf with Drop and Unshelve, which a commit running in this
+    /// repository disables.
     fn shelf_row(&mut self, ui: &mut egui::Ui, reference: &str, message: &str) {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add(egui::Label::new(message).truncate())
             .on_hover_text(format!("{reference} {message}"));
+        let lock = self.input.commit_lock.stash;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let drop = ui.small_button("Drop");
+            let drop = appearance::enabled_unless(ui, lock, |ui| ui.small_button("Drop"));
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &format!("git-shelf-drop-{reference}"), drop.rect);
             if drop.clicked() {
                 self.outcome.drop_shelf = Some(reference.to_owned());
             }
-            let unshelve = ui.small_button("Unshelve");
+            let unshelve = appearance::enabled_unless(ui, lock, |ui| ui.small_button("Unshelve"));
             #[cfg(feature = "test-support")]
             diagnostics::record(
                 ui.ctx(),

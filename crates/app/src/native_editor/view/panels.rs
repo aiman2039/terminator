@@ -143,6 +143,7 @@ impl ViewPass<'_> {
             hunks: gutter_hunks,
             deleted: self.frame.change_colors[2],
             can_stage: !self.doc.dirty(),
+            commit_lock: self.frame.commit_lock,
         });
         let Some(hunk) = index.and_then(|index| gutter_hunks.get(index)) else {
             return;

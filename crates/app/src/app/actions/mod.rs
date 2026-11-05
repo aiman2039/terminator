@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod commit_lock;
 mod editor_close;
 mod git_commands;
 mod git_outcome;

@@ -6,6 +6,16 @@ use terminator_core::{Request, async_client};
 /// Scheduling route: subsystem, resource key, and policy.
 type Route = (&'static str, String, Policy);
 
+/// The queue of one root's Git and file actions. A commit job is admitted
+/// there too, so every write queued before it has landed when Git commits.
+fn workspace_route(root: &std::path::Path) -> Route {
+    (
+        "workspace-op",
+        root.display().to_string(),
+        Policy::OrderedMutation,
+    )
+}
+
 /// Stateless routing rules for GUI service jobs.
 pub(in crate::gui_services) struct JobRouting;
 
@@ -170,12 +180,14 @@ impl JobRouting {
             Job::Diff(tab) | Job::DiffContext(tab, _) | Job::DiffExpand(tab, ..) => {
                 ("diff", tab.key(), Policy::ReplaceableRead)
             }
-            Job::DiffAction(tab, _) => ("diff-action", tab.key(), Policy::OrderedMutation),
-            Job::StageGutterBlock { path, .. } => (
-                "diff-action",
-                format!("gutter:{}", path.display()),
-                Policy::OrderedMutation,
-            ),
+            // Diff and gutter writes queue with their repository's other
+            // actions, where a commit is admitted: one sent before Commit
+            // lands before Git commits (and its hooks run).
+            Job::DiffAction(tab, request) => match request.root() {
+                Some(root) => workspace_route(root),
+                None => ("diff-action", tab.key(), Policy::OrderedMutation),
+            },
+            Job::StageGutterBlock { cwd, .. } => workspace_route(cwd),
             Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
             Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
             // A newer filter or Go to Hash replaces the query still running.
@@ -220,11 +232,7 @@ impl JobRouting {
     /// full-text search must not hold back a new terminal.
     fn files_route(job: &Job) -> Option<Route> {
         let route = match job {
-            Job::Workspace(root, _) => (
-                "workspace-op",
-                root.display().to_string(),
-                Policy::OrderedMutation,
-            ),
+            Job::Workspace(root, _) => workspace_route(root),
             // A newer query cancels the queued or running walk (#175).
             Job::Search { root, .. } => (
                 "search",
@@ -362,6 +370,11 @@ impl JobRouting {
             }
             Job::OpenProject(_, generation) => context.generation = *generation,
             Job::GitLog(_, query) => context.generation = query.generation,
+            // A failed diff or gutter write answers its tab or gutter.
+            Job::DiffAction(tab, _) => context.tab = Some(tab.key()),
+            Job::StageGutterBlock { path, .. } => {
+                context.tab = Some(format!("gutter:{}", path.display()));
+            }
             _ => {}
         }
     }

@@ -27,6 +27,8 @@ pub(crate) use settings::SaveAppearanceInput;
 pub(crate) use settings::TestNtfyInput;
 mod routing;
 pub(super) use routing::JobRouting;
+#[cfg(test)]
+mod routing_tests;
 mod vnc;
 pub(crate) use vnc::VncFrameInput;
 pub(crate) use vnc::VncPickTransferInput;

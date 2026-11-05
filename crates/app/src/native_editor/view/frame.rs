@@ -45,6 +45,8 @@ impl App {
         } else {
             self.git_base(path)
         };
+        let commit_lock = git_base.is_some()
+            && self.commit_blocks(self.gutter_root(path), workspace_ops::CommitRisk::Index);
         let frame = ViewFrame {
             vim: self.state.settings.native_vim,
             failed_color: appearance::color(&self.theme.status_failed),
@@ -61,6 +63,7 @@ impl App {
             completion_triggers: self.lsp.completion_triggers(path),
             remote_snapshot,
             git_base,
+            commit_lock,
             change_colors: [
                 appearance::color(&self.theme.git_added),
                 appearance::color(&self.theme.git_modified),

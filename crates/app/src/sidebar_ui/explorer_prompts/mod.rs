@@ -67,11 +67,16 @@ impl App {
             return;
         };
         let (prompt, verb) = pending.prompt();
+        let op = pending.into_op();
+        // A commit running in this repository disables the action; the
+        // question stays until the commit ends.
+        let lock = self.commit_wait(self.git_root().as_deref(), op.commit_risk());
         ui.horizontal(|ui| {
             ui.label(prompt);
-            if ui.button(verb).clicked() {
+            if appearance::enabled_unless(ui, lock, |ui| ui.button(verb)).clicked()
+                && self.queue_workspace(op)
+            {
                 self.git.confirm = None;
-                self.queue_workspace(pending.into_op());
             }
             if ui.button("Cancel").clicked() {
                 self.git.confirm = None;

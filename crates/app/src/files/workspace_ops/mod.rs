@@ -10,7 +10,10 @@ mod vcs;
 
 #[cfg(test)]
 pub(crate) use commit::{COMMIT_CANCELLED, PUSH_CANCELLED, PUSH_FAILED};
-pub(crate) use commit::{CommitRequest, CommitRun, commit_cancelled, commit_landed, push_failed};
+pub(crate) use commit::{
+    COMMIT_RUNNING, COMMIT_WAIT, CommitRequest, CommitRisk, CommitRun, commit_cancelled,
+    commit_landed, push_failed,
+};
 use entries::*;
 use vcs::*;
 
@@ -84,6 +87,38 @@ pub enum Op {
         to_dir: PathBuf,
     },
     Reveal(PathBuf),
+}
+
+impl Op {
+    /// What this action can change in a commit that runs in its
+    /// repository. A second commit has its own guard (`start_commit`).
+    pub(crate) fn commit_risk(&self) -> CommitRisk {
+        match self {
+            Self::Stage(_) | Self::StageAll(_) | Self::Unstage(_) | Self::Discard { .. } => {
+                CommitRisk::Index
+            }
+            Self::Switch(_) => CommitRisk::Head,
+            Self::Shelve(_) | Self::Unshelve(_) | Self::DropShelf(_) => CommitRisk::Stash,
+            Self::Perforce(_)
+            | Self::Delete(_)
+            | Self::Commit { .. }
+            | Self::Shelves
+            | Self::Branches
+            | Self::HeadMessage
+            | Self::Log
+            | Self::Compare { .. }
+            | Self::CompareTargets
+            | Self::VerifyRevision(_)
+            | Self::FileHistory(_)
+            | Self::CreateFile(_)
+            | Self::CreateDir(_)
+            | Self::Duplicate(_)
+            | Self::Rename { .. }
+            | Self::Move { .. }
+            | Self::Copy { .. }
+            | Self::Reveal(_) => CommitRisk::None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -52,6 +52,11 @@ pub(crate) fn hunks(base: &str, text: &str) -> Vec<GutterHunk> {
         .collect()
 }
 
+/// Per open file: the Git refresh generation of the read, the file's
+/// `HEAD` text, and its repository's canonical worktree root.
+pub(crate) type GitBases =
+    std::collections::HashMap<PathBuf, (u64, Option<Arc<str>>, Option<PathBuf>)>;
+
 /// Diff identity: buffer revision plus the `HEAD` text's address.
 type GutterKey = (u64, usize);
 
@@ -196,6 +201,8 @@ pub(crate) struct PopupUiInput<'a> {
     pub(crate) deleted: egui::Color32,
     /// Stage works on the saved file only.
     pub(crate) can_stage: bool,
+    /// A commit runs in the file's repository: Stage waits for it.
+    pub(crate) commit_lock: bool,
 }
 
 /// Paint the popup; returns the picked action, and clears `popup` when
@@ -207,6 +214,7 @@ pub(crate) fn popup_ui(input: PopupUiInput<'_>) -> PopupAction {
         hunks,
         deleted,
         can_stage,
+        commit_lock,
     } = input;
     let Some(open) = popup.as_ref() else {
         return PopupAction::None;
@@ -235,11 +243,12 @@ pub(crate) fn popup_ui(input: PopupUiInput<'_>) -> PopupAction {
                     if ui.button("Show diff").clicked() {
                         action = PopupAction::ShowDiff;
                     }
-                    if ui
-                        .add_enabled(can_stage, egui::Button::new("Stage hunk"))
-                        .on_disabled_hover_text("Save the file first")
-                        .clicked()
-                    {
+                    let why = if commit_lock {
+                        Some(crate::workspace_ops::COMMIT_WAIT)
+                    } else {
+                        (!can_stage).then_some("Save the file first")
+                    };
+                    if appearance::enabled_unless(ui, why, |ui| ui.button("Stage hunk")).clicked() {
                         action = PopupAction::Stage;
                     }
                     if appearance::sidebar_action(ui, "X", "Close").clicked() {
@@ -276,13 +285,19 @@ impl App {
     /// showing until the fresh one lands, so markers never flicker.
     pub(crate) fn git_base(&mut self, path: &Path) -> Option<Arc<str>> {
         let entry = self.git_bases.get(path);
-        let fresh = entry.is_some_and(|(generation, _)| *generation == self.git_base_generation);
+        let fresh = entry.is_some_and(|(generation, ..)| *generation == self.git_base_generation);
         if !fresh && self.git_base_pending.insert(path.to_owned()) {
             let _ = self
                 .jobs
                 .send(Job::GitBase(path.to_owned(), self.git_base_generation));
         }
-        entry.and_then(|(_, base)| base.clone())
+        entry.and_then(|(_, base, _)| base.clone())
+    }
+
+    /// The canonical worktree root of `path`'s repository, as the read of
+    /// its `HEAD` text found it: the root its gutter Stage writes in.
+    pub(crate) fn gutter_root(&self, path: &Path) -> Option<&Path> {
+        self.git_bases.get(path)?.2.as_deref()
     }
 
     /// The cwd of `path`'s native diff tab: the project's Git root when
@@ -307,9 +322,16 @@ impl App {
     }
 
     /// Stage the working-tree changes under one gutter block of the saved
-    /// buffer `text`, on a background job.
+    /// buffer `text`, on a background job, unless a running commit locks it.
+    /// Git runs in the file's repository root when it is known, so the job
+    /// queues with that root's actions and a commit clicked after it.
     pub(crate) fn stage_gutter_block(&mut self, path: &Path, mark: ChangeMark, text: String) {
-        let Some(cwd) = path.parent().map(Path::to_path_buf) else {
+        let root = self.gutter_root(path).map(Path::to_path_buf);
+        let risk = crate::workspace_ops::CommitRisk::Index;
+        if self.refuse_during_commit(root.as_deref(), risk) {
+            return;
+        }
+        let Some(cwd) = root.or_else(|| path.parent().map(Path::to_path_buf)) else {
             return;
         };
         let _ = self.jobs.send(Job::StageGutterBlock {
@@ -320,10 +342,16 @@ impl App {
         });
     }
 
-    pub(crate) fn apply_git_base(&mut self, path: PathBuf, generation: u64, base: Option<String>) {
+    /// A read of `path`'s `HEAD` text and repository root landed.
+    pub(crate) fn apply_git_base(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        (base, root): (Option<String>, Option<PathBuf>),
+    ) {
         self.git_base_pending.remove(&path);
         self.git_bases
-            .insert(path, (generation, base.map(Arc::from)));
+            .insert(path, (generation, base.map(Arc::from), root));
     }
 }
 

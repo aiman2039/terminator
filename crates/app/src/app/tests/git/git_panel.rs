@@ -1,7 +1,11 @@
 use super::*;
 use crate::app::FileActionInput;
 
-fn run_git_outcome(app: &mut App, ctx: &egui::Context, outcome: sidebar_ui::GitPanelOutcome) {
+pub(super) fn run_git_outcome(
+    app: &mut App,
+    ctx: &egui::Context,
+    outcome: sidebar_ui::GitPanelOutcome,
+) {
     let mut outcome = Some(outcome);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         if let Some(outcome) = outcome.take() {
@@ -228,6 +232,7 @@ fn git_panel_clicks_reuse_an_open_diff_instead_of_duplicating() {
                         base_ref: None,
                         focus_message: false,
                         commit_run: None,
+                        commit_lock: Default::default(),
                         commit_failure: None,
                     };
                     sidebar_ui::git_panel(ui, &mut { input })
@@ -489,7 +494,7 @@ fn commit_op(message: &str, push: bool) -> workspace_ops::Op {
     }
 }
 
-fn click_commit(app: &mut App, ctx: &egui::Context, push: bool) {
+pub(super) fn click_commit(app: &mut App, ctx: &egui::Context, push: bool) {
     run_git_outcome(
         app,
         ctx,
@@ -502,7 +507,7 @@ fn click_commit(app: &mut App, ctx: &egui::Context, push: bool) {
 }
 
 /// The commit job the panel queued: its root and op.
-fn sent_commit(requests: &mpsc::Receiver<Job>) -> (PathBuf, workspace_ops::Op) {
+pub(super) fn sent_commit(requests: &mpsc::Receiver<Job>) -> (PathBuf, workspace_ops::Op) {
     requests
         .try_iter()
         .find_map(|job| match job {
@@ -512,7 +517,7 @@ fn sent_commit(requests: &mpsc::Receiver<Job>) -> (PathBuf, workspace_ops::Op) {
         .expect("a commit job was queued")
 }
 
-fn reply(
+pub(super) fn reply(
     app: &mut App,
     ctx: &egui::Context,
     job: (PathBuf, workspace_ops::Op),

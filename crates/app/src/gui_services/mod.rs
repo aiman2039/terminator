@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod gutter_job_tests;
 mod jobs;
 #[cfg(test)]
 mod log_job_tests;

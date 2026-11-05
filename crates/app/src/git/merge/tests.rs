@@ -235,3 +235,187 @@ fn unsaved_merge_result_blocks_closing_and_quit() {
     app.merge.get_mut(&key).unwrap().dirty = false;
     assert!(!app.block_unsaved_diff(None));
 }
+
+/// What the status bar says when a running commit refuses an action.
+const RUNNING: &str = "A commit is running in this repository. Wait for it to finish.";
+
+/// An app on the repository `root` with a resolved, unsaved merge of
+/// `conflicted.txt`: its job queue, the merge tab key, and the file.
+struct ResolvedMerge {
+    app: crate::App,
+    ctx: eframe::egui::Context,
+    received: std::sync::mpsc::Receiver<crate::Job>,
+    key: String,
+    path: PathBuf,
+}
+
+fn resolved_merge(root: &std::path::Path) -> ResolvedMerge {
+    let ctx = eframe::egui::Context::default();
+    let mut app = crate::App::with_context(&ctx, terminator_core::Paths::at(root.join("state")));
+    let (jobs, received) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.projects.push(terminator_core::Project {
+        id: "p".into(),
+        name: "p".into(),
+        path: root.into(),
+        layout: serde_json::Value::Null,
+    });
+    app.selected = Some("p".into());
+    app.context = Some(crate::services::ContextData {
+        cwd: root.into(),
+        root: Some(root.into()),
+        perforce: None,
+        git_dirs: vec![],
+        branch: "main".into(),
+        changes: vec![],
+        decorations: std::collections::HashMap::default(),
+        stats: std::collections::HashMap::default(),
+        error: None,
+    });
+    let path = root.join("conflicted.txt");
+    std::fs::write(&path, "markers\n").unwrap();
+    let key = tab(root.into(), path.clone()).key();
+    let mut state = MergeTab::default();
+    let mut merge = doc("a\n", "b\n", "c\n");
+    merge.accept(0, Pick::Theirs);
+    state.doc = Some(merge);
+    state.dirty = true;
+    app.merge.insert(key.clone(), state);
+    ResolvedMerge {
+        app,
+        ctx,
+        received,
+        key,
+        path,
+    }
+}
+
+impl ResolvedMerge {
+    /// Commits from the Git panel; returns the commit job's root and op.
+    fn commit(&mut self) -> (PathBuf, crate::workspace_ops::Op) {
+        self.app.git.commit = "msg".into();
+        let app = &mut self.app;
+        let mut output = self.ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            let commit = crate::sidebar_ui::GitPanelOutcome {
+                commit: true,
+                ..Default::default()
+            };
+            app.perform_git_outcome(ui, commit);
+        });
+        output.textures_delta.clear();
+        self.received
+            .try_iter()
+            .find_map(|job| match job {
+                crate::Job::Workspace(root, op @ crate::workspace_ops::Op::Commit { .. }) => {
+                    Some((root, op))
+                }
+                _ => None,
+            })
+            .expect("a commit job was queued")
+    }
+
+    fn wait_for_the_write(&mut self) {
+        let start = std::time::Instant::now();
+        while self.app.merge.get(&self.key).is_some_and(MergeTab::busy) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10));
+            self.app.poll_merge_saves();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn staged(&self) -> bool {
+        self.received.try_iter().any(|job| {
+            matches!(
+                job,
+                crate::Job::Workspace(_, crate::workspace_ops::Op::Stage(ref staged)) if *staged == self.path
+            )
+        })
+    }
+
+    /// One frame of the merge tab at `time`; returns the painted texts
+    /// with their top-left corners.
+    fn paint(
+        &mut self,
+        time: f64,
+        events: Vec<eframe::egui::Event>,
+    ) -> Vec<(eframe::egui::Pos2, String)> {
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                eframe::egui::Pos2::ZERO,
+                eframe::egui::vec2(900.0, 600.0),
+            )),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let root = self.path.parent().unwrap().to_path_buf();
+        let merge = tab(root, self.path.clone());
+        let app = &mut self.app;
+        let mut output = self.ctx.run_ui(input, |ui| app.merge_view(ui, &merge));
+        output.textures_delta.clear();
+        crate::app::painted_text(&output.shapes)
+    }
+}
+
+#[test]
+fn mark_resolved_says_why_it_waits_for_a_running_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut merge = resolved_merge(&dir.path().canonicalize().unwrap());
+    merge.commit();
+    let at = merge
+        .paint(1.0, vec![])
+        .into_iter()
+        .find_map(|(at, text)| (text == "Mark resolved").then_some(at))
+        .expect("Mark resolved is painted");
+    let pointer = at + eframe::egui::vec2(4.0, 4.0);
+    let mut texts = Vec::new();
+    for frame in 0..12 {
+        let events = if frame == 0 {
+            vec![eframe::egui::Event::PointerMoved(pointer)]
+        } else {
+            vec![]
+        };
+        texts = merge.paint(1.1 + f64::from(frame) * 0.1, events);
+    }
+    assert!(
+        texts
+            .iter()
+            .any(|(_, text)| text == "Wait for the commit to finish"),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn mark_resolved_waits_while_a_commit_runs_in_the_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut merge = resolved_merge(&dir.path().canonicalize().unwrap());
+    let (root, op) = merge.commit();
+    let (key, path) = (merge.key.clone(), merge.path.clone());
+    merge.app.save_merge(&key, &path, true);
+    assert!(!merge.app.merge[&key].busy(), "nothing is written");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "markers\n");
+    assert_eq!(merge.app.info.as_deref(), Some(RUNNING));
+    // Once the commit ends, Mark resolved writes and stages the file.
+    let committed = Ok(crate::workspace_ops::Report::Message("Committed".into()));
+    let reply = crate::Update::Workspace(root, op, committed);
+    merge.app.update_tx.send(reply).unwrap();
+    crate::app::drain_updates(&mut merge.app, &merge.ctx);
+    merge.app.save_merge(&key, &path, true);
+    merge.wait_for_the_write();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "c\n");
+    assert!(merge.staged(), "Mark resolved stages the file");
+}
+
+#[test]
+fn a_commit_that_starts_before_the_resolved_file_is_written_leaves_it_unstaged() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut merge = resolved_merge(&dir.path().canonicalize().unwrap());
+    let (key, path) = (merge.key.clone(), merge.path.clone());
+    merge.app.save_merge(&key, &path, true);
+    merge.commit();
+    merge.wait_for_the_write();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "c\n");
+    assert!(!merge.staged(), "the stage waits for the commit");
+    assert_eq!(merge.app.merge[&key].message.as_deref(), Some("Saved"));
+    assert_eq!(merge.app.info.as_deref(), Some(RUNNING));
+}

@@ -713,7 +713,25 @@ minutes. Other Git panel actions (staging, shelves, branches) keep their
 20-second limit. While the job runs, the commit area shows **Committing…** or
 **Pushing…** with a spinner and **Cancel**. The commit buttons stay disabled,
 so a second commit or push cannot start. Actions that you started before the
-commit finish first. The rest of the GUI stays usable.
+commit finish first, also a hunk or line that you staged in a diff tab or in
+the editor gutter. The rest of the GUI stays usable.
+
+While Git commits, the actions that can change the commit in that repository
+are disabled, with the hover text "Wait for the commit to finish": staging
+and unstaging (Git panel, Stage All, diff tabs, editor gutter, Mark
+resolved), the Git panel's Discard changes, Shelve, Unshelve, Drop, and the
+branch switch. Find Action does not show **Git: Stage All**. A diff tab key
+for one of them (for example `s`) does nothing, and the status bar shows
+"A commit is running in this repository. Wait for it to finish." These
+actions work again when the commit ends or its push starts. The branch switch
+waits until the push ends, because `git push` pushes the branch that is
+checked out when it starts. Reads, Explorer file operations (also **Delete
+file** in the Git panel), and other repositories are not blocked. Another
+worktree of the same repository can stage and switch branches, but its
+Shelve, Unshelve, and Drop wait: all worktrees share the stash. A stopped
+hook can leave its own stash entry, so when the commit ends the shelf list
+loads again before you can unshelve or drop, and an open Drop question
+closes.
 
 **Cancel** stops Git and its hooks (the full process group). It sends Ctrl-C
 first, so Git removes its lock files and a hook manager puts stashed edits

@@ -14,7 +14,7 @@ use crate::diagnostics;
 use crate::{
     App, appearance, file_actions::FileAction, icons, services::ContextData, workspace_ops,
 };
-pub(crate) use commit_progress::{CommitPhase, CommitProgress};
+pub(crate) use commit_progress::{CommitLock, CommitPhase, CommitProgress};
 use committed::*;
 use eframe::egui::{self, Color32, RichText};
 #[cfg(test)]
@@ -93,6 +93,8 @@ pub struct GitPanelInput<'a> {
     pub focus_message: bool,
     /// The commit or push in flight; commit controls wait for its reply.
     pub(crate) commit_run: Option<CommitProgress<'a>>,
+    /// Controls that a commit running in this repository disables.
+    pub(crate) commit_lock: CommitLock,
     /// Summary line and output tail of the last failed commit or push.
     pub commit_failure: Option<&'a str>,
 }
@@ -310,6 +312,7 @@ impl GitPanelPass<'_, '_> {
             neovim_review: input.neovim_review,
             open_shortcut: input.open_shortcut,
             stats: &input.context.stats,
+            lock: input.commit_lock,
         };
         if input.view_list {
             self.flat_list(ui, &row_ctx);
@@ -368,6 +371,7 @@ struct GitRowCtx<'a> {
     neovim_review: bool,
     open_shortcut: &'a str,
     stats: &'a std::collections::HashMap<PathBuf, (u32, u32)>,
+    lock: CommitLock,
 }
 
 fn git_group_label(group: terminator_git::GitGroup) -> &'static str {

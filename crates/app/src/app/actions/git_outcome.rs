@@ -100,7 +100,12 @@ impl App {
             self.error = Some("Open a project folder first.".into());
             return;
         };
-        let Some(cancel) = self.git.start_commit(root, self.git.commit.clone()) else {
+        // Its worktrees share the stash, which the run locks too.
+        let common_dir = crate::app::git_panel_state::RepoTarget::new(&root, self.context.as_ref())
+            .common_dir
+            .map(Path::to_path_buf);
+        let draft = self.git.commit.clone();
+        let Some(cancel) = self.git.start_commit(root, common_dir, draft) else {
             return;
         };
         let message = std::mem::take(&mut self.git.commit);

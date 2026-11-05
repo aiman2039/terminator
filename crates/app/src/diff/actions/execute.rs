@@ -162,6 +162,34 @@ pub(crate) async fn execute(input: ExecuteInput<'_>) -> Result<Outcome> {
     }
 }
 
+impl Request {
+    /// What this request can change in a commit that runs in its
+    /// repository: Stage, Unstage, and their Undo write the index; Discard
+    /// and Save write only the working tree.
+    pub(crate) fn commit_risk(&self) -> crate::workspace_ops::CommitRisk {
+        let index = match self {
+            Self::Hunk { kind, .. } => *kind != Kind::Discard,
+            Self::Undo(change) => change.index,
+            Self::Save { .. } => false,
+        };
+        if index {
+            crate::workspace_ops::CommitRisk::Index
+        } else {
+            crate::workspace_ops::CommitRisk::None
+        }
+    }
+
+    /// The canonical worktree root the request writes in, when known.
+    pub(crate) fn root(&self) -> Option<&Path> {
+        match self {
+            Self::Save { document, .. } | Self::Hunk { document, .. } => {
+                document.source.as_ref().map(|source| source.root.as_path())
+            }
+            Self::Undo(change) => Some(&change.root),
+        }
+    }
+}
+
 /// "Stage hunk 3", or "Discard 2 lines of hunk 3" for picked lines.
 pub(super) fn action_label(kind: Kind, number: usize, lines: Option<&LineSelection>) -> String {
     match lines.filter(|picked| !picked.is_empty()) {

@@ -49,6 +49,30 @@ pub(crate) fn push_failed(reason: &dyn std::fmt::Display) -> String {
     format!("{PUSH_FAILED}: {reason}")
 }
 
+/// Status of an action that a running commit refused.
+pub(crate) const COMMIT_RUNNING: &str =
+    "A commit is running in this repository. Wait for it to finish.";
+/// Hover text of a control that a running commit disables.
+pub(crate) const COMMIT_WAIT: &str = "Wait for the commit to finish";
+
+/// What an action can change in a commit that runs in its repository.
+/// `git commit` reads the index again after `pre-commit` and moves `HEAD`
+/// only at its end, so until then these writes change the commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommitRisk {
+    /// Nothing: reads, Explorer file operations, Perforce.
+    None,
+    /// One worktree's index or files: staging, Discard.
+    Index,
+    /// The index and the stash. Every worktree of a repository shares the
+    /// stash, and a hook can keep its own entry there: Shelve, Unshelve,
+    /// Drop.
+    Stash,
+    /// One worktree's `HEAD`: Switch. The push after the commit needs it
+    /// too: `git push` with no refspec reads `HEAD` when it starts.
+    Head,
+}
+
 /// The message and options of one commit.
 #[derive(Clone, Copy)]
 pub(crate) struct CommitRequest<'a> {

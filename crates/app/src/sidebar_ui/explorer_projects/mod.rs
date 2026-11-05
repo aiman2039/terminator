@@ -154,12 +154,20 @@ impl App {
             .or_else(|| self.selected_project().map(|project| project.path.clone()))
     }
 
-    pub(crate) fn queue_workspace(&mut self, op: workspace_ops::Op) {
+    /// Sends `op` to run in [`Self::op_root`], unless a running commit
+    /// locks it. True when the job was sent.
+    pub(crate) fn queue_workspace(&mut self, op: workspace_ops::Op) -> bool {
         let Some(root) = self.op_root() else {
             self.error = Some("Open a project folder first.".into());
-            return;
+            return false;
         };
-        let _ = self.jobs.send(Job::Workspace(root, op));
+        // The canonical root of the panel's repository; a folder fallback
+        // has no known repository.
+        let repository = self.git_root();
+        if self.refuse_during_commit(repository.as_deref(), op.commit_risk()) {
+            return false;
+        }
+        self.jobs.send(Job::Workspace(root, op)).is_ok()
     }
 
     pub(super) fn explorer_local(
@@ -170,7 +178,9 @@ impl App {
     ) {
         let root = self.op_root().unwrap_or_else(|| path.to_path_buf());
         match local {
-            ExplorerLocal::Reveal => self.queue_workspace(workspace_ops::Op::Reveal(path.into())),
+            ExplorerLocal::Reveal => {
+                self.queue_workspace(workspace_ops::Op::Reveal(path.into()));
+            }
             ExplorerLocal::LocalHistory => self.open_local_history(path.to_owned()),
             ExplorerLocal::CopyRelative => {
                 ui.ctx()

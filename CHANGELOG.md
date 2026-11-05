@@ -43,6 +43,13 @@
   20-second limit is gone; a failure shows the end of the hook output. Cancel
   sends Ctrl-C first, so Git and hooks can clean up, and stops the run after
   5 seconds. Hook output above 8 MiB no longer fails the commit.
+- Git: while a commit runs, the actions that can change it in that repository
+  wait. Staging and unstaging (Git panel, Stage All, diff tabs, editor gutter,
+  Mark resolved), Discard, Shelve, Unshelve and Drop wait until the push
+  starts; the branch switch waits until the push ends. Their controls show
+  "Wait for the commit to finish". A stage sent just before Commit lands
+  before Git commits. Reads, Explorer file operations and other repositories
+  are not blocked.
 - Git Log draws a commit graph with branch, remote and tag labels.
 - Git Log filters: message or hash, branch, user, date and path. Typed text
   loads after 0.4 seconds, and the old list stays until the new one is ready.

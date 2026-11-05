@@ -13,15 +13,20 @@ Final checks on the merged tree:
 - `cargo clippy --workspace --all-targets -- -D warnings`, with and without
   `--all-features`: pass.
 - `cargo nextest run --workspace --all-features --locked --profile ci`:
-  2432 passed, 5 skipped.
+  2465 passed, 5 skipped.
 - `sarah --fail-on-warn`: only the old allowed warning
   (`crates/daemon/src/remote/terminal.rs` `prepare`, 85 lines).
 - `cargo xtask async-boundary`: pass.
 
-Review: six reviewers found 30 bugs in the merged change. 29 are fixed, each
-with a regression test that failed before the fix. One is open: Stage,
-Unstage or Shelve while a commit hook runs can change what the commit
-contains.
+Review: six reviewers found 30 bugs in the merged change. All 30 are fixed,
+each with a regression test that failed before the fix. The last one was:
+Stage, Unstage or Shelve while a commit hook runs can change what the commit
+contains. One guard now refuses those actions in that repository while the
+commit runs (the branch switch also while it pushes). Three more reviewers
+(coverage, correctness, tests) checked the guard and found 15 items, 3 of
+them medium: a stage sent just before Commit could land during the hook,
+Unix-only test code broke the Windows clippy run, and two reviewers found
+the same race. All are fixed with tests, and this entry records the last one.
 
 Evidence by kind:
 
@@ -31,7 +36,11 @@ Evidence by kind:
   font sizes and corner radii.
 - Real Git repositories in temporary folders: a commit with a slow
   post-commit hook (Cancel after the commit landed), Compare with a renamed
-  file, and Commit Log filters.
+  file, and Commit Log filters. With a pre-commit hook that waits, a Stage
+  asked for during the hook stays out of the commit, and a hunk staged just
+  before Commit is in the commit and seen by the hook.
+- `/verify` recipe (isolated daemon, local `sshd` on 127.0.0.1:2299): an SSH
+  terminal and a Mosh terminal each ran a command and showed its output.
 - Real child processes: Cancel sends SIGINT first (a shell INT trap runs),
   and long user commands keep the end of a large output.
 - Live provider (rust-analyzer on PATH; the tests skip without it):
@@ -49,7 +58,9 @@ Not verified:
 - Native GUI fixtures (`cargo xtask gui …`), the packaged app and
   screenshots. Three changed xtask fixtures and the landing capture compile
   but did not run.
-- Linux and Windows. The Linux key rules have unit tests only.
+- Linux and Windows. The Linux key rules have unit tests only. The Windows
+  clippy cross-check (`scripts/check.sh windows-clippy`) still stops on one
+  unused import in `native_editor/disk_tests.rs` that is also on `master`.
 - A live older daemon. No daemon code changed and the change adds no daemon
   request; the new default keys are string entries in the saved keymap.
 

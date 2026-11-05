@@ -37,7 +37,9 @@ impl App {
         if focused && !ui.ctx().egui_wants_keyboard_input() {
             merge_keys(ui, &mut state);
         }
-        merge_status(ui, &mut state, &mut clicks);
+        // Mark resolved stages where the Git panel runs its actions.
+        let lock = self.commit_wait(self.git_root().as_deref(), workspace_ops::CommitRisk::Index);
+        merge_status(ui, &mut state, &mut clicks, lock);
         let colors = rows::MergeColors::new(&self.theme, ui);
         if state.doc.is_some() {
             rows::merge_body(rows::MergeBodyInput {
@@ -116,8 +118,14 @@ fn step(state: &mut MergeTab, forward: bool) {
     }
 }
 
-/// Counters, errors, and the apply/save/resolve buttons.
-fn merge_status(ui: &mut egui::Ui, state: &mut MergeTab, clicks: &mut MergeClicks) {
+/// Counters, errors, and the apply/save/resolve buttons. `lock` says why
+/// a running commit disables Mark resolved.
+fn merge_status(
+    ui: &mut egui::Ui,
+    state: &mut MergeTab,
+    clicks: &mut MergeClicks,
+    lock: Option<&str>,
+) {
     if let Some(error) = &state.error {
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
@@ -144,14 +152,13 @@ fn merge_status(ui: &mut egui::Ui, state: &mut MergeTab, clicks: &mut MergeClick
                 .add_enabled(state.dirty, egui::Button::new("Save"))
                 .on_hover_text("Write the result; unresolved conflicts keep markers")
                 .clicked();
-            clicks.resolve = ui
-                .add_enabled(
-                    conflicts == 0 && changes == 0,
-                    egui::Button::new("Mark resolved"),
-                )
-                .on_hover_text("Save the result and stage the file (git add)")
-                .on_disabled_hover_text("Resolve every change first")
-                .clicked();
+            let why =
+                lock.or((conflicts > 0 || changes > 0).then_some("Resolve every change first"));
+            clicks.resolve = appearance::enabled_unless(ui, why, |ui| {
+                ui.button("Mark resolved")
+                    .on_hover_text("Save the result and stage the file (git add)")
+            })
+            .clicked();
         });
         if busy {
             ui.spinner();

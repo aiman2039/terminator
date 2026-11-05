@@ -42,7 +42,7 @@ use doc::*;
 pub(crate) use file_io::LineEnding;
 pub(crate) use find::FindBar;
 pub(crate) use find_files::{FindInFiles, explorer_has_focus, note_explorer_focus};
-pub(crate) use gutter::GutterPopup;
+pub(crate) use gutter::{GitBases, GutterPopup};
 pub(crate) use hierarchy::HierarchyView;
 pub(crate) use navigation::{NavLocation, UsagesView, read_line_previews};
 pub(crate) use rename::RenameDialog;
@@ -276,6 +276,9 @@ mod view_buffer_tests;
 
 #[cfg(test)]
 mod disk_tests;
+
+#[cfg(test)]
+mod gutter_tests;
 
 #[cfg(test)]
 mod reopen_tests;

@@ -227,8 +227,8 @@ impl App {
             Update::EditorBlame(path, revision, entries) => {
                 self.apply_editor_blame(&path, revision, entries);
             }
-            Update::GitBase(path, generation, base) => {
-                self.apply_git_base(path, generation, base);
+            Update::GitBase(path, generation, base, root) => {
+                self.apply_git_base(path, generation, (base, root));
             }
             Update::LinePreviews(generation, lines) => {
                 self.apply_line_previews(generation, lines);

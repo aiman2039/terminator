@@ -507,7 +507,10 @@ fn timed_out_exit_can_be_retried() {
 #[test]
 fn quit_during_a_commit_says_to_cancel_it_first() {
     let (mut app, ctx, _dir, _) = fixture();
-    let cancel = app.git.start_commit("/repo".into(), "msg".into()).unwrap();
+    let cancel = app
+        .git
+        .start_commit("/repo".into(), None, "msg".into())
+        .unwrap();
     app.exit = Exit::Waiting(
         Instant::now()
             .checked_sub(Duration::from_secs(16))

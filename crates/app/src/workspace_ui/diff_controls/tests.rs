@@ -132,8 +132,8 @@ fn chevrons_route_to_discard_stage_and_unstage() {
 }
 
 /// Click the `>>` chevron of the only hunk in a split view and return the
-/// action the controls asked for.
-fn click_revert_chevron(staged: bool) -> Option<(usize, Kind)> {
+/// action the controls asked for. `stage_lock` is a running commit.
+fn click_revert_chevron(staged: bool, stage_lock: bool) -> Option<(usize, Kind)> {
     let doc = diff::build_with_context(diff::BuildWithContextInput {
         path: std::path::Path::new("file.txt"),
         left: "a\nb\nc\n",
@@ -200,6 +200,7 @@ fn click_revert_chevron(staged: bool) -> Option<(usize, Kind)> {
                     staged,
                     editor_pane: false,
                     enabled: true,
+                    stage_lock,
                     review: &mut review,
                     scroll: &scroll,
                     rail: egui::Rect::from_min_size(egui::pos2(792.0, 0.0), egui::vec2(8.0, 400.0)),
@@ -217,6 +218,12 @@ fn click_revert_chevron(staged: bool) -> Option<(usize, Kind)> {
 
 #[test]
 fn split_chevron_click_discards_working_changes_and_unstages_staged_ones() {
-    assert_eq!(click_revert_chevron(false), Some((0, Kind::Discard)));
-    assert_eq!(click_revert_chevron(true), Some((0, Kind::Unstage)));
+    assert_eq!(click_revert_chevron(false, false), Some((0, Kind::Discard)));
+    assert_eq!(click_revert_chevron(true, false), Some((0, Kind::Unstage)));
+}
+
+#[test]
+fn a_running_commit_disables_the_unstage_chevron_but_not_discard() {
+    assert_eq!(click_revert_chevron(true, true), None);
+    assert_eq!(click_revert_chevron(false, true), Some((0, Kind::Discard)));
 }

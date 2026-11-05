@@ -47,7 +47,7 @@ pub async fn context_async(input: ContextAsyncInput<'_>) -> ContextData {
         .run(cancel, move || anyhow::Ok(root.canonicalize()?))
         .await
         .unwrap_or_else(|_| cwd.clone());
-    result.git_dirs = git.git_dirs(&root).await;
+    result.git_dirs = git.git_dirs(&root, cancel).await;
     result.root = Some(root.clone());
     if !include_stats {
         return result;
@@ -98,7 +98,10 @@ impl GitRunner<'_> {
         .await
     }
 
-    async fn git_dirs(&self, root: &Path) -> Vec<PathBuf> {
+    /// The Git dir and the common dir, canonical: a main worktree prints
+    /// `.git` (a symlink in some layouts) where a linked worktree prints
+    /// the resolved path, and a running commit compares the two.
+    async fn git_dirs(&self, root: &Path, cancel: &CancellationToken) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         for arg in ["--absolute-git-dir", "--git-common-dir"] {
             if let Ok(bytes) = self.run(root, &["rev-parse", arg]).await {
@@ -110,7 +113,18 @@ impl GitRunner<'_> {
                 });
             }
         }
-        dirs
+        let printed = dirs.clone();
+        self.service
+            .fs()
+            .run(cancel, move || {
+                anyhow::Ok(
+                    dirs.into_iter()
+                        .map(|dir| dir.canonicalize().unwrap_or(dir))
+                        .collect(),
+                )
+            })
+            .await
+            .unwrap_or(printed)
     }
 
     async fn branch(&self, root: &Path) -> String {
@@ -195,5 +209,58 @@ mod tests {
         for dir in &context.git_dirs {
             assert_eq!(dir.canonicalize().unwrap(), root.join(".git"));
         }
+    }
+
+    /// Runs `git` in `cwd` with no hooks.
+    #[cfg(unix)]
+    fn git(cwd: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(["-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// Every worktree of a repository shares the stash; a running commit
+    /// matches their common dir, so both name it the same way.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn every_worktree_names_its_common_dir_the_same_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let (main, linked) = (base.join("main"), base.join("linked"));
+        std::fs::create_dir(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        // Some tools keep `.git` elsewhere and link it.
+        let store = base.join("store.git");
+        std::fs::rename(main.join(".git"), &store).unwrap();
+        std::os::unix::fs::symlink(&store, main.join(".git")).unwrap();
+        let author = ["-c", "user.email=w@example.invalid", "-c", "user.name=W"];
+        let commit = ["commit", "-q", "--allow-empty", "-m", "base"];
+        git(&main, &[author.as_slice(), commit.as_slice()].concat());
+        let target = linked.to_string_lossy().into_owned();
+        git(&main, &["worktree", "add", "-q", "-b", "side", &target]);
+        let state = tempfile::tempdir().unwrap();
+        let (tx, _) = std::sync::mpsc::channel();
+        let (service, _owner) = Services::new(
+            terminator_core::Paths::at(state.path().into()),
+            eframe::egui::Context::default(),
+            tx,
+        )
+        .unwrap();
+        async fn common_dir(service: &Services, cwd: PathBuf) -> Option<PathBuf> {
+            let input = ContextAsyncInput {
+                service,
+                cwd,
+                include_stats: false,
+                cancel: &CancellationToken::new(),
+            };
+            context_async(input).await.git_dirs.get(1).cloned()
+        }
+        assert_eq!(common_dir(&service, main).await, Some(store.clone()));
+        assert_eq!(common_dir(&service, linked).await, Some(store));
     }
 }

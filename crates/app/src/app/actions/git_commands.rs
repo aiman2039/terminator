@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::revision_compare::PickerMode;
+use crate::workspace_ops::CommitRisk;
 use crate::*;
 
 /// The Git actions, in Find Action order.
@@ -28,9 +29,11 @@ impl App {
                 self.selected_remote_project().is_none() && self.context.is_some()
             }
             Action::GitCommitPush => self.commit_ready(),
-            Action::GitStageAll => self
-                .local_git_context()
-                .is_some_and(|context| context.changes.iter().any(|change| !change.conflict())),
+            // Like the Stage All button, it waits for a commit running here.
+            Action::GitStageAll => self.local_git_context().is_some_and(|context| {
+                context.changes.iter().any(|change| !change.conflict())
+                    && !self.commit_blocks(context.root.as_deref(), CommitRisk::Index)
+            }),
             Action::GitCompareWith | Action::GitCompareRevision | Action::GitShowHistory => {
                 self.focused_local_file().is_some()
             }

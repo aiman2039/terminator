@@ -8,6 +8,19 @@ pub(crate) enum CommitPhase {
     Pushing,
 }
 
+/// The panel controls that a commit running in its repository disables,
+/// as the hover text that says why, or `None` when they work.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CommitLock {
+    /// Staging and Discard: the commit runs in this worktree.
+    pub(crate) index: Option<&'static str>,
+    /// Shelve, Unshelve, and Drop: the commit runs in a worktree of this
+    /// repository.
+    pub(crate) stash: Option<&'static str>,
+    /// The branch switch: the commit or its push runs in this worktree.
+    pub(crate) head: Option<&'static str>,
+}
+
 /// The commit job in flight, as the commit area shows it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CommitProgress<'a> {

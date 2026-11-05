@@ -504,6 +504,7 @@ mod tests {
                         base_ref: None,
                         focus_message: false,
                         commit_run: None,
+                        commit_lock: Default::default(),
                         commit_failure: None,
                     };
                     *outcome = git_panel(ui, &mut input);
@@ -584,6 +585,7 @@ mod tests {
                         base_ref: None,
                         focus_message: false,
                         commit_run: None,
+                        commit_lock: Default::default(),
                         commit_failure: None,
                     };
                     *outcome = git_panel(ui, &mut input);

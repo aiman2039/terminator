@@ -102,18 +102,20 @@ impl ControlsFrame<'_> {
             if !strip.contains_rect(rect) {
                 continue;
             }
+            let lock = self.action_lock(kind);
+            let enabled = self.enabled && lock.is_none();
             let response = ui
                 .interact(
                     rect,
                     ui.scope_id()
                         .with(("diff-chevron", band.index, kind.label())),
-                    if self.enabled {
+                    if enabled {
                         egui::Sense::click()
                     } else {
                         egui::Sense::hover()
                     },
                 )
-                .on_hover_text(action_tip(kind, picked))
+                .on_hover_text(lock.map_or_else(|| action_tip(kind, picked), str::to_owned))
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &action_target(kind, band.index), rect);
@@ -123,8 +125,8 @@ impl ControlsFrame<'_> {
                 chevron,
                 color: band.color,
                 tints: self.colors.tints(),
-                hovered: response.hovered() && self.enabled,
-                enabled: self.enabled,
+                hovered: response.hovered() && enabled,
+                enabled,
             });
             if response.clicked() {
                 state.result.action = Some((band.index, kind));

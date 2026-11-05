@@ -26,6 +26,8 @@ struct DiffFrame<'a> {
     remote: bool,
     read_only: bool,
     enabled: bool,
+    /// A commit runs in this diff's repository: staging waits for it.
+    commit_lock: bool,
     count: usize,
     split: bool,
     focused: bool,

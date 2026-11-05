@@ -68,6 +68,8 @@ struct ViewFrame {
     completion_triggers: Vec<char>,
     remote_snapshot: bool,
     git_base: Option<Arc<str>>,
+    /// A commit runs in this file's repository: the gutter Stage waits.
+    commit_lock: bool,
     change_colors: [Color32; 3],
 }
 

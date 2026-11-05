@@ -28,53 +28,61 @@ pub fn check_state(input: CheckStateInput) -> CheckState {
 
 /// Small tri-state checkbox painted to fit the 20px Git rows. Returns true
 /// when clicked; the caller decides whether that means include or exclude.
-pub(super) fn tri_checkbox(ui: &mut egui::Ui, state: CheckState) -> bool {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(14.0, GIT_TREE_ROW_HEIGHT), egui::Sense::click());
-    if ui.is_rect_visible(rect) {
-        let box_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(13.0, 13.0));
-        let visuals = ui.visuals();
-        let (fill, stroke) = match state {
-            CheckState::Unchecked => (
-                visuals.widgets.inactive.bg_fill,
-                visuals.widgets.inactive.bg_stroke,
-            ),
-            _ => (visuals.selection.bg_fill, egui::Stroke::NONE),
-        };
-        ui.painter().rect(
-            box_rect,
-            appearance::RADIUS_SMALL,
-            fill,
-            stroke,
-            egui::StrokeKind::Inside,
-        );
-        let mark = visuals.selection.stroke.color;
-        match state {
-            CheckState::Checked => {
-                let c = box_rect.center();
-                ui.painter().line_segment(
-                    [egui::pos2(c.x - 3.5, c.y), egui::pos2(c.x - 1.0, c.y + 2.5)],
-                    egui::Stroke::new(1.6, mark),
-                );
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(c.x - 1.0, c.y + 2.5),
-                        egui::pos2(c.x + 3.5, c.y - 2.5),
-                    ],
-                    egui::Stroke::new(1.6, mark),
-                );
-            }
-            CheckState::Partial => {
-                let c = box_rect.center();
-                ui.painter().line_segment(
-                    [egui::pos2(c.x - 3.0, c.y), egui::pos2(c.x + 3.0, c.y)],
-                    egui::Stroke::new(1.8, mark),
-                );
-            }
-            CheckState::Unchecked => {}
+/// `lock` disables it and says why.
+pub(super) fn tri_checkbox(ui: &mut egui::Ui, state: CheckState, lock: Option<&str>) -> bool {
+    appearance::enabled_unless(ui, lock, |ui| {
+        let size = egui::vec2(14.0, GIT_TREE_ROW_HEIGHT);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            paint_check(ui, rect, state);
         }
+        response
+    })
+    .clicked()
+}
+
+fn paint_check(ui: &egui::Ui, rect: egui::Rect, state: CheckState) {
+    let box_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(13.0, 13.0));
+    let visuals = ui.visuals();
+    let (fill, stroke) = match state {
+        CheckState::Unchecked => (
+            visuals.widgets.inactive.bg_fill,
+            visuals.widgets.inactive.bg_stroke,
+        ),
+        _ => (visuals.selection.bg_fill, egui::Stroke::NONE),
+    };
+    ui.painter().rect(
+        box_rect,
+        appearance::RADIUS_SMALL,
+        fill,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    let mark = visuals.selection.stroke.color;
+    match state {
+        CheckState::Checked => {
+            let c = box_rect.center();
+            ui.painter().line_segment(
+                [egui::pos2(c.x - 3.5, c.y), egui::pos2(c.x - 1.0, c.y + 2.5)],
+                egui::Stroke::new(1.6, mark),
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(c.x - 1.0, c.y + 2.5),
+                    egui::pos2(c.x + 3.5, c.y - 2.5),
+                ],
+                egui::Stroke::new(1.6, mark),
+            );
+        }
+        CheckState::Partial => {
+            let c = box_rect.center();
+            ui.painter().line_segment(
+                [egui::pos2(c.x - 3.0, c.y), egui::pos2(c.x + 3.0, c.y)],
+                egui::Stroke::new(1.8, mark),
+            );
+        }
+        CheckState::Unchecked => {}
     }
-    response.clicked()
 }
 
 /// One changed file: diffstat, status letter, click-to-diff, and context menu.
@@ -143,6 +151,7 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
         ui.separator();
         row.menu_copy(ui, outcome);
         ui.separator();
+        // Trash only, like the Explorer's Delete: a running commit allows it.
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
             label: "Delete file",
@@ -191,8 +200,8 @@ impl ChangeRow<'_> {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 if group != terminator_git::GitGroup::Conflicts {
                     let checked = usize::from(group == terminator_git::GitGroup::Staged);
-                    check_clicked =
-                        tri_checkbox(ui, check_state(CheckStateInput { checked, total: 1 }));
+                    let state = check_state(CheckStateInput { checked, total: 1 });
+                    check_clicked = tri_checkbox(ui, state, self.ctx.lock.index);
                 }
                 appearance::file_row(appearance::FileRowInput {
                     ui,
@@ -299,40 +308,36 @@ impl ChangeRow<'_> {
         }
     }
 
-    /// Stage or Unstage, and Discard changes.
+    /// Stage or Unstage, and Discard changes. A commit running in this
+    /// repository disables them.
     fn menu_stage(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
         let path = &self.change.path;
-        if self.group == terminator_git::GitGroup::Staged {
-            if appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: "Unstage",
-                icon: "ArrowLeft",
-                shortcut: "",
+        let staged = self.group == terminator_git::GitGroup::Staged;
+        let (label, icon) = if staged {
+            ("Unstage", "ArrowLeft")
+        } else {
+            ("Stage", "Plus")
+        };
+        let lock = self.ctx.lock.index;
+        let item = |ui: &mut egui::Ui, label: &str, icon: &str| {
+            appearance::enabled_unless(ui, lock, |ui| {
+                appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label,
+                    icon,
+                    shortcut: "",
+                })
             })
-            .clicked()
-            {
+        };
+        if item(ui, label, icon).clicked() {
+            if staged {
                 outcome.unstage.push(path.clone());
-                ui.close();
+            } else {
+                outcome.stage.push(path.clone());
             }
-        } else if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Stage",
-            icon: "Plus",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            outcome.stage.push(path.clone());
             ui.close();
         }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Discard changes",
-            icon: "Eraser",
-            shortcut: "",
-        })
-        .clicked()
-        {
+        if item(ui, "Discard changes", "Eraser").clicked() {
             outcome.discard.push((
                 path.clone(),
                 self.group == terminator_git::GitGroup::Untracked,

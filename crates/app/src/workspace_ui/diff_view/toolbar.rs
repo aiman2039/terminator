@@ -142,14 +142,22 @@ impl App {
         } else {
             ("Upload", "Stage whole file")
         };
-        let button = ui
-            .add_enabled_ui(frame.enabled && !pass.review.unsaved_edits(), |ui| {
+        let lock = frame.commit_lock.then_some(workspace_ops::COMMIT_WAIT);
+        let button = appearance::enabled_unless(ui, lock, |ui| {
+            ui.add_enabled_ui(frame.enabled && !pass.review.unsaved_edits(), |ui| {
                 appearance::sidebar_action(ui, icon, tip)
             })
-            .inner;
+            .inner
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record_response(ui.ctx(), "diff-stage-file", &button);
         pass.stage_file = button.clicked();
+    }
+
+    /// Why Undo waits: a running commit locks undoing a stage or unstage.
+    fn diff_undo_lock(frame: &DiffFrame<'_>, pass: &DiffPass) -> Option<&'static str> {
+        let index = pass.review.undo.last().is_some_and(|undo| !undo.worktree());
+        (frame.commit_lock && index).then_some(workspace_ops::COMMIT_WAIT)
     }
 
     /// The labeled undo history, newest first. Only the newest entry can
@@ -158,15 +166,18 @@ impl App {
         if pass.review.undo.is_empty() {
             return;
         }
+        let lock = Self::diff_undo_lock(frame, pass);
         let menu = appearance::icon_menu_button(ui, "List", |ui| {
             ui.weak("Undo history");
             for (at, undo) in pass.review.undo.iter().rev().enumerate() {
                 let label = undo.label.as_str();
                 if at == 0 {
-                    let item = ui.add_enabled(
-                        frame.enabled,
-                        egui::Button::new(format!("Undo {label}")).frame(false),
-                    );
+                    let item = appearance::enabled_unless(ui, lock, |ui| {
+                        ui.add_enabled(
+                            frame.enabled,
+                            egui::Button::new(format!("Undo {label}")).frame(false),
+                        )
+                    });
                     if item.clicked() {
                         pass.undo = true;
                         ui.close();
@@ -252,11 +263,13 @@ impl App {
         let _ = menu;
         self.diff_layout_toggles(ui, frame, pass);
         ui.separator();
-        let undo_button = ui
-            .add_enabled_ui(frame.enabled && !pass.review.undo.is_empty(), |ui| {
+        let lock = Self::diff_undo_lock(frame, pass);
+        let undo_button = appearance::enabled_unless(ui, lock, |ui| {
+            ui.add_enabled_ui(frame.enabled && !pass.review.undo.is_empty(), |ui| {
                 appearance::sidebar_action(ui, "History", "Undo last hunk action")
             })
-            .inner;
+            .inner
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record_response(ui.ctx(), "diff-undo", &undo_button);
         pass.undo = undo_button.clicked();

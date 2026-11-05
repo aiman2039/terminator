@@ -182,6 +182,20 @@ pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Respons
     response.on_hover_text(tip)
 }
 
+/// Adds a control that `why` disables, with `why` as its hover text then.
+/// The control keeps its size and place; only its input and opacity change.
+pub fn enabled_unless(
+    ui: &mut egui::Ui,
+    why: Option<&str>,
+    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    let response = ui.add_enabled_ui(why.is_none(), add).inner;
+    match why {
+        Some(why) => response.on_disabled_hover_text(why),
+        None => response,
+    }
+}
+
 /// Exact-size frameless button for toolbar icons with custom paint, such as
 /// tinted status glyphs. Shares the action size so it centers on their row.
 pub fn toolbar_button(ui: &mut egui::Ui) -> egui::Response {

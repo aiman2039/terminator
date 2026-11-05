@@ -148,6 +148,7 @@ fn running_commit_shows_its_step_cancel_and_the_last_failure() {
                         cancelling,
                         root: &root,
                     }),
+                    commit_lock: CommitLock::default(),
                     commit_failure: Some(failure),
                 };
                 outcome = git_panel(ui, &mut input);

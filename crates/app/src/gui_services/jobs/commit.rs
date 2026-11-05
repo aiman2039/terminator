@@ -1,8 +1,11 @@
 //! The commit job. It is admitted on the root's workspace-op queue, so every
-//! earlier action there (Stage, Stage All) has finished. It then hands the
-//! long run to its own queue: later Explorer and Git actions in the root do
-//! not wait for the minutes a hook or a push may take. The push runs as a
-//! second job on that queue, so its progress report arrives before its end.
+//! earlier action there (Stage, Stage All, diff hunk and gutter writes) has
+//! finished. It then hands the long run to its own queue: later reads and
+//! Explorer actions in the root do not wait for the minutes a hook or a push
+//! may take. While Git commits, the GUI refuses the actions that could
+//! change the commit, and the branch switch until the push ends too
+//! (`App::refuse_during_commit`). The push runs as a second job on that
+//! queue, so its progress report arrives before its end.
 use super::super::submit::Services;
 use crate::{Update, workspace_ops};
 use std::path::{Path, PathBuf};
@@ -245,12 +248,21 @@ mod tests {
             assert!(Instant::now() < deadline, "hook never started");
             std::thread::sleep(Duration::from_millis(5));
         }
-        // The hook still runs; a later Stage in the same root still finishes.
-        std::fs::write(root.join("b.txt"), "b\n").unwrap();
-        let stage = Job::Workspace(root.clone(), Op::Stage(root.join("b.txt")));
-        service.send(stage).unwrap();
-        let staged = reply(&mut owner, |op| matches!(op, Op::Stage(_)));
-        assert!(staged.is_ok(), "{staged:?}");
+        // The hook still runs; a later Explorer action and a read in the
+        // same root still finish. (The GUI refuses index changes meanwhile.)
+        let create = Job::Workspace(root.clone(), Op::CreateFile(root.join("b.txt")));
+        service.send(create).unwrap();
+        let created = reply(&mut owner, |op| matches!(op, Op::CreateFile(_)));
+        assert!(created.is_ok(), "{created:?}");
+        assert!(root.join("b.txt").is_file());
+        service
+            .send(Job::Workspace(root.clone(), Op::Branches))
+            .unwrap();
+        let listed = reply(&mut owner, |op| matches!(op, Op::Branches));
+        assert!(
+            matches!(&listed, Ok(Report::Branches(names)) if names == &["main"]),
+            "{listed:?}"
+        );
         cancel.cancel();
         let end = reply(&mut owner, |op| matches!(op, Op::Commit { .. }));
         assert_eq!(end.unwrap_err(), workspace_ops::COMMIT_CANCELLED);

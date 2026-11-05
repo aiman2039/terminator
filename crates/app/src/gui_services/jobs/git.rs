@@ -89,6 +89,32 @@ impl Services {
         terminator_git::check_text(&bytes).then(|| String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// The canonical worktree root of `path`'s repository, found the way
+    /// the gutter Stage job finds it: `rev-parse --show-toplevel` in its
+    /// folder, then canonicalized.
+    pub(in crate::gui_services) async fn git_toplevel(
+        &self,
+        path: &std::path::Path,
+        cancel: &CancellationToken,
+    ) -> Option<std::path::PathBuf> {
+        let bytes = terminator_git::run(
+            self.processes(),
+            self.fs(),
+            terminator_git::RunInput {
+                cwd: path.parent()?,
+                args: vec!["rev-parse".into(), "--show-toplevel".into()],
+                options: terminator_core::CommandOptions::default(),
+            },
+        )
+        .await
+        .ok()?;
+        let root = std::path::PathBuf::from(std::str::from_utf8(&bytes).ok()?.trim());
+        self.fs()
+            .run(cancel, move || anyhow::Ok(root.canonicalize()?))
+            .await
+            .ok()
+    }
+
     pub(in crate::gui_services) async fn diff_context(
         &self,
         input: DiffContextInput<'_>,

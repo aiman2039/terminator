@@ -70,8 +70,7 @@ impl Services {
                 .await
             }
             Job::GitBase(path, generation) => {
-                let base = self.git_base_text(&path).await;
-                updates.push(Update::GitBase(path, generation, base));
+                updates.push(self.git_base(path, generation, &cancel).await);
                 Ok(())
             }
             job @ Job::StageGutterBlock { .. } => {
@@ -82,6 +81,17 @@ impl Services {
             Job::GitLog(tab, query) => self.git_log((tab, query), cancel, updates).await,
             _ => anyhow::bail!(MISROUTED),
         }
+    }
+
+    /// The `HEAD` text of `path` for gutter markers, and the root of its
+    /// repository: the gutter Stage matches that root with a running commit.
+    async fn git_base(&self, path: PathBuf, generation: u64, cancel: &CancellationToken) -> Update {
+        let base = self.git_base_text(&path).await;
+        let root = match base {
+            Some(_) => self.git_toplevel(&path, cancel).await,
+            None => None,
+        };
+        Update::GitBase(path, generation, base, root)
     }
 
     /// `git rev-parse --git-common-dir` succeeds in `path`.

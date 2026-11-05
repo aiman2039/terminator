@@ -323,7 +323,9 @@ impl ControlsFrame<'_> {
             &[(Kind::Stage, "Plus"), (Kind::Discard, "Eraser")]
         };
         for &(kind, icon) in kinds {
-            let button = appearance::sidebar_action(ui, icon, &action_tip(kind, picked));
+            let button = appearance::enabled_unless(ui, self.action_lock(kind), |ui| {
+                appearance::sidebar_action(ui, icon, &action_tip(kind, picked))
+            });
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &action_target(kind, index), button.rect);
             if button.clicked() {

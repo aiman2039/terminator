@@ -1,8 +1,11 @@
 use super::commit::{LONG_GIT_TIMEOUT, long_options, tail};
-use super::tests::{git, repo};
+#[cfg(unix)]
+use super::tests::git;
+use super::tests::repo;
 use super::*;
 use std::time::Duration;
 
+#[cfg(unix)]
 fn request(message: &str) -> CommitRequest<'_> {
     CommitRequest {
         message,
@@ -320,5 +323,51 @@ mod hooks {
         assert!(error.contains("\nremote says no"), "{error}");
         assert!(commit_landed(&error) && !commit_cancelled(&error));
         pool.close().await;
+    }
+}
+
+#[test]
+fn actions_are_classed_by_what_they_can_change_in_a_running_commit() {
+    let path = || PathBuf::from("/repo/a.txt");
+    let index = [
+        Op::Stage(path()),
+        Op::StageAll(vec![path()]),
+        Op::Unstage(path()),
+        Op::Discard {
+            path: path(),
+            untracked: true,
+        },
+    ];
+    for op in index {
+        assert_eq!(op.commit_risk(), CommitRisk::Index, "{op:?}");
+    }
+    // The push after the commit reads HEAD too.
+    assert_eq!(Op::Switch("main".into()).commit_risk(), CommitRisk::Head);
+    let stash = [
+        Op::Shelve(vec![path()]),
+        Op::Unshelve("stash@{0}".into()),
+        Op::DropShelf("stash@{0}".into()),
+    ];
+    for op in stash {
+        assert_eq!(op.commit_risk(), CommitRisk::Stash, "{op:?}");
+    }
+    let free = [
+        Op::Branches,
+        Op::Log,
+        Op::Shelves,
+        Op::HeadMessage,
+        Op::Compare { base: None },
+        Op::CompareTargets,
+        Op::FileHistory(path()),
+        Op::Delete(path()),
+        Op::CreateFile(path()),
+        Op::Rename {
+            from: path(),
+            to: "/repo/b.txt".into(),
+        },
+        Op::Reveal(path()),
+    ];
+    for op in free {
+        assert_eq!(op.commit_risk(), CommitRisk::None, "{op:?}");
     }
 }

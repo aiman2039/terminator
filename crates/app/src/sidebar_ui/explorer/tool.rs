@@ -274,6 +274,7 @@ impl App {
         self.ensure_git_lists(context.root.clone());
         let mut draft = std::mem::take(&mut self.git.commit);
         let recent_messages = self.preferences.commit_messages.clone();
+        let commit_lock = self.git_panel_lock(context);
         let outcome = git_panel(
             ui,
             &mut GitPanelInput {
@@ -310,6 +311,7 @@ impl App {
                     .run
                     .as_ref()
                     .map(crate::app::git_panel_state::CommitRun::progress),
+                commit_lock,
                 commit_failure: self.git.commit_failure.as_deref(),
             },
         );
