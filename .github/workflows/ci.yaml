@@ -65,8 +65,16 @@ jobs:
             libasound2-dev libwebkit2gtk-4.1-dev
       # Editor and upgrade fixtures spawn Neovim; the image has none.
       # Pinned download like the native-gui job, not a floating winget install.
+      # GitHub release downloads sometimes time out; retry once.
       - uses: rhysd/action-setup-vim@v1
+        id: nvim
         if: runner.os == 'Windows'
+        continue-on-error: true
+        with:
+          neovim: true
+          version: v0.11.6
+      - uses: rhysd/action-setup-vim@v1
+        if: runner.os == 'Windows' && steps.nvim.outcome == 'failure'
         with:
           neovim: true
           version: v0.11.6
@@ -223,7 +231,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'
+      # GitHub release downloads sometimes time out; retry once.
       - uses: rhysd/action-setup-vim@v1
+        id: nvim
+        continue-on-error: true
+        with:
+          neovim: true
+          version: v0.11.6
+      - uses: rhysd/action-setup-vim@v1
+        if: steps.nvim.outcome == 'failure'
         with:
           neovim: true
           version: v0.11.6

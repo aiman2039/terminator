@@ -45,6 +45,42 @@ pub(crate) struct PrepareInput<'a> {
     pub line: Option<u32>,
     pub column: Option<u32>,
 }
+fn remote_script(
+    cwd: &str,
+    file: Option<&str>,
+    socket: Option<&str>,
+    cursor: Option<(u32, Option<u32>)>,
+) -> Result<String> {
+    let mut script = format!(
+        "set -eu; cd -- {}; export COLORTERM=truecolor; ",
+        terminator_core::quote(cwd)
+    );
+    if let Some(file) = file {
+        let socket = socket.context("Remote editor socket missing")?;
+        script.push_str("umask 077; d=\"$HOME/.cache/terminator/e\"; test ! -L \"$HOME/.cache/terminator\"; test ! -L \"$d\"; mkdir -p \"$d\"; chmod 700 \"$HOME/.cache/terminator\" \"$d\"; exec nvim --listen \"$HOME/");
+        script.push_str(socket);
+        script.push_str("\" -c ");
+        script.push_str(&terminator_core::quote(&format!(
+            "lua assert(loadstring({}))()",
+            serde_json::to_string(include_str!("../editor.lua"))?
+        )));
+        if let Some((line, column)) = cursor {
+            script.push(' ');
+            script.push_str(&terminator_core::quote(&format!(
+                "+call cursor({},{})",
+                line.max(1),
+                column.unwrap_or(1).max(1)
+            )));
+        }
+        script.push_str(" -- ");
+        script.push_str(&terminator_core::quote(file));
+    } else {
+        // csh/tcsh accept `-l` only as the sole flag; a TTY makes them
+        // interactive anyway.
+        script.push_str("s=\"${SHELL:-/bin/sh}\"; case \"${s##*/}\" in csh|tcsh) exec \"$s\" -l;; esac; exec \"$s\" -il");
+    }
+    Ok(script)
+}
 pub(crate) fn prepare(
     input: PrepareInput<'_>,
 ) -> Result<(CommandBuilder, RemoteSession, Option<PathBuf>)> {
@@ -64,34 +100,12 @@ pub(crate) fn prepare(
     let socket = file
         .as_ref()
         .map(|_| format!(".cache/terminator/e/{}.sock", sid.replace('-', "")));
-    let mut script = format!(
-        "set -eu; cd -- {}; export COLORTERM=truecolor; ",
-        terminator_core::quote(&cwd)
-    );
-    if let Some(file) = &file {
-        let socket = socket.as_deref().context("Remote editor socket missing")?;
-        script.push_str("umask 077; d=\"$HOME/.cache/terminator/e\"; test ! -L \"$HOME/.cache/terminator\"; test ! -L \"$d\"; mkdir -p \"$d\"; chmod 700 \"$HOME/.cache/terminator\" \"$d\"; exec nvim --listen \"$HOME/");
-        script.push_str(socket);
-        script.push_str("\" -c ");
-        script.push_str(&terminator_core::quote(&format!(
-            "lua assert(loadstring({}))()",
-            serde_json::to_string(include_str!("../editor.lua"))?
-        )));
-        if let Some(line) = line {
-            script.push(' ');
-            script.push_str(&terminator_core::quote(&format!(
-                "+call cursor({},{})",
-                line.max(1),
-                column.unwrap_or(1).max(1)
-            )));
-        }
-        script.push_str(" -- ");
-        script.push_str(&terminator_core::quote(file));
-    } else {
-        // csh/tcsh accept `-l` only as the sole flag; a TTY makes them
-        // interactive anyway.
-        script.push_str("s=\"${SHELL:-/bin/sh}\"; case \"${s##*/}\" in csh|tcsh) exec \"$s\" -l;; esac; exec \"$s\" -il");
-    }
+    let script = remote_script(
+        &cwd,
+        file.as_deref(),
+        socket.as_deref(),
+        line.map(|line| (line, column)),
+    )?;
     let (program, remote) = if project.mosh {
         // The helper runs this over SSH, then becomes `mosh-client`.
         (
