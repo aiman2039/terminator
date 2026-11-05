@@ -119,7 +119,11 @@ mod tests {
         let paths = Paths::at(dir.path().into());
         let spelled = |spell_check| {
             let settings = Settings {
-                editor_program: "/bin/sh".into(),
+                // Any existing executable; `/bin/sh` is missing on Windows.
+                editor_program: std::env::current_exe()
+                    .expect("test executable")
+                    .to_string_lossy()
+                    .into_owned(),
                 editor_mode: EditorMode::Embedded,
                 spell_check,
                 ..Settings::default()

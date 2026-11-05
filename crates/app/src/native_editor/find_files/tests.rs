@@ -712,7 +712,13 @@ fn window_keys_move_the_cursor_open_the_hit_and_close() {
     // Enter opens the hit at its line and closes the window.
     paint(&mut app, &ctx, &[egui::Key::Enter]);
     assert!(!app.find_in_files.as_ref().unwrap().shown);
-    assert_eq!(app.native_pending_line.get(Path::new("/a/x.rs")), Some(&7));
+    // Windows opens `/a/x.rs` as `C:\a\x.rs`.
+    let pending = app
+        .native_pending_line
+        .iter()
+        .find(|(path, _)| path.ends_with("a/x.rs"))
+        .map(|(_, line)| *line);
+    assert_eq!(pending, Some(7));
     // Esc closes without opening anything and gives the keyboard back.
     app.native_pending_line.clear();
     let editor = egui::Id::unique("editor-under-test");

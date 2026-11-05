@@ -20,7 +20,10 @@ pub fn blame_with_contents(
         timeout: std::time::Duration::from_secs(20),
         ..Default::default()
     };
-    let path = path.to_string_lossy();
+    // A repository-relative path: Git on Windows rejects verbatim (`\\?\`) paths.
+    let relative =
+        terminator_git::relative_path(&root, path).map_err(|e| format!("git blame: {e}"))?;
+    let path = relative.to_string_lossy();
     let mut args = vec!["blame", "--line-porcelain"];
     if contents.is_some() {
         args.extend(["--contents", "-"]);

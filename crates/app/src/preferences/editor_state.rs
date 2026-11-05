@@ -83,6 +83,12 @@ mod tests {
     use super::*;
     use crate::preferences::UiPreferences;
 
+    /// An absolute path on every platform; `/src` is relative on Windows.
+    fn src(name: &str) -> String {
+        let root = if cfg!(windows) { "C:/src" } else { "/src" };
+        format!("{root}/{name}")
+    }
+
     fn state(path: &str, line: usize) -> EditorState {
         EditorState {
             path: PathBuf::from(path),
@@ -97,32 +103,37 @@ mod tests {
     fn editor_states_survive_a_preferences_save_and_load() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut prefs = UiPreferences::default();
-        prefs.editor_states.remember(state("/src/a.rs", 40));
+        prefs.editor_states.remember(state(&src("a.rs"), 40));
         let unfolded = EditorState {
             folds: Vec::new(),
-            ..state("/src/b.rs", 7)
+            ..state(&src("b.rs"), 7)
         };
         prefs.editor_states.remember(unfolded.clone());
         prefs.save(dir.path()).expect("save");
         let loaded = UiPreferences::load(dir.path()).expect("load");
         assert_eq!(loaded.editor_states, prefs.editor_states);
         assert_eq!(
-            loaded.editor_states.get(Path::new("/src/b.rs")),
+            loaded.editor_states.get(Path::new(&src("b.rs"))),
             Some(&unfolded)
         );
         assert_eq!(
             loaded.editor_states.paths(),
-            [Path::new("/src/b.rs"), Path::new("/src/a.rs")]
+            [Path::new(&src("b.rs")), Path::new(&src("a.rs"))]
         );
     }
 
     #[test]
     fn damaged_or_relative_entries_are_dropped_on_load() {
-        let json = r#"[{"path":"/src/a.rs","line":4},{"path":"rel.rs"},
-            {"path":"/src/b.rs","line":-2},{"line":3},"junk"]"#;
-        let states: EditorStates = serde_json::from_str(json).expect("parse");
-        assert_eq!(states.paths(), [Path::new("/src/a.rs")]);
-        let kept = states.get(Path::new("/src/a.rs")).expect("kept");
+        let json = serde_json::json!([
+            {"path": src("a.rs"), "line": 4},
+            {"path": "rel.rs"},
+            {"path": src("b.rs"), "line": -2},
+            {"line": 3},
+            "junk"
+        ]);
+        let states: EditorStates = serde_json::from_value(json).expect("parse");
+        assert_eq!(states.paths(), [Path::new(&src("a.rs"))]);
+        let kept = states.get(Path::new(&src("a.rs"))).expect("kept");
         assert_eq!((kept.line, kept.column, kept.top), (4, 0, 0));
         assert!(kept.folds.is_empty(), "missing fields take defaults");
         let other: EditorStates = serde_json::from_str(r#"{"a":1}"#).expect("parse");
@@ -133,21 +144,24 @@ mod tests {
     fn only_the_most_recent_files_are_kept() {
         let mut states = EditorStates::default();
         for index in 0..=MAX_EDITOR_STATES {
-            states.remember(state(&format!("/src/{index}.rs"), index));
+            states.remember(state(&src(&format!("{index}.rs")), index));
         }
         assert_eq!(states.paths().len(), MAX_EDITOR_STATES);
         assert!(
-            states.get(Path::new("/src/0.rs")).is_none(),
+            states.get(Path::new(&src("0.rs"))).is_none(),
             "oldest dropped"
         );
         // Remembering a file again moves it to the front, no duplicate.
-        states.remember(state("/src/1.rs", 99));
+        states.remember(state(&src("1.rs"), 99));
         assert_eq!(states.paths().len(), MAX_EDITOR_STATES);
-        assert_eq!(states.paths().first(), Some(&Path::new("/src/1.rs")));
-        assert_eq!(states.get(Path::new("/src/1.rs")).map(|s| s.line), Some(99));
+        assert_eq!(states.paths().first(), Some(&Path::new(&src("1.rs"))));
+        assert_eq!(
+            states.get(Path::new(&src("1.rs"))).map(|s| s.line),
+            Some(99)
+        );
         // A longer list from a file is cut to the cap on load.
         let many: Vec<EditorState> = (0..=MAX_EDITOR_STATES)
-            .map(|index| state(&format!("/src/{index}.rs"), index))
+            .map(|index| state(&src(&format!("{index}.rs")), index))
             .collect();
         let json = serde_json::to_string(&many).expect("serialize");
         let loaded: EditorStates = serde_json::from_str(&json).expect("parse");
