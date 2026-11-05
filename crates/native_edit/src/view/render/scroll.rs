@@ -152,8 +152,9 @@ impl<B: Buffer> SourceView<'_, B> {
     /// mode does not move the source viewport. A status band with a top
     /// hairline (`JetBrains` status bar): the command prompt owns the
     /// left, and `Ln, Col`, the host's cells and the vim mode sit
-    /// right-aligned.
-    pub(super) fn paint_footer(&self, ui: &mut egui::Ui) -> Option<Rect> {
+    /// right-aligned. Returns the band and the painted rect of each host
+    /// cell (`status_items`, in order), so the host can attach menus.
+    pub(super) fn paint_footer(&self, ui: &mut egui::Ui) -> Option<(Rect, Vec<Rect>)> {
         if !self.options.show_status {
             return None;
         }
@@ -181,17 +182,26 @@ impl<B: Buffer> SourceView<'_, B> {
         }
         let font = egui::FontId::proportional(STATUS_FONT);
         let mut right = rect.right() - STATUS_PAD;
-        for (text, color) in self.status_cells(&palette).into_iter().rev() {
+        let mut host_cells = vec![Rect::NOTHING; self.options.status_items.len()];
+        let cells = self.status_cells(&palette).into_iter().enumerate();
+        for (index, (text, color)) in cells.rev() {
             let galley = painter.layout_no_wrap(text, font.clone(), color);
             let size = galley.size();
             let at = Pos2::new(
                 snap(right - size.x, ppp),
                 snap(rect.center().y - size.y * 0.5, ppp),
             );
+            // Cell 0 is `Ln, Col`; the host's cells follow it.
+            if let Some(cell) = index
+                .checked_sub(1)
+                .and_then(|host| host_cells.get_mut(host))
+            {
+                *cell = Rect::from_x_y_ranges(at.x..=at.x + size.x, rect.y_range());
+            }
             painter.galley(at, galley, color);
             right = at.x - STATUS_GAP;
         }
-        Some(rect)
+        Some((rect, host_cells))
     }
 
     /// Status cells, left to right: caret position, host cells, mode.
@@ -256,6 +266,7 @@ impl Canvas<'_> {
                 let geometry = RowCells {
                     text: &row.text,
                     hints: &hints,
+                    tab: self.geometry.tab,
                 };
                 (
                     index,

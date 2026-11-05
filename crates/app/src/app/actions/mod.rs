@@ -7,8 +7,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod commit_lock;
 mod editor_close;
+mod git_commands;
 mod git_outcome;
+
+pub(crate) use git_commands::GIT_ACTIONS;
 
 pub(crate) struct TerminalActionInput<'a> {
     pub(crate) ctx: &'a egui::Context,
@@ -252,6 +256,29 @@ impl App {
             path,
             line: None,
         });
+    }
+    /// Open `path` at `at` (0-based line, UTF-16 column), as a search hit
+    /// does. Editors that take a line open there; the native editor also
+    /// places the caret on the column. Rapid repeats collapse like a
+    /// double-click on a row.
+    pub(crate) fn activate_file_at(
+        &mut self,
+        ui: &egui::Ui,
+        path: &Path,
+        at: terminator_native_edit::lsp::Position,
+    ) {
+        let interval = Duration::from_secs_f64(
+            ui.ctx()
+                .options(|options| options.input_options.max_double_click_delay),
+        );
+        if self.note_file_activation(NoteFileActivationInput {
+            path: path.to_path_buf(),
+            staged: None,
+            action: FileAction::Open,
+            interval,
+        }) {
+            self.open_file_at(path.to_path_buf(), at);
+        }
     }
     /// Records a click activation; returns false when it repeats the previous
     /// one within the double-click interval.

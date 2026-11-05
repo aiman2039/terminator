@@ -228,10 +228,15 @@ fn outline_row(input: OutlineRowInput<'_>) -> egui::Response {
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
     if selected {
-        painter.rect_filled(rect, 3.0, visuals.selection.bg_fill);
+        painter.rect_filled(rect, appearance::RADIUS_SMALL, visuals.selection.bg_fill);
     } else if response.hovered() {
-        painter.rect_filled(rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
+        painter.rect_filled(
+            rect,
+            appearance::RADIUS_SMALL,
+            visuals.widgets.hovered.weak_bg_fill,
+        );
     }
+    appearance::paint_focus(ui, &response);
     let mut x = rect.left() + depth as f32 * INDENT;
     if parent {
         let chevron =
@@ -272,7 +277,7 @@ fn paint_kind_badge(painter: &egui::Painter, kind: &str, center: egui::Pos2) {
         center,
         egui::Align2::CENTER_CENTER,
         letter,
-        egui::FontId::monospace(10.0),
+        egui::FontId::monospace(appearance::FONT_CAPTION),
         egui::Color32::WHITE,
     );
 }
@@ -303,7 +308,7 @@ fn paint_symbol_text(input: PaintSymbolTextInput<'_>) {
     };
     let name = painter.layout_no_wrap(
         symbol.name.clone(),
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(appearance::FONT_BODY),
         name_color,
     );
     let name_pos = egui::pos2(x, center_y - name.size().y / 2.0);
@@ -321,7 +326,7 @@ fn paint_symbol_text(input: PaintSymbolTextInput<'_>) {
             egui::pos2(x + name_width + 8.0, center_y),
             egui::Align2::LEFT_CENTER,
             detail.lines().next().unwrap_or_default(),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(appearance::FONT_CAPTION),
             visuals.weak_text_color(),
         );
     }

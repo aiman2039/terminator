@@ -1,10 +1,12 @@
 //! Embeddable native source view over [`crate::doc::Buffer`].
 #[cfg(test)]
 mod clipboard_tests;
+mod command;
 mod keys;
 mod render;
 #[cfg(test)]
 mod view_tests;
+pub use command::{EditorCommand, chord_label, queue_command, queued_command};
 pub use keys::{
     IdeAction, IdeEdit, IdeEditKeyInput, JetBrainsKey, ModeColors, command_prompt, comment_token,
     ctrl_h_is_motion, ctrl_v_is_block, egui_key, ide_edit_in_vim, ide_edit_key,
@@ -12,9 +14,9 @@ pub use keys::{
     mode_name, source_focus_id,
 };
 pub use render::{
-    Annotation, ChangeKind, ChangeMark, DiagnosticMark, EditorPalette, LineFill, RangeFill,
-    ShowSourceInput, SourceOptions, SourceOutcome, Squiggle, show_source, source_row_height,
-    squiggle_tails, squiggles, status_line,
+    Annotation, ChangeKind, ChangeMark, DiagnosticMark, EditorPalette, GitCompare, HoverSpot,
+    LineFill, RangeFill, ShowSourceInput, SourceOptions, SourceOutcome, Squiggle, show_source,
+    source_row_height, squiggle_tails, squiggles, status_line, word_span,
 };
 
 /// Display layout helpers, re-exported for hosts that map pointer

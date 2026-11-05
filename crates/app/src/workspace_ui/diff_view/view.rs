@@ -77,11 +77,15 @@ impl App {
             .and_then(|doc| doc.as_ref().ok())
             .map(std::sync::Arc::clone);
         let read_only = remote || doc.as_ref().is_some_and(|doc| doc.read_only);
+        let source = doc.as_ref().and_then(|doc| doc.source.as_ref());
         let enabled = !read_only
             && !review.busy
             && !self.loading.contains(&key)
             && !self.diff_reviews.values().any(|state| state.busy)
-            && doc.as_ref().is_some_and(|doc| doc.source.is_some());
+            && source.is_some();
+        let commit_lock = source.is_some_and(|source| {
+            self.commit_blocks(Some(&source.root), workspace_ops::CommitRisk::Index)
+        });
         let count = doc.as_ref().map_or(0, |doc| doc.hunks.len());
         let split = self.diff_split.contains(&key);
         let active = self.diff_tab_active(tab);
@@ -104,6 +108,7 @@ impl App {
             remote,
             read_only,
             enabled,
+            commit_lock,
             count,
             split,
             focused,
@@ -230,19 +235,21 @@ impl App {
     }
 
     /// Stage or unstage the whole file (mode changes included) through
-    /// the same workspace operation as the Git panel.
-    fn stage_diff_file(&self, frame: &DiffFrame<'_>) {
-        let root = frame
-            .doc
-            .as_ref()
-            .and_then(|doc| doc.source.as_ref())
-            .map_or_else(|| frame.cwd.to_path_buf(), |source| source.root.clone());
+    /// the same workspace operation as the Git panel, unless a running
+    /// commit locks it.
+    fn stage_diff_file(&mut self, frame: &DiffFrame<'_>) {
+        let source = frame.doc.as_ref().and_then(|doc| doc.source.as_ref());
         let path = frame.cwd.join(frame.path);
         let op = if frame.staged {
             workspace_ops::Op::Unstage(path)
         } else {
             workspace_ops::Op::Stage(path)
         };
+        let repository = source.map(|source| source.root.as_path());
+        if self.refuse_during_commit(repository, op.commit_risk()) {
+            return;
+        }
+        let root = source.map_or_else(|| frame.cwd.to_path_buf(), |source| source.root.clone());
         let _ = self.jobs.send(Job::Workspace(root, op));
     }
 

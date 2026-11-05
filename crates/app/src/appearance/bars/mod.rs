@@ -1,7 +1,8 @@
 mod pane_bar;
 
 use super::rows::{PaintStatusIconInput, paint_status_icon, u8_from_f32};
-use super::theme::{WIDGET_RADIUS, color, icon_color};
+use super::scale::{FONT_SMALL, WIDGET_RADIUS};
+use super::theme::{color, icon_color};
 use eframe::egui::{self, Color32, FontId, RichText};
 use pane_bar::*;
 use terminator_core::appearance::AppearanceConfig;
@@ -76,7 +77,7 @@ pub fn unsaved_close_bar(ui: &mut egui::Ui, input: UnsavedCloseBar<'_>) -> Unsav
     let rect = response.response.rect;
     ui.painter().rect_filled(
         egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
-        0,
+        egui::CornerRadius::ZERO,
         warn,
     );
     response.inner
@@ -120,7 +121,8 @@ pub struct TerminalBarSpec<'a> {
 pub(crate) const TERMINAL_LEADING_SLOT: f32 = 17.0;
 
 const TERMINAL_BAR_HEIGHT: f32 = 26.0;
-pub(crate) const TERMINAL_BUTTON: f32 = 22.0;
+/// Pane bar buttons use the shared compact toolbar square.
+pub(crate) const TERMINAL_BUTTON: f32 = super::TOOLBAR_BUTTON;
 pub(crate) const TERMINAL_BRANCH_MAX: f32 = 96.0;
 
 /// Fixed width of the Git and split cluster on a tab bar, where the branch

@@ -1,8 +1,8 @@
-//! The editor context menu: clipboard, history, find, blame, file and
-//! language-server actions.
-use super::SourceView;
+//! The editor context menu: clipboard, history, find, Git (blame and
+//! compare), file and language-server actions.
 use super::canvas::Canvas;
 use super::helpers::RenderHelpers;
+use super::{GitCompare, SourceView};
 use crate::doc::Buffer;
 use crate::vim::Effect;
 use crate::vim::ModalEngine;
@@ -207,6 +207,27 @@ impl<B: Buffer> SourceView<'_, B> {
             self.out.toggle_blame = true;
             ui.close();
         }
+        self.menu_compare_items(ui);
+    }
+
+    /// Compare with a branch, tag, or revision, or with a commit from the
+    /// file's history; the host opens its picker.
+    fn menu_compare_items(&mut self, ui: &mut egui::Ui) {
+        let rows = [
+            ("Compare with…", "GitCompareArrows", GitCompare::Refs),
+            ("Compare with Revision…", "History", GitCompare::History),
+        ];
+        for (label, icon, pick) in rows {
+            let row = MenuRow {
+                label,
+                icon,
+                shortcut: "",
+            };
+            if self.item(ui, row).clicked() {
+                self.out.git_compare = Some(pick);
+                ui.close();
+            }
+        }
     }
 
     fn menu_file_items(&mut self, ui: &mut egui::Ui, key: &str) {
@@ -237,6 +258,17 @@ impl<B: Buffer> SourceView<'_, B> {
         };
         let response = self.item(ui, find);
         self.effect_on_click(ui, &response, Effect::FindInFiles);
+        let replace = MenuRow {
+            label: "Replace in files…",
+            icon: "Pencil",
+            shortcut: if cfg!(target_os = "macos") {
+                "⇧⌘R"
+            } else {
+                "Ctrl+Shift+R"
+            },
+        };
+        let response = self.item(ui, replace);
+        self.effect_on_click(ui, &response, Effect::ReplaceInFiles);
     }
 
     fn menu_lsp_items(&mut self, ui: &mut egui::Ui) {
@@ -326,9 +358,9 @@ impl<B: Buffer> SourceView<'_, B> {
         self.out.rename_action_rect = Some(rename_button.rect);
         self.effect_on_click(ui, &rename_button, Effect::RenameSymbol);
         let hover = MenuRow {
-            label: "Show hover",
+            label: "Quick documentation",
             icon: "Info",
-            shortcut: "",
+            shortcut: "F1",
         };
         let hover_button = self.item(ui, hover);
         self.out.hover_action_rect = Some(hover_button.rect);

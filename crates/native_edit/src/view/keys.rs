@@ -173,8 +173,9 @@ pub fn ide_shortcut(key: egui::Key, modifiers: egui::Modifiers) -> Option<IdeAct
         egui::Key::Z => IdeAction::Undo,
         egui::Key::V => IdeAction::PasteKey,
         egui::Key::S => IdeAction::Save,
-        // Cmd/Ctrl+Shift+F is Find in Files (see [`ide_navigation_shortcut`]).
-        egui::Key::F if modifiers.shift => return None,
+        // Cmd/Ctrl+Shift+F and +R are Find and Replace in Files (see
+        // [`ide_navigation_shortcut`]).
+        egui::Key::F | egui::Key::R if modifiers.shift => return None,
         egui::Key::F => IdeAction::Find,
         egui::Key::H | egui::Key::R => IdeAction::Replace,
         egui::Key::K => IdeAction::Hover,
@@ -183,9 +184,10 @@ pub fn ide_shortcut(key: egui::Key, modifiers: egui::Modifiers) -> Option<IdeAct
 }
 
 /// Project navigation chords (`IntelliJ` keymap) that queue an effect in
-/// every mode, vim included: Cmd/Ctrl+Shift+F Find in Files, and with a
-/// language `server`, Cmd/Ctrl+Alt+B Go to Implementation and
-/// Cmd/Ctrl+Shift+B Go to Type Declaration.
+/// every mode, vim included: Cmd/Ctrl+Shift+F Find in Files,
+/// Cmd/Ctrl+Shift+R Replace in Files, and with a language `server`,
+/// Cmd/Ctrl+Alt+B Go to Implementation and Cmd/Ctrl+Shift+B Go to Type
+/// Declaration.
 #[must_use]
 pub fn ide_navigation_shortcut(
     key: egui::Key,
@@ -197,6 +199,7 @@ pub fn ide_navigation_shortcut(
     }
     match key {
         egui::Key::F if modifiers.shift && !modifiers.alt => Some(Effect::FindInFiles),
+        egui::Key::R if modifiers.shift && !modifiers.alt => Some(Effect::ReplaceInFiles),
         egui::Key::B if server && modifiers.alt && !modifiers.shift => {
             Some(Effect::GotoImplementation)
         }
@@ -270,6 +273,11 @@ pub enum IdeEdit {
     },
     ToggleComment,
     JoinLines,
+    /// Start New Line (Shift+Enter); `above`: Start New Line Before
+    /// Current (Cmd+Alt+Enter, Ctrl+Alt+Enter off macOS).
+    StartNewLine {
+        above: bool,
+    },
 }
 
 /// Inputs for [`ide_edit_key`].
@@ -340,8 +348,12 @@ pub fn ide_edit_key(input: IdeEditKeyInput) -> Option<IdeEdit> {
                 Some(IdeEdit::Unfold { all: select })
             }
             egui::Key::J if modifiers.ctrl && select && !modifiers.alt => Some(IdeEdit::JoinLines),
+            egui::Key::Enter if modifiers.command && modifiers.alt && !select => {
+                Some(IdeEdit::StartNewLine { above: true })
+            }
             _ => None,
         },
+        egui::Key::Enter if select => Some(IdeEdit::StartNewLine { above: false }),
         egui::Key::ArrowLeft => mv(IdeMotion::Left),
         egui::Key::ArrowRight => mv(IdeMotion::Right),
         egui::Key::ArrowUp => mv(IdeMotion::Up),
@@ -356,12 +368,14 @@ pub fn ide_edit_key(input: IdeEditKeyInput) -> Option<IdeEdit> {
 
 /// Whether an IDE chord applies with vim on. Vim keeps plain, Shift, and
 /// word-modifier navigation; chords no vim key uses (Command or Ctrl
-/// edits, line moves, paging) work in every mode.
+/// edits, line moves, paging) work in every mode. Start New Line works
+/// in Insert mode only (Shift+Enter stays vim's Enter elsewhere).
 #[must_use]
-pub fn ide_edit_in_vim(edit: IdeEdit, modifiers: egui::Modifiers) -> bool {
+pub fn ide_edit_in_vim(edit: IdeEdit, modifiers: egui::Modifiers, mode: Mode) -> bool {
     match edit {
         IdeEdit::Move(IdeMotion::PageUp(_) | IdeMotion::PageDown(_), _) => true,
         IdeEdit::Move(..) | IdeEdit::DeleteWordBack => modifiers.command,
+        IdeEdit::StartNewLine { .. } => mode == Mode::Insert,
         _ => true,
     }
 }

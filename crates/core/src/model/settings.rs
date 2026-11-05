@@ -1,5 +1,15 @@
 use super::*;
 
+/// A `JetBrains` tool window key: Cmd+digit on macOS, Alt+digit on Linux
+/// (stored `command` means Ctrl+Shift there).
+fn tool_window_key(digit: char) -> String {
+    if cfg!(target_os = "macos") {
+        format!("command+{digit}")
+    } else {
+        format!("alt+{digit}")
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -59,6 +69,10 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Two pairs share a chord on purpose, and the GUI picks one by
+    /// keyboard focus: Rename terminal and Replace in Files, and on Linux
+    /// (where stored `command` already means Ctrl+Shift) Find in terminal
+    /// and Find in Files.
     fn default_keybindings() -> std::collections::BTreeMap<String, String> {
         [
             ("new_terminal".into(), "command+T".into()),
@@ -70,16 +84,21 @@ impl Settings {
             ("next_pane".into(), "command+]".into()),
             ("select_all".into(), "command+A".into()),
             ("find_in_terminal".into(), "command+F".into()),
+            // JetBrains Find in Path; Find in terminal's chord on Linux.
+            ("find_in_files".into(), "command+shift+F".into()),
             ("search_scrollback".into(), "command+alt+F".into()),
             ("copy_working_directory".into(), "command+alt+C".into()),
             ("rename_terminal".into(), "command+shift+R".into()),
+            // JetBrains Replace in Path shares Rename terminal's chord: a
+            // focused terminal keeps it, every other place replaces.
+            ("replace_in_files".into(), "command+shift+R".into()),
             ("close_session".into(), "command+W".into()),
             ("clear_scrollback".into(), "command+shift+K".into()),
             ("editor_save".into(), "command+S".into()),
             ("compare_disk".into(), "command+shift+Y".into()),
             ("toggle_left_sidebar".into(), "command+B".into()),
             ("toggle_right_sidebar".into(), "command+L".into()),
-            ("toggle_ide_mode".into(), "command+E".into()),
+            ("toggle_ide_mode".into(), "command+alt+E".into()),
             ("move_to_main".into(), "command+alt+M".into()),
             ("move_to_strip".into(), "command+alt+Down".into()),
             ("open_settings".into(), "command+,".into()),
@@ -88,7 +107,7 @@ impl Settings {
             ("file_structure".into(), "command+F12".into()),
             ("navigate_back".into(), "command+alt+Left".into()),
             ("navigate_forward".into(), "command+alt+Right".into()),
-            ("recent_files".into(), "command+alt+E".into()),
+            ("recent_files".into(), "command+E".into()),
             ("next_attention".into(), "command+shift+J".into()),
             ("new_browser".into(), "command+alt+B".into()),
             ("new_vnc".into(), "command+alt+V".into()),
@@ -98,6 +117,12 @@ impl Settings {
             ("diff_prev_file".into(), "alt+shift+F7".into()),
             ("tab_switcher_back".into(), "ctrl+shift+Tab".into()),
             ("tab_switcher".into(), "ctrl+Tab".into()),
+            ("tool_explorer".into(), tool_window_key('1')),
+            ("tool_problems".into(), tool_window_key('6')),
+            ("tool_structure".into(), tool_window_key('7')),
+            ("tool_git".into(), tool_window_key('9')),
+            ("tool_terminal".into(), "alt+F12".into()),
+            ("select_in".into(), "alt+F1".into()),
         ]
         .into()
     }

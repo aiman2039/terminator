@@ -84,7 +84,7 @@ pub(super) fn attention_title(input: AttentionTitleInput<'_>) -> egui::Response 
     let label = ui
         .add_sized(
             [label_width, ATTENTION_ACTION_SIZE],
-            egui::Label::new(RichText::new(text).size(12.0))
+            egui::Label::new(RichText::new(text).size(appearance::FONT_SMALL))
                 .halign(egui::Align::LEFT)
                 .truncate()
                 .sense(egui::Sense::click()),
@@ -214,7 +214,7 @@ pub(super) fn attention_card_contents(
     };
     let frame = egui::Frame::group(ui.style())
         .stroke(stroke)
-        .corner_radius(6)
+        .corner_radius(appearance::RADIUS_MEDIUM)
         .fill(appearance::color(&theme.window))
         .inner_margin(egui::Margin::symmetric(6, 2));
     let height = ATTENTION_ACTION_SIZE + frame.total_margin().sum().y;

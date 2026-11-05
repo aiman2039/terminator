@@ -1,10 +1,15 @@
 //! IDE layout: sidebars beside the tool stripes, the bottom terminal
 //! strip panel, and the layout toggles in the status bar.
 
+use crate::shortcuts::Side;
 use crate::*;
 
 mod stripe;
+mod terminal_key;
 mod terminal_strip;
+mod tool_windows;
+#[cfg(test)]
+pub(crate) use tool_windows::{ToolPlace, ToolStep};
 
 /// A stripe entry: the native Projects list, or one right-sidebar tool.
 /// Either stripe can host any of them; the side decides the sidebar.
@@ -31,6 +36,7 @@ impl App {
                 panel = panel.exact_size(width);
             }
             let projects_response = panel.show(ui, |ui| {
+                shortcuts::begin_sidebar(ui, Side::Left);
                 self.agent_bar(ui);
                 ui.push_id("left-sidebar-content", |ui| {
                     if let Some(tool) = self.preferences.left_tool {
@@ -41,6 +47,7 @@ impl App {
                         self.projects(ui);
                     }
                 });
+                shortcuts::end_sidebar(ui, Side::Left, self.preferences.left_tool.is_some());
             });
             self.project_width = projects_response.response.rect.width();
             #[cfg(feature = "test-support")]
@@ -57,12 +64,14 @@ impl App {
                 .default_size(self.preferences.width)
                 .size_range(220.0..=480.0)
                 .show(ui, |ui| {
+                    shortcuts::begin_sidebar(ui, Side::Right);
                     if self.preferences.right_projects {
                         self.agent_bar(ui);
                         self.projects(ui);
                     } else {
                         self.sidebar(ui);
                     }
+                    shortcuts::end_sidebar(ui, Side::Right, !self.preferences.right_projects);
                 });
             self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
             #[cfg(feature = "test-support")]

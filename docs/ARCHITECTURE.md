@@ -223,8 +223,8 @@ explicitly; "before git checkout" labels are not recorded yet. Settings →
 History → Local History days (default 7, 0 stops recording) sets retention;
 the worker prunes expired entries and unused blobs once a day.
 
-The GUI opens Local History from the Explorer file menu or the native editor
-header, only when the daemon advertises the capability. The page fills the
+The GUI opens Local History from the Explorer file menu or the native editor's
+pane tab menu, only when the daemon advertises the capability. The page fills the
 main pane like Settings (not a layout tab): a timeline, and the native diff of
 the selected snapshot against the file on disk. Revert asks for confirmation;
 the daemon then saves the current content as "Before revert" and writes the
@@ -235,6 +235,23 @@ file's timeline, so requests cannot read or write outside the store.
 
 macOS builds use Cocoa/native dialogs and a locally signed `.app` bundle. Linux builds use native windowing with X11/Wayland and portal file dialogs. The daemon's OS-notification callback worker is separate from terminal handling. macOS pumps its native notification run loop on the daemon thread; Linux uses the desktop notification service. Desktop banners may include a platform sound name when `notification_sound` is on (`notification-sound-v1`). In-app attention stays silent. No Electron, Chromium, CEF, or Servo is included. GUI-only OS webview tabs use WKWebView / WebKitGTK via wry and die with the GUI.
 
+## Appearance
+
+`crates/app/src/appearance` owns the native look: theme colors and chrome
+tints (`theme.rs`), editor tokens (`editor.rs`), the shared controls, bars and
+rows, and one type and radius scale (`scale.rs`). Font roles are steps from a
+13 pt base, like JetBrains `JBFont`: mini 9, caption 11, small 12, body 13,
+large 14, heading 16 (semibold) and title 18. `apply` registers them as the
+egui text styles, so `ui.heading()` and `TextStyle::Small` use the same sizes;
+menus use one step less. Corner radii have four steps: extra small 2 (change
+markers, underlines, meter and slider parts, pane drop outlines), small 4
+(rows, chips, badges, checkboxes), medium 6 (controls, `WIDGET_RADIUS`) and
+large 10 (windows, cards, menus and popups, `PANEL_RADIUS` and `MENU_RADIUS`).
+Flush panels use `CornerRadius::ZERO`. The UI text size is not a user setting;
+terminal and editor sizes are, and they stay outside the scale, as do the
+Markdown preview reading sizes, the player spectrum and the VNC page
+(`vnc_ui/`). The `appearance::scale_tests` guard fails on a literal font size
+or corner radius in any other `crates/app/src` file.
 
 ## VNC ownership
 
@@ -548,7 +565,9 @@ Neovim reads validate request IDs and share one response deadline, including the
 
 Temporary subprocesses concurrently drain bounded stdout/stderr and feed stdin.
 Cancellation/timeout kills the process group and awaits child reaping, including
-inherited-pipe cases. External editors and detached recovery helpers have separate
+inherited-pipe cases. Long user commands (`run_cancellable`: commit, push) get
+`SIGINT` first and a 5-second grace before the kill, and keep the end of an
+output past its limit instead of failing. External editors and detached recovery helpers have separate
 tracked observers and are never killed by that temporary-child policy. Existing
 pre-GUI daemon bootstrap/recovery code keeps its session-preserving synchronous
 compatibility path; GUI-triggered platform recovery runs on the native adapter.

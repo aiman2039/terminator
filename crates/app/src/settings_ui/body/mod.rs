@@ -155,12 +155,14 @@ impl App {
             if !self.field_visible(label, action) {
                 continue;
             }
+            // Read only: an unbound action without a default (the Git
+            // ones) must not add a key, or the draft looks changed.
             let binding = self
                 .settings_draft
                 .keybindings
-                .entry(action.into())
-                .or_default()
-                .clone();
+                .get(action)
+                .cloned()
+                .unwrap_or_default();
             let capturing = self.shortcut_capture.as_deref() == Some(action);
             let shown = if capturing {
                 "Press keys…".into()

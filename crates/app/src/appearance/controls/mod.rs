@@ -1,10 +1,24 @@
-use super::theme::{WIDGET_RADIUS, icon_color};
+use super::scale::{FONT_MINI, WIDGET_RADIUS};
+use super::theme::icon_color;
 use eframe::egui::{self, Color32, FontId};
 
 mod menus;
 mod popup_list;
 pub use menus::*;
 pub use popup_list::*;
+
+/// Glyph size of every icon-only toolbar control. The window header keeps it
+/// in its larger square, so every toolbar row shows one icon size.
+pub const TOOLBAR_ICON: f32 = 14.0;
+
+/// Compact toolbar square: sidebar toolbars, tab strip, pane and editor bars,
+/// and the status bar. Every frameless icon control there shares it so the
+/// icons sit on one row regardless of the ambient [`egui::Style`] spacing.
+pub const TOOLBAR_BUTTON: f32 = 22.0;
+
+/// Window-header square. Header tools, sidebar toggles, Player, Agents,
+/// search, and the header menus all use it.
+pub const HEADER_BUTTON: f32 = 28.0;
 
 /// Title-bar sidebar glyph. Resting state has no frame; hover fills only.
 pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
@@ -18,7 +32,7 @@ pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
 }
 
 /// Same square as [`framed_icon`], with a selected fill and a custom glyph tint.
-/// The project header uses one size for hide, Player, Agents, and the overflow menu.
+/// Every window-header icon control uses this square.
 pub(crate) struct FramedIconButtonInput<'a> {
     pub ui: &'a mut egui::Ui,
     pub icon: &'a str,
@@ -35,8 +49,28 @@ pub fn framed_icon_button(input: FramedIconButtonInput<'_>) -> egui::Response {
         selected,
         tint,
     } = input;
+    let response = header_square(FramedIconButtonInput {
+        ui: &mut *ui,
+        icon,
+        tip,
+        selected,
+        tint,
+    });
+    accessible_icon(ui, &response, tip);
+    response
+}
+
+/// One [`HEADER_BUTTON`] square: hover or selected fill, then the glyph.
+fn header_square(input: FramedIconButtonInput<'_>) -> egui::Response {
+    let FramedIconButtonInput {
+        ui,
+        icon,
+        tip,
+        selected,
+        tint,
+    } = input;
     let response = ui
-        .allocate_response(egui::vec2(28.0, 28.0), egui::Sense::click())
+        .allocate_response(egui::Vec2::splat(HEADER_BUTTON), egui::Sense::click())
         .on_hover_text(tip);
     if response.hovered() || selected {
         ui.painter().rect_filled(
@@ -49,14 +83,44 @@ pub fn framed_icon_button(input: FramedIconButtonInput<'_>) -> egui::Response {
             },
         );
     }
-    egui::Image::new(crate::icons::source(icon))
-        .tint(tint)
-        .paint_at(
-            ui,
-            egui::Rect::from_center_size(response.rect.center(), egui::vec2(14.0, 14.0)),
-        );
-    accessible_icon(ui, &response, tip);
+    paint_centered_icon(PaintCenteredIconInput {
+        ui,
+        rect: response.rect,
+        icon,
+        size: TOOLBAR_ICON,
+        tint,
+    });
     response
+}
+
+/// Frameless glyph-and-text button, such as the header branch or the
+/// status-bar bell count. The glyph keeps [`TOOLBAR_ICON`], and `height` is
+/// the row's button square, so it centers beside the icon buttons.
+pub(crate) struct IconLabelButtonInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub icon: &'a str,
+    pub label: &'a str,
+    pub height: f32,
+}
+
+pub fn icon_label_button(input: IconLabelButtonInput<'_>) -> egui::Response {
+    let IconLabelButtonInput {
+        ui,
+        icon,
+        label,
+        height,
+    } = input;
+    // `Button::new` keeps the exact glyph size; `image_and_text` caps it to
+    // the font height.
+    let image = egui::Image::new(crate::icons::source(icon))
+        .tint(icon_color())
+        .fit_to_exact_size(egui::Vec2::splat(TOOLBAR_ICON));
+    ui.scope(|ui| {
+        // The ambient interact size would make the button taller than its row.
+        ui.spacing_mut().interact_size.y = height;
+        ui.add(egui::Button::new((image, label)).frame(false))
+    })
+    .inner
 }
 
 /// Name an icon-only control for screen readers and outline it while it has
@@ -66,7 +130,8 @@ fn accessible_icon(ui: &egui::Ui, response: &egui::Response, tip: &str) {
     paint_focus(ui, response);
 }
 
-fn paint_focus(ui: &egui::Ui, response: &egui::Response) {
+/// Outline a control while it has keyboard focus.
+pub fn paint_focus(ui: &egui::Ui, response: &egui::Response) {
     if response.has_focus() {
         ui.painter().rect_stroke(
             response.rect,
@@ -99,11 +164,6 @@ pub fn optional_port(ui: &mut egui::Ui, port: &mut Option<u16>, hint: &str) -> e
     response
 }
 
-/// Sidebar toolbar glyph size. Every frameless icon control shares it so the
-/// icons sit on one row regardless of the ambient [`egui::Style`] spacing.
-pub const TOOLBAR_BUTTON: f32 = 22.0;
-const TOOLBAR_ICON: f32 = 14.0;
-
 /// Allocate a frameless control at an exact size. `Ui::add_sized` still lets
 /// `spacing.interact_size` inflate the response, which is what pushed toolbar
 /// icons to different heights; pin the spacing for the allocation.
@@ -120,6 +180,20 @@ pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Respons
     paint_action_icon(ui, &response, icon);
     accessible_icon(ui, &response, tip);
     response.on_hover_text(tip)
+}
+
+/// Adds a control that `why` disables, with `why` as its hover text then.
+/// The control keeps its size and place; only its input and opacity change.
+pub fn enabled_unless(
+    ui: &mut egui::Ui,
+    why: Option<&str>,
+    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    let response = ui.add_enabled_ui(why.is_none(), add).inner;
+    match why {
+        Some(why) => response.on_disabled_hover_text(why),
+        None => response,
+    }
 }
 
 /// Exact-size frameless button for toolbar icons with custom paint, such as
@@ -232,11 +306,13 @@ pub fn selectable_icon(input: SelectableIconInput<'_>) -> egui::Response {
 }
 
 /// Tool-window stripe button: icon over a tiny label, pill when selected.
+/// `tip` is the hover text (the tool name and its key).
 /// `badge` paints a waiting dot in the top-right corner (agent attention).
 pub(crate) struct StripeButtonInput<'a> {
     pub ui: &'a mut egui::Ui,
     pub icon: &'a str,
     pub label: &'a str,
+    pub tip: &'a str,
     pub selected: bool,
     pub badge: Option<Color32>,
 }
@@ -246,12 +322,13 @@ pub fn stripe_button(input: StripeButtonInput<'_>) -> egui::Response {
         ui,
         icon,
         label,
+        tip,
         selected,
         badge,
     } = input;
     let response = ui
         .allocate_response(egui::vec2(40.0, 46.0), egui::Sense::click())
-        .on_hover_text(label);
+        .on_hover_text(tip);
     if response.hovered() || selected {
         ui.painter().rect_filled(
             response.rect,
@@ -279,7 +356,7 @@ pub fn stripe_button(input: StripeButtonInput<'_>) -> egui::Response {
             egui::pos2(response.rect.center().x, response.rect.bottom() - 11.0),
             egui::Align2::CENTER_CENTER,
             label,
-            FontId::proportional(9.0),
+            FontId::proportional(FONT_MINI),
             if selected {
                 icon_color()
             } else {
@@ -312,6 +389,8 @@ pub struct ToolButtonInput<'a> {
     pub active: bool,
 }
 
+/// Window-header tool toggle: the same square and glyph as [`framed_icon`],
+/// filled while its tool is open.
 pub fn tool_button(input: ToolButtonInput<'_>) -> egui::Response {
     let ToolButtonInput {
         ui,
@@ -320,21 +399,6 @@ pub fn tool_button(input: ToolButtonInput<'_>) -> egui::Response {
         active,
     } = input;
     use crate::preferences::SidebarTool;
-    let response = ui
-        .add_sized([36.0, 32.0], egui::Button::new("").frame(false))
-        .on_hover_text(label);
-    if active || response.hovered() {
-        ui.painter().rect_filled(
-            response.rect,
-            WIDGET_RADIUS,
-            if active {
-                ui.visuals().selection.bg_fill
-            } else {
-                ui.visuals().widgets.hovered.bg_fill
-            },
-        );
-    }
-    let tint = icon_color();
     let icon = match tool {
         SidebarTool::Explorer => "Files",
         SidebarTool::Agents => "Bell",
@@ -346,12 +410,14 @@ pub fn tool_button(input: ToolButtonInput<'_>) -> egui::Response {
         SidebarTool::Vnc => "Monitor",
         SidebarTool::Hosts => "Globe",
     };
-    egui::Image::new(crate::icons::source(icon))
-        .tint(tint)
-        .paint_at(
-            ui,
-            egui::Rect::from_center_size(response.rect.center(), egui::vec2(16.0, 16.0)),
-        );
+    let response = header_square(FramedIconButtonInput {
+        ui: &mut *ui,
+        icon,
+        tip: label,
+        selected: active,
+        tint: icon_color(),
+    });
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
+    paint_focus(ui, &response);
     response
 }

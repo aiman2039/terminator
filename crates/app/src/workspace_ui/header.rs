@@ -1,8 +1,9 @@
 use super::super::*;
-pub(super) const HEADER_SLOT: f32 = 36.0;
+/// One header tool or the overflow menu: the shared header square.
+pub(super) const HEADER_SLOT: f32 = appearance::HEADER_BUTTON;
 pub(super) const HEADER_GAP: f32 = 4.0;
-pub(super) const HEADER_MENU_SLOT: f32 = 32.0;
-pub(super) const HEADER_TOGGLE_RESERVE: f32 = 36.0;
+/// The right sidebar toggle and a gap on each side of it.
+pub(super) const HEADER_TOGGLE_RESERVE: f32 = HEADER_SLOT + 2.0 * HEADER_GAP;
 
 #[derive(Clone, Copy)]
 pub(super) enum HeaderAction {
@@ -36,12 +37,6 @@ pub(super) struct HeaderToolBounds {
     pub(super) toggle: egui::Rect,
 }
 
-pub(super) struct HeaderIconButton<'a> {
-    pub(super) icon: &'a str,
-    pub(super) tip: &'a str,
-    pub(super) width: f32,
-}
-
 pub(super) fn header_row_width(buttons: usize, menu: bool) -> f32 {
     // Header width is a UI coordinate; the button count can exceed the f32 mantissa.
     let mut width = buttons as f32 * HEADER_SLOT;
@@ -54,13 +49,13 @@ pub(super) fn header_row_width(buttons: usize, menu: bool) -> f32 {
         if buttons > 0 {
             width += HEADER_GAP;
         }
-        width += HEADER_MENU_SLOT;
+        width += HEADER_SLOT;
     }
     width
 }
 
 /// Project-header icon, same square as [`appearance::framed_icon`].
-pub(super) const PROJECT_HEADER_SLOT: f32 = 28.0;
+pub(super) const PROJECT_HEADER_SLOT: f32 = appearance::HEADER_BUTTON;
 pub(super) const PROJECT_HEADER_GAP: f32 = 2.0;
 /// Shortest name kept beside Player, Agents, and hide. Narrower than this, those
 /// icons move into the menu so the name stays readable.
@@ -233,25 +228,11 @@ pub(super) fn header_tool_bounds(ui: &egui::Ui) -> HeaderToolBounds {
     let max = ui.max_rect();
     HeaderToolBounds {
         budget: (ui.available_width() - HEADER_TOGGLE_RESERVE).max(0.0),
-        toggle: egui::Rect::from_min_max(egui::pos2(max.right() - 32.0, max.top()), max.max),
+        toggle: egui::Rect::from_min_max(
+            egui::pos2(max.right() - HEADER_SLOT - HEADER_GAP, max.top()),
+            max.max,
+        ),
     }
-}
-
-pub(super) fn header_icon_button(
-    ui: &mut egui::Ui,
-    button: HeaderIconButton<'_>,
-) -> egui::Response {
-    let HeaderIconButton { icon, tip, width } = button;
-    ui.add_sized(
-        [width, 32.0],
-        egui::Button::image(
-            egui::Image::new(icons::source(icon))
-                .tint(appearance::icon_color())
-                .fit_to_exact_size(egui::vec2(16.0, 16.0)),
-        )
-        .frame(false),
-    )
-    .on_hover_text(tip)
 }
 
 /// Case-insensitive substring filter for the saved-scrollback viewer.

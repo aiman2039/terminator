@@ -13,6 +13,8 @@ mod editor_tests;
 mod fixtures;
 #[cfg(feature = "test-support")]
 mod input;
+#[cfg(feature = "test-support")]
+mod lock_tests;
 mod paint_tests;
 mod view_tests;
 

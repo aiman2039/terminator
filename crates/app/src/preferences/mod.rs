@@ -1,8 +1,10 @@
+mod editor_state;
 mod persistence;
 mod sorting;
 mod strip;
 mod type_ahead;
 
+pub use editor_state::{EditorState, EditorStates};
 pub use persistence::{
     AgentsTab, ExplorerSearchMode, ExplorerView, ProjectStyle, RadioStation, SidebarTool,
     UiPreferences, VncPasteShortcut, clamp_left_width,

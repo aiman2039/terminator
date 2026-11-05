@@ -1,5 +1,69 @@
 # Validation evidence — 2026-09-08
 
+## JetBrains parity: keys, editor, search, Git, design — 2026-11-05
+
+Source: eight tracks on base `5a452a3` (keys, design, LSP, editor, search,
+Git, Commit Log filters, missing folder), merged in one worktree, then the
+shared font and radius scale and a review of six areas. macOS (Apple
+Silicon) only.
+
+Final checks on the merged tree:
+
+- `cargo fmt --all --check`: pass.
+- `cargo clippy --workspace --all-targets -- -D warnings`, with and without
+  `--all-features`: pass.
+- `cargo nextest run --workspace --all-features --locked --profile ci`:
+  2465 passed, 5 skipped.
+- `sarah --fail-on-warn`: only the old allowed warning
+  (`crates/daemon/src/remote/terminal.rs` `prepare`, 85 lines).
+- `cargo xtask async-boundary`: pass.
+
+Review: six reviewers found 30 bugs in the merged change. All 30 are fixed,
+each with a regression test that failed before the fix. The last one was:
+Stage, Unstage or Shelve while a commit hook runs can change what the commit
+contains. One guard now refuses those actions in that repository while the
+commit runs (the branch switch also while it pushes). Three more reviewers
+(coverage, correctness, tests) checked the guard and found 15 items, 3 of
+them medium: a stage sent just before Commit could land during the hook,
+Unix-only test code broke the Windows clippy run, and two reviewers found
+the same race. All are fixed with tests, and this entry records the last one.
+
+Evidence by kind:
+
+- Unit and egui frame tests with isolated temporary state: key routing and
+  migration, tool window focus and Esc, Find and Replace in Files, editor
+  state, completion and snippets, and a source guard that rejects literal
+  font sizes and corner radii.
+- Real Git repositories in temporary folders: a commit with a slow
+  post-commit hook (Cancel after the commit landed), Compare with a renamed
+  file, and Commit Log filters. With a pre-commit hook that waits, a Stage
+  asked for during the hook stays out of the commit, and a hunk staged just
+  before Commit is in the commit and seen by the hook.
+- `/verify` recipe (isolated daemon, local `sshd` on 127.0.0.1:2299): an SSH
+  terminal and a Mosh terminal each ran a command and showed its output.
+- Real child processes: Cancel sends SIGINT first (a shell INT trap runs),
+  and long user commands keep the end of a large output.
+- Live provider (rust-analyzer on PATH; the tests skip without it):
+  diagnostics and hover, completion, completion resolve with docs and import
+  edits, and a new check after `didSave`. The `didSave` fixture now has a
+  `Cargo.lock`. Without it, the first `cargo check` wrote one, rust-analyzer
+  reloaded the workspace, and the check that the save asked for was
+  sometimes lost (12–33 s, and failures under load). Alone, it now takes
+  about 5 s. In one full run under load, rust-analyzer still dropped the
+  check after the save, so the test saves again every 20 s (maximum
+  2 minutes), as a user does.
+
+Not verified:
+
+- Native GUI fixtures (`cargo xtask gui …`), the packaged app and
+  screenshots. Three changed xtask fixtures and the landing capture compile
+  but did not run.
+- Linux and Windows. The Linux key rules have unit tests only. The Windows
+  clippy cross-check (`scripts/check.sh windows-clippy`) still stops on one
+  unused import in `native_editor/disk_tests.rs` that is also on `master`.
+- A live older daemon. No daemon code changed and the change adds no daemon
+  request; the new default keys are string entries in the saved keymap.
+
 ## Release build time (#67, #69, #71) — 2026-11-02
 
 Source: Cargo timing reports from release runs 41310177079 (0.141.0) and

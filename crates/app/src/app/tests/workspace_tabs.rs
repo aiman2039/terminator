@@ -157,6 +157,49 @@ fn workspace_tabs_hug_their_labels_and_underline_inside() {
     );
 }
 
+/// The tab close glyph uses the same icon size as the strip's `+` and menu
+/// controls, which keep the compact toolbar square.
+#[cfg(feature = "test-support")]
+#[test]
+fn workspace_tab_close_glyph_matches_the_strip_controls() {
+    let (mut app, ctx, _dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("one", SessionKind::Shell));
+    let workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+    let paint = |app: &mut App| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                app.workspace_bar(ui, "a", &mut dock);
+                app.layouts.insert("a".into(), dock);
+            },
+        );
+        output.textures_delta.clear();
+        painted_icon_rects(&output.shapes)
+    };
+    // The first frame loads the icon textures.
+    paint(&mut app);
+    let icons = paint(&mut app);
+    let close = agent_target(&ctx, "workspace-close:one").expect("close slot");
+    let glyph = icons
+        .iter()
+        .find(|icon| close.contains(icon.center()))
+        .expect("the active tab paints its close glyph");
+    assert_eq!(glyph.size(), egui::Vec2::splat(appearance::TOOLBAR_ICON));
+    let plus = agent_target(&ctx, "workspace-plus").expect("plus button");
+    assert_eq!(plus.size(), egui::Vec2::splat(appearance::TOOLBAR_BUTTON));
+}
+
 /// Split panes keep a caption so each one can be named and dragged.
 #[cfg(feature = "test-support")]
 #[test]

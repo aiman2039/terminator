@@ -1,5 +1,6 @@
 //! Bottom status bar: connection, the highest-priority banner, branch and
-//! PR metadata, breadcrumb, diagnostics, and the right-aligned readouts.
+//! PR metadata, breadcrumb (see `crumbs`), diagnostics, and the
+//! right-aligned readouts.
 
 use crate::*;
 
@@ -16,11 +17,22 @@ impl App {
                 self.player_status_row(ui);
             }
             self.notification_status_badge(ui);
+            let flow_end = ui.cursor().left();
             // Single right-aligned block (see status_right_end): resource
             // readout, sidebar-height toggle, then the strip collapse.
             // Right-aligned app totals. Pure paint over the background
             // sample: no extra wakes, updates land with the heartbeat.
-            self.status_right_end(ui);
+            // The block lays itself out from the row's end; this outer
+            // right-to-left scope only measures it.
+            let right_block = ui
+                .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.status_right_end(ui);
+                })
+                .response
+                .rect
+                .width();
+            // The next frame's editor crumbs fold to leave this room.
+            Self::keep_status_trailing(ui, flow_end, right_block);
         });
     }
 
@@ -196,9 +208,10 @@ impl App {
         }
     }
 
-    /// Status-bar context after the branch block: breadcrumb
-    /// (project › active file or terminal), language-server diagnostics,
-    /// and the active editor's LSP state.
+    /// Status-bar context after the branch block: breadcrumb (project ›
+    /// active file or terminal; a native editor's path and caret symbol
+    /// are clickable), language-server diagnostics, and the active
+    /// editor's LSP state.
     pub(crate) fn status_context(&mut self, ui: &mut egui::Ui) {
         let Some(project_id) = self.selected.clone() else {
             return;
@@ -214,16 +227,20 @@ impl App {
             Some(Tab::NativeEditor { path }) => Some(path.clone()),
             _ => None,
         };
-        let leaf = self.breadcrumb_leaf(&project, pane.as_ref());
         ui.separator();
-        let _crumb = ui.weak(&project.name);
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "status-breadcrumb-project", _crumb.rect);
-        if let Some(leaf) = leaf {
-            ui.weak("›");
-            let _leaf = ui.weak(leaf);
+        if let Some(path) = &editor_path {
+            self.status_editor_crumbs(ui, &project, path);
+        } else {
+            let leaf = self.breadcrumb_leaf(&project, pane.as_ref());
+            let _crumb = ui.weak(&project.name);
             #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "status-breadcrumb", _leaf.rect);
+            diagnostics::record(ui.ctx(), "status-breadcrumb-project", _crumb.rect);
+            if let Some(leaf) = leaf {
+                ui.weak("›");
+                let _leaf = ui.weak(leaf);
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "status-breadcrumb", _leaf.rect);
+            }
         }
         self.status_diagnostics(ui);
         if let Some(path) = editor_path

@@ -10,14 +10,11 @@ impl App {
         if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
             crate::console::Console::err(format_args!("Fixture native project picker opened"));
         }
-        self.add_project = false;
-        self.picker_active = true;
+        let (generation, title) = self.begin_project_pick();
         let dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
-            .set_title("Open project");
+            .set_title(title);
         let cwd = self.dialog_directory();
-        self.selection_generation = self.selection_generation.wrapping_add(1);
-        let generation = self.selection_generation;
         let service = self.services.clone();
         self.services.dialog(async move {
             let cwd = service

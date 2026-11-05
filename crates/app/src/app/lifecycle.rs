@@ -17,6 +17,7 @@ impl App {
             || self.worktree_open
             || self.worktree_draft.is_some()
             || self.worktree_remove.is_some()
+            || self.git.picker.is_some()
     }
     pub fn new(cc: &eframe::CreationContext<'_>, paths: Paths) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, paths.clone());
@@ -207,6 +208,7 @@ impl App {
             diff_replacement: None,
             terminal_context: HashMap::new(),
             missing_projects: HashSet::new(),
+            missing_folder: super::missing_folder::MissingFolder::default(),
             project_names: crate::sidebar_ui::ProjectNames::default(),
             texts: HashMap::new(),
             diffs: HashMap::new(),

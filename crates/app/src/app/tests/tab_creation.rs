@@ -40,6 +40,32 @@ fn worktree_completion_opens_only_the_requested_projects_terminal() {
     }
 }
 
+/// A created worktree that cannot be selected (here: removed) never gets
+/// its terminal in the project that stays selected.
+#[test]
+fn worktree_completion_starts_no_terminal_in_another_project() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    let mut state = app.state.clone();
+    state.worktrees.push(worktrees::Registration {
+        project_id: "b".into(),
+        common_dir: "/a/.git".into(),
+        path: "/b".into(),
+        created: 0,
+        removed: true,
+    });
+    app.update_tx
+        .send(Update::WorktreeCreated(Box::new(state), "b".into(), true))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.selected.as_deref(), Some("a"));
+    assert!(!requests.try_iter().any(|job| matches!(
+        job,
+        Job::Control(request, _) if matches!(*request, Request::Create { .. })
+    )));
+}
+
 #[test]
 fn new_workspace_tabs_use_the_project_root_after_cd() {
     let (mut app, _, _dir) = fixture();

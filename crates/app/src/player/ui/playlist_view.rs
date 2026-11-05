@@ -41,7 +41,8 @@ pub(super) fn playlist_rows(input: PlaylistRowsInput<'_>) {
         project,
     } = input;
     let surface = appearance::color(&app.theme.surface);
-    ui.painter().rect_filled(rect, 3.0, surface);
+    ui.painter()
+        .rect_filled(rect, appearance::RADIUS_SMALL, surface);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(rect.shrink(4.0))
@@ -127,21 +128,22 @@ fn playlist_row(input: PlaylistRowInput<'_>) -> egui::Response {
     let playing = !player.radio() && player.file_index == Some(index);
     let (row, response) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
     if player.selected.contains(&index) {
-        ui.painter().rect_filled(row, 2.0, colors.selection);
+        ui.painter()
+            .rect_filled(row, appearance::RADIUS_XSMALL, colors.selection);
     }
     let color = if playing { colors.accent } else { colors.text };
     ui.painter().text(
         pos2(row.min.x + 6.0, row.center().y),
         egui::Align2::LEFT_CENTER,
         format!("{}. {title}", index.saturating_add(1)),
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(appearance::FONT_BODY),
         color,
     );
     ui.painter().text(
         pos2(row.max.x - 6.0, row.center().y),
         egui::Align2::RIGHT_CENTER,
         duration,
-        egui::FontId::monospace(12.0),
+        egui::FontId::monospace(appearance::FONT_SMALL),
         color,
     );
     response

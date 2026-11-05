@@ -232,6 +232,7 @@ impl App {
             staged: frame.staged,
             editor_pane: panes.editable,
             enabled,
+            stage_lock: frame.commit_lock,
             review: &mut pass.review,
             scroll: outputs,
             rail: panes.rail,

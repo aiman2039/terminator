@@ -167,6 +167,8 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) staged: bool,
     pub(crate) editor_pane: bool,
     pub(crate) enabled: bool,
+    /// A running commit locks Stage and Unstage; Discard stays.
+    pub(crate) stage_lock: bool,
     pub(crate) review: &'a mut diff::review::State,
     pub(crate) scroll: &'a [egui::scroll_area::ScrollAreaOutput<()>],
     pub(crate) rail: egui::Rect,
@@ -185,6 +187,7 @@ struct ControlsFrame<'a> {
     staged: bool,
     editor_pane: bool,
     enabled: bool,
+    stage_lock: bool,
     scroll: &'a [PaneOutput],
     first: &'a PaneOutput,
     last: &'a PaneOutput,
@@ -194,6 +197,14 @@ struct ControlsFrame<'a> {
     count: usize,
     row_h: f32,
     pointer: Option<egui::Pos2>,
+}
+
+impl ControlsFrame<'_> {
+    /// Why the `kind` action of a hunk is disabled: a running commit
+    /// locks Stage and Unstage.
+    fn action_lock(&self, kind: Kind) -> Option<&'static str> {
+        (self.stage_lock && kind != Kind::Discard).then_some(crate::workspace_ops::COMMIT_WAIT)
+    }
 }
 
 /// The review the controls edit, and what they asked for.
@@ -210,6 +221,7 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
         staged,
         editor_pane,
         enabled,
+        stage_lock,
         review,
         scroll,
         rail,
@@ -233,6 +245,7 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
         staged,
         editor_pane,
         enabled,
+        stage_lock,
         scroll,
         first,
         last,

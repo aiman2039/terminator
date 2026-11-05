@@ -502,7 +502,10 @@ mod tests {
                         open_shortcut: "",
                         compare: Some(&compare),
                         base_ref: None,
-                        committing: false,
+                        focus_message: false,
+                        commit_run: None,
+                        commit_lock: Default::default(),
+                        commit_failure: None,
                     };
                     *outcome = git_panel(ui, &mut input);
                 },
@@ -580,7 +583,10 @@ mod tests {
                         open_shortcut: "",
                         compare: Some(&compare),
                         base_ref: None,
-                        committing: false,
+                        focus_message: false,
+                        commit_run: None,
+                        commit_lock: Default::default(),
+                        commit_failure: None,
                     };
                     *outcome = git_panel(ui, &mut input);
                 },

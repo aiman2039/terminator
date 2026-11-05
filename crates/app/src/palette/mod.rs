@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use terminator_native_edit::finder::{MAX_INDEX_FILES, spawn_scan};
 use terminator_native_edit::lsp as native_lsp;
+use terminator_native_edit::view::{EditorCommand, chord_label};
 
 const MAX_RESULTS: usize = 80;
 /// File Structure lists a whole outline, not a ranked top slice.
@@ -25,7 +26,7 @@ pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
 const FILTER_PROJECTS: u8 = 1 << 2;
 const FILTER_SESSIONS: u8 = 1 << 3;
 const FILTER_AGENTS: u8 = 1 << 4;
-const FILTER_ACTIONS: u8 = 1 << 5;
+pub(crate) const FILTER_ACTIONS: u8 = 1 << 5;
 const FILTER_SETTINGS: u8 = 1 << 6;
 
 const PALETTE_FILTERS: &[(&str, u8)] = &[
@@ -91,6 +92,8 @@ pub(crate) enum PaletteItem {
     },
     Settings(SettingsSection),
     Action(Action),
+    /// A native editor command (Find Action), run in the target editor.
+    Editor(EditorCommand),
     AddProject,
     VncProfile(String, String),
     NewWorktree,
@@ -142,6 +145,7 @@ enum Kind {
     Layout,
     Vnc,
     Action,
+    Editor,
 }
 
 impl Kind {
@@ -157,8 +161,23 @@ impl Kind {
             Self::Layout => ("Layout", 6, FILTER_ACTIONS),
             Self::Vnc => ("VNC", 6, FILTER_ACTIONS),
             Self::Action => ("Action", 6, FILTER_ACTIONS),
+            Self::Editor => ("Editor", 6, FILTER_ACTIONS),
         }
     }
+}
+
+/// The chord that runs `command` in a focused native editor, as the
+/// editor menu shows it ("⌥⌘L"), or "" when no key runs it.
+fn editor_chord(command: EditorCommand) -> String {
+    let mac = cfg!(target_os = "macos");
+    let jetbrains = crate::appearance::editor_style()
+        .prefs
+        .editor_jetbrains_keys;
+    command
+        .chord(mac, jetbrains)
+        .map_or_else(String::new, |(key, modifiers)| {
+            chord_label(key, modifiers, mac)
+        })
 }
 
 impl PaletteItem {
@@ -172,6 +191,7 @@ impl PaletteItem {
             Self::Settings(..) => Kind::Settings,
             Self::ApplyLayout(..) => Kind::Layout,
             Self::VncProfile(..) => Kind::Vnc,
+            Self::Editor(..) => Kind::Editor,
             _ => Kind::Action,
         }
     }
@@ -192,6 +212,7 @@ impl PaletteItem {
             Self::Symbol { name, .. } => name.clone(),
             Self::Settings(section) => section.title().into(),
             Self::Action(action) => action.label().into(),
+            Self::Editor(command) => command.name().into(),
             Self::AddProject => "Add project".into(),
             Self::VncProfile(_, name) => name.clone(),
             Self::NewWorktree => "New task worktree".into(),
@@ -276,6 +297,7 @@ impl PaletteItem {
                 .map_or_else(String::new, |project| project.path.display().to_string()),
             Self::Settings(section) => section.keywords().into(),
             Self::Action(action) if !pinned_action(*action) => app.shortcut_label(*action),
+            Self::Editor(command) => editor_chord(*command),
             Self::VncProfile(id, _) => app
                 .state
                 .vnc_profiles
@@ -293,6 +315,10 @@ impl PaletteItem {
         if let Self::Symbol { kind, .. } = self {
             text.push(' ');
             text.push_str(kind);
+        }
+        if let Self::Editor(command) = self {
+            text.push(' ');
+            text.push_str(command.keywords());
         }
         if let Self::File(path) | Self::Symbol { path, .. } = self {
             text.push(' ');
@@ -315,5 +341,7 @@ mod index;
 mod items;
 mod results;
 
+#[cfg(test)]
+mod editor_tests;
 #[cfg(test)]
 mod tests;

@@ -241,7 +241,7 @@ impl App {
         if down && !released {
             ui.painter().rect_stroke(
                 strip_rect,
-                2,
+                appearance::RADIUS_XSMALL,
                 egui::Stroke::new(2.0, appearance::color(&self.theme.accent)),
                 egui::StrokeKind::Inside,
             );

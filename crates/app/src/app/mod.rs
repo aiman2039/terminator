@@ -4,6 +4,7 @@ pub(crate) use actions::TerminalActionInput;
 pub(crate) use commands::{copy_directory_label, session_directory};
 pub(crate) mod app_state;
 mod apply_state;
+mod attention;
 mod center;
 mod client;
 mod command_blocks;
@@ -23,6 +24,7 @@ mod ide;
 #[cfg(test)]
 mod layout_tests;
 mod lifecycle;
+pub(crate) mod missing_folder;
 pub(crate) mod palette_state;
 mod projects;
 pub(crate) use projects::InsertFloatInput;

@@ -78,14 +78,10 @@ impl Viewer<'_> {
     }
 
     pub(super) fn tab_title(&mut self, tab: &mut Tab) -> egui::WidgetText {
-        let file_name = |path: &std::path::Path| {
-            path.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        };
         match tab {
-            Tab::Image { path } => file_name(path).into(),
+            // Unsaved changes show as a dot in the close button's place
+            // (`tab_modified`), not in the title.
+            Tab::Image { path } | Tab::NativeEditor { path } => self.file_title(path),
             Tab::Browser { id, target } => self.app.browser_title(id, target).into(),
             Tab::Player => "Player".into(),
             Tab::Terminal(sid) => self.terminal_tab_title(sid),
@@ -93,16 +89,6 @@ impl Viewer<'_> {
                 "{} {}",
                 if *staged { "Staged:" } else { "Diff:" },
                 path.file_name().unwrap_or_default().to_string_lossy()
-            )
-            .into(),
-            Tab::NativeEditor { path } => format!(
-                "{}{}",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                if self.app.native_dirty(path) {
-                    " ●"
-                } else {
-                    ""
-                }
             )
             .into(),
             Tab::CommitLog { .. } => "Commit Log".into(),
@@ -139,19 +125,14 @@ impl Viewer<'_> {
             .map(|s| s.label.clone())
             .unwrap_or("Session".into());
         let presented = self.app.present_session(sid);
-        if presented.attention.waiting() > 0 {
-            egui::RichText::new(format!("● {label}"))
-                .color(self.app.terminal_title_color(sid))
-                .into()
+        let text = if presented.attention.waiting() > 0 {
+            format!("● {label}")
         } else if presented.attention.failed > 0 {
-            egui::RichText::new(format!("▲ {label}"))
-                .color(self.app.terminal_title_color(sid))
-                .into()
+            format!("▲ {label}")
         } else {
-            egui::RichText::new(label)
-                .color(self.app.terminal_title_color(sid))
-                .into()
-        }
+            label
+        };
+        self.session_title(sid, text)
     }
 
     pub(super) fn paint_terminal_leading(

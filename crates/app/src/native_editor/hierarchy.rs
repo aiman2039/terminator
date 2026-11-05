@@ -380,12 +380,12 @@ impl HierarchyView {
             &node.item.name,
             0.0,
             egui::TextFormat::simple(
-                egui::FontId::proportional(13.0),
+                egui::FontId::proportional(crate::appearance::FONT_BODY),
                 ui.visuals().strong_text_color(),
             ),
         );
         let weak = egui::TextFormat::simple(
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(crate::appearance::FONT_SMALL),
             ui.visuals().weak_text_color(),
         );
         if let Some(detail) = &node.item.detail {

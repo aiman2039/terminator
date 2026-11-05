@@ -119,8 +119,11 @@ impl App {
         ui.separator();
         self.explorer_folder_menu_clipboard(ui, folder_path);
         ui.separator();
-        if menu_click(ui, "Find in folder", "Search") {
-            self.explorer_find_in_folder(folder_path);
+        if menu_click(ui, "Find in Folder…", "Search") {
+            self.open_find_in_folder(folder_path);
+        }
+        if menu_click(ui, "Replace in Folder…", "Pencil") {
+            self.open_replace_in_folder(folder_path);
         }
         if menu_click(ui, "Reveal in file manager", "FolderOpen") {
             self.queue_workspace(workspace_ops::Op::Reveal(folder_path.to_owned()));
@@ -185,17 +188,6 @@ impl App {
             self.explorer_local(folder_path, ExplorerLocal::CopyName, ui);
         }
     }
-
-    /// Contents search limited to `folder` (JetBrains Find in Path with a
-    /// directory scope).
-    fn explorer_find_in_folder(&mut self, folder: &Path) {
-        let Some(cwd) = self.cwd() else {
-            return;
-        };
-        self.preferences.explorer_search_mode = ExplorerSearchMode::Contents;
-        self.preferences.explorer_include = crate::search::folder_include_pattern(&cwd, folder);
-        self.explorer_focus_find = true;
-    }
 }
 
 /// One menu entry; closes the menu when picked.
@@ -241,18 +233,15 @@ impl App {
                 ignored: entry.ignored,
                 errors: self.lsp.has_errors_under(&entry.path),
                 theme: &self.theme,
-                open_shortcut: &context.open_shortcut,
-                split_shortcut: &context.split_shortcut,
                 selected: self.explorer_selected(&entry.path, context.focused_file.as_deref()),
                 perforce: self
                     .context
                     .as_ref()
                     .is_some_and(|context| context.perforce.is_some()),
-                git_branches: self
+                git: self
                     .context
                     .as_ref()
-                    .and_then(|context| context.root.as_ref())
-                    .map(|_| self.git.branches.as_slice()),
+                    .is_some_and(|context| context.root.is_some()),
                 marks: FileRowMarks {
                     excluded: self.explorer_excluded(&entry.path),
                     bookmarked: self.preferences.explorer_bookmarks.contains(&entry.path),

@@ -216,6 +216,8 @@ fn backspace_removes_an_empty_pair_and_whole_indent_levels() {
     engine.modeless_key(&mut doc, Key::Backspace);
     assert_eq!(doc.text(), "");
     let (mut engine, mut doc) = modeless("        x");
+    // One level is the document's indent width (here four spaces).
+    doc.set_indent_style(crate::indent::IndentStyle::spaces(4));
     at(AtInput {
         engine: &mut engine,
         doc: &mut doc,
@@ -272,6 +274,57 @@ fn tab_inserts_spaces_to_the_next_stop() {
     });
     engine.modeless_key(&mut doc, Key::Tab);
     assert_eq!(doc.text(), "\tx\n\t");
+}
+
+#[test]
+fn typing_inserts_a_tab_when_the_file_uses_tabs() {
+    use crate::indent::IndentStyle;
+    let (mut engine, mut doc) = modeless("fn a() {\n");
+    doc.set_indent_style(IndentStyle::tabs(8));
+    engine.ide_move(&mut doc, IdeMotion::LineEnd, false);
+    engine.modeless_key(&mut doc, Key::Enter);
+    assert_eq!(doc.text(), "fn a() {\n\t\n");
+    engine.modeless_key(&mut doc, Key::Tab);
+    assert_eq!(doc.text(), "fn a() {\n\t\t\n");
+    engine.modeless_key(&mut doc, Key::BackTab);
+    assert_eq!(doc.text(), "fn a() {\n\t\n");
+    // Vim `>>` shifts by the same unit.
+    let mut engine = VimEngine::new();
+    let mut doc = Doc::new("a\n");
+    doc.set_indent_style(IndentStyle::tabs(4));
+    engine.press_key(&mut doc, Key::Char('>'));
+    engine.press_key(&mut doc, Key::Char('>'));
+    assert_eq!(doc.text(), "\ta\n");
+}
+
+#[test]
+fn typing_indents_by_the_files_space_width() {
+    use crate::indent::IndentStyle;
+    let (mut engine, mut doc) = modeless("x\n");
+    doc.set_indent_style(IndentStyle::spaces(2));
+    engine.modeless_key(&mut doc, Key::Tab);
+    engine.modeless_key(&mut doc, Key::Tab);
+    assert_eq!(doc.text(), "    x\n");
+    // Backspace in the leading indent removes one level.
+    engine.modeless_key(&mut doc, Key::Backspace);
+    assert_eq!(doc.text(), "  x\n");
+    // After a tab shown eight wide, Tab fills to the next 2-cell stop.
+    let (mut engine, mut doc) = modeless("\tx\n");
+    doc.set_indent_style(IndentStyle {
+        tab_width: 8,
+        ..IndentStyle::spaces(2)
+    });
+    engine.ide_move(&mut doc, IdeMotion::Right, false);
+    engine.modeless_key(&mut doc, Key::Tab);
+    assert_eq!(doc.text(), "\t  x\n");
+    // A selection indents and outdents by one level.
+    let (mut engine, mut doc) = modeless("a\nb\n");
+    doc.set_indent_style(IndentStyle::spaces(2));
+    engine.ide_move(&mut doc, IdeMotion::Down, true);
+    engine.modeless_key(&mut doc, Key::Tab);
+    assert_eq!(doc.text(), "  a\nb\n");
+    engine.modeless_key(&mut doc, Key::BackTab);
+    assert_eq!(doc.text(), "a\nb\n");
 }
 
 #[test]
@@ -377,4 +430,105 @@ fn vim_mode_keeps_inclusive_selections() {
     let mut doc = Doc::new("hello");
     engine.ide_move(&mut doc, IdeMotion::Right, true);
     assert_eq!(engine.copy_text(&doc), "he");
+}
+
+#[test]
+fn start_new_line_opens_an_indented_line_below_without_splitting() {
+    let (mut engine, mut doc) = modeless("    let x = (1);\nnext\n");
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 9,
+    });
+    engine.ide_start_new_line(&mut doc, false);
+    assert_eq!(doc.text(), "    let x = (1);\n    \nnext\n");
+    assert_eq!(engine.cursor(), Cursor { line: 1, col: 4 });
+    assert_eq!(engine.mode(), Mode::Insert);
+    // After an opener the new line goes one level deeper.
+    let (mut engine, mut doc) = modeless("fn a() {\n}\n");
+    engine.ide_start_new_line(&mut doc, false);
+    assert_eq!(doc.text(), "fn a() {\n    \n}\n");
+    assert_eq!(engine.cursor(), Cursor { line: 1, col: 4 });
+}
+
+#[test]
+fn start_new_line_before_current_opens_an_indented_line_above() {
+    let (mut engine, mut doc) = modeless("fn a() {\n    x();\n}\n");
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 1,
+        col: 6,
+    });
+    engine.ide_start_new_line(&mut doc, true);
+    assert_eq!(doc.text(), "fn a() {\n    \n    x();\n}\n");
+    assert_eq!(engine.cursor(), Cursor { line: 1, col: 4 });
+    // Above a closer the new line is one level deeper.
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 3,
+        col: 0,
+    });
+    engine.ide_start_new_line(&mut doc, true);
+    assert_eq!(doc.text(), "fn a() {\n    \n    x();\n    \n}\n");
+    assert_eq!(engine.cursor(), Cursor { line: 3, col: 4 });
+    // At the top of the buffer.
+    let (mut engine, mut doc) = modeless("\tfirst\n");
+    engine.ide_start_new_line(&mut doc, true);
+    assert_eq!(doc.text(), "\t\n\tfirst\n");
+    assert_eq!(engine.cursor(), Cursor { line: 0, col: 1 });
+}
+
+#[test]
+fn start_new_line_drops_the_selection_and_undoes_in_one_step() {
+    let (mut engine, mut doc) = modeless("alpha beta\n");
+    engine.ide_move(&mut doc, IdeMotion::WordRight, true);
+    engine.for_each_caret(&mut doc, |engine, doc| {
+        engine.ide_start_new_line(doc, false);
+        Vec::new()
+    });
+    assert_eq!(doc.text(), "alpha beta\n\n");
+    assert!(engine.selection().is_none());
+    assert_eq!(engine.cursor(), Cursor { line: 1, col: 0 });
+    engine.undo(&mut doc);
+    assert_eq!(doc.text(), "alpha beta\n");
+    // Undo gives the selection back.
+    assert_eq!(engine.copy_text(&doc), "alpha");
+}
+
+#[test]
+fn start_new_line_works_in_vim_insert_mode_only() {
+    let mut engine = VimEngine::new();
+    let mut doc = Doc::new("  ab\n");
+    engine.ide_start_new_line(&mut doc, false);
+    assert_eq!(doc.text(), "  ab\n", "Normal mode keeps vim's own keys");
+    engine.press_key(&mut doc, Key::Char('i'));
+    engine.ide_start_new_line(&mut doc, false);
+    assert_eq!(doc.text(), "  ab\n  \n");
+    assert_eq!(engine.cursor(), Cursor { line: 1, col: 2 });
+    engine.ide_start_new_line(&mut doc, true);
+    assert_eq!(doc.text(), "  ab\n  \n  \n");
+    assert_eq!(engine.cursor(), Cursor { line: 1, col: 2 });
+    engine.type_text(&mut doc, "x");
+    engine.press_key(&mut doc, Key::Escape);
+    assert_eq!(doc.text(), "  ab\n  x\n  \n");
+    // The insert session, new lines included, is one undo step.
+    engine.press_key(&mut doc, Key::Char('u'));
+    assert_eq!(doc.text(), "  ab\n");
+    assert_eq!(engine.cursor(), Cursor { line: 0, col: 3 });
+}
+
+#[test]
+fn backspace_after_start_new_line_in_vim_replace_mode_restores_nothing() {
+    let mut engine = VimEngine::new();
+    let mut doc = Doc::new("abcd\n");
+    engine.press_key(&mut doc, Key::Char('R'));
+    engine.type_text(&mut doc, "XY");
+    assert_eq!(doc.text(), "XYcd\n");
+    engine.ide_start_new_line(&mut doc, false);
+    assert_eq!(doc.text(), "XYcd\n\n");
+    engine.press_key(&mut doc, Key::Backspace);
+    assert_eq!(doc.text(), "XYcd\n\n", "no replaced char comes back");
 }

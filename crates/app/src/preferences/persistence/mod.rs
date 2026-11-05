@@ -1,6 +1,8 @@
 mod expanded;
+mod explorer;
 mod playlists;
 mod styles;
+pub use explorer::{ExplorerSearchMode, ExplorerView};
 pub use styles::{ProjectStyle, TerminalStyle};
 #[cfg(test)]
 mod tests;
@@ -67,35 +69,6 @@ fn lenient_side_tool<'de, D: serde::Deserializer<'de>>(
     Ok(serde_json::from_value(value).unwrap_or(None))
 }
 
-/// Explorer search behavior: filter the visible tree by name, or search file
-/// contents and show a result list.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExplorerSearchMode {
-    #[default]
-    Names,
-    Contents,
-}
-
-/// Explorer tree view options (`IntelliJ` Project view "Tree Appearance").
-/// The defaults keep the original order: folders first, natural name sort.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ExplorerView {
-    /// Sort folders among files instead of above them.
-    pub folders_mixed: bool,
-    /// Sort by extension, then by name.
-    pub sort_by_type: bool,
-    /// Show every file at its own level instead of nesting lock and
-    /// generated files under their source (`Cargo.lock` under `Cargo.toml`).
-    pub nesting_off: bool,
-    /// Show only files with Git changes and the folders that hold them.
-    pub changed_only: bool,
-    /// Folders and files hidden like ignored files (`IntelliJ` "Mark
-    /// Directory as Excluded", but for this view only).
-    pub excluded: Vec<PathBuf>,
-}
-
 /// Agents sidebar views. Needs attention preserves the existing inbox;
 /// All live is the verified-agent overview; Unread follows read state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,8 +94,8 @@ pub struct Playlist {
     pub tracks: Vec<PathBuf>,
 }
 
-/// Right sidebar width that fits six header actions plus the overflow menu:
-/// Explorer through Settings stay on the bar, and search does not.
+/// Right sidebar width. The window header shows all its actions at this
+/// width, without the overflow menu.
 const DEFAULT_SIDEBAR_WIDTH: f32 = 328.0;
 
 /// A named layout preset capturing IDE mode, sidebar visibility, tool selection,
@@ -258,6 +231,7 @@ pub struct UiPreferences {
     pub info_show_system: bool,
     pub typography_migrated: bool,
     pub attention_migrated: bool,
+    pub keymap_migrated: bool,
     pub markdown_modes: HashMap<String, crate::markdown::Mode>,
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,
@@ -297,6 +271,7 @@ pub struct UiPreferences {
     pub player_chrome_collapsed: bool,
     pub player_radio_mode: bool,
     pub radio_stations: Vec<RadioStation>,
+    pub editor_states: super::EditorStates,
     /// IDE strip dock layouts per project (shell terminals). GUI-local view
     /// state; validated on load, invalid docks dropped. Kept last so the
     /// derived `PartialEq` (which gates saves) short-circuits on cheap
@@ -351,6 +326,7 @@ impl Default for UiPreferences {
             info_show_system: true,
             typography_migrated: false,
             attention_migrated: false,
+            keymap_migrated: false,
             markdown_modes: HashMap::new(),
             hidden_projects: HashSet::new(),
             project_sort: ProjectSort::NameAsc,
@@ -375,6 +351,7 @@ impl Default for UiPreferences {
             player_chrome_collapsed: false,
             player_radio_mode: false,
             radio_stations: Vec::new(),
+            editor_states: super::EditorStates::default(),
             ide_strip_docks: StripDocks::default(),
         }
     }

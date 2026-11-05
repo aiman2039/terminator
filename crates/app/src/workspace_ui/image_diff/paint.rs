@@ -123,7 +123,7 @@ fn paint(
 fn side(ui: &egui::Ui, rect: egui::Rect, texture: Option<&TextureHandle>) {
     ui.painter().rect_stroke(
         rect,
-        2.0,
+        appearance::RADIUS_XSMALL,
         ui.visuals().widgets.noninteractive.bg_stroke,
         egui::StrokeKind::Inside,
     );

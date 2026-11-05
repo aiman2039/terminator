@@ -6,7 +6,8 @@ impl App {
     /// files open at the target line and column through the pending
     /// machinery (`open_native` carries the line, `native_pending_col`
     /// the UTF-16 column). Runs after the workspace is checked back in, when
-    /// the originating project resolves again.
+    /// the originating project resolves again. A jump without a position
+    /// opens the file where it was left.
     pub(super) fn apply_goto_jump(&mut self, jump: lsp_manager::GotoJump) {
         // Several declarations: let the user pick (`IntelliJ`).
         if jump.targets.len() > 1 {
@@ -22,6 +23,7 @@ impl App {
         };
         let line = usize::try_from(target.range.start.line).unwrap_or(usize::MAX);
         if target_path == jump.from
+            && jump.at_position
             && let Some(doc) = self.native_docs.get_mut(&target_path)
             && let Some(buffer) = doc.doc.as_mut()
         {
@@ -42,9 +44,15 @@ impl App {
         self.open_native(OpenNativeInput {
             project: &project,
             path: target_path.clone(),
-            line: target.range.start.line.checked_add(1),
+            line: jump
+                .at_position
+                .then(|| target.range.start.line.checked_add(1))
+                .flatten(),
             split: None,
         });
+        if !jump.at_position {
+            return;
+        }
         // The column converts once the target buffer has loaded.
         let absolute = std::path::absolute(&target_path).unwrap_or(target_path);
         self.native_pending_col

@@ -46,3 +46,12 @@ Add defaulted `on_tab_button_at`, `context_menu_at`, and `set_render_tab` callba
 They retain the node and tab index for same-file views. A host can take a drag
 from the dock; the dock then clears its own pending drag/drop data and releases
 the egui drag ID. This prevents two drag systems from moving the same view.
+
+## Modified-tab dot (2026-11-05)
+
+Add a defaulted `tab_modified` callback (`false`). `tab_title` takes the flag and,
+for a modified tab, paints a filled dot (`TAB_MODIFIED_DOT_RADIUS`) in the close
+button's color in place of the X. When the pointer or keyboard focus is on the
+close button, the X comes back. The close button keeps its size, hit area and
+click behavior, so tab widths do not change. Terminator marks native editor
+tabs with unsaved changes, like the `JetBrains` New UI editor tabs.

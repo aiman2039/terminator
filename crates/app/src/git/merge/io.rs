@@ -198,8 +198,14 @@ impl App {
     }
 
     /// Write the result; `stage` also marks the file resolved (`git add`)
-    /// once the write lands. Only explicit clicks call this.
+    /// once the write lands. Only explicit clicks call this. A commit
+    /// running where the stage would go refuses Mark resolved.
     pub(crate) fn save_merge(&mut self, key: &str, path: &Path, stage: bool) {
+        let repository = self.git_root();
+        let risk = workspace_ops::CommitRisk::Index;
+        if stage && self.refuse_during_commit(repository.as_deref(), risk) {
+            return;
+        }
         let Some(text) = self
             .merge
             .get(key)
@@ -219,7 +225,15 @@ impl App {
         }
     }
 
+    /// A save landed. Its stage goes out unless a commit started since the
+    /// click; then the file is saved but not marked resolved.
     fn merge_saved(&mut self, key: &str, path: &Path, (stage, result): (bool, Result<(), String>)) {
+        if !self.merge.contains_key(key) {
+            return;
+        }
+        let staged = result.is_ok()
+            && stage
+            && self.queue_workspace(workspace_ops::Op::Stage(path.to_path_buf()));
         let Some(state) = self.merge.get_mut(key) else {
             return;
         };
@@ -227,14 +241,11 @@ impl App {
             Ok(()) => {
                 state.dirty = false;
                 state.error = None;
-                state.message = Some(if stage {
+                state.message = Some(if staged {
                     "Saved and marked resolved".into()
                 } else {
                     "Saved".into()
                 });
-                if stage {
-                    self.queue_workspace(workspace_ops::Op::Stage(path.to_path_buf()));
-                }
             }
             Err(error) => state.error = Some(error),
         }

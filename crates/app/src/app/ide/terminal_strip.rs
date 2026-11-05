@@ -249,7 +249,7 @@ impl App {
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new("Start one to dock it here.")
-                            .size(11.0)
+                            .size(appearance::FONT_CAPTION)
                             .color(appearance::color(&self.theme.secondary)),
                     )
                     .selectable(false),

@@ -52,9 +52,11 @@ impl RowPaint<'_> {
             font,
             color,
         } = input;
+        let tab = self.geometry.tab;
         let geometry = RowCells {
             text: self.text,
             hints: self.hints,
+            tab,
         };
         let len = piece.chars().count();
         let end = col.saturating_add(len);
@@ -76,7 +78,7 @@ impl RowPaint<'_> {
                 self.painter.text(
                     Pos2::new(snap(x, ppp), snap(self.y, ppp)),
                     egui::Align2::LEFT_TOP,
-                    expand_tabs(&part, display_x(self.text, from)),
+                    expand_tabs(&part, display_x(self.text, from, tab), tab),
                     font.clone(),
                     color,
                 );
@@ -148,6 +150,7 @@ impl RowPaint<'_> {
         let geometry = RowCells {
             text: self.text,
             hints: self.hints,
+            tab: self.geometry.tab,
         };
         let advance = self.geometry.advance;
         let mut seen_at: Option<(usize, usize)> = None;

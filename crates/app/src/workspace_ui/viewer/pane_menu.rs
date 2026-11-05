@@ -12,6 +12,10 @@ impl Viewer<'_> {
             self.app.rename_action(ui, sid, RenameSurface::Pane);
             ui.separator();
         }
+        if let Tab::NativeEditor { path } = tab {
+            self.app.native_file_menu(ui, path);
+            ui.separator();
+        }
         self.app
             .new_terminal_menu(super::super::menus::NewTerminalMenuInput {
                 ui,

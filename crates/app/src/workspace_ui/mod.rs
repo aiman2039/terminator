@@ -6,6 +6,7 @@ mod diff_paint;
 mod diff_tests;
 mod diff_view;
 mod drag;
+mod file_tabs;
 mod header;
 mod hover;
 mod image_diff;

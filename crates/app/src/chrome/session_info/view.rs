@@ -248,7 +248,7 @@ fn section_header(input: SectionHeaderInput<'_>) -> bool {
     ui.horizontal(|ui| {
         ui.set_min_height(22.0);
         let title = ui.add(
-            egui::Label::new(RichText::new(title).color(text).size(13.0))
+            egui::Label::new(RichText::new(title).color(text).size(appearance::FONT_BODY))
                 .sense(egui::Sense::click()),
         );
         if title.clicked() {
@@ -307,11 +307,20 @@ fn value_row(input: ValueRowInput<'_>) -> egui::Response {
     let mut value_response = None;
     ui.horizontal(|ui| {
         ui.set_min_height(18.0);
-        ui.label(RichText::new(label).color(label_color).size(12.0));
+        ui.label(
+            RichText::new(label)
+                .color(label_color)
+                .size(appearance::FONT_SMALL),
+        );
         let response = ui
             .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add(
-                    egui::Label::new(RichText::new(value).color(value_color).size(12.0)).truncate(),
+                    egui::Label::new(
+                        RichText::new(value)
+                            .color(value_color)
+                            .size(appearance::FONT_SMALL),
+                    )
+                    .truncate(),
                 )
             })
             .inner;
@@ -342,7 +351,7 @@ fn meter_value_width(ui: &egui::Ui, system: &SystemRows) -> f32 {
         ui.painter()
             .layout_no_wrap(
                 (*value).into(),
-                egui::FontId::proportional(12.0),
+                egui::FontId::proportional(appearance::FONT_SMALL),
                 Color32::WHITE,
             )
             .size()
@@ -375,7 +384,11 @@ fn meter_row(input: MeterRowInput<'_>) {
     } = input;
     ui.horizontal(|ui| {
         ui.set_min_height(18.0);
-        ui.label(RichText::new(label).color(colors.label).size(12.0));
+        ui.label(
+            RichText::new(label)
+                .color(colors.label)
+                .size(appearance::FONT_SMALL),
+        );
         let response = ui
             .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let response = ui
@@ -385,7 +398,9 @@ fn meter_row(input: MeterRowInput<'_>) {
                         |ui| {
                             let response = ui.add(
                                 egui::Label::new(
-                                    RichText::new(value).color(colors.value).size(12.0),
+                                    RichText::new(value)
+                                        .color(colors.value)
+                                        .size(appearance::FONT_SMALL),
                                 )
                                 .truncate(),
                             );
@@ -409,13 +424,16 @@ fn meter_row(input: MeterRowInput<'_>) {
 fn meter_bar(ui: &mut egui::Ui, fraction: f32, color: Color32) -> egui::Rect {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 14.0), egui::Sense::hover());
     let bar = egui::Rect::from_center_size(rect.center(), egui::vec2(56.0, 4.0));
-    ui.painter()
-        .rect_filled(bar, 2.0, Color32::from_white_alpha(28));
+    ui.painter().rect_filled(
+        bar,
+        appearance::RADIUS_XSMALL,
+        Color32::from_white_alpha(28),
+    );
     let fill_width = bar.width() * fraction.clamp(0.0, 1.0);
     if fill_width > 0.5 {
         ui.painter().rect_filled(
             egui::Rect::from_min_size(bar.min, egui::vec2(fill_width, bar.height())),
-            2.0,
+            appearance::RADIUS_XSMALL,
             color,
         );
     }

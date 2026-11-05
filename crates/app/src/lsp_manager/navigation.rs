@@ -1,57 +1,6 @@
 use super::*;
 
 impl LspManager {
-    /// Ask for hover at a UTF-16 position; the answer lands in
-    /// [`hover_popup`]. Without a server the popup explains why.
-    pub fn request_hover(&mut self, path: &Path, position: L::Position, cursor: (usize, usize)) {
-        let path = path.to_owned();
-        if let Some(note) = self.server_status(&path) {
-            self.hover = Some(HoverPopup {
-                path,
-                cursor_line: cursor.0,
-                cursor_col: cursor.1,
-                text: note,
-                markdown: false,
-                open: true,
-                status: true,
-            });
-            return;
-        }
-        let key = self.docs.get(&path).map(|doc| doc.server.clone());
-        let uri = self.docs.get(&path).map(|doc| doc.uri.clone());
-        let (Some(key), Some(uri)) = (key, uri) else {
-            return;
-        };
-        let Some(server) = self.servers.get_mut(&key) else {
-            return;
-        };
-        if !server.ready {
-            self.hover = Some(HoverPopup {
-                path,
-                cursor_line: cursor.0,
-                cursor_col: cursor.1,
-                text: "Language server is starting…".into(),
-                markdown: false,
-                open: true,
-                status: true,
-            });
-            return;
-        }
-        let L::RequestId::Number(number) = server.ids.next_id() else {
-            return;
-        };
-        let _ = server
-            .inbox
-            .send(L::hover(&L::RequestId::Number(number), &uri, position));
-        server.pending.insert(
-            number,
-            Pending::Hover {
-                path,
-                cursor: (cursor.0, cursor.1),
-            },
-        );
-    }
-
     /// Ask for the definition of the symbol at a UTF-16 position; the
     /// answer lands in [`take_goto`]. Silent without a ready server
     /// (nothing to jump to, same as an empty answer).
@@ -250,25 +199,6 @@ impl LspManager {
             },
         );
         Ok(())
-    }
-
-    /// Current hover popup for `path`, dismissed when the cursor moved
-    /// on. Returns the text to show, if any.
-    pub fn hover_popup(&mut self, path: &Path, cursor: (usize, usize)) -> Option<(String, bool)> {
-        let popup = self.hover.as_mut()?;
-        if popup.path != path || (popup.cursor_line, popup.cursor_col) != cursor || !popup.open {
-            if popup.path == path {
-                self.hover = None;
-            }
-            return None;
-        }
-        Some((popup.text.clone(), popup.markdown))
-    }
-
-    pub fn close_hover(&mut self) {
-        if let Some(popup) = self.hover.as_mut() {
-            popup.open = false;
-        }
     }
 
     /// Finished goto jump, if any.

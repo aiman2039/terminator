@@ -3,12 +3,14 @@ use super::{DiffFrame, DiffPass};
 use diff::actions::{Kind, Request};
 
 impl App {
-    /// Send this frame's save, discard, undo, or hunk request.
+    /// Send this frame's save, discard, undo, or hunk request, unless a
+    /// running commit locks it (index changes only).
     pub(super) fn submit_diff_request(&mut self, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
         let request = Self::diff_request(frame, pass);
         if !frame.read_only
             && (frame.enabled || pass.save_edits)
             && let Some(request) = request
+            && !self.refuse_during_commit(request.root(), request.commit_risk())
         {
             let review = &mut pass.review;
             review.saving_edits = pass.save_edits;

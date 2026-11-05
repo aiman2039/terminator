@@ -40,7 +40,7 @@ impl VncToolbar<'_> {
         let fields = self.fields;
         egui::Image::new(icons::source("Monitor"))
             .tint(appearance::icon_color())
-            .fit_to_exact_size(egui::vec2(16.0, 16.0))
+            .fit_to_exact_size(egui::Vec2::splat(appearance::TOOLBAR_ICON))
             .ui(ui);
         ui.strong(if fields.label.is_empty() {
             "VNC Viewer"

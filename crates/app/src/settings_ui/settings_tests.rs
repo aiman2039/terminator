@@ -121,6 +121,24 @@ mod tests {
     }
 
     #[test]
+    fn showing_the_shortcuts_page_leaves_settings_unchanged() {
+        let (mut app, ctx, _dir) = app();
+        app.settings_section = SettingsSection::Shortcuts;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 820.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.settings_center(ui),
+        );
+        output.textures_delta.clear();
+        assert!(!app.settings_dirty(), "unbound Git actions add nothing");
+    }
+
+    #[test]
     fn clearing_the_ntfy_channel_switches_the_toggle_off() {
         let (mut app, ctx, _dir) = app();
         app.settings_section = SettingsSection::Notifications;

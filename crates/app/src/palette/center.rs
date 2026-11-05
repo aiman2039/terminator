@@ -290,26 +290,14 @@ impl App {
     }
 
     pub(super) fn run_palette(&mut self, ctx: &egui::Context, item: PaletteItem) {
+        // Read a typed `:line[:col]` before closing clears the query.
+        let typed = results::file_query(self.palette.query.trim());
         self.close_palette();
         match item {
             PaletteItem::Project(id, _) => self.select_project(id),
             PaletteItem::Session(id, _) => self.go_session(&id),
             PaletteItem::Agent(id, _, _) => self.go_session(&id),
-            PaletteItem::File(path) => {
-                if let Some(project) = self
-                    .project_for_palette_path(&path)
-                    .map(|project| project.id.clone())
-                    && self.selected.as_ref() != Some(&project)
-                {
-                    self.select_project(project);
-                }
-                self.open_file(OpenFileInput {
-                    path,
-                    line: None,
-                    split: None,
-                    external: false,
-                });
-            }
+            PaletteItem::File(path) => self.open_palette_file(path, &typed),
             PaletteItem::Symbol {
                 path, line, column, ..
             } => {
@@ -334,6 +322,7 @@ impl App {
             }
             PaletteItem::AddProject => self.add_project = true,
             PaletteItem::Action(action) => self.run_shortcut(ctx, action),
+            PaletteItem::Editor(command) => self.run_editor_command(ctx, command),
             PaletteItem::VncProfile(id, _) => {
                 if let Some(profile) = self.state.vnc_profiles.iter().find(|p| p.id == id).cloned()
                 {
@@ -352,6 +341,32 @@ impl App {
                 }
             }
         }
+    }
+
+    /// A Go to File pick opens in its own project, at the typed 1-based
+    /// line and column when the query had them (`main.rs:42:5`).
+    fn open_palette_file(&mut self, path: PathBuf, typed: &results::FileQuery) {
+        if let Some(project) = self
+            .project_for_palette_path(&path)
+            .map(|project| project.id.clone())
+            && self.selected.as_ref() != Some(&project)
+        {
+            self.select_project(project);
+        }
+        let Some(line) = typed.line else {
+            self.open_file(OpenFileInput {
+                path,
+                line: None,
+                split: None,
+                external: false,
+            });
+            return;
+        };
+        let at = native_lsp::Position {
+            line: line.saturating_sub(1),
+            character: typed.column.unwrap_or(1).saturating_sub(1),
+        };
+        self.open_file_at(path, at);
     }
 }
 

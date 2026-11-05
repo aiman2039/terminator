@@ -2,6 +2,46 @@ use super::*;
 use crate::diff::ExpandGapInput;
 use crate::gui_services::Owner;
 
+impl Source {
+    /// A tracked regular file `path` (relative) in the worktree `root`, for
+    /// view tests that need a document with hunk actions.
+    pub(crate) fn fixture(root: &Path, path: &Path) -> Self {
+        Self {
+            root: root.into(),
+            path: path.into(),
+            index: b"100644 0000000000000000000000000000000000000000 0\tfile".to_vec(),
+            head: Vec::new(),
+            exists: true,
+            mode: 0o100644,
+        }
+    }
+}
+
+impl Undo {
+    /// The undo of a change to `path` (relative) in the worktree `root`:
+    /// of an index change when `index`, else of a working-tree one.
+    pub(crate) fn fixture(root: &Path, path: &Path, index: bool) -> Self {
+        let version = Version {
+            text: String::new(),
+            exists: true,
+            mode: 0o100644,
+        };
+        Self {
+            root: root.into(),
+            path: path.into(),
+            index,
+            before: version.clone(),
+            after: version,
+            label: if index {
+                "Stage hunk 1"
+            } else {
+                "Discard hunk 1"
+            }
+            .into(),
+        }
+    }
+}
+
 struct Fixture {
     service: Services,
     _owner: Owner,
@@ -710,4 +750,144 @@ async fn staged_rename_diff_compares_with_the_rename_source() {
     .unwrap();
     assert_eq!(doc.left_text, original());
     assert_eq!(doc.hunks.len(), 1);
+}
+
+#[test]
+fn only_index_requests_wait_for_a_running_commit() {
+    use crate::workspace_ops::CommitRisk;
+    let doc = Arc::new(DiffDocument {
+        source: Some(Source::fixture(Path::new("/repo"), Path::new("file"))),
+        ..DiffDocument::default()
+    });
+    let hunk = |kind| Request::Hunk {
+        document: Arc::clone(&doc),
+        hunk: 0,
+        kind,
+        lines: None,
+    };
+    assert_eq!(hunk(Kind::Stage).commit_risk(), CommitRisk::Index);
+    assert_eq!(hunk(Kind::Unstage).commit_risk(), CommitRisk::Index);
+    assert_eq!(hunk(Kind::Discard).commit_risk(), CommitRisk::None);
+    assert_eq!(hunk(Kind::Stage).root(), Some(Path::new("/repo")));
+    let save = Request::Save {
+        document: Arc::clone(&doc),
+        text: String::new(),
+    };
+    assert_eq!(save.commit_risk(), CommitRisk::None);
+    let version = Version {
+        text: String::new(),
+        exists: true,
+        mode: 0o100644,
+    };
+    let undo = |index| {
+        Request::Undo(Undo {
+            root: "/repo".into(),
+            path: "file".into(),
+            index,
+            before: version.clone(),
+            after: version.clone(),
+            label: String::new(),
+        })
+    };
+    assert_eq!(undo(true).commit_risk(), CommitRisk::Index);
+    assert_eq!(undo(false).commit_risk(), CommitRisk::None);
+    assert_eq!(undo(true).root(), Some(Path::new("/repo")));
+}
+
+/// A diff write and a commit sent through the job queue, with a real
+/// `pre-commit` hook (a shell script).
+#[cfg(unix)]
+mod commit_order {
+    use super::*;
+    use crate::workspace_ops::{Op, Report};
+    use std::time::{Duration, Instant};
+
+    /// The reply of the commit job.
+    async fn commit_reply(owner: &mut Owner) -> std::result::Result<Report, String> {
+        let started = Instant::now();
+        loop {
+            if let Some(mut completion) = owner.supervisor.try_recv()
+                && let Some(Ok(updates)) = completion.result.take()
+            {
+                for update in updates {
+                    if let crate::Update::Workspace(_, Op::Commit { .. }, result) = update {
+                        return result;
+                    }
+                }
+            }
+            assert!(started.elapsed() < Duration::from_secs(20), "no reply");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// A `pre-commit` hook that writes the names the commit holds to `seen`.
+    fn record_hook(root: &Path, seen: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let hooks = root.join(".no-fixture-hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        let script = format!(
+            "#!/bin/sh\ngit diff --cached --name-only > '{}'\n",
+            seen.display()
+        );
+        std::fs::write(&hook, script).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_hunk_staged_just_before_a_commit_lands_before_the_commit_hooks_run() {
+        let mut fixture = Fixture::new("file.txt", Some(&original()));
+        let root = fixture.dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("other.txt"), "other\n").unwrap();
+        fixture.git(&["add", "--", "other.txt"]);
+        std::fs::write(fixture.absolute(), changed()).unwrap();
+        let record = tempfile::tempdir().unwrap();
+        let seen = record.path().join("seen");
+        record_hook(&root, &seen);
+        let tab = crate::Tab::Diff {
+            remote: None,
+            cwd: root.clone(),
+            path: root.join("file.txt"),
+            staged: false,
+        };
+        let stage = Request::Hunk {
+            document: fixture.doc(false).await,
+            hunk: 0,
+            kind: Kind::Stage,
+            lines: None,
+        };
+        let commit = Op::Commit {
+            message: "both".into(),
+            amend: false,
+            signoff: false,
+            push: false,
+            cancel: CancellationToken::new(),
+        };
+        // The stage still runs when Commit goes out.
+        let held = execute::mutations().lock().await;
+        let service = &fixture.service;
+        service
+            .send(crate::Job::DiffAction(tab, Box::new(stage)))
+            .unwrap();
+        service
+            .send(crate::Job::Workspace(root.clone(), commit))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!seen.exists(), "Git commits once the stage landed");
+        drop(held);
+        let result = commit_reply(&mut fixture._owner).await;
+        assert!(result.is_ok(), "{result:?}");
+        // The hook checked the staged hunk, and the commit holds it.
+        let checked = std::fs::read_to_string(&seen).unwrap();
+        assert_eq!(
+            checked.lines().collect::<Vec<_>>(),
+            ["file.txt", "other.txt"]
+        );
+        let show = ["show", "--name-only", "--format=", "HEAD"];
+        let committed = String::from_utf8(fixture.git(&show)).unwrap();
+        assert_eq!(
+            committed.lines().collect::<Vec<_>>(),
+            ["file.txt", "other.txt"]
+        );
+    }
 }

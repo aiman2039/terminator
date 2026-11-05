@@ -33,9 +33,13 @@ pub(crate) struct RequestHierarchyChildrenInput<'a> {
 
 mod answers;
 use answers::{Answer, RenameAnswer};
+mod completion;
+pub(crate) use completion::{CompletionResults, ResolveFor, ResolvedCompletion};
 mod docs;
 mod edits;
 mod gated;
+mod hover;
+pub(crate) use hover::HoverKey;
 mod navigation;
 mod problems;
 mod symbols;
@@ -99,10 +103,8 @@ struct OpenDoc {
 }
 
 enum Pending {
-    Hover {
-        path: PathBuf,
-        cursor: (usize, usize),
-    },
+    /// Quick Documentation for one spot.
+    Hover(HoverKey),
     Definition {
         path: PathBuf,
     },
@@ -129,6 +131,8 @@ enum Pending {
         path: PathBuf,
         generation: u64,
     },
+    /// `completionItem/resolve` for the docs panel or an accepted item.
+    CompletionResolve(PathBuf, ResolveFor),
     Signature {
         path: PathBuf,
         generation: u64,
@@ -190,13 +194,6 @@ pub struct EditAnswers {
     pub resolved: Option<(PathBuf, serde_json::Value)>,
 }
 
-/// Completion proposals for one request (`generation` drops stale ones).
-pub struct CompletionResults {
-    pub path: PathBuf,
-    pub generation: u64,
-    pub items: Vec<L::CompletionItem>,
-}
-
 struct Server {
     inbox: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     /// Directly spawned child (test path without services): the GUI
@@ -215,22 +212,13 @@ struct Server {
     ready: bool,
 }
 
-pub struct HoverPopup {
-    path: PathBuf,
-    cursor_line: usize,
-    cursor_col: usize,
-    pub text: String,
-    pub markdown: bool,
-    pub open: bool,
-    /// A status note ("starting…", "not found"), not a server answer:
-    /// a null hover clears these, never real answers.
-    status: bool,
-}
-
 /// A finished goto request, ready for the workspace to open.
 pub struct GotoJump {
     pub from: PathBuf,
     pub targets: Vec<L::GotoTarget>,
+    /// False for a plain file open (Recent files): the file then opens
+    /// where it was left, not at the target's position.
+    pub at_position: bool,
 }
 
 /// Reference locations returned for one native editor request.
@@ -281,11 +269,14 @@ pub struct LspManager {
     /// Settings → Check spelling.
     spell_enabled: bool,
     action_wait: Option<ActionWait>,
-    hover: Option<HoverPopup>,
+    /// Quick Documentation answers by spot.
+    hover: hover::HoverCache,
     goto: Option<GotoJump>,
     references: Option<ReferenceResults>,
     completion: Option<CompletionResults>,
     completion_generation: u64,
+    /// `completionItem/resolve` answers waiting for their editor.
+    completion_resolved: Vec<ResolvedCompletion>,
     pub edit_answers: EditAnswers,
     /// Hierarchy answers in arrival order (see [`HierarchyAnswer`]).
     pub hierarchy_answers: Vec<HierarchyAnswer>,
@@ -348,11 +339,12 @@ impl LspManager {
             // Settings turn it on (default true) when the state loads.
             spell_enabled: false,
             action_wait: None,
-            hover: None,
+            hover: hover::HoverCache::default(),
             goto: None,
             references: None,
             completion: None,
             completion_generation: 0,
+            completion_resolved: Vec::new(),
             signature: None,
             edit_answers: EditAnswers::default(),
             hierarchy_answers: Vec::new(),
@@ -425,6 +417,7 @@ impl LspManager {
             self.symbols_retry.clear();
             self.inlay.clear();
             self.inlay_retry.clear();
+            self.hover = hover::HoverCache::default();
             self.search_revision = self.search_revision.wrapping_add(1);
         }
     }
@@ -487,6 +480,10 @@ fn project_root(path: &Path, language: Language) -> PathBuf {
     fallback.unwrap_or_else(|| path.parent().map(Path::to_path_buf).unwrap_or_default())
 }
 
+#[cfg(test)]
+mod hover_tests;
+#[cfg(test)]
+mod save_tests;
 #[cfg(test)]
 mod spell_tests;
 #[cfg(test)]

@@ -106,7 +106,8 @@ impl ControlsFrame<'_> {
             ),
             egui::vec2(rail.width(), 6.0),
         );
-        ui.painter().rect_filled(marker, 1.0, color);
+        ui.painter()
+            .rect_filled(marker, appearance::RADIUS_XSMALL, color);
         let click = ui
             .interact(
                 marker.expand(2.0),
@@ -180,7 +181,7 @@ impl ControlsFrame<'_> {
         if band.selected {
             ui.painter().with_clip_rect(clip).rect_stroke(
                 rect,
-                0.0,
+                egui::CornerRadius::ZERO,
                 egui::Stroke::new(1.0, band.color),
                 egui::StrokeKind::Inside,
             );
@@ -322,7 +323,9 @@ impl ControlsFrame<'_> {
             &[(Kind::Stage, "Plus"), (Kind::Discard, "Eraser")]
         };
         for &(kind, icon) in kinds {
-            let button = appearance::sidebar_action(ui, icon, &action_tip(kind, picked));
+            let button = appearance::enabled_unless(ui, self.action_lock(kind), |ui| {
+                appearance::sidebar_action(ui, icon, &action_tip(kind, picked))
+            });
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &action_target(kind, index), button.rect);
             if button.clicked() {

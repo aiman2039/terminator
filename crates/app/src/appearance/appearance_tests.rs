@@ -1,6 +1,7 @@
 use super::bars::*;
 use super::controls::*;
 use super::rows::*;
+use super::scale::*;
 use super::theme::*;
 use eframe::egui::{self, Color32, FontFamily, FontId, TextStyle};
 use terminator_core::appearance::AppearanceConfig;

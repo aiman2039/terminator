@@ -300,10 +300,11 @@ impl App {
         let accent = appearance::color(&self.theme.accent);
         let wash = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 36);
         let landing = zone.landing(leaf.rect);
-        ui.painter().rect_filled(landing, 2, wash);
+        ui.painter()
+            .rect_filled(landing, appearance::RADIUS_XSMALL, wash);
         ui.painter().rect_stroke(
             landing,
-            2,
+            appearance::RADIUS_XSMALL,
             egui::Stroke::new(1.5, accent),
             egui::StrokeKind::Inside,
         );
@@ -333,7 +334,7 @@ impl App {
             swapping = true;
             ui.painter().rect_stroke(
                 from.rect,
-                2,
+                appearance::RADIUS_XSMALL,
                 egui::Stroke::new(1.5, accent),
                 egui::StrokeKind::Inside,
             );
@@ -346,7 +347,7 @@ impl App {
             } else {
                 zone.label()
             },
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(appearance::FONT_SMALL),
             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220),
         );
     }

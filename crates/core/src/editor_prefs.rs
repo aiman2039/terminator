@@ -30,13 +30,17 @@ pub struct EditorPrefs {
     pub editor_caret_blink: bool,
     /// Color brackets by nesting depth.
     pub editor_rainbow_brackets: bool,
-    /// `JetBrains` keymap in a focused editor: Cmd+B, Cmd+E, Cmd+L, F2,
-    /// Shift+F6, Cmd+[ / ], Shift+Cmd+A and double Shift win over app keys.
+    /// `JetBrains` keymap. In every pane: double Shift, Shift+Cmd+A and
+    /// Shift+Cmd+O. In a focused editor Cmd+B, Cmd+E, Cmd+L, F2, Shift+F6
+    /// and Cmd+[ / ] also win over app keys.
     pub editor_jetbrains_keys: bool,
     /// Show each line's worst problem after its text ("error lens").
     pub editor_error_lens: bool,
     pub editor_autosave: Autosave,
     pub editor_autosave_delay_ms: u32,
+    /// Quick Documentation when the pointer rests on a symbol. Problems
+    /// at the pointer show either way.
+    pub editor_hover_docs: bool,
 }
 
 impl Default for EditorPrefs {
@@ -50,6 +54,7 @@ impl Default for EditorPrefs {
             editor_error_lens: false,
             editor_autosave: Autosave::Off,
             editor_autosave_delay_ms: 1000,
+            editor_hover_docs: true,
         }
     }
 }
@@ -82,6 +87,7 @@ impl EditorPrefs {
             editor_autosave_delay_ms: self
                 .editor_autosave_delay_ms
                 .clamp(*AUTOSAVE_DELAY_MS.start(), *AUTOSAVE_DELAY_MS.end()),
+            editor_hover_docs: self.editor_hover_docs,
         }
     }
 }
@@ -137,6 +143,7 @@ mod tests {
             editor_error_lens: true,
             editor_autosave: Autosave::Delay,
             editor_autosave_delay_ms: 5,
+            editor_hover_docs: false,
         }
         .sanitized();
         assert_eq!(prefs.editor_autosave_delay_ms, 200);
@@ -145,5 +152,22 @@ mod tests {
         assert_eq!(prefs.editor_line_spacing, 1.2);
         assert!(!prefs.editor_caret_blink);
         assert!(!prefs.editor_rainbow_brackets);
+        assert!(!prefs.editor_hover_docs);
+    }
+
+    #[test]
+    fn hover_docs_are_on_by_default_and_round_trip_as_an_appearance_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Older files have no key: the docs stay on.
+        std::fs::write(&path, "[appearance]\neditor_error_lens = true\n").unwrap();
+        let mut file = AppearanceFile::load(&path).unwrap();
+        assert!(file.config.editor.editor_hover_docs);
+        file.config.editor.editor_hover_docs = false;
+        let saved = AppearanceFile::save(&path, &file.config, &file.source).unwrap();
+        assert!(saved.source.contains("editor_hover_docs = false"));
+        assert!(saved.source.contains("editor_error_lens = true"));
+        let again = AppearanceFile::load(&path).unwrap();
+        assert!(!again.config.editor.editor_hover_docs);
     }
 }

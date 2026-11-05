@@ -50,7 +50,7 @@ pub(in super::super) fn paint_line_end(input: PaintLineEndInput<'_>) {
         painter.rect_filled(
             egui::Rect::from_min_max(egui::pos2(x0, 0.0), egui::pos2(x1, height))
                 .translate(pos.to_vec2()),
-            0.0,
+            egui::CornerRadius::ZERO,
             tint(color, 110),
         );
     }
@@ -66,7 +66,7 @@ pub(in super::super) fn paint_line_end(input: PaintLineEndInput<'_>) {
         );
         painter.rect_stroke(
             rect.expand(1.0),
-            2.0,
+            crate::appearance::RADIUS_XSMALL,
             egui::Stroke::new(1.0, tint(color, 160)),
             egui::StrokeKind::Outside,
         );

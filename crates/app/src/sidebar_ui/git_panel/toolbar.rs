@@ -176,27 +176,14 @@ pub(super) fn git_toolbar(input: GitToolbarInput<'_>) {
         if history.clicked() {
             outcome.history = Some(true);
         }
-        let branch = appearance::text_menu_button(ui, branch_name, |ui| {
-            if input.branches.is_empty() {
-                ui.weak("No branches");
-            }
-            for name in input.branches {
-                let mark = if name == branch_name { "✓" } else { "" };
-                if appearance::menu_item(appearance::MenuItemInput {
-                    ui,
-                    label: name,
-                    icon: "GitBranch",
-                    shortcut: mark,
-                })
-                .clicked()
-                {
-                    outcome.switch = Some(name.clone());
-                    ui.close();
-                }
-            }
-        })
-        .response
-        .on_hover_text("Switch branch");
+        // A commit or push running in this worktree disables the switch.
+        let branch = appearance::enabled_unless(ui, input.commit_lock.head, |ui| {
+            appearance::text_menu_button(ui, branch_name, |ui| {
+                git_branch_items(ui, input, branch_name, &mut *outcome);
+            })
+            .response
+            .on_hover_text("Switch branch")
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-branch", branch.rect);
         let _ = branch;
@@ -216,6 +203,32 @@ pub(super) fn git_toolbar(input: GitToolbarInput<'_>) {
             git_overflow_more(ui, input, outcome);
         }
     });
+}
+
+/// The branch switcher's menu: every branch, the current one checked.
+fn git_branch_items(
+    ui: &mut egui::Ui,
+    input: &GitPanelInput<'_>,
+    branch_name: &str,
+    outcome: &mut GitPanelOutcome,
+) {
+    if input.branches.is_empty() {
+        ui.weak("No branches");
+    }
+    for name in input.branches {
+        let mark = if name == branch_name { "✓" } else { "" };
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: name,
+            icon: "GitBranch",
+            shortcut: mark,
+        })
+        .clicked()
+        {
+            outcome.switch = Some(name.clone());
+            ui.close();
+        }
+    }
 }
 
 /// `branch → base` with ahead/behind counts, the Orca branch compare line.

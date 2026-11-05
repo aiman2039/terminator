@@ -2,3 +2,4 @@
 mod bugs;
 mod edits;
 mod motions;
+mod undo;

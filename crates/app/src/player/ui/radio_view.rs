@@ -126,11 +126,17 @@ fn station_row(ui: &mut Ui, station: &radio::Station, lit: bool) -> egui::Respon
         ui.allocate_exact_size(vec2(ui.available_width(), STATION_ROW_H), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if lit {
-        ui.painter()
-            .rect_filled(row, 3.0, ui.visuals().selection.bg_fill);
+        ui.painter().rect_filled(
+            row,
+            appearance::RADIUS_SMALL,
+            ui.visuals().selection.bg_fill,
+        );
     } else if response.hovered() {
-        ui.painter()
-            .rect_filled(row, 3.0, ui.visuals().widgets.hovered.bg_fill);
+        ui.painter().rect_filled(
+            row,
+            appearance::RADIUS_SMALL,
+            ui.visuals().widgets.hovered.bg_fill,
+        );
     }
     let icon = Rect::from_center_size(pos2(row.min.x + 12.0, row.center().y), vec2(16.0, 16.0));
     egui::Image::new(icons::source("Radio"))
@@ -149,7 +155,7 @@ fn station_row(ui: &mut Ui, station: &radio::Station, lit: bool) -> egui::Respon
         pos2(row.min.x + 28.0, row.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(appearance::FONT_BODY),
         color,
     );
     response

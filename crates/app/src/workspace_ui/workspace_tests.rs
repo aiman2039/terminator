@@ -148,7 +148,9 @@ mod tests {
         let count = HEADER_ACTIONS.len();
         let full = header_row_width(count, false);
         assert_eq!(header_visible_count(full, count), count);
-        assert_eq!(header_visible_count(full - 1.0, count), count - 1);
+        // The menu is one more header square: it takes the last action's
+        // place, so a row one point short moves two actions into it.
+        assert_eq!(header_visible_count(full - 1.0, count), count - 2);
         let three = header_row_width(3, true);
         assert_eq!(header_visible_count(three, count), 3);
         assert_eq!(header_visible_count(three - 1.0, count), 2);

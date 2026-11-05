@@ -2,19 +2,27 @@
 //!
 //! One frame runs in three phases: per-frame values are read and the
 //! file's popups are checked out of the app ([`frame`]), the buffer is
-//! borrowed for the header, source view, and popups ([`ViewPass`]), and
-//! the requests that pass queued run once the borrow ends ([`after`]).
+//! borrowed for the source view, the Markdown toolbar, and popups
+//! ([`ViewPass`]), and the requests that pass queued run once the borrow
+//! ends ([`after`]). The file's path and caret symbol show in the app
+//! status bar; its file actions are in the pane tab menu ([`file_menu`]).
 mod after;
 mod assist;
 mod body;
+mod completion;
 mod disk_bar;
+mod doc_popup;
 mod effects;
+mod file_menu;
 mod format;
 mod format_menu;
 mod frame;
-mod header;
 mod panels;
+mod source_options;
 mod support;
+mod toolbar;
+#[cfg(test)]
+mod toolbar_tests;
 
 use super::*;
 use std::collections::HashSet;
@@ -31,15 +39,6 @@ struct ViewSite<'a> {
     node: Option<egui_dock::NodePath>,
 }
 
-/// Breadcrumb and the pinned/recent file menus.
-struct ViewFiles {
-    file_location: String,
-    breadcrumb: String,
-    pinned_files: HashSet<PathBuf>,
-    recent_files: Vec<PathBuf>,
-    pinned: bool,
-}
-
 /// Markdown preview identity and scroll sync for this view.
 struct ViewPreview {
     key: String,
@@ -52,8 +51,6 @@ struct ViewFrame {
     vim: bool,
     failed_color: Color32,
     services: gui_services::Services,
-    files: ViewFiles,
-    outline: Arc<[native_lsp::Symbol]>,
     language: Language,
     is_markdown: bool,
     preview: ViewPreview,
@@ -67,10 +64,12 @@ struct ViewFrame {
     problems_generation: u64,
     blame_offer: Option<bool>,
     inlay_answer: Option<(u64, Arc<[native_lsp::InlayHint]>)>,
+    /// The server's completion trigger characters.
+    completion_triggers: Vec<char>,
     remote_snapshot: bool,
-    /// Offer Local History: a local file and a capable daemon.
-    local_history: bool,
     git_base: Option<Arc<str>>,
+    /// A commit runs in this file's repository: the gutter Stage waits.
+    commit_lock: bool,
     change_colors: [Color32; 3],
 }
 
@@ -103,12 +102,19 @@ struct ViewRequests {
     wq_issuer: Option<CloseIssuer>,
     quit_all: Option<bool>,
     splits: Vec<NativeSplit>,
-    hover_at: Option<(native_lsp::Position, (usize, usize))>,
+    /// Quick Documentation asked for at the caret (F1, `K`, …).
+    quick_doc_at: Option<quick_doc::Spot>,
+    /// The text under a resting pointer, as the source view reported it.
+    hover_spot: Option<terminator_native_edit::view::HoverSpot>,
+    /// This frame's underlines: the problems a Quick Documentation popup
+    /// lists.
+    squiggles: crate::native_editor::extras::SquiggleSets,
     goto_at: Option<native_lsp::Position>,
     /// Go to Implementation / Type Declaration at a position.
     locate_at: Option<(native_lsp::Position, native_lsp::Locate)>,
-    /// Find in Files asked for, with its seed query.
-    find_in_files: Option<String>,
+    /// Find in Files asked for, with its seed query and whether it opens
+    /// in replace mode.
+    find_in_files: Option<(String, bool)>,
     references_at: Option<native_lsp::Position>,
     hierarchy_at: Option<(native_lsp::Position, native_lsp::HierarchyKind)>,
     rename_at: Option<native_lsp::Position>,
@@ -119,13 +125,12 @@ struct ViewRequests {
     goto_file: Option<String>,
     /// Ctrl-^ / Ctrl-6: edit the alternate file.
     alternate_file: bool,
-    toggle_pin: bool,
-    open_local_history: bool,
-    recent_open: Option<PathBuf>,
     activated_editor: bool,
     blame_toggle: bool,
     /// Clicked blame line, and whether Cmd/Ctrl was held (open on web).
     blame_click: Option<(usize, bool)>,
+    /// Compare with… or Compare with Revision… from the context menu.
+    git_compare: Option<terminator_native_edit::view::GitCompare>,
     /// Gutter popup: open the working-tree diff of this file.
     gutter_diff: bool,
     /// Gutter popup: stage this block of the saved buffer text.
@@ -138,7 +143,9 @@ struct ViewRequests {
     actions_at: Option<native_lsp::Range>,
     /// The picked action and the buffer revision it was listed for.
     picked_action: Option<(native_lsp::CodeActionItem, u64)>,
-    completion_request: Option<(native_lsp::Position, usize, usize)>,
+    completion_ask: Option<complete::CompletionAsk>,
+    /// An accepted item whose auto-import edits are still to resolve.
+    accepted_completion: Option<complete::AcceptedItem>,
     caret_rect: Option<egui::Rect>,
     source_scroll: Option<f32>,
 }
@@ -203,7 +210,7 @@ impl App {
         self.native_view_on_type(path, frame.language, revision_before);
         self.drain_edit_answers();
         self.native_view_signature(path, frame.language, &requests);
-        self.native_view_completion(path, frame.language, &requests);
+        self.native_view_completion((ui, path), frame.language, &requests);
         if frame.is_markdown {
             self.native_markdown_preview(NativeMarkdownPreviewInput {
                 ui,
@@ -227,13 +234,13 @@ impl App {
             ));
             return;
         }
-        self.native_view_follow_up((ui.ctx(), path), &frame, &mut requests);
+        self.native_view_follow_up((ui.ctx(), path), &mut requests);
         self.native_view_autosave(ui, path, &frame);
         self.native_lsp_sync(path, frame.language);
         self.request_editor_blame(ui.ctx(), path);
         self.native_view_lsp_requests(site, frame.language, &mut requests);
         self.native_view_highlights(ui.ctx(), path, &frame.source_id);
-        self.show_hover_popup(ui, path);
+        self.native_quick_doc(ui, (path, frame.language, &frame.source_id), &mut requests);
         self.native_view_deferred(ui, path, requests);
     }
 }

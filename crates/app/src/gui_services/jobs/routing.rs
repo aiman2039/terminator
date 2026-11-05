@@ -6,6 +6,16 @@ use terminator_core::{Request, async_client};
 /// Scheduling route: subsystem, resource key, and policy.
 type Route = (&'static str, String, Policy);
 
+/// The queue of one root's Git and file actions. A commit job is admitted
+/// there too, so every write queued before it has landed when Git commits.
+fn workspace_route(root: &std::path::Path) -> Route {
+    (
+        "workspace-op",
+        root.display().to_string(),
+        Policy::OrderedMutation,
+    )
+}
+
 /// Stateless routing rules for GUI service jobs.
 pub(in crate::gui_services) struct JobRouting;
 
@@ -115,7 +125,18 @@ impl JobRouting {
                 tab.key(),
                 crate::GitView::failed(tab, busy()),
             )],
+            Job::GitLog(tab, query) => vec![Update::GitView(
+                tab.key(),
+                crate::GitView::Log(query.failed(busy())),
+            )],
             Job::LocalHistory(op) => vec![Update::LocalHistory(op.failed(busy()))],
+            Job::Workspace(root, op @ crate::workspace_ops::Op::Commit { .. }) => {
+                vec![Update::Workspace(root.clone(), op.clone(), Err(busy()))]
+            }
+            // The Compare popup waits for its answer, too.
+            Job::Workspace(root, op) if crate::revision_compare::answers(op) => {
+                vec![Update::Workspace(root.clone(), op.clone(), Err(busy()))]
+            }
             _ => Vec::new(),
         }
     }
@@ -130,6 +151,14 @@ impl JobRouting {
         if Self::remote_deadline(job) {
             context.deadline =
                 std::time::Instant::now().checked_add(std::time::Duration::from_secs(45));
+        }
+        if matches!(
+            job,
+            Job::Workspace(_, crate::workspace_ops::Op::Commit { .. })
+        ) {
+            // A queued commit still runs and replies, however long the
+            // actions before it take; the Git panel waits for that reply.
+            context.deadline = None;
         }
         context
     }
@@ -151,14 +180,22 @@ impl JobRouting {
             Job::Diff(tab) | Job::DiffContext(tab, _) | Job::DiffExpand(tab, ..) => {
                 ("diff", tab.key(), Policy::ReplaceableRead)
             }
-            Job::DiffAction(tab, _) => ("diff-action", tab.key(), Policy::OrderedMutation),
-            Job::StageGutterBlock { path, .. } => (
-                "diff-action",
-                format!("gutter:{}", path.display()),
-                Policy::OrderedMutation,
-            ),
+            // Diff and gutter writes queue with their repository's other
+            // actions, where a commit is admitted: one sent before Commit
+            // lands before Git commits (and its hooks run).
+            Job::DiffAction(tab, request) => match request.root() {
+                Some(root) => workspace_route(root),
+                None => ("diff-action", tab.key(), Policy::OrderedMutation),
+            },
+            Job::StageGutterBlock { cwd, .. } => workspace_route(cwd),
             Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
             Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
+            // A newer filter or Go to Hash replaces the query still running.
+            Job::GitLog(tab, _) => (
+                crate::git_log::LOG_SUBSYSTEM,
+                tab.key(),
+                Policy::ReplaceableRead,
+            ),
             Job::LocalHistory(op) => crate::local_history::route(op),
             Job::LinePreviews(..) => ("files", "line-previews".into(), Policy::ReplaceableRead),
             Job::WorktreeProbe(path, _) => (
@@ -195,11 +232,7 @@ impl JobRouting {
     /// full-text search must not hold back a new terminal.
     fn files_route(job: &Job) -> Option<Route> {
         let route = match job {
-            Job::Workspace(root, _) => (
-                "workspace-op",
-                root.display().to_string(),
-                Policy::OrderedMutation,
-            ),
+            Job::Workspace(root, _) => workspace_route(root),
             // A newer query cancels the queued or running walk (#175).
             Job::Search { root, .. } => (
                 "search",
@@ -336,6 +369,12 @@ impl JobRouting {
                 }
             }
             Job::OpenProject(_, generation) => context.generation = *generation,
+            Job::GitLog(_, query) => context.generation = query.generation,
+            // A failed diff or gutter write answers its tab or gutter.
+            Job::DiffAction(tab, _) => context.tab = Some(tab.key()),
+            Job::StageGutterBlock { path, .. } => {
+                context.tab = Some(format!("gutter:{}", path.display()));
+            }
             _ => {}
         }
     }
@@ -409,6 +448,52 @@ mod tests {
         ];
         for job in &slow {
             assert_ne!(key(job), create);
+        }
+    }
+
+    #[test]
+    fn commit_waits_for_earlier_root_actions_without_a_queue_deadline() {
+        let root = PathBuf::from("/repo");
+        let commit = Job::Workspace(
+            root.clone(),
+            crate::workspace_ops::Op::Commit {
+                message: "m".into(),
+                amend: false,
+                signoff: false,
+                push: true,
+                cancel: terminator_core::async_service::CancellationToken::new(),
+            },
+        );
+        let stage = Job::Workspace(
+            root.clone(),
+            crate::workspace_ops::Op::Stage(root.join("a")),
+        );
+        // Same queue: a Stage clicked before Commit finishes first.
+        assert_eq!(key(&commit), key(&stage));
+        assert!(JobRouting::context(&commit).deadline.is_none());
+        assert!(JobRouting::context(&stage).deadline.is_some());
+        // A refused commit still replies, so the panel leaves "Committing…".
+        assert!(matches!(
+            JobRouting::rejection(&commit).as_slice(),
+            [Update::Workspace(
+                _,
+                crate::workspace_ops::Op::Commit { .. },
+                Err(_)
+            )]
+        ));
+        assert!(JobRouting::rejection(&stage).is_empty());
+    }
+
+    #[test]
+    fn a_refused_compare_query_still_answers_the_popup() {
+        use crate::workspace_ops::Op;
+        let folder = PathBuf::from("/repo/src");
+        for op in [Op::CompareTargets, Op::VerifyRevision("HEAD~1".into())] {
+            let refused = JobRouting::rejection(&Job::Workspace(folder.clone(), op));
+            assert!(
+                matches!(refused.as_slice(), [Update::Workspace(_, _, Err(_))]),
+                "the popup leaves its spinner"
+            );
         }
     }
 }

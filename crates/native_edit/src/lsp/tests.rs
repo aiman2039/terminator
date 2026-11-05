@@ -182,6 +182,58 @@ fn sync_notifications_carry_uri_version_text() {
 }
 
 #[test]
+fn initialize_asks_servers_for_save_notifications() {
+    let root = Url::parse("file:///repo").expect("root");
+    let value = body_of(&initialize(&IdGen::default().next_id(), 7, &root));
+    let capabilities = field(field(&value, "params"), "capabilities");
+    let sync = field(field(capabilities, "textDocument"), "synchronization");
+    assert_eq!(field(sync, "didSave").as_bool(), Some(true));
+}
+
+#[test]
+fn did_save_carries_the_text_only_when_asked() {
+    let uri = Url::parse("file:///repo/main.rs").expect("uri");
+    let bare = body_of(&did_save(&uri, None));
+    assert_eq!(text(&bare, "method"), "textDocument/didSave");
+    let params = field(&bare, "params");
+    assert_eq!(
+        text(field(params, "textDocument"), "uri"),
+        "file:///repo/main.rs"
+    );
+    assert!(params.get("text").is_none(), "no text unless asked");
+    let full = body_of(&did_save(&uri, Some("fn f() {}\n")));
+    assert_eq!(text(field(&full, "params"), "text"), "fn f() {}\n");
+}
+
+#[test]
+fn save_capability_follows_text_document_sync() {
+    let wants = |sync: Value| save_include_text(&serde_json::json!({ "textDocumentSync": sync }));
+    // rust-analyzer advertises an empty save options object.
+    let rust = serde_json::json!({ "openClose": true, "change": 2, "save": {} });
+    assert_eq!(wants(rust), Some(false));
+    // pylsp asks for the text.
+    assert_eq!(
+        wants(serde_json::json!({ "save": { "includeText": true } })),
+        Some(true)
+    );
+    assert_eq!(
+        wants(serde_json::json!({ "save": { "includeText": false } })),
+        Some(false)
+    );
+    assert_eq!(wants(serde_json::json!({ "save": true })), Some(false));
+    assert_eq!(wants(serde_json::json!({ "save": false })), None);
+    assert_eq!(wants(serde_json::json!({ "save": null })), None);
+    assert_eq!(wants(serde_json::json!({ "openClose": true })), None);
+    // A bare sync kind (pyright, taplo) wants saves without text,
+    // except kind `None` (0).
+    assert_eq!(wants(serde_json::json!(2)), Some(false));
+    assert_eq!(wants(serde_json::json!(1)), Some(false));
+    assert_eq!(wants(serde_json::json!(0)), None);
+    assert_eq!(save_include_text(&serde_json::json!({})), None);
+    assert_eq!(save_include_text(&Value::Null), None);
+}
+
+#[test]
 fn hover_and_definition_carry_utf16_position() {
     let uri = Url::parse("file:///repo/main.rs").expect("uri");
     let mut ids = IdGen::default();
@@ -368,6 +420,24 @@ fn hover_shapes_flatten_to_text() {
         parse_hover(&array).expect("array").text,
         "```rust\nfn f()\n```\n\ndocs here"
     );
+}
+
+#[test]
+fn blank_hover_answers_mean_no_docs() {
+    for blank in [
+        serde_json::json!({"contents": {"kind": "markdown", "value": "  \n"}}),
+        serde_json::json!({"contents": ""}),
+        serde_json::json!({"contents": []}),
+        serde_json::json!({"contents": [{"language": "rust", "value": ""}, " "]}),
+        serde_json::json!({"range": {"start": {"line": 0, "character": 0}}}),
+    ] {
+        assert!(parse_hover(&blank).is_none(), "{blank}");
+    }
+    // Blank pieces of a list are left out, not shown as empty blocks.
+    let mixed = serde_json::json!({
+        "contents": [{"language": "rust", "value": " "}, "docs", ""]
+    });
+    assert_eq!(parse_hover(&mixed).expect("docs").text, "docs");
 }
 
 #[test]
@@ -652,7 +722,7 @@ fn snippets_expand_to_text_with_the_caret_on_the_first_stop() {
     );
     assert_eq!(expand_snippet("foo($0)"), ("foo()".into(), 4));
     assert_eq!(expand_snippet("plain"), ("plain".into(), 5));
-    assert_eq!(expand_snippet("\\$x ${1|a,b|}"), ("$x a".into(), 4));
+    assert_eq!(expand_snippet("\\$x ${1|a,b|}"), ("$x a".into(), 3));
 }
 
 #[test]
@@ -897,20 +967,21 @@ fn spell_language_ids_cover_files_without_a_server() {
 
 #[test]
 fn format_options_follow_the_file_indentation() {
-    let two = crate::doc::Doc::new("a {\n  b {\n    c\n  }\n}\n");
+    use crate::doc::{Buffer, Doc};
+    let two = Doc::new("a {\n  b {\n    c\n  }\n}\n");
     assert_eq!(
-        FormatOptions::detect(&two),
-        Some(FormatOptions {
+        two.indent_style().format_options(),
+        FormatOptions {
             tab_size: 2,
             insert_spaces: true
-        })
+        }
     );
-    let tabs = crate::doc::Doc::new("a {\n\tb\n}\n");
+    let tabs = Doc::new("a {\n\tb\n}\n");
+    assert!(!tabs.indent_style().format_options().insert_spaces);
     assert_eq!(
-        FormatOptions::detect(&tabs).map(|o| o.insert_spaces),
-        Some(false)
+        Doc::new("flat\n").indent_style().format_options(),
+        FormatOptions::default()
     );
-    assert_eq!(FormatOptions::detect(&crate::doc::Doc::new("flat\n")), None);
     let id = RequestId::Number(1);
     let uri = Url::parse("file:///tmp/a.rs").expect("uri");
     let options = FormatOptions {

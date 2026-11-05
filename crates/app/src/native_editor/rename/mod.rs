@@ -1,5 +1,6 @@
 //! Preview-first, GUI-owned LSP rename. The server proposes text edits;
 //! filesystem workers validate and stage them before an explicit Apply.
+//! Replace in Files writes through the same staging and buffer checks.
 
 mod dialog;
 mod staging;
@@ -14,9 +15,9 @@ use std::io::Write as _;
 
 type RenameResult<T> = std::result::Result<T, String>;
 
-const MAX_RENAME_FILES: usize = 64;
-const MAX_RENAME_EDITS: usize = 4096;
-const MAX_RENAME_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_RENAME_FILES: usize = 64;
+pub(super) const MAX_RENAME_EDITS: usize = 4096;
+pub(super) const MAX_RENAME_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) struct RenameDialog {
     path: PathBuf,
@@ -59,6 +60,25 @@ impl RenameDialog {
     }
 }
 
+impl PreparedRename {
+    /// Files the change rewrites (unchanged files dropped out).
+    pub(super) fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    pub(super) fn edit_count(&self) -> usize {
+        self.edit_count
+    }
+
+    /// The bytes `path` had when the change was prepared.
+    pub(super) fn original(&self, path: &Path) -> Option<&[u8]> {
+        self.files
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| file.original.as_slice())
+    }
+}
+
 impl App {
     pub(super) fn begin_native_rename(
         &mut self,
@@ -90,24 +110,47 @@ impl App {
     }
 
     fn rename_open_docs_are_clean(&self, prepared: &PreparedRename) -> RenameResult<()> {
+        self.open_docs_are_clean(prepared, "applying the rename")
+    }
+
+    /// An open native buffer of `path` blocks a write while it has unsaved
+    /// edits or a load or save runs (`action` ends "Save it before …"),
+    /// and when it was loaded from other bytes than `original`. The buffer
+    /// is compared as a save writes it: its encoding and byte-order mark.
+    pub(super) fn open_doc_is_clean(
+        &self,
+        path: &Path,
+        original: Option<&[u8]>,
+        action: &str,
+    ) -> RenameResult<()> {
+        let Some(doc) = self.native_docs.get(path) else {
+            return Ok(());
+        };
+        if doc.dirty() || doc.saving || doc.loading {
+            return Err(format!("Save {} before {action}.", path.display()));
+        }
+        if let Some(original) = original
+            && let Some(text) = doc.disk_text()
+            && doc.encoding.encode(&text).ok().as_deref() != Some(original)
+        {
+            return Err(format!(
+                "{} differs from the loaded editor. Reload it and try again.",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Every open buffer of `prepared`'s files passes
+    /// [`Self::open_doc_is_clean`], and language-server versions still
+    /// match.
+    pub(super) fn open_docs_are_clean(
+        &self,
+        prepared: &PreparedRename,
+        action: &str,
+    ) -> RenameResult<()> {
         for file in &prepared.files {
-            if let Some(doc) = self.native_docs.get(&file.path)
-                && (doc.dirty() || doc.saving || doc.loading)
-            {
-                return Err(format!(
-                    "Save {} before applying the rename.",
-                    file.path.display()
-                ));
-            }
-            if let Some(doc) = self.native_docs.get(&file.path)
-                && let Some(text) = doc.disk_text()
-                && text.as_bytes() != file.original.as_slice()
-            {
-                return Err(format!(
-                    "{} differs from the loaded editor. Reload it and try again.",
-                    file.path.display()
-                ));
-            }
+            self.open_doc_is_clean(&file.path, Some(&file.original), action)?;
             if let Some(version) = file.version
                 && self.lsp.document_version(&file.path) != Some(version)
             {
@@ -149,7 +192,8 @@ impl App {
         Ok(rx)
     }
 
-    fn start_rename_apply(
+    /// Write a checked change set on the file pool, every file or none.
+    pub(super) fn start_rename_apply(
         &self,
         prepared: PreparedRename,
     ) -> RenameResult<tokio::sync::mpsc::UnboundedReceiver<RenameResult<Vec<PathBuf>>>> {

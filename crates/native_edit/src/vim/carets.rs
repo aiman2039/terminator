@@ -389,13 +389,17 @@ impl VimEngine {
     /// Run `apply` once per caret (just once without extra carets): the
     /// carets bottom-up, each loaded as the engine's own, edits grouped
     /// into one undo step. Carets that end up on the same spot merge.
+    /// A lone caret is noted first, so undo can put it back.
     pub fn for_each_caret<B: Buffer>(
         &mut self,
         doc: &mut B,
         mut apply: impl FnMut(&mut Self, &mut B) -> Vec<Effect>,
     ) -> Vec<Effect> {
         if self.extra_carets.is_empty() {
-            return apply(self, doc);
+            self.note_selection(doc);
+            let effects = apply(self, doc);
+            doc.note_selection(None);
+            return effects;
         }
         let mut spots: Vec<Spot> = self
             .carets()

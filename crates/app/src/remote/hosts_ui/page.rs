@@ -35,7 +35,7 @@ impl App {
         egui::Frame::NONE.inner_margin(16.0).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             ui.horizontal(|ui| {
-                ui.label(RichText::new("SSH").size(18.0).strong());
+                ui.label(RichText::new("SSH").size(appearance::FONT_TITLE).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     close = appearance::sidebar_action(ui, "X", "Close").clicked();
                 });

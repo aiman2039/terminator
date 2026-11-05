@@ -21,34 +21,6 @@ pub(super) struct RenameAnswer {
 }
 
 impl LspManager {
-    pub(super) fn on_hover(
-        &mut self,
-        path: PathBuf,
-        cursor: (usize, usize),
-        result: serde_json::Value,
-    ) {
-        if let Some(hover) = L::parse_hover(&result) {
-            self.hover = Some(HoverPopup {
-                path,
-                cursor_line: cursor.0,
-                cursor_col: cursor.1,
-                text: hover.text,
-                markdown: hover.markdown,
-                open: true,
-                status: false,
-            });
-        }
-        // A null answer clears a status note (the request it
-        // hung off is done); real answers are never cleared.
-        else if self
-            .hover
-            .as_ref()
-            .is_some_and(|popup| popup.status && popup.path == path)
-        {
-            self.hover = None;
-        }
-    }
-
     pub(super) fn on_symbols(&mut self, path: PathBuf, revision: u64, result: serde_json::Value) {
         let parsed = L::parse_document_symbols(&result);
         if parsed.is_empty() {
@@ -108,6 +80,7 @@ impl LspManager {
             self.goto = Some(GotoJump {
                 from: path,
                 targets,
+                at_position: true,
             });
         }
     }

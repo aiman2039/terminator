@@ -183,7 +183,7 @@ impl LspManager {
 
     fn on_answer(&mut self, key: &ServerKey, pending: Pending, answer: Answer) {
         match pending {
-            Pending::Hover { path, cursor } => self.on_hover(path, cursor, answer.value()),
+            Pending::Hover(spot) => self.on_hover(spot, answer),
             Pending::Symbols { path, revision } => self.on_symbols(path, revision, answer.value()),
             Pending::InlayHints { path, revision } => self.on_inlay_hints(path, revision, answer),
             Pending::WorkspaceSymbols { generation } => {
@@ -192,11 +192,16 @@ impl LspManager {
             Pending::Definition { path } => self.on_definition(path, answer.value()),
             // The editor matches answers to its popup by generation.
             Pending::Completion { path, generation } => {
+                let list = L::parse_completion_list(&answer.value());
                 self.completion = Some(CompletionResults {
                     path,
                     generation,
-                    items: L::parse_completion(&answer.value()),
+                    items: list.items,
+                    incomplete: list.incomplete,
                 });
+            }
+            Pending::CompletionResolve(path, target) => {
+                self.on_completion_resolve(path, target, answer);
             }
             Pending::Format { path, revision } => {
                 self.edit_answers.format =

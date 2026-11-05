@@ -44,6 +44,77 @@ fn session_actions_need_a_focused_session_everywhere() {
 }
 
 #[test]
+fn cmd_shift_r_renames_a_focused_terminal_and_replaces_in_files_elsewhere() {
+    let (mut app, ctx, _dir) = fixture();
+    app.state.sessions = vec![session_fixture("live", SessionKind::Shell)];
+    let keys = &app.state.settings.keybindings;
+    let chord = shortcuts::binding(keys, Action::ReplaceInFiles.id());
+    assert_eq!(chord, shortcuts::binding(keys, Action::RenameTerminal.id()));
+    let chord = shortcuts::parse(&chord).unwrap();
+    let press = |app: &mut App| {
+        let event = egui::Event::Key {
+            key: chord.key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: chord.modifiers,
+        };
+        let input = egui::RawInput {
+            events: vec![event],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.run_shortcuts(ui.ctx()));
+        output.textures_delta.clear();
+    };
+    let replacing = |app: &App| {
+        app.find_in_files
+            .as_ref()
+            .is_some_and(|find| find.shown && find.replace.on)
+    };
+    // A focused terminal keeps Rename terminal.
+    app.active_session = Some("live".into());
+    press(&mut app);
+    let renaming = app.rename_session.as_ref().map(|(id, _)| id.as_str());
+    assert_eq!(renaming, Some("live"));
+    assert!(!replacing(&app));
+    app.rename_session = None;
+    // The Explorer tree holds the keyboard, not the terminal.
+    let tree = egui::Id::unique("explorer-tree-under-test");
+    ctx.memory_mut(|memory| memory.request_focus(tree));
+    crate::native_editor::note_explorer_focus(&ctx, tree);
+    assert!(!app.terminal_has_keyboard(&ctx));
+    ctx.memory_mut(|memory| memory.surrender_focus(tree));
+    assert!(app.terminal_has_keyboard(&ctx));
+    // The terminal's own find bar still counts as the terminal.
+    app.find_in_active_terminal(&ctx);
+    let find_bar = egui::Id::unique(("terminal-find", "live"));
+    egui::text_edit::TextEditState::default().store(&ctx, find_bar);
+    assert!(ctx.memory(|memory| memory.has_focus(find_bar)));
+    assert!(app.text_input_focused(&ctx));
+    assert!(app.terminal_has_keyboard(&ctx));
+    press(&mut app);
+    let renaming = app.rename_session.as_ref().map(|(id, _)| id.as_str());
+    assert_eq!(renaming, Some("live"));
+    assert!(!replacing(&app));
+    app.rename_session = None;
+    ctx.memory_mut(|memory| memory.surrender_focus(find_bar));
+    // A text field over the terminal pane: Replace in Files takes it.
+    let field = egui::Id::unique("text-field-under-test");
+    egui::text_edit::TextEditState::default().store(&ctx, field);
+    ctx.memory_mut(|memory| memory.request_focus(field));
+    press(&mut app);
+    assert!(replacing(&app));
+    assert!(app.rename_session.is_none());
+    // Another pane (a native editor, a diff) has focus: Replace in Files.
+    app.find_in_files.as_mut().unwrap().hide();
+    ctx.memory_mut(|memory| memory.surrender_focus(field));
+    app.active_session = None;
+    press(&mut app);
+    assert!(replacing(&app));
+    assert!(app.rename_session.is_none());
+}
+
+#[test]
 fn editor_actions_follow_the_targeted_session() {
     let (app, _ctx, _dir) = fixture();
     let shell = session_fixture("shell", SessionKind::Shell);

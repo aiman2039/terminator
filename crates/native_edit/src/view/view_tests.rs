@@ -362,16 +362,16 @@ mod tests {
     fn wide_chars_take_two_display_cells() {
         assert_eq!(char_display_width('a'), 1);
         assert_eq!(char_display_width('あ'), 2);
-        assert_eq!(display_x("aあb", 0), 0);
-        assert_eq!(display_x("aあb", 1), 1);
-        assert_eq!(display_x("aあb", 2), 3);
-        assert_eq!(display_x("aあb", 3), 4);
+        assert_eq!(display_x("aあb", 0, 4), 0);
+        assert_eq!(display_x("aあb", 1, 4), 1);
+        assert_eq!(display_x("aあb", 2, 4), 3);
+        assert_eq!(display_x("aあb", 3, 4), 4);
         // Floor: the second cell of a wide char resolves to that char.
-        assert_eq!(col_at_display_x("aあb", 0), 0);
-        assert_eq!(col_at_display_x("aあb", 1), 1);
-        assert_eq!(col_at_display_x("aあb", 2), 1);
-        assert_eq!(col_at_display_x("aあb", 3), 2);
-        assert_eq!(col_at_display_x("aあb", 99), 3);
+        assert_eq!(col_at_display_x("aあb", 0, 4), 0);
+        assert_eq!(col_at_display_x("aあb", 1, 4), 1);
+        assert_eq!(col_at_display_x("aあb", 2, 4), 1);
+        assert_eq!(col_at_display_x("aあb", 3, 4), 2);
+        assert_eq!(col_at_display_x("aあb", 99, 4), 3);
     }
 
     #[test]
@@ -660,18 +660,20 @@ mod tests {
     }
 
     #[test]
-    fn insert_mode_tab_still_inserts_a_tab() {
-        let ctx = egui::Context::default();
-        let mut doc = crate::doc::Doc::new("text");
-        let mut engine = VimEngine::new();
-        drive_keys(DriveKeysInput {
-            ctx: &ctx,
-            doc: &mut doc,
-            engine: &mut engine,
-            keys: &[egui::Key::I, egui::Key::Tab],
-        });
-        assert_eq!(doc.text(), "\ttext");
-        assert_eq!(engine.mode(), Mode::Insert);
+    fn insert_mode_tab_inserts_one_level_of_the_files_indent() {
+        for (text, expected) in [("\tx\ntext", "\tx\n\ttext"), ("text", "    text")] {
+            let ctx = egui::Context::default();
+            let mut doc = crate::doc::Doc::new(text);
+            let mut engine = VimEngine::new();
+            drive_keys(DriveKeysInput {
+                ctx: &ctx,
+                doc: &mut doc,
+                engine: &mut engine,
+                keys: &[egui::Key::J, egui::Key::I, egui::Key::Tab],
+            });
+            assert_eq!(doc.text(), expected);
+            assert_eq!(engine.mode(), Mode::Insert);
+        }
     }
 
     #[test]

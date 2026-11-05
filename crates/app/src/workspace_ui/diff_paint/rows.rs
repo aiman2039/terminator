@@ -175,13 +175,13 @@ pub(in super::super) fn fill_diff_row(input: FillDiffRowInput<'_>) {
     // Whole device pixels: tinted rows meet without seams or blur.
     let rect = rect.round_to_pixels(ui.pixels_per_point());
     if bg != Color32::TRANSPARENT {
-        ui.painter().rect_filled(rect, 0.0, bg);
+        ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, bg);
     }
     let gutter_right = snap(ui, egui::pos2(rect.left() + gutter_w, rect.bottom()));
     let gutter = egui::Rect::from_min_max(rect.min, gutter_right);
     ui.painter().rect_filled(
         gutter,
-        0.0,
+        egui::CornerRadius::ZERO,
         appearance::diff_tints(ui.visuals().dark_mode).gutter,
     );
 }

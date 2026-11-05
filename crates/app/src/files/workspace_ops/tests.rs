@@ -1,10 +1,10 @@
 use super::*;
 
-fn git(root: &Path, args: &[&str]) {
+pub(super) fn git(root: &Path, args: &[&str]) {
     run_command(git::command(root, args), git_options()).unwrap();
 }
 
-fn repo() -> tempfile::TempDir {
+pub(super) fn repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q", "-b", "main"]);
     git(dir.path(), &["config", "core.autocrlf", "false"]);
@@ -146,16 +146,7 @@ fn stage_commit_and_discard_stay_inside_the_repo() {
     perform(root, Op::Stage(path.clone())).unwrap();
     fs::write(root.join("new.txt"), "new\n").unwrap();
     perform(root, Op::Stage(root.join("new.txt"))).unwrap();
-    perform(
-        root,
-        Op::Commit {
-            message: "next\n".into(),
-            amend: false,
-            signoff: false,
-            push: false,
-        },
-    )
-    .unwrap();
+    git(root, &["commit", "-qm", "next"]);
     fs::write(&path, "dirty\n").unwrap();
     perform(
         root,
@@ -178,65 +169,6 @@ fn stage_commit_and_discard_stay_inside_the_repo() {
     assert!(!root.join("scratch.txt").exists());
     let outside = dir.path().join("../nope.txt");
     assert!(perform(root, Op::Stage(outside)).is_err());
-}
-
-#[test]
-fn amend_signoff_and_push_commit_variants() {
-    let dir = repo();
-    let root = dir.path();
-    let subject = |root: &Path| git_text(root, &["log", "-1", "--pretty=%s"]).unwrap();
-    let body = |root: &Path| git_text(root, &["log", "-1", "--pretty=%b"]).unwrap();
-    // Amend with an empty message keeps the previous subject.
-    fs::write(root.join("a.txt"), "amended\n").unwrap();
-    perform(root, Op::Stage(root.join("a.txt"))).unwrap();
-    perform(
-        root,
-        Op::Commit {
-            message: String::new(),
-            amend: true,
-            signoff: true,
-            push: false,
-        },
-    )
-    .unwrap();
-    assert_eq!(subject(root), "base");
-    assert!(body(root).contains("Signed-off-by: Ops <ops@example.com>"));
-    // Amend with a message replaces the subject.
-    fs::write(root.join("a.txt"), "again\n").unwrap();
-    perform(root, Op::Stage(root.join("a.txt"))).unwrap();
-    perform(
-        root,
-        Op::Commit {
-            message: "renamed".into(),
-            amend: true,
-            signoff: false,
-            push: false,
-        },
-    )
-    .unwrap();
-    assert_eq!(subject(root), "renamed");
-    // Push goes to a bare remote configured as upstream.
-    let remote = tempfile::tempdir().unwrap();
-    git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
-    let remote_arg = remote.path().to_string_lossy().into_owned();
-    git(root, &["remote", "add", "origin", &remote_arg]);
-    git(root, &["push", "-q", "-u", "origin", "main"]);
-    fs::write(root.join("a.txt"), "pushed\n").unwrap();
-    perform(root, Op::Stage(root.join("a.txt"))).unwrap();
-    let report = perform(
-        root,
-        Op::Commit {
-            message: "pushed change".into(),
-            amend: false,
-            signoff: false,
-            push: true,
-        },
-    )
-    .unwrap();
-    assert!(matches!(report, Report::Message(ref m) if m == "Committed and pushed"));
-    let remote_head = git_text(remote.path(), &["rev-parse", "main"]).unwrap();
-    let local_head = git_text(root, &["rev-parse", "HEAD"]).unwrap();
-    assert_eq!(remote_head, local_head);
 }
 
 #[test]

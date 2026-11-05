@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::*;
 
+mod crumbs;
 mod frame_sync;
 mod input;
 mod menu;
@@ -160,13 +161,18 @@ impl eframe::App for App {
 }
 
 impl App {
-    /// Browser navigation, GUI resources, the player, and update checks,
-    /// polled while the app is not exiting.
+    /// Browser navigation, GUI resources, language servers, the player,
+    /// and update checks, polled while the app is not exiting.
     fn poll_background_services(&mut self, ctx: &egui::Context) {
         for (key, target) in self.browser_host.take_navigations() {
             self.apply_browser_navigation(&key, target);
         }
         self.reconcile_gui_resources();
+        // Diagnostics also land with no native editor on screen (a check
+        // started by a save), so Problems and the status bar stay current.
+        if self.lsp.poll() {
+            ctx.request_repaint();
+        }
         self.poll_player();
         if self.player.needs_poll() {
             ctx.request_repaint_after(Duration::from_millis(50));
@@ -256,6 +262,7 @@ impl App {
         self.show_usages_window(ctx);
         self.show_find_in_files_window(ctx);
         self.show_hierarchy_window(ctx);
+        self.show_compare_picker(ctx);
         self.apply_browser_submit();
         self.reconcile_gui_resources();
         self.sync_browsers(ctx, frame);

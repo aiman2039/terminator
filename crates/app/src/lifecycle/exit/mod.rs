@@ -211,7 +211,9 @@ impl App {
     pub(crate) fn exit_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
             layouts: self.persistable_layouts(),
-            preferences: self.preferences_writable.then(|| self.preferences.clone()),
+            preferences: self
+                .preferences_writable
+                .then(|| self.preferences_for_exit()),
             selected: self
                 .selected
                 .clone()
@@ -225,7 +227,11 @@ impl App {
             _ => return,
         };
         if started.elapsed() > Duration::from_secs(15) {
-            self.cancel_exit("Timed out waiting for pending operations or persistence".into());
+            self.cancel_exit(if self.git.run.is_some() {
+                "a commit or push is still running; cancel it in the Git panel first".into()
+            } else {
+                "Timed out waiting for pending operations or persistence".into()
+            });
             return;
         }
         if let Some(services) = &self.jobs.services {

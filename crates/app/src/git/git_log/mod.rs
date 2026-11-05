@@ -1,10 +1,24 @@
 //! Commit log and blame data structures, fetched via `git log` and `git blame`.
 mod files;
+mod filter;
+#[cfg(test)]
+mod filter_tests;
+mod graph;
+#[cfg(test)]
+mod graph_tests;
+mod labels;
+mod log_view;
+mod query;
 #[cfg(test)]
 mod tests;
 mod web;
 
 pub use files::*;
+pub use filter::*;
+pub use graph::*;
+pub use labels::*;
+pub use log_view::*;
+pub use query::*;
 pub use web::*;
 
 use std::path::Path;
@@ -21,12 +35,11 @@ pub struct CommitEntry {
     pub timestamp: i64,
     pub message: String,
     pub subject: String,
-    pub refs: Vec<String>,
+    /// HEAD, branches, and tags that point at this commit.
+    pub refs: Vec<RefLabel>,
     pub parents: Vec<String>,
-    /// Graph edges: for each parent index (into the visible commit list),
-    /// the lane/column this commit connects to. Empty for initial commits.
-    pub graph_col: usize,
-    pub graph_color: u8,
+    /// This commit's row in the lane graph.
+    pub graph: GraphRow,
 }
 
 /// A branch or tag reference.
@@ -77,6 +90,17 @@ pub struct CommitLog {
     pub refs: Vec<RefEntry>,
     pub active_branch: String,
     pub error: Option<String>,
+    /// The widest graph row, in lanes.
+    pub lanes: usize,
+    /// The filters and Go to Hash target this log answers (boxed: the
+    /// Git view enum stays small).
+    pub query: Box<LogQuery>,
+    /// `git config user.name`: the User filter's "me".
+    pub me: Option<String>,
+    /// Go to Hash: the full hash of the commit it found.
+    pub found: Option<String>,
+    /// Go to Hash: why it found no commit.
+    pub missing: Option<String>,
 }
 
 /// Fetched blame data.
@@ -88,72 +112,29 @@ pub struct BlameData {
     pub commit_web: Option<String>,
 }
 
-/// Fetch the commit log from a git repository.
+/// Fetch the whole commit log (no filters) from a git repository.
 pub fn fetch_log(cwd: &Path) -> Result<CommitLog, String> {
-    let root = match git_root(cwd) {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Git root: {e}")),
-    };
-    let branch = match current_branch(&root) {
-        Ok(b) => b,
-        Err(e) => return Err(format!("Branch: {e}")),
-    };
-    let log_output = match terminator_core::git::run_blocking(
-        &root,
-        &[
-            "log",
-            "--all",
-            "--date=unix",
-            "--format=%H%n%h%n%an%n%ae%n%ad%n%P%n%D%n%B%n>>>>>END<<<<<",
-            "-1000",
-        ],
-        CommandOptions {
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
-        },
-    ) {
-        Ok(v) => v,
-        Err(e) => return Err(format!("git log: {e}")),
-    };
-    let log_text = String::from_utf8_lossy(&log_output);
-    let commits = parse_log(&log_text);
-    let refs = fetch_refs(&root);
-    Ok(CommitLog {
-        commits,
-        refs,
-        active_branch: branch,
-        error: None,
-    })
+    let mut log = query_log(&BlockingGit, cwd, &LogQuery::default());
+    match log.error.take() {
+        Some(error) => Err(error),
+        None => Ok(log),
+    }
 }
 
 fn git_root(cwd: &Path) -> Result<std::path::PathBuf, String> {
-    let options = CommandOptions {
-        stdout_limit: 1024 * 1024,
-        ..Default::default()
-    };
-    let bytes = terminator_core::git::run_blocking(cwd, &["rev-parse", "--show-toplevel"], options)
-        .map_err(|e| format!("{e}"))?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|e| format!("{e}"))?
-        .trim();
-    Ok(std::path::PathBuf::from(text))
+    query::root_with(&BlockingGit, cwd)
 }
 
-fn current_branch(root: &Path) -> Result<String, String> {
-    let options = CommandOptions {
-        stdout_limit: 1024 * 1024,
-        ..Default::default()
-    };
-    let bytes =
-        terminator_core::git::run_blocking(root, &["rev-parse", "--abbrev-ref", "HEAD"], options)
-            .map_err(|e| format!("{e}"))?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|e| format!("{e}"))?
-        .trim();
-    Ok(text.to_string())
-}
-
+/// Commits in log order, each with its lane graph row.
+#[cfg(test)]
 fn parse_log(text: &str) -> Vec<CommitEntry> {
+    let mut commits = parse_commits(text);
+    query::lay_out(&mut commits, false);
+    commits
+}
+
+/// Commits in log order, without graph rows.
+fn parse_commits(text: &str) -> Vec<CommitEntry> {
     text.split(">>>>>END<<<<<\n")
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
@@ -182,14 +163,6 @@ fn parse_commit(entry: &str) -> CommitEntry {
             .map(std::string::ToString::to_string)
             .collect()
     };
-    let refs: Vec<String> = if refs_str.is_empty() {
-        vec![]
-    } else {
-        refs_str
-            .split(", ")
-            .map(std::string::ToString::to_string)
-            .collect()
-    };
     let timestamp: i64 = date.parse().unwrap_or(0);
     CommitEntry {
         hash,
@@ -200,10 +173,9 @@ fn parse_commit(entry: &str) -> CommitEntry {
         timestamp,
         message,
         subject,
-        refs,
+        refs: parse_ref_labels(&refs_str),
         parents,
-        graph_col: 0,
-        graph_color: 0,
+        graph: GraphRow::default(),
     }
 }
 
@@ -230,13 +202,13 @@ fn relative_date(timestamp: i64) -> String {
     }
 }
 
-fn fetch_refs(root: &Path) -> Vec<RefEntry> {
+fn fetch_refs(git: &impl LogGit, root: &Path) -> Vec<RefEntry> {
     let mut refs = Vec::new();
     let options = CommandOptions {
         stdout_limit: 1024 * 1024,
         ..Default::default()
     };
-    let bytes = match terminator_core::git::run_blocking(
+    let bytes = match git.git(
         root,
         &[
             "for-each-ref",

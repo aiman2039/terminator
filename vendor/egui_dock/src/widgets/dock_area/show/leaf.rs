@@ -423,7 +423,7 @@ impl<Tab> DockArea<'_, Tab> {
                 tabs_ui.output_mut(|o| o.cursor_icon = CursorIcon::Grabbing);
             }
 
-            let (is_active, label, tab_style, closeable, leading_width) = {
+            let (is_active, label, tab_style, closeable, leading_width, modified) = {
                 let leaf = self.dock_state[path]
                     .get_leaf_mut()
                     .expect("This node must be a leaf");
@@ -435,6 +435,7 @@ impl<Tab> DockArea<'_, Tab> {
                     tab_style.unwrap_or(style.tab.clone()),
                     tab_viewer.is_closeable(&leaf.tabs[tab_index.0]),
                     tab_viewer.tab_leading_width(&leaf.tabs[tab_index.0]),
+                    tab_viewer.tab_modified(&leaf.tabs[tab_index.0]),
                 )
             };
 
@@ -455,6 +456,7 @@ impl<Tab> DockArea<'_, Tab> {
                             preferred_width,
                             show_close_button,
                             leading_width,
+                            modified,
                             fade,
                         );
                         if leading_width > 0.0 {
@@ -492,6 +494,7 @@ impl<Tab> DockArea<'_, Tab> {
                     preferred_width,
                     show_close_button,
                     leading_width,
+                    modified,
                     fade,
                 );
                 if leading_width > 0.0 {
@@ -1119,6 +1122,7 @@ impl<Tab> DockArea<'_, Tab> {
         preferred_width: Option<f32>,
         show_close_button: bool,
         leading_width: f32,
+        modified: bool,
         fade: Option<&Style>,
     ) -> (Response, Option<Response>, Rect) {
         let style = fade.unwrap_or_else(|| self.style.as_ref().unwrap());
@@ -1218,13 +1222,14 @@ impl<Tab> DockArea<'_, Tab> {
                 .interact(close_button_rect, id.with("close-button"), Sense::click())
                 .on_hover_cursor(CursorIcon::PointingHand);
 
-            let color = if close_response.hovered() || close_response.has_focus() {
+            let hovered = close_response.hovered() || close_response.has_focus();
+            let color = if hovered {
                 style.buttons.close_tab_active_color
             } else {
                 style.buttons.close_tab_color
             };
 
-            if close_response.hovered() || close_response.has_focus() {
+            if hovered {
                 let mut corner_radius = tab_style.corner_radius;
                 corner_radius.nw = 0;
                 corner_radius.sw = 0;
@@ -1234,6 +1239,17 @@ impl<Tab> DockArea<'_, Tab> {
                     corner_radius,
                     style.buttons.close_tab_bg_fill,
                 );
+            }
+
+            // Unsaved changes hold the close slot as a dot until the
+            // pointer reaches it; then the close button comes back.
+            if modified && !hovered {
+                ui.painter().circle_filled(
+                    close_button_rect.center(),
+                    Style::TAB_MODIFIED_DOT_RADIUS,
+                    color,
+                );
+                return close_response;
             }
 
             let mut x_rect = close_button_rect;

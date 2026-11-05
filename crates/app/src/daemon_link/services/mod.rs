@@ -1,5 +1,5 @@
 mod context;
-mod links;
+pub(crate) mod links;
 mod listing;
 
 pub use context::{ContextAsyncInput, context_async};
@@ -22,12 +22,26 @@ use terminator_git::{Change, Entry};
 
 /// Called by the folder-opening worker, including for saved symlink aliases.
 pub fn project_for_directory<'a>(
-    projects: &'a [terminator_core::Project],
+    projects: impl IntoIterator<Item = &'a terminator_core::Project>,
     directory: &Path,
 ) -> Option<&'a terminator_core::Project> {
     projects
-        .iter()
+        .into_iter()
         .find(|p| p.path == directory || p.path.canonicalize().is_ok_and(|path| path == directory))
+}
+
+/// Projects a folder pick can open. A managed worktree the user removed
+/// cannot be selected, so a pick of its folder adds the folder again; the
+/// session service then forgets the removed marker.
+pub fn openable_projects(
+    state: &terminator_core::State,
+) -> impl Iterator<Item = &terminator_core::Project> {
+    state.projects.iter().filter(|project| {
+        !state
+            .worktrees
+            .iter()
+            .any(|worktree| worktree.project_id == project.id && worktree.removed)
+    })
 }
 
 #[derive(Clone, Debug)]

@@ -96,30 +96,10 @@ pub fn items(
     .collect()
 }
 
+/// File action rows for one target. The rows show no key hints: the Open file
+/// and Split right shortcuts open the file picker and a terminal split, not
+/// these actions.
 pub fn menu(ui: &mut egui::Ui, spec: FileMenu) -> Option<FileAction> {
-    menu_with(MenuWithInput {
-        ui,
-        spec,
-        open: "",
-        split: "",
-    })
-}
-
-pub struct MenuWithInput<'a> {
-    pub ui: &'a mut egui::Ui,
-    pub spec: FileMenu,
-    pub open: &'a str,
-    pub split: &'a str,
-}
-
-/// `open` and `split` are the displayed shortcuts for those rows.
-pub fn menu_with(input: MenuWithInput<'_>) -> Option<FileAction> {
-    let MenuWithInput {
-        ui,
-        spec,
-        open,
-        split,
-    } = input;
     let mut previous_group = None;
     for (label, action) in items(spec) {
         let group = match action {
@@ -145,16 +125,11 @@ pub fn menu_with(input: MenuWithInput<'_>) -> Option<FileAction> {
             | FileAction::NativeStagedDiff
             | FileAction::NativeWorkingDiff => "FileDiff",
         };
-        let shortcut = match action {
-            FileAction::Open => open,
-            FileAction::Split => split,
-            _ => "",
-        };
         let response = crate::appearance::menu_item(crate::appearance::MenuItemInput {
             ui,
             label,
             icon,
-            shortcut,
+            shortcut: "",
         });
         #[cfg(feature = "test-support")]
         crate::diagnostics::record_ui(ui, label, response.rect);

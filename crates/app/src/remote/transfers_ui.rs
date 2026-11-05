@@ -183,7 +183,7 @@ impl App {
             let rect = ui.max_rect();
             ui.painter().rect_stroke(
                 rect,
-                4.0,
+                appearance::RADIUS_SMALL,
                 egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
                 egui::StrokeKind::Inside,
             );

@@ -38,8 +38,9 @@ fn whole(token: &str) -> Option<Candidate> {
 }
 
 /// `path:line`, `path:line:col`, with an optional trailing `:` (rustc,
-/// gcc, grep -n, ripgrep, eslint, pytest).
-fn colon_location(token: &str) -> Option<Candidate> {
+/// gcc, grep -n, ripgrep, eslint, pytest). Go to File reads typed
+/// `main.rs:42` the same way.
+pub(crate) fn colon_location(token: &str) -> Option<Candidate> {
     let token = token.strip_suffix(':').unwrap_or(token);
     let (rest, last) = token.rsplit_once(':')?;
     let last = number(last)?;

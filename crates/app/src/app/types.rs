@@ -233,7 +233,6 @@ pub(crate) enum Job {
     /// Download a browser tab icon; answers with `Update::Favicon`.
     Favicon(String),
     PasteClipboard(String),
-
     Diff(Tab),
     DiffContext(Tab, diff::DiffView),
     DiffExpand(
@@ -253,11 +252,11 @@ pub(crate) enum Job {
     LinePreviews(u64, Vec<(PathBuf, Vec<u32>)>),
     /// Files a commit changed, for the commit log's details pane.
     CommitFiles(PathBuf, String),
-    /// Read a file's `HEAD` text for gutter markers (refresh generation).
+    /// Read a file's `HEAD` text and repository root for gutter markers.
     GitBase(PathBuf, u64),
     /// Blame a native buffer's text `(path, buffer revision, text)`.
     EditorBlame(PathBuf, u64, String),
-    /// Stage the working-tree changes under one editor gutter block.
+    /// Stage one gutter block's changes; `cwd` is the repository root if known.
     StageGutterBlock {
         cwd: PathBuf,
         path: PathBuf,
@@ -333,6 +332,7 @@ pub(crate) enum Job {
     },
     /// Load a commit-log or blame tab off the GUI thread.
     GitView(Tab),
+    GitLog(Tab, git_log::LogQuery),
     LocalHistory(crate::local_history::Op),
 }
 /// Loaded contents of a commit-log or blame tab.
@@ -471,7 +471,7 @@ pub(crate) enum Update {
     Search(u64, Result<Vec<search::Hit>, String>),
     Favicon(String, Option<Vec<u8>>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),
-    GitBase(PathBuf, u64, Option<String>),
+    GitBase(PathBuf, u64, Option<String>, Option<PathBuf>),
     /// A gutter block staged `(path, message or error)`.
     GutterStaged(PathBuf, Result<String, String>),
     EditorBlame(PathBuf, u64, Result<git_log::BlameData, String>),

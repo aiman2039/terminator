@@ -3,6 +3,20 @@
 use crate::*;
 use terminator_core::editor_prefs::{AUTOSAVE_DELAY_MS, Autosave, FONT_SIZE, LINE_SPACING};
 
+/// What the JetBrains keymap does, in this platform's keys.
+const KEYMAP_HELP: &str = if cfg!(target_os = "macos") {
+    "Works in the whole app: double ⇧ search everywhere, ⇧⌘A find action, ⇧⌘O go \
+     to file. While an editor has focus, these keys also win over app keys: ⌘B \
+     declaration, ⌘E recent files, ⌘L go to line, ⌘[ and ⌘] back and forward, F2 \
+     next problem, ⇧F6 rename."
+} else {
+    "Works in the whole app: double Shift search everywhere, Ctrl+Shift+A find \
+     action, Ctrl+Shift+N go to file, Ctrl+E recent files. A focused terminal keeps \
+     Ctrl+E and Ctrl+Shift+A. While an editor has focus, these keys also win over \
+     app keys: Ctrl+B declaration, Ctrl+G go to line, F2 next problem, Shift+F6 \
+     rename."
+};
+
 impl App {
     pub(super) fn editor_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Editor");
@@ -13,7 +27,6 @@ impl App {
             self.field_visible("Line spacing", "line height leading"),
             self.field_visible("Caret", "cursor blink"),
             self.field_visible("Brackets", "rainbow bracket pair colorization nesting"),
-            self.field_visible("Keymap", "jetbrains intellij shortcuts keys"),
         ];
         let prefs = &mut self.theme_draft.editor;
         if show[0] {
@@ -64,32 +77,39 @@ impl App {
                 },
             });
         }
-        if show[4] {
-            settings_controls::settings_row(settings_controls::SettingsRowInput {
-                ui,
-                label: "Keymap",
-                description: if cfg!(target_os = "macos") {
-                    "While an editor has focus, JetBrains keys win over app keys: ⌘B \
-                     declaration, ⌘E recent files, ⌘L go to line, ⌘[ and ⌘] back and \
-                     forward, F2 next problem, ⇧F6 rename, ⇧⌘A or double ⇧ search."
-                } else {
-                    "While an editor has focus, JetBrains keys win over app keys: Ctrl+B \
-                     declaration, Ctrl+E recent files, Ctrl+G go to line, F2 next problem, \
-                     Shift+F6 rename, Ctrl+Shift+A or double Shift search."
-                },
-                add_control: |ui| {
-                    ui.checkbox(&mut prefs.editor_jetbrains_keys, "JetBrains keys");
-                },
-            });
-        }
+        self.editor_keymap_setting(ui);
         self.editor_save_settings(ui);
     }
 
-    /// Error lens and autosave rows.
+    /// The JetBrains keymap row. The keymap works in the whole app.
+    fn editor_keymap_setting(&mut self, ui: &mut egui::Ui) {
+        let keywords = "jetbrains intellij shortcuts keys double shift find action go to file";
+        if !self.field_visible("Keymap", keywords) {
+            return;
+        }
+        let prefs = &mut self.theme_draft.editor;
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Keymap",
+            description: KEYMAP_HELP,
+            add_control: |ui| {
+                ui.checkbox(
+                    &mut prefs.editor_jetbrains_keys,
+                    "JetBrains keys in the whole app",
+                );
+            },
+        });
+    }
+
+    /// Error lens, autosave and hover documentation rows.
     fn editor_save_settings(&mut self, ui: &mut egui::Ui) {
         let show = [
             self.field_visible("Problems", "error lens inline diagnostics"),
             self.field_visible("Autosave", "auto save focus delay"),
+            self.field_visible(
+                "Documentation",
+                "quick documentation hover mouse pointer docs",
+            ),
         ];
         let prefs = &mut self.theme_draft.editor;
         if show[0] {
@@ -128,6 +148,20 @@ impl App {
                             .suffix(" ms"),
                         );
                     }
+                },
+            });
+        }
+        if show[2] {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Documentation",
+                description: "Show the docs of the symbol under a resting pointer. Problems \
+                              there show either way. F1 shows the docs at the caret.",
+                add_control: |ui| {
+                    ui.checkbox(
+                        &mut prefs.editor_hover_docs,
+                        "Show documentation on mouse hover",
+                    );
                 },
             });
         }

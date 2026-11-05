@@ -122,7 +122,8 @@ impl App {
         }
     }
 
-    /// Settings, pinned and remaining actions, VNC hosts, and layouts.
+    /// Settings, pinned and remaining actions, VNC hosts, native editor
+    /// commands, and layouts.
     fn push_command_items(&self, items: &mut Vec<PaletteItem>) {
         for section in SettingsSection::ALL {
             items.push(PaletteItem::Settings(section));
@@ -158,6 +159,16 @@ impl App {
                 .filter(|&action| self.palette_lists_action(action))
                 .map(PaletteItem::Action),
         );
+        // Editor commands need a native editor to act on.
+        if let Some(target) = self.editor_command_target() {
+            items.extend(
+                EditorCommand::ALL
+                    .iter()
+                    .copied()
+                    .filter(|&command| target.offers(command))
+                    .map(PaletteItem::Editor),
+            );
+        }
         for name in self.preferences.named_layouts.keys() {
             items.push(PaletteItem::ApplyLayout(name.clone()));
         }

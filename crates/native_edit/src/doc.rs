@@ -4,6 +4,9 @@
 //! [`Buffer`] trait (`char` indexing, cheap line access), so the backing
 //! store stays private. Undo uses typing-run coalescing.
 
+use crate::indent::IndentStyle;
+pub use crate::undo::UndoChange;
+use crate::undo::{ChangeSpan, EditRun, UndoEntry, UndoOp, UndoStep};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -15,6 +18,9 @@ static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
 fn next_revision() -> u64 {
     NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
 }
+
+pub use crate::journal::Change;
+use crate::journal::Journal;
 
 /// Char-indexed text buffer. Indices are Unicode scalar values, matching the
 /// `ropey` convention, so callers never deal in bytes.
@@ -46,14 +52,33 @@ pub trait Buffer {
     fn line_col_at(&self, char_idx: usize) -> (usize, usize);
     fn insert(&mut self, char_idx: usize, text: &str);
     fn delete(&mut self, range: Range<usize>);
-    fn undo(&mut self) -> bool;
-    fn redo(&mut self) -> bool;
+    /// Undo one step and report what it changed; `None` when there is
+    /// nothing to undo.
+    fn undo_change(&mut self) -> Option<UndoChange>;
+    /// Redo one step and report what it changed; `None` when there is
+    /// nothing to redo.
+    fn redo_change(&mut self) -> Option<UndoChange>;
+    fn undo(&mut self) -> bool {
+        self.undo_change().is_some()
+    }
+    fn redo(&mut self) -> bool {
+        self.redo_change().is_some()
+    }
+    /// Note the caret and selection (`anchor`, `head` char offsets) just
+    /// before an edit: the next new undo step keeps it, and undo reports
+    /// it back. `None` drops the note. Backends may keep nothing.
+    fn note_selection(&mut self, _selection: Option<(usize, usize)>) {}
     /// Monotonic edit counter: every text mutation (insert, delete,
     /// undo, redo) bumps it. Views use it to invalidate cached
     /// derivations (highlighting) without rehashing the buffer.
     /// Backends without a counter report `0` (always re-derive).
     fn revision(&self) -> u64 {
         0
+    }
+    /// The edits since `revision`, oldest first, so positions taken then
+    /// can follow them. `None` when the buffer no longer knows them.
+    fn changes_since(&self, _revision: u64) -> Option<Vec<Change>> {
+        None
     }
     /// End the coalescing run: the next edit starts a fresh undo unit.
     /// Call after cursor moves, mode changes, saves, and remote updates.
@@ -66,74 +91,12 @@ pub trait Buffer {
     /// Close the unit opened by [`Buffer::begin_undo_group`]. An empty
     /// unit records nothing.
     fn end_undo_group(&mut self) {}
-}
-
-#[derive(Clone, Debug)]
-enum UndoOp {
-    /// Insert `text` at `at` to undo (i.e. a delete happened).
-    Insert { at: usize, text: String },
-    /// Delete `len` chars at `at` to undo (i.e. an insert happened).
-    Delete { at: usize, len: usize },
-}
-
-#[derive(Clone, Debug, Default)]
-struct EditRun {
-    op: Option<UndoOp>,
-}
-
-impl EditRun {
-    /// Merge `op` into the open run when it directly continues it:
-    /// contiguous typing appends, contiguous forward deletes append, and
-    /// contiguous backward deletes prepend (with the stored position moved).
-    fn push(&mut self, op: UndoOp) -> bool {
-        let slot = self.op.take();
-        let (merged, next) = match (slot, op) {
-            (Some(UndoOp::Delete { at: a, len: la }), UndoOp::Delete { at: b, len: lb })
-                if a.checked_add(la) == Some(b) =>
-            {
-                match la.checked_add(lb) {
-                    Some(len) => (true, Some(UndoOp::Delete { at: a, len })),
-                    None => (false, Some(UndoOp::Delete { at: b, len: lb })),
-                }
-            }
-            (
-                Some(UndoOp::Insert {
-                    at: a,
-                    text: mut ta,
-                }),
-                UndoOp::Insert { at: b, text: tb },
-            ) if b == a => {
-                ta.push_str(&tb);
-                (true, Some(UndoOp::Insert { at: a, text: ta }))
-            }
-            (
-                Some(UndoOp::Insert {
-                    at: a,
-                    text: mut ta,
-                }),
-                UndoOp::Insert { at: b, text: tb },
-            ) if b.checked_add(tb.chars().count()) == Some(a) => {
-                ta.insert_str(0, &tb);
-                (true, Some(UndoOp::Insert { at: b, text: ta }))
-            }
-            (slot, op) => (false, {
-                let _ = slot;
-                Some(op)
-            }),
-        };
-        // `push` is only called from `commit`, which immediately stores `next`
-        // back into the undo stack when unmerged; keep the merged run here.
-        self.op = next;
-        merged
+    /// How this text indents: typing, indent commands, tab stops and
+    /// indent guides follow it. Backends without a setting use four
+    /// spaces.
+    fn indent_style(&self) -> IndentStyle {
+        IndentStyle::default()
     }
-}
-
-/// One undo-stack entry: a single edit or an explicit group of edits
-/// (one vim change) that undoes and redoes atomically.
-#[derive(Clone, Debug)]
-enum UndoEntry {
-    Op(UndoOp),
-    Group(Vec<UndoOp>),
 }
 
 /// Rope-backed [`Buffer`]: `ropey` owns storage and line indexing, so
@@ -143,11 +106,18 @@ enum UndoEntry {
 pub struct Doc {
     rope: ropey::Rope,
     revision: u64,
-    undo: Vec<UndoEntry>,
-    redo: Vec<UndoEntry>,
+    undo: Vec<UndoStep>,
+    redo: Vec<UndoStep>,
     run: EditRun,
     group_depth: usize,
     group: Vec<UndoOp>,
+    journal: Journal,
+    /// Caret and selection noted for the next new undo step.
+    noted: Option<(usize, usize)>,
+    /// The open unit's note, taken when the unit opened.
+    group_before: Option<(usize, usize)>,
+    /// Detected from the text at creation; hosts may set it.
+    indent: IndentStyle,
 }
 
 impl Default for Doc {
@@ -157,16 +127,41 @@ impl Default for Doc {
 }
 
 impl Doc {
+    /// A buffer holding `text`, indenting the way the text already does
+    /// (four spaces when nothing is indented).
     pub fn new(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let indent = IndentStyle::detect(text.lines()).unwrap_or_default();
         Self {
-            rope: ropey::Rope::from(text.into()),
+            rope: ropey::Rope::from(text),
             revision: next_revision(),
             undo: Vec::new(),
             redo: Vec::new(),
             run: EditRun::default(),
             group_depth: 0,
             group: Vec::new(),
+            journal: Journal::default(),
+            noted: None,
+            group_before: None,
+            indent,
         }
+    }
+
+    /// Indent with `style` from now on (`.editorconfig`, language rules).
+    pub fn set_indent_style(&mut self, style: IndentStyle) {
+        self.indent = style;
+    }
+
+    /// Whether an undone step waits to be redone (any new edit drops it).
+    #[must_use]
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// An undo unit is open (a vim Insert session): edits now join it.
+    #[must_use]
+    pub fn undo_group_open(&self) -> bool {
+        self.group_depth > 0
     }
 
     #[must_use]
@@ -174,7 +169,9 @@ impl Doc {
         self.rope.to_string()
     }
 
-    fn bump(&mut self) {
+    /// A new revision for `change`, which the journal keeps.
+    fn bump(&mut self, change: Change) {
+        self.journal.record(self.revision, change);
         self.revision = next_revision();
     }
 
@@ -217,6 +214,8 @@ impl Doc {
     }
 
     fn commit(&mut self, op: UndoOp) {
+        // Only a new step keeps the note; a merge or a unit drops it.
+        let before = self.noted.take();
         if self.group_depth > 0 {
             // Inside an explicit unit every edit is banked verbatim; the
             // run merger stays closed so nothing leaks into neighbors.
@@ -228,12 +227,18 @@ impl Doc {
         if self.run.push(op.clone()) {
             let last = self.undo.len().saturating_sub(1);
             if let Some(stored) = self.run.op.clone()
-                && let Some(UndoEntry::Op(slot)) = self.undo.get_mut(last)
+                && let Some(UndoStep {
+                    entry: UndoEntry::Op(slot),
+                    ..
+                }) = self.undo.get_mut(last)
             {
                 *slot = stored;
             }
         } else {
-            self.undo.push(UndoEntry::Op(op));
+            self.undo.push(UndoStep {
+                entry: UndoEntry::Op(op),
+                before,
+            });
         }
         self.redo.clear();
     }
@@ -242,27 +247,50 @@ impl Doc {
     /// this first, so the open unit never holds positions that a replay
     /// made stale; edits after it start a new entry in the same unit.
     fn flush_group(&mut self) {
+        let before = self.group_before.take();
         if !self.group.is_empty() {
             self.redo.clear();
-            self.undo
-                .push(UndoEntry::Group(std::mem::take(&mut self.group)));
+            self.undo.push(UndoStep {
+                entry: UndoEntry::Group(std::mem::take(&mut self.group)),
+                before,
+            });
         }
     }
 
     /// Execute one undo entry (single op or whole group), returning the
-    /// entry that reverses it. Groups replay in reverse chronological
-    /// order, so the banked group redoes forward.
-    fn execute_entry(&mut self, entry: UndoEntry) -> UndoEntry {
-        match entry {
-            UndoEntry::Op(op) => UndoEntry::Op(self.execute(op)),
+    /// entry that reverses it and the span it changed. Groups replay in
+    /// reverse chronological order, so the banked group redoes forward.
+    fn execute_entry(&mut self, entry: UndoEntry) -> (UndoEntry, Range<usize>) {
+        let mut span = ChangeSpan::default();
+        let inverse = match entry {
+            UndoEntry::Op(op) => {
+                let inverse = self.execute(op);
+                span.add(&inverse);
+                UndoEntry::Op(inverse)
+            }
             UndoEntry::Group(ops) => {
                 let mut inverses = Vec::with_capacity(ops.len());
                 for op in ops.into_iter().rev() {
-                    inverses.push(self.execute(op));
+                    let inverse = self.execute(op);
+                    span.add(&inverse);
+                    inverses.push(inverse);
                 }
                 UndoEntry::Group(inverses)
             }
-        }
+        };
+        (inverse, span.range())
+    }
+
+    /// Run one stack step: what it changed, and the step that reverses
+    /// it (keeping the note from before the original edit).
+    fn replay(&mut self, step: UndoStep) -> (UndoChange, UndoStep) {
+        let UndoStep { entry, before } = step;
+        let (entry, range) = self.execute_entry(entry);
+        let change = UndoChange {
+            range,
+            selection: before,
+        };
+        (change, UndoStep { entry, before })
     }
 
     /// Execute an inverse op, returning the inverse that reverses it.
@@ -272,7 +300,7 @@ impl Doc {
                 let at = at.min(self.len_chars());
                 let len = text.chars().count();
                 self.rope.insert(at, &text);
-                self.bump();
+                self.bump(Change::insert(at, len));
                 UndoOp::Delete { at, len }
             }
             UndoOp::Delete { at, len } => {
@@ -281,7 +309,7 @@ impl Doc {
                     .map_or(self.len_chars(), |sum| sum.min(self.len_chars()));
                 let removed = self.rope.slice(at.min(end)..end).to_string();
                 self.rope.remove(at.min(end)..end);
-                self.bump();
+                self.bump(Change::delete(at.min(end), end.saturating_sub(at.min(end))));
                 UndoOp::Insert { at, text: removed }
             }
         }
@@ -380,8 +408,8 @@ impl Buffer for Doc {
         }
         let at = char_idx.min(self.len_chars());
         self.rope.insert(at, text);
-        self.bump();
         let len = text.chars().count();
+        self.bump(Change::insert(at, len));
         self.commit(UndoOp::Delete { at, len });
     }
 
@@ -393,7 +421,7 @@ impl Buffer for Doc {
         }
         let removed = self.rope.slice(start..end).to_string();
         self.rope.remove(start..end);
-        self.bump();
+        self.bump(Change::delete(start, end.saturating_sub(start)));
         self.commit(UndoOp::Insert {
             at: start,
             text: removed,
@@ -404,29 +432,40 @@ impl Buffer for Doc {
         self.revision
     }
 
+    fn changes_since(&self, revision: u64) -> Option<Vec<Change>> {
+        self.journal.since(revision, self.revision)
+    }
+
+    fn indent_style(&self) -> IndentStyle {
+        self.indent
+    }
+
     /// Stored ops are already inverses: executing one undoes the edit, and
     /// banking the new inverse makes redo exact. A group replays in
     /// reverse chronological order, so the banked group redoes forward.
-    fn undo(&mut self) -> bool {
+    fn undo_change(&mut self) -> Option<UndoChange> {
         self.end_run();
         self.flush_group();
-        let Some(entry) = self.undo.pop() else {
-            return false;
-        };
-        let inverse = self.execute_entry(entry);
+        let step = self.undo.pop()?;
+        let (change, inverse) = self.replay(step);
         self.redo.push(inverse);
-        true
+        Some(change)
     }
 
-    fn redo(&mut self) -> bool {
+    fn redo_change(&mut self) -> Option<UndoChange> {
         self.end_run();
         self.flush_group();
-        let Some(entry) = self.redo.pop() else {
-            return false;
-        };
-        let inverse = self.execute_entry(entry);
+        let step = self.redo.pop()?;
+        let (change, inverse) = self.replay(step);
         self.undo.push(inverse);
-        true
+        Some(UndoChange {
+            selection: None,
+            ..change
+        })
+    }
+
+    fn note_selection(&mut self, selection: Option<(usize, usize)>) {
+        self.noted = selection;
     }
 
     fn end_run(&mut self) {
@@ -435,6 +474,10 @@ impl Buffer for Doc {
 
     fn begin_undo_group(&mut self) {
         self.end_run();
+        if self.group_depth == 0 {
+            // The unit is one undo step: it keeps the note from before it.
+            self.group_before = self.noted.take();
+        }
         self.group_depth = self.group_depth.saturating_add(1);
     }
 

@@ -44,6 +44,23 @@ fn fold_follows_lines_inserted_or_removed_above() {
 }
 
 #[test]
+fn restored_folds_skip_lines_that_start_no_region() {
+    let doc = Doc::new("fn a() {\n    x();\n}\nfn b() {\n    y();\n}\n");
+    let mut folds = Folds::default();
+    folds.ensure(&doc, Language::Rust);
+    let generation = folds.generation();
+    // Line 1 is inside a block and line 40 is past the end: both stale.
+    folds.restore(&[3, 1, 40]);
+    assert_eq!(folds.folded_starts(), [3]);
+    assert!(folds.hidden(4) && !folds.hidden(1));
+    assert_ne!(folds.generation(), generation, "the rows lay out again");
+    // Nothing that still matches: no change.
+    let generation = folds.generation();
+    folds.restore(&[1]);
+    assert_eq!(folds.generation(), generation);
+}
+
+#[test]
 fn enclosing_lists_open_blocks_outermost_first() {
     let doc = Doc::new("impl S {\n    fn f() {\n        x();\n    }\n}\n");
     let mut folds = Folds::default();

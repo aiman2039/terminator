@@ -1,5 +1,6 @@
 //! The Git sidebar panel.
 mod commit;
+mod commit_progress;
 mod committed;
 mod rows;
 #[cfg(test)]
@@ -13,6 +14,7 @@ use crate::diagnostics;
 use crate::{
     App, appearance, file_actions::FileAction, icons, services::ContextData, workspace_ops,
 };
+pub(crate) use commit_progress::{CommitLock, CommitPhase, CommitProgress};
 use committed::*;
 use eframe::egui::{self, Color32, RichText};
 #[cfg(test)]
@@ -87,8 +89,14 @@ pub struct GitPanelInput<'a> {
     pub compare: Option<&'a workspace_ops::CompareData>,
     /// User-picked base ref; `None` means the upstream branch is used.
     pub base_ref: Option<&'a str>,
-    /// A commit is in flight; commit controls are disabled until it reports.
-    pub committing: bool,
+    /// Focus the commit message this paint (Git: Commit… in Find Action).
+    pub focus_message: bool,
+    /// The commit or push in flight; commit controls wait for its reply.
+    pub(crate) commit_run: Option<CommitProgress<'a>>,
+    /// Controls that a commit running in this repository disables.
+    pub(crate) commit_lock: CommitLock,
+    /// Summary line and output tail of the last failed commit or push.
+    pub commit_failure: Option<&'a str>,
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -113,6 +121,10 @@ pub struct GitPanelOutcome {
     pub collapse: bool,
     pub commit: bool,
     pub commit_push: bool,
+    /// Stop the commit or push in flight.
+    pub cancel_commit: bool,
+    /// Hide the last failure's output.
+    pub dismiss_commit_failure: bool,
     /// Amend was ticked with an empty draft: load the `HEAD` message.
     pub load_head_message: bool,
     /// Shelve every staged (checked) path.
@@ -135,6 +147,8 @@ pub struct GitPanelOutcome {
     pub refresh_compare: bool,
     /// Open the conflict resolver for this file.
     pub resolve: Option<PathBuf>,
+    /// Open the Compare popup for this file.
+    pub compare: Option<(PathBuf, crate::revision_compare::PickerMode)>,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -278,6 +292,7 @@ impl GitPanelPass<'_, '_> {
                     trailing: hash,
                     tint: appearance::color(&self.input.theme.secondary),
                 });
+                crate::shortcuts::tool_row_focus(ui, &row);
                 if row.clicked() {
                     self.outcome.view_log = true;
                 }
@@ -297,6 +312,7 @@ impl GitPanelPass<'_, '_> {
             neovim_review: input.neovim_review,
             open_shortcut: input.open_shortcut,
             stats: &input.context.stats,
+            lock: input.commit_lock,
         };
         if input.view_list {
             self.flat_list(ui, &row_ctx);
@@ -355,6 +371,7 @@ struct GitRowCtx<'a> {
     neovim_review: bool,
     open_shortcut: &'a str,
     stats: &'a std::collections::HashMap<PathBuf, (u32, u32)>,
+    lock: CommitLock,
 }
 
 fn git_group_label(group: terminator_git::GitGroup) -> &'static str {

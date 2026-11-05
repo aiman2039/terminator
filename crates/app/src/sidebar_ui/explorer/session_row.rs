@@ -1,5 +1,6 @@
 //! Session and worktree rows in the project sidebar.
 use super::*;
+use crate::app::missing_folder::{MISSING_ICON, MISSING_TOOLTIP, missing_folder_text};
 
 impl App {
     pub(super) fn session_row_for_tab(
@@ -207,21 +208,35 @@ impl App {
         });
         let count = live.to_string();
         let selected = self.selected.as_ref() == Some(&project.id);
-        let response = appearance::project_row(appearance::ProjectRowInput {
-            color: None,
-            ui,
-            label: &project.name,
-            icon: "GitBranch",
-            selected,
-            height: self.theme.row_height(),
-            trailing: &count,
-            tint,
-        })
-        .on_hover_text(format!(
-            "{}\nManaged Git worktree\n{} live terminal(s)",
-            self.project_location_label(&project.id),
-            live
-        ));
+        // A deleted checkout: dim name and a warning icon, like other projects.
+        let missing = self.project_folder_missing(&project.id);
+        let response = ui
+            .scope(|ui| {
+                if missing {
+                    ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
+                }
+                appearance::project_row(appearance::ProjectRowInput {
+                    color: None,
+                    ui,
+                    label: &project.name,
+                    icon: if missing { MISSING_ICON } else { "GitBranch" },
+                    selected,
+                    height: self.theme.row_height(),
+                    trailing: &count,
+                    tint,
+                })
+            })
+            .inner
+            .on_hover_text(format!(
+                "{}{}\nManaged Git worktree\n{} live terminal(s)",
+                if missing {
+                    format!("{MISSING_TOOLTIP}\n")
+                } else {
+                    String::new()
+                },
+                self.project_location_label(&project.id),
+                live
+            ));
         #[cfg(feature = "test-support")]
         diagnostics::record(
             ui.ctx(),
@@ -229,45 +244,68 @@ impl App {
             response.rect,
         );
         if response.clicked() {
+            self.open_worktree_card(project);
+        }
+        appearance::context_menu(&response, |ui| self.worktree_card_menu(ui, project));
+    }
+
+    /// A missing checkout with no live terminal cannot open; say why.
+    fn open_worktree_card(&mut self, project: &Project) {
+        if !self.project_available(&project.id) && self.project_folder_missing(&project.id) {
+            self.info = Some(missing_folder_text(&project.path));
+        } else {
             self.select_project(project.id.clone());
         }
-        appearance::context_menu(&response, |ui| {
-            if appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: "Open",
-                icon: "FolderOpen",
-                shortcut: "",
-            })
-            .clicked()
-            {
-                self.select_project(project.id.clone());
-                ui.close();
-            }
-            if appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: "New terminal",
-                icon: "Terminal",
-                shortcut: &self.shortcut_label(Action::NewTerminal),
-            })
-            .clicked()
-            {
-                self.select_project(project.id.clone());
-                self.create(None);
-                ui.close();
-            }
-            ui.separator();
-            if appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: "Remove worktree…",
-                icon: "X",
-                shortcut: "",
-            })
-            .clicked()
-            {
-                self.confirm_remove_worktree(&project.id);
-                ui.close();
-            }
-        });
+    }
+
+    /// A deleted checkout cannot start a terminal; say why. A worktree that
+    /// cannot be selected never gets a terminal in another project.
+    pub(crate) fn new_worktree_terminal(&mut self, project: &Project) {
+        if self.project_folder_missing(&project.id) {
+            self.info = Some(missing_folder_text(&project.path));
+            return;
+        }
+        self.select_project(project.id.clone());
+        if self.selected.as_deref() == Some(project.id.as_str()) {
+            self.create(None);
+        }
+    }
+
+    fn worktree_card_menu(&mut self, ui: &mut egui::Ui, project: &Project) {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Open",
+            icon: "FolderOpen",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            self.open_worktree_card(project);
+            ui.close();
+        }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "New terminal",
+            icon: "Terminal",
+            shortcut: &self.shortcut_label(Action::NewTerminal),
+        })
+        .clicked()
+        {
+            self.new_worktree_terminal(project);
+            ui.close();
+        }
+        ui.separator();
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Remove worktree…",
+            icon: "X",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            self.confirm_remove_worktree(&project.id);
+            ui.close();
+        }
     }
 }
 

@@ -21,7 +21,7 @@ impl App {
         if ui.ctx().input(|input| !input.raw.hovered_files.is_empty()) {
             ui.painter().rect_stroke(
                 clip,
-                4.0,
+                appearance::RADIUS_SMALL,
                 egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
                 egui::StrokeKind::Inside,
             );

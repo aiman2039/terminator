@@ -1,4 +1,5 @@
-use eframe::egui::{self, Color32, FontFamily, FontId, TextStyle};
+use super::scale::{MENU_RADIUS, PANEL_RADIUS, WIDGET_RADIUS, apply_text_styles, semibold};
+use eframe::egui::{self, Color32, FontFamily};
 use std::sync::atomic::{AtomicU32, Ordering};
 use terminator_core::appearance::{AppearanceConfig, rgb};
 use terminator_native_edit::view::{BOLD_FAMILY, ITALIC_FAMILY};
@@ -129,11 +130,6 @@ pub fn color(value: &str) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// `JetBrains` New UI geometry: inset rounded panels, softer widgets/menus.
-pub const PANEL_RADIUS: u8 = 10;
-pub const WIDGET_RADIUS: u8 = 6;
-pub const MENU_RADIUS: u8 = 10;
-
 /// Flush panel: surface fill and a hairline edge, no gap between sections.
 /// Rounding lives on widgets, menus, and popups, not on abutting panels.
 pub fn panel_frame(theme: &AppearanceConfig) -> egui::Frame {
@@ -167,7 +163,7 @@ pub fn install(ctx: &egui::Context) {
         (
             "Inter Semibold",
             include_bytes!("../../assets/fonts/Inter-SemiBold.ttf").as_slice(),
-            FontFamily::Name("Semibold".into()),
+            semibold(),
         ),
         (
             "JetBrains Mono",
@@ -214,9 +210,7 @@ pub fn install(ctx: &egui::Context) {
             "Noto Sans Hebrew",
             include_bytes!("../../assets/fonts/NotoSansHebrew-Regular.ttf"),
         ),
-        terminal
-            .into_iter()
-            .chain([FontFamily::Name("Semibold".into())]),
+        terminal.into_iter().chain([semibold()]),
     );
     ctx.set_fonts(fonts);
     egui_extras::install_image_loaders(ctx);
@@ -254,26 +248,6 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     apply_spacing(&mut style.spacing, theme.compact());
     ctx.set_style_of(egui::Theme::Dark, style);
     ctx.set_theme(egui::Theme::Dark);
-}
-
-fn apply_text_styles(style: &mut egui::Style) {
-    for role in [TextStyle::Body, TextStyle::Button] {
-        style.text_styles.insert(role, FontId::proportional(13.0));
-    }
-    style
-        .text_styles
-        .insert(TextStyle::Small, FontId::proportional(12.0));
-    style.text_styles.insert(
-        TextStyle::Heading,
-        FontId::new(16.0, FontFamily::Name("Semibold".into())),
-    );
-    style.text_styles.insert(
-        TextStyle::Name("Section".into()),
-        FontId::new(13.0, FontFamily::Name("Semibold".into())),
-    );
-    style
-        .text_styles
-        .insert(TextStyle::Monospace, FontId::monospace(13.0));
 }
 
 fn apply_visuals(visuals: &mut egui::Visuals, theme: &AppearanceConfig) {

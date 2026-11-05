@@ -49,7 +49,7 @@ fn history_tool(h: &Harness, o: &Options, p: &Value) -> Result<()> {
             h,
             opts: o,
             name: "history",
-            actions: waiting(json!([{"target":"header-overflow"},{"target":"tool-History"}])),
+            actions: waiting(json!([{"target":"tool-History"}])),
             after: 15000,
         },
         |_| prefs(h).is_ok_and(|prefs| prefs.get("tool").is_some_and(|tool| tool == "history")),

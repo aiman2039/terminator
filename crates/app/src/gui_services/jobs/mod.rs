@@ -1,3 +1,5 @@
+mod commit;
+pub(crate) use commit::COMMIT_SUBSYSTEM;
 mod daemon;
 pub(crate) use daemon::CloseEditorsInput;
 pub(crate) use daemon::CloseIdleInput;
@@ -25,6 +27,8 @@ pub(crate) use settings::SaveAppearanceInput;
 pub(crate) use settings::TestNtfyInput;
 mod routing;
 pub(super) use routing::JobRouting;
+#[cfg(test)]
+mod routing_tests;
 mod vnc;
 pub(crate) use vnc::VncFrameInput;
 pub(crate) use vnc::VncPickTransferInput;
@@ -64,3 +68,5 @@ impl ImageJobs {
     }
 }
 pub(in crate::gui_services) use git::DiffExpandInput;
+#[cfg(test)]
+pub(in crate::gui_services) use git::JobGit;

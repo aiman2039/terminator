@@ -152,6 +152,9 @@ impl App {
                 self.dirs.insert(path, entries);
             }
             Err(error) => {
+                if path == cwd {
+                    self.note_missing_root(&path, &error);
+                }
                 self.directory_errors.insert(path, error);
             }
         }
@@ -172,6 +175,7 @@ impl App {
         {
             return;
         }
+        let root = context.cwd.clone();
         let diff_prints = self.diff_fingerprints();
         let context = match self.context.take() {
             Some(mut previous)
@@ -194,6 +198,11 @@ impl App {
         self.git_base_generation = self.git_base_generation.wrapping_add(1);
         self.watch_fallback = fallback;
         for (path, entries) in directories {
+            if path == root
+                && let Err(error) = &entries
+            {
+                self.note_missing_root(&path, error);
+            }
             self.apply_refreshed_directory(path, entries);
         }
     }
@@ -231,6 +240,14 @@ impl App {
         op: workspace_ops::Op,
         result: Result<workspace_ops::Report, String>,
     ) {
+        if let workspace_ops::Op::Commit { .. } = op {
+            self.handle_commit_reply(result);
+            return;
+        }
+        if crate::revision_compare::answers(&op) {
+            self.compare_reply(root, &op, result);
+            return;
+        }
         // A list reply for a repository the panel no longer shows is stale.
         // Compare with the root new jobs run in (Perforce uses its command root).
         let stale = self.op_root().as_deref() != Some(root);
@@ -241,6 +258,14 @@ impl App {
                 | workspace_ops::Report::Log(_)
                 | workspace_ops::Report::Compare(_),
             ) if stale => {}
+            // Only commit jobs report progress, and only Compare queries
+            // answer with targets, revisions, and history: both go above.
+            Ok(
+                workspace_ops::Report::Pushing
+                | workspace_ops::Report::CompareTargets(_)
+                | workspace_ops::Report::Revision(_)
+                | workspace_ops::Report::History(_),
+            ) => {}
             Ok(workspace_ops::Report::Message(text)) => self.workspace_op_succeeded(&op, text),
             Ok(workspace_ops::Report::Branches(names)) => self.git.branches = names,
             // Amend edits the last message; only fill a draft the
@@ -259,9 +284,6 @@ impl App {
             Err(error) => {
                 if matches!(op, workspace_ops::Op::Perforce(_)) {
                     self.refresh_request = None;
-                }
-                if matches!(op, workspace_ops::Op::Commit { .. }) {
-                    self.restore_failed_commit(&error);
                 }
                 if let workspace_ops::Op::Rename { from, to } = &op {
                     self.explorer_undoing
@@ -287,15 +309,11 @@ impl App {
             self.remap_moved_path(from, to);
         }
         self.explorer_record_move(moved);
-        if matches!(op, workspace_ops::Op::Commit { .. }) {
-            self.git.commit_inflight = None;
-        }
         self.info = Some(text);
         self.refresh_request = None;
         if matches!(
             op,
-            workspace_ops::Op::Commit { .. }
-                | workspace_ops::Op::Switch(_)
+            workspace_ops::Op::Switch(_)
                 | workspace_ops::Op::Shelve(_)
                 | workspace_ops::Op::Unshelve(_)
                 | workspace_ops::Op::DropShelf(_)
@@ -307,6 +325,13 @@ impl App {
     }
 
     pub(super) fn handle_git_view(&mut self, key: &str, view: GitView) {
+        let view = match view {
+            GitView::Log(log) => match self.log_answer(key, log) {
+                Some(view) => view,
+                None => return,
+            },
+            view => view,
+        };
         // A view closed while loading leaves no entry to fill.
         if let Some(slot) = self.git_views.get_mut(key) {
             *slot = view;

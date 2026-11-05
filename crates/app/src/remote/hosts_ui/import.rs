@@ -109,7 +109,11 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 form::card(ui, |ui| {
-                    ui.label(RichText::new("Import hosts").size(16.0).strong());
+                    ui.label(
+                        RichText::new("Import hosts")
+                            .size(crate::appearance::FONT_HEADING)
+                            .strong(),
+                    );
                     ui.add_space(6.0);
                     close |= self.ssh_import_form(ui);
                 });

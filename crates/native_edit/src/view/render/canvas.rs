@@ -149,6 +149,7 @@ impl Canvas<'_> {
         let geometry = RowCells {
             text: &row.text,
             hints: &hints,
+            tab: self.geometry.tab,
         };
         Some((row.line, row.start.saturating_add(geometry.col_at(cells))))
     }
@@ -193,12 +194,14 @@ pub(super) struct PaintRow<'r> {
 }
 
 impl<'r> PaintRow<'r> {
-    pub fn new(visual: &'r VisualRow, hints: &'r [RowHint<'r>], y: f32) -> Self {
+    /// `tab`: the tab stop width in cells.
+    pub fn new(visual: &'r VisualRow, hints: &'r [RowHint<'r>], y: f32, tab: usize) -> Self {
         Self {
             visual,
             cells: RowCells {
                 text: &visual.text,
                 hints,
+                tab,
             },
             y,
         }

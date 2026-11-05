@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+- JetBrains keys work in every pane, terminals and Settings included: double
+  Shift (Search Everywhere), ⇧⌘A (Find Action) and ⇧⌘O (Go to File). ⌘E is
+  now Recent Files everywhere, and Toggle IDE mode moved to ⌥⌘E. Saved
+  bindings that are still at the old defaults move once; changed bindings
+  stay. On Linux a focused terminal keeps Ctrl+E and Ctrl+Shift+A.
+- Tool window keys: ⌘1 Explorer, ⌘6 Problems, ⌘7 Structure, ⌘9 Git (Alt+digit
+  on Linux), ⌥F12 terminal and ⌥F1 Select In. A key shows and focuses a hidden
+  tool window, and hides it when it has focus. Esc goes back and never reaches
+  a terminal.
+- Find Action lists the native editor commands with their keys (for example
+  Duplicate Line or Selection ⌘D) and the Git commands. The Git commands have
+  no default keys.
+- Find in Files (⇧⌘F) and Replace in Files (⇧⌘R) open from every pane, Search
+  Everywhere, the editor menu and Explorer folders. They have keyboard control,
+  a preview, results that stream in, file masks and Exclude globs. Replace in
+  Files shows each change before it writes, with a checkbox per file and per
+  line, and `$1` groups in regex mode. A focused terminal keeps ⇧⌘R for Rename
+  terminal; on Linux it also keeps Ctrl+Shift+F for terminal find.
+- Explorer Contents search hits open at their line. Go to File accepts
+  `file:line` and `file:line:column`, and lists dotfiles that Git does not
+  ignore. Find in Files and Go to File skip version control folders such as
+  `.git` and `.svn`.
+- Native editor: a save sends `didSave` to the language servers, so
+  rust-analyzer checks again and Problems, underlines and counts update.
+- Native editor completion shows a docs panel, the parameters and type on each
+  row, and auto-imports. Snippets keep their placeholders: Tab and Shift+Tab
+  move between them.
+- Native editor Quick Documentation: rest the pointer on a symbol, or press F1,
+  to see its docs and the problems at that spot in one popup. Settings →
+  Editor → Documentation turns the mouse hover off.
+- Native editor: Undo and Redo move the caret to the change. ⇧↩ starts a new
+  line below the caret line, and ⌥⌘↩ starts one above.
+- Native editor indentation follows `.editorconfig` and the indentation the
+  file already uses. A save applies `insert_final_newline` and
+  `trim_trailing_whitespace`, but never while Redo is possible.
+- Native editor: a file opens again at its last caret, scroll position and
+  folds, also after a restart and from Recent files.
+- Git: Commit and Push run in the background with a spinner and Cancel. The
+  20-second limit is gone; a failure shows the end of the hook output. Cancel
+  sends Ctrl-C first, so Git and hooks can clean up, and stops the run after
+  5 seconds. Hook output above 8 MiB no longer fails the commit.
+- Git: while a commit runs, the actions that can change it in that repository
+  wait. Staging and unstaging (Git panel, Stage All, diff tabs, editor gutter,
+  Mark resolved), Discard, Shelve, Unshelve and Drop wait until the push
+  starts; the branch switch waits until the push ends. Their controls show
+  "Wait for the commit to finish". A stage sent just before Commit lands
+  before Git commits. Reads, Explorer file operations and other repositories
+  are not blocked.
+- Git Log draws a commit graph with branch, remote and tag labels.
+- Git Log filters: message or hash, branch, user, date and path. Typed text
+  loads after 0.4 seconds, and the old list stays until the new one is ready.
+- Compare with… a branch, remote branch, tag, typed revision, or a commit from
+  the file history. It opens the read-only native diff. A renamed file is
+  compared with the name it had in that revision.
+- Toolbars use one icon size per row. The native editor header row is gone:
+  the status bar shows the file path and the symbol at the caret, and a
+  Markdown file has a floating Edit / Preview / Split toolbar. Tabs show the
+  file-type icon, a dot for unsaved changes, and a folder hint when two tabs
+  have the same name. The Explorer file menu no longer shows wrong keys.
+- Text sizes and corner radii come from one shared scale (13 pt base, like
+  JetBrains). Count and kind badge letters are 11 pt. The Find in Files and
+  Find Usages previews show code at 12 pt, the same size as their line
+  numbers.
+- Explorer: a moved or deleted folder (for example a removed Git worktree)
+  shows "Folder not found" with Locate Folder…, Remove Project and Retry, not
+  the Privacy hint. If the focused terminal's folder is deleted, the Explorer
+  shows the project folder with a note. A folder pick always shows a result.
+  The sidebar marks a project or worktree whose folder is missing.
 - IDE mode defaults to full-height sidebars, so the terminal strip stays in
   the center column. The status-bar columns button (left of the strip
   hide control) and the command palette entry "Toggle IDE sidebar height"

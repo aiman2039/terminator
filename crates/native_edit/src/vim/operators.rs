@@ -1,4 +1,4 @@
-use super::super::doc::Buffer;
+use super::super::doc::{Buffer, UndoChange};
 use super::helpers::{doc_is_empty, grapheme_right, range_text};
 use super::mode::{Bit, Cursor, Input, ModalEngine, Mode, PendingOp, Place, Repeat};
 use super::state::VimEngine;
@@ -54,8 +54,16 @@ impl VimEngine {
     /// IDE cut: remove the copy source and park the cursor on the cut point.
     /// A cut selection collapses back to Normal, mirroring `d`. An IDE
     /// action, not a vim change: recording continues only inside an insert
-    /// session, where the cut ends typed-text attribution.
+    /// session, where the cut ends typed-text attribution. With vim off,
+    /// undo selects the cut text again.
     pub fn cut<B: Buffer>(&mut self, doc: &mut B) -> String {
+        self.note_selection(doc);
+        let text = self.cut_noted(doc);
+        doc.note_selection(None);
+        text
+    }
+
+    fn cut_noted<B: Buffer>(&mut self, doc: &mut B) -> String {
         if self.mode == Mode::Insert {
             self.typed_exact = false;
         } else {
@@ -154,21 +162,80 @@ impl VimEngine {
         std::mem::replace(&mut self.scroll_request, false)
     }
 
-    /// IDE undo/redo: same as `u`/Ctrl-R but callable in any mode, with the
-    /// cursor clamped back into range afterwards. Undo is never repeatable.
+    /// IDE undo/redo: same as `u`/Ctrl-R but callable in any mode. The
+    /// caret lands on the change, and the view scrolls to it when it is
+    /// off screen. Either one ends a snippet session.
     pub fn undo<B: Buffer>(&mut self, doc: &mut B) {
-        doc.undo();
-        self.clear_pending();
-        self.rec_discard();
-        self.clamp(doc);
+        self.end_snippet();
+        let change = doc.undo_change();
+        self.land_on_change(doc, change);
     }
 
     /// See [`Self::undo`].
     pub fn redo<B: Buffer>(&mut self, doc: &mut B) {
-        doc.redo();
+        self.end_snippet();
+        let change = doc.redo_change();
+        self.land_on_change(doc, change);
+    }
+
+    /// After undo or redo (never repeatable): one caret, on the change.
+    /// Modeless editing gets back the caret and selection noted before
+    /// the edit; otherwise (and always in vim, like `u`) the caret goes
+    /// to the start of the change.
+    fn land_on_change<B: Buffer>(&mut self, doc: &mut B, change: Option<UndoChange>) {
         self.clear_pending();
         self.rec_discard();
+        let Some(change) = change else {
+            self.clamp(doc);
+            return;
+        };
+        self.extra_carets.clear();
+        if self.mode == Mode::Insert {
+            self.typed_exact = false;
+            // Vim `R`: the chars Backspace would put back are gone.
+            if let Some(replaced) = self.x.replaced.as_mut() {
+                replaced.clear();
+            }
+        }
+        let noted = change.selection.filter(|_| self.modeless);
+        match noted {
+            Some((anchor, head)) if anchor != head => {
+                if self.mode == Mode::Insert {
+                    self.enter_normal(doc);
+                }
+                self.mode = Mode::Visual;
+                self.anchor = Self::cursor_at(doc, anchor);
+                self.cursor = Self::cursor_at(doc, head);
+            }
+            _ => {
+                if self.mode.is_visual() {
+                    self.mode = Mode::Normal;
+                }
+                let at = noted.map_or(change.range.start, |(_, head)| head);
+                self.cursor = Self::cursor_at(doc, at);
+                self.anchor = self.cursor;
+            }
+        }
+        self.settle_cursor(doc);
         self.clamp(doc);
+        self.preferred_col = self.cursor.col;
+        // Like a jump: center the change when it is off screen.
+        let (view, line) = (self.x.viewport, self.cursor.line);
+        if (view.top == 0 && view.bottom == 0) || line < view.top || line > view.bottom {
+            self.scroll_request = true;
+        }
+    }
+
+    /// Note the caret and selection before an edit, so undo can put them
+    /// back. Callers drop the note when their edit is done.
+    pub(super) fn note_selection<B: Buffer>(&self, doc: &mut B) {
+        let head = self.char_idx(doc, self.cursor);
+        let anchor = if self.mode.is_visual() {
+            self.char_idx(doc, self.anchor)
+        } else {
+            head
+        };
+        doc.note_selection(Some((anchor, head)));
     }
 
     /// `count` lines from the cursor (`dd`, and `.` replay of it).

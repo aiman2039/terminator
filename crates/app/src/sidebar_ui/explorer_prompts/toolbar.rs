@@ -215,11 +215,7 @@ impl App {
 
     fn explorer_toolbar_buttons(&self, ui: &mut egui::Ui) -> ToolbarButtons {
         let reveal_enabled = self.explorer_reveal_candidate().is_some();
-        let reveal_disabled_note = if self.focused_local_file().is_some() {
-            "The focused file is outside the Explorer folder"
-        } else {
-            "Focus a local file to reveal it in Explorer"
-        };
+        let reveal_disabled_note = self.explorer_reveal_note();
         let ignored_icon = if self.preferences.show_ignored {
             "Eye"
         } else {
@@ -231,9 +227,13 @@ impl App {
             tip: "Show ignored files (excluded by Git ignore rules and Git metadata)",
             selected: self.preferences.show_ignored,
         });
+        let reveal_tip = appearance::shortcut_tip(
+            "Reveal current file in Explorer",
+            &self.shortcut_label(crate::Action::SelectIn),
+        );
         let reveal = ui
             .add_enabled_ui(reveal_enabled, |ui| {
-                appearance::sidebar_action(ui, "LocateFixed", "Reveal current file in Explorer")
+                appearance::sidebar_action(ui, "LocateFixed", &reveal_tip)
             })
             .inner
             .on_disabled_hover_text(reveal_disabled_note);
@@ -299,7 +299,7 @@ impl App {
             self.expanded_dirs.clear();
         }
         if buttons.refresh.clicked() {
-            self.refresh_request = None;
+            self.retry_explorer();
         }
     }
 

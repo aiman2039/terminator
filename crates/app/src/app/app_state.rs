@@ -200,7 +200,6 @@ pub struct App {
     pub(crate) strip_pane_by_tab: HashMap<String, egui_dock::NodePath>,
     pub(crate) strip_pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pub(crate) pane_by_tab: HashMap<String, egui_dock::NodePath>,
-
     pub(crate) pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pub(crate) pane_index: Option<PaneIndex>,
     pub(crate) pane_action_source: Option<PaneSource>,
@@ -214,6 +213,7 @@ pub struct App {
     pub(crate) diff_replacement: Option<(Tab, Tab)>,
     pub(crate) terminal_context: HashMap<String, String>,
     pub(crate) missing_projects: HashSet<String>,
+    pub(crate) missing_folder: super::missing_folder::MissingFolder,
     /// Daemon project names and the sidebar rename draft.
     pub(crate) project_names: crate::sidebar_ui::ProjectNames,
     pub(crate) texts: HashMap<String, String>,
@@ -380,9 +380,9 @@ pub struct App {
     /// On-disk part of a code action touching files that are not open.
     pub(crate) action_apply:
         Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<PathBuf>, String>>>,
-    /// `HEAD` text per open file for gutter change markers, tagged with
-    /// the Git refresh generation it was read at.
-    pub(crate) git_bases: HashMap<PathBuf, (u64, Option<std::sync::Arc<str>>)>,
+    /// `HEAD` text and repository root per open file for gutter markers,
+    /// tagged with the Git refresh generation they were read at.
+    pub(crate) git_bases: crate::native_editor::GitBases,
     pub(crate) git_base_pending: std::collections::HashSet<PathBuf>,
     pub(crate) git_base_generation: u64,
     pub(crate) gutter_popup: Option<crate::native_editor::GutterPopup>,
@@ -477,10 +477,10 @@ pub(crate) fn service_failure_update(
     error: &async_service::Failure,
 ) -> Option<Update> {
     match context.subsystem {
-        "diff-action" => Some(Update::DiffActionFailed(
-            context.resource.clone(),
-            error.to_string(),
-        )),
+        // A diff or gutter write; one in a known repository ran on its queue.
+        "diff-action" | "workspace-op" if let Some(key) = &context.tab => {
+            Some(Update::DiffActionFailed(key.clone(), error.to_string()))
+        }
         "diff" => Some(Update::Diff(
             context.resource.clone(),
             Err(error.to_string()),

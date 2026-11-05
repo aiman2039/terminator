@@ -5,8 +5,12 @@ mod blink;
 mod canvas;
 mod decorations;
 mod geometry;
+mod guides;
 mod gutter;
 mod helpers;
+mod hover;
+#[cfg(test)]
+mod hover_tests;
 mod keyboard;
 mod lens;
 mod marks;
@@ -16,7 +20,9 @@ mod palette;
 mod pointer;
 mod row_paint;
 mod rows;
+mod run_command;
 mod scroll;
+mod snippet;
 mod sticky;
 #[cfg(test)]
 mod tests;
@@ -26,11 +32,12 @@ pub use geometry::source_row_height;
 #[cfg(test)]
 pub(super) use helpers::RenderHelpers;
 pub use helpers::status_line;
+pub use hover::{HoverSpot, word_span};
 pub use marks::{
     Annotation, ChangeKind, ChangeMark, DiagnosticMark, LineFill, RangeFill, Squiggle,
     squiggle_tails, squiggles,
 };
-pub use options::{ShowSourceInput, SourceOptions, SourceOutcome};
+pub use options::{GitCompare, ShowSourceInput, SourceOptions, SourceOutcome};
 pub use palette::EditorPalette;
 
 use crate::doc::Buffer;
@@ -79,14 +86,26 @@ pub fn show_source<B: Buffer>(input: ShowSourceInput<'_, B>) -> SourceOutcome {
     };
     view.derive_layout(ui, highlight);
     let viewport = Viewport::measure(ui, &geometry, highlight);
+    let top_offset = options
+        .top_line
+        .map(|line| Viewport::line_offset(highlight.rows(), line, geometry.row_height));
     let scroll_output = viewport
-        .scroll_area(id, (options.scroll_fraction, options.scroll_offset))
+        .scroll_area(
+            id,
+            (
+                options.scroll_fraction,
+                top_offset.or(options.scroll_offset),
+            ),
+        )
         .show(ui, |ui| view.show_frame(ui, &viewport, highlight));
     view.apply_folds(highlight);
     view.paint_squiggle_rail(ui, scroll_output.inner_rect);
-    let footer_rect = view.paint_footer(ui);
+    let (footer_rect, status_rects) = view
+        .paint_footer(ui)
+        .map_or((None, Vec::new()), |(rect, cells)| (Some(rect), cells));
     view.out.into_outcome(OutcomeInput {
         footer_rect,
+        status_rects,
         scroll: scroll_output,
         visual_rows: viewport.row_count,
         row_height: geometry.row_height,
@@ -96,6 +115,7 @@ pub fn show_source<B: Buffer>(input: ShowSourceInput<'_, B>) -> SourceOutcome {
 /// Frame-level results folded into the [`SourceOutcome`].
 struct OutcomeInput {
     footer_rect: Option<egui::Rect>,
+    status_rects: Vec<egui::Rect>,
     scroll: egui::scroll_area::ScrollAreaOutput<()>,
     visual_rows: usize,
     row_height: f32,
@@ -143,8 +163,10 @@ impl<B: Buffer> SourceView<'_, B> {
     }
 
     /// Everything inside the scroll area, in egui call order: allocation,
-    /// focus target, pointer input, context menu, focus, row painting,
-    /// sticky headers, keyboard input, clipboard sync and scroll-follow.
+    /// focus target, pointer input, context menu, focus, snippet stops,
+    /// row painting, sticky headers, the hover spot, a queued host
+    /// command, the viewport report, keyboard input, clipboard sync and
+    /// scroll-follow.
     fn show_frame(&mut self, ui: &mut egui::Ui, viewport: &Viewport, highlight: &HighlightCache) {
         let canvas = self.open_canvas(ui, viewport, highlight);
         self.register_focus_target(&canvas);
@@ -154,11 +176,17 @@ impl<B: Buffer> SourceView<'_, B> {
         self.handle_drag(&canvas);
         self.show_context_menu(&canvas);
         let focused = self.update_focus(&canvas);
+        self.engine.snippet_upkeep(&*self.doc);
         let marks = self.row_marks(&canvas, focused);
         self.paint_rows(&canvas, &marks);
         if self.options.sticky_headers {
             self.paint_sticky_headers(&canvas);
         }
+        self.report_hover(&canvas);
+        self.run_queued_command(&canvas);
+        // Every frame, focused or not: a wheel scroll over an unfocused
+        // view still moves the top line the host remembers.
+        self.report_viewport(&canvas);
         self.handle_caret_chords(&canvas, focused);
         self.handle_keyboard(&canvas, focused);
         self.sync_clipboard(&canvas);
@@ -186,6 +214,8 @@ struct FrameOut {
     change_clicked: Option<(usize, egui::Pos2)>,
     annotation_clicked: Option<usize>,
     toggle_blame: bool,
+    hover: Option<HoverSpot>,
+    git_compare: Option<GitCompare>,
 }
 
 impl FrameOut {
@@ -204,12 +234,15 @@ impl FrameOut {
             change_clicked: None,
             annotation_clicked: None,
             toggle_blame: false,
+            hover: None,
+            git_compare: None,
         }
     }
 
     fn into_outcome(self, input: OutcomeInput) -> SourceOutcome {
         let OutcomeInput {
             footer_rect,
+            status_rects,
             scroll,
             visual_rows,
             row_height,
@@ -229,6 +262,8 @@ impl FrameOut {
             change_clicked,
             annotation_clicked,
             toggle_blame,
+            hover,
+            git_compare,
         } = self;
         SourceOutcome {
             effects,
@@ -238,14 +273,17 @@ impl FrameOut {
             rename_action_rect,
             hover_action_rect,
             footer_rect,
+            status_rects,
             scroll_fraction,
             visual_rows,
             caret_rect,
             change_clicked,
             annotation_clicked,
             toggle_blame,
+            git_compare,
             scroll,
             row_height,
+            hover,
         }
     }
 }

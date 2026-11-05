@@ -106,16 +106,13 @@ impl App {
     pub(crate) fn notification_status_badge(&mut self, ui: &mut egui::Ui) {
         let (waiting, unread) = self.attention_counts();
         let label = attention_badge_label(waiting, unread);
-        let response = ui
-            .add(
-                egui::Button::image_and_text(
-                    egui::Image::new(icons::source("Bell"))
-                        .fit_to_exact_size(egui::vec2(14.0, 14.0)),
-                    label,
-                )
-                .frame(false),
-            )
-            .on_hover_text("Pending agent notifications. Click to open the Agents inbox.");
+        let response = appearance::icon_label_button(appearance::IconLabelButtonInput {
+            ui,
+            icon: "Bell",
+            label: &label,
+            height: appearance::TOOLBAR_BUTTON,
+        })
+        .on_hover_text("Pending agent notifications. Click to open the Agents inbox.");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "status-attention-bell", response.rect);
         if response.clicked() {

@@ -1,4 +1,5 @@
 //! The shared full-width sidebar row.
+use super::super::scale::{FONT_CAPTION, FONT_SMALL, RADIUS_SMALL};
 use super::{PaintStatusIconInput, icon_color, paint_status_icon};
 use eframe::egui::{self, Color32, FontId, TextStyle};
 
@@ -91,6 +92,8 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         return response;
     }
     paint_row_fill(ui, &response, selected);
+    // A tool window key or Tab can focus a row; arrow keys then move it.
+    crate::appearance::paint_focus(ui, &response);
     let trailing = fitted_trailing(ui, label, trailing, response.rect.width() - label_left);
     let right = response.rect.right() - trailing_width(ui, trailing, tint);
     let rect = egui::Rect::from_min_max(
@@ -134,7 +137,7 @@ fn paint_row_fill(ui: &egui::Ui, response: &egui::Response, selected: bool) {
     if response.hovered() || selected {
         ui.painter().rect_filled(
             response.rect,
-            4,
+            RADIUS_SMALL,
             if selected {
                 ui.visuals().selection.bg_fill
             } else {
@@ -168,7 +171,7 @@ fn trailing_width(ui: &egui::Ui, trailing: &str, tint: Color32) -> f32 {
         4.0
     } else {
         ui.painter()
-            .layout_no_wrap(trailing.into(), FontId::proportional(12.0), tint)
+            .layout_no_wrap(trailing.into(), FontId::proportional(FONT_SMALL), tint)
             .size()
             .x
             + 12.0
@@ -215,7 +218,7 @@ impl RowText {
         let subtitle = subtitle.map(|text| {
             single_line(
                 text,
-                FontId::proportional(11.0),
+                FontId::proportional(FONT_CAPTION),
                 ui.visuals().weak_text_color(),
             )
         });
@@ -320,7 +323,7 @@ fn paint_trailing(input: PaintTrailingInput<'_>) {
             egui::pos2(anchor.x - 5.0, anchor.y),
             egui::Align2::RIGHT_CENTER,
             trailing,
-            FontId::proportional(12.0),
+            FontId::proportional(FONT_SMALL),
             if trailing.contains(' ') {
                 ui.visuals().weak_text_color()
             } else {

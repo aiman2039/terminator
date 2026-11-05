@@ -1,12 +1,20 @@
 //! Explicit file and Git actions from the sidebar. Diff review stays read-only.
 //! Every path has to stay inside the repository or project root.
+mod commit;
+#[cfg(test)]
+mod commit_tests;
 mod entries;
 #[cfg(test)]
 mod tests;
 mod vcs;
 
+#[cfg(test)]
+pub(crate) use commit::{COMMIT_CANCELLED, PUSH_CANCELLED, PUSH_FAILED};
+pub(crate) use commit::{
+    COMMIT_RUNNING, COMMIT_WAIT, CommitRequest, CommitRisk, CommitRun, commit_cancelled,
+    commit_landed, push_failed,
+};
 use entries::*;
-pub(crate) use vcs::PUSH_FAILED;
 use vcs::*;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -14,6 +22,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use terminator_core::async_service::CancellationToken;
 use terminator_core::{CommandOptions, git, os_name, run_command};
 
 #[derive(Clone, Debug)]
@@ -29,11 +38,15 @@ pub enum Op {
         untracked: bool,
     },
     Delete(PathBuf),
+    /// `git commit`, then `git push` when `push` is set. Hooks and the
+    /// network may need minutes: it runs as a cancellable job with a long
+    /// cap, and `cancel` kills Git's process group.
     Commit {
         message: String,
         amend: bool,
         signoff: bool,
         push: bool,
+        cancel: CancellationToken,
     },
     /// Shelve staged paths with `git stash push --staged`.
     Shelve(Vec<PathBuf>),
@@ -48,6 +61,12 @@ pub enum Op {
     Compare {
         base: Option<String>,
     },
+    /// Branches, remote branches, and tags for Compare with… (read-only).
+    CompareTargets,
+    /// The commit a typed revision names, for Compare with… (read-only).
+    VerifyRevision(String),
+    /// Commits that changed a file, for Compare with Revision… (read-only).
+    FileHistory(PathBuf),
     CreateFile(PathBuf),
     CreateDir(PathBuf),
     Duplicate(PathBuf),
@@ -70,14 +89,52 @@ pub enum Op {
     Reveal(PathBuf),
 }
 
+impl Op {
+    /// What this action can change in a commit that runs in its
+    /// repository. A second commit has its own guard (`start_commit`).
+    pub(crate) fn commit_risk(&self) -> CommitRisk {
+        match self {
+            Self::Stage(_) | Self::StageAll(_) | Self::Unstage(_) | Self::Discard { .. } => {
+                CommitRisk::Index
+            }
+            Self::Switch(_) => CommitRisk::Head,
+            Self::Shelve(_) | Self::Unshelve(_) | Self::DropShelf(_) => CommitRisk::Stash,
+            Self::Perforce(_)
+            | Self::Delete(_)
+            | Self::Commit { .. }
+            | Self::Shelves
+            | Self::Branches
+            | Self::HeadMessage
+            | Self::Log
+            | Self::Compare { .. }
+            | Self::CompareTargets
+            | Self::VerifyRevision(_)
+            | Self::FileHistory(_)
+            | Self::CreateFile(_)
+            | Self::CreateDir(_)
+            | Self::Duplicate(_)
+            | Self::Rename { .. }
+            | Self::Move { .. }
+            | Self::Copy { .. }
+            | Self::Reveal(_) => CommitRisk::None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Report {
     Message(String),
+    /// The commit landed and its push runs next: progress, not the end.
+    Pushing,
     Branches(Vec<String>),
     HeadMessage(String),
     Shelves(Vec<(String, String)>),
     Log(Vec<(String, String)>),
     Compare(CompareData),
+    CompareTargets(Vec<crate::revision_compare::CompareTarget>),
+    /// The full hash of a checked revision.
+    Revision(String),
+    History(Vec<crate::git_log::HistoryEntry>),
 }
 
 /// Branch comparison for the Git sidebar: upstream tracking, ahead/behind,
@@ -118,18 +175,7 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         }),
         Op::Discard { path, untracked } => discard(root, &path, untracked),
         Op::Delete(path) => delete(root, &path),
-        Op::Commit {
-            message,
-            amend,
-            signoff,
-            push,
-        } => commit(CommitInput {
-            root,
-            message: &message,
-            amend,
-            signoff,
-            push,
-        }),
+        Op::Commit { .. } => bail!("Commit and push run as cancellable jobs"),
         Op::Shelve(paths) => shelve(root, &paths),
         Op::Shelves => Ok(Report::Shelves(shelves(root)?)),
         Op::Unshelve(reference) => unshelve(root, &reference),
@@ -139,6 +185,15 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         Op::Switch(name) => switch(root, &name),
         Op::Log => Ok(Report::Log(log(root)?)),
         Op::Compare { base } => Ok(Report::Compare(compare(root, base.as_deref())?)),
+        Op::CompareTargets => crate::revision_compare::list_targets(root)
+            .map(Report::CompareTargets)
+            .map_err(anyhow::Error::msg),
+        Op::VerifyRevision(text) => crate::revision_compare::verify_revision(root, &text)
+            .map(Report::Revision)
+            .map_err(anyhow::Error::msg),
+        Op::FileHistory(path) => crate::git_log::file_history(root, &path)
+            .map(Report::History)
+            .map_err(anyhow::Error::msg),
         Op::CreateFile(path) => create_file(root, &path),
         Op::CreateDir(path) => create_dir(root, &path),
         Op::Duplicate(path) => duplicate(root, &path),

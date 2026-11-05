@@ -28,6 +28,61 @@ fn ide_status_badge_renders_without_sidebars() {
     assert!(agent_target(&ctx, "status-attention-bell").is_some());
 }
 
+/// The IDE status bar's Player, bell, and layout controls share the compact
+/// toolbar square and glyph, so the bar keeps one height while audio plays.
+#[test]
+#[cfg(feature = "test-support")]
+fn status_bar_icons_share_the_compact_toolbar_size() {
+    let (mut app, ctx, _dir) = fixture();
+    app.preferences.ide_mode = true;
+    app.player = player::Controller::finished_fixture("a", Some(0));
+    app.player.play_file("a", PathBuf::from("/a/tone.wav"), 0);
+    let paint = |app: &mut App| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 40.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    app.player_status_row(ui);
+                    app.notification_status_badge(ui);
+                    app.status_right_end(ui);
+                });
+            },
+        );
+        output.textures_delta.clear();
+        painted_icon_rects(&output.shapes)
+    };
+    // The first frame loads the icon textures.
+    paint(&mut app);
+    let icons: Vec<egui::Vec2> = paint(&mut app).iter().map(egui::Rect::size).collect();
+    let square = egui::Vec2::splat(appearance::TOOLBAR_BUTTON);
+    for name in [
+        "player-chrome",
+        "status-player",
+        "status-player-next",
+        "status-sidebar-height",
+        "status-terminal-toggle",
+    ] {
+        let rect = agent_target(&ctx, name).unwrap_or_else(|| panic!("{name} is not painted"));
+        assert_eq!(rect.size(), square, "{name}");
+    }
+    let bell = agent_target(&ctx, "status-attention-bell").expect("status bell");
+    assert_eq!(bell.height(), appearance::TOOLBAR_BUTTON);
+    assert!(icons.len() >= 6, "icons not painted: {icons:?}");
+    for size in &icons {
+        assert_eq!(
+            *size,
+            egui::Vec2::splat(appearance::TOOLBAR_ICON),
+            "{icons:?}"
+        );
+    }
+}
+
 #[test]
 #[cfg(feature = "test-support")]
 fn status_strip_shows_app_totals_and_opens_info() {
@@ -448,4 +503,219 @@ fn system_meter_bars_share_one_column() {
             "meter bars should share one column: {bars:?}"
         );
     }
+}
+
+/// Paint the status-bar context in a 1200 px row; returns the painted text.
+fn paint_status_context(
+    app: &mut App,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> Vec<String> {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 40.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                app.status_context(ui);
+            });
+        },
+    );
+    output.textures_delta.clear();
+    painted_strings(&output.shapes)
+}
+
+/// Move to, press and release the status-bar target `name`.
+fn click_status_target(app: &mut App, ctx: &egui::Context, name: &str) {
+    let pos = crate::diagnostics::current_rect(ctx, name)
+        .unwrap_or_else(|| panic!("{name} is not painted"))
+        .center();
+    paint_status_context(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        paint_status_context(
+            app,
+            ctx,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+    }
+}
+
+/// The selected project's only pane is a native editor of `path`.
+fn focus_native_editor(app: &mut App, path: &Path, text: &str) {
+    app.layouts.insert(
+        "a".into(),
+        Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: path.to_owned(),
+        }])),
+    );
+    app.native_docs.insert(
+        path.to_owned(),
+        crate::native_editor::NativeDoc::loaded(path.to_owned(), text),
+    );
+}
+
+#[test]
+fn status_breadcrumb_shows_the_focused_editors_path_and_caret_symbol() {
+    let (mut app, ctx, _dir) = fixture();
+    let path = PathBuf::from("/a/src/lib.rs");
+    focus_native_editor(&mut app, &path, "fn first() {}\nfn second() {}\n");
+    let text = paint_status_context(&mut app, &ctx, Vec::new());
+    for name in [
+        "status-breadcrumb-project",
+        "status-crumb:src",
+        "status-crumb:lib.rs",
+        "status-breadcrumb",
+        "status-crumb-symbol",
+    ] {
+        assert!(
+            crate::diagnostics::current_rect(&ctx, name).is_some(),
+            "{name}: {text:?}"
+        );
+    }
+    // The caret sits on line 1, inside `first`.
+    assert!(text.iter().any(|line| line == "first"), "{text:?}");
+    assert!(!text.iter().any(|line| line == "●"), "clean: {text:?}");
+    // Unsaved changes show once, on the file's tab; the status bar does
+    // not repeat that dot.
+    app.native_docs.insert(
+        path.clone(),
+        crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+    );
+    let text = paint_status_context(&mut app, &ctx, Vec::new());
+    assert!(!text.iter().any(|line| line == "●"), "unsaved: {text:?}");
+    // Without a focused editor there is no editor breadcrumb.
+    app.layouts.insert(
+        "a".into(),
+        Workspace::from_layout(DockState::new(vec![Tab::Terminal("shell".into())])),
+    );
+    let text = paint_status_context(&mut app, &ctx, Vec::new());
+    for name in ["status-crumb:lib.rs", "status-crumb-symbol"] {
+        assert!(
+            crate::diagnostics::current_rect(&ctx, name).is_none(),
+            "{name}: {text:?}"
+        );
+    }
+    assert!(!text.iter().any(|line| line == "first" || line == "lib.rs"));
+}
+
+#[test]
+fn status_breadcrumb_reveals_folders_in_explorer_and_opens_file_structure() {
+    let (mut app, ctx, _dir) = fixture();
+    let (src, deep) = (PathBuf::from("/a/src"), PathBuf::from("/a/src/deep"));
+    let path = deep.join("lib.rs");
+    focus_native_editor(&mut app, &path, "fn first() {}\n");
+    app.selected = Some("a".into());
+    app.active_session = None;
+    app.preferences.visible = false;
+    app.preferences.explorer_autoreveal = true;
+    paint_status_context(&mut app, &ctx, Vec::new());
+    click_status_target(&mut app, &ctx, "status-crumb:src");
+    assert!(app.preferences.visible && !app.preferences.right_projects);
+    assert_eq!(app.preferences.tool, SidebarTool::Explorer);
+    assert_eq!(app.explorer_selection, std::slice::from_ref(&src));
+    assert_eq!(app.explorer_scroll_to.as_ref(), Some(&src));
+    assert!(app.expanded_dirs.contains(&src) && app.expanded_dirs.contains(&deep));
+    let reveal = app.explorer_reveal.as_ref().expect("reveal");
+    assert!(
+        reveal.file == path && !reveal.pending_scroll,
+        "the folder is the scroll target, not the file inside it"
+    );
+    // The first Explorer that paints takes the reveal.
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.sidebar_tool(SidebarTool::Explorer, ui);
+    });
+    output.textures_delta.clear();
+    let reveal = app.explorer_reveal.as_ref().expect("reveal kept");
+    assert_ne!(reveal.host, egui::Id::NULL);
+    assert_eq!(reveal.root, PathBuf::from("/a"));
+    // Still loading: the folder row is not listed, so the scroll waits.
+    assert_eq!(app.explorer_scroll_to.as_ref(), Some(&src));
+    let entry = |path: &Path, directory| terminator_git::Entry {
+        path: path.to_path_buf(),
+        directory,
+        ignored: false,
+    };
+    app.dirs
+        .insert(PathBuf::from("/a"), vec![entry(&src, true)]);
+    let main = src.join("main.rs");
+    app.dirs
+        .insert(src.clone(), vec![entry(&deep, true), entry(&main, false)]);
+    app.dirs.insert(deep.clone(), vec![entry(&path, false)]);
+    app.sidebar_cache.get_mut().clear_files();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.sidebar_tool(SidebarTool::Explorer, ui);
+    });
+    output.textures_delta.clear();
+    assert_eq!(app.explorer_scroll_to, None, "scrolled once the row showed");
+    // "Always select opened file" keeps the clicked folder selected.
+    assert_eq!(app.explorer_selection, std::slice::from_ref(&src));
+    paint_status_context(&mut app, &ctx, Vec::new());
+    click_status_target(&mut app, &ctx, "status-crumb-symbol");
+    assert!(app.palette.open);
+    assert_eq!(app.palette.file_scope.as_ref(), Some(&path));
+}
+
+/// One 1200 px status row: the context, then `trailing` px of items that
+/// the crumbs leave room for, as the status bar reports them.
+fn paint_status_row(app: &mut App, ctx: &egui::Context, trailing: f32) -> Vec<String> {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 40.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                app.status_context(ui);
+                let flow_end = ui.cursor().left() + trailing;
+                App::keep_status_trailing(ui, flow_end, 0.0);
+            });
+        },
+    );
+    output.textures_delta.clear();
+    painted_strings(&output.shapes)
+}
+
+#[test]
+fn status_breadcrumb_folds_leading_folders_to_leave_room_for_the_row() {
+    let (mut app, ctx, _dir) = fixture();
+    let path = PathBuf::from("/a/crates/app/src/native_editor/view/toolbar.rs");
+    focus_native_editor(&mut app, &path, "fn markdown_toolbar_fade() {}\n");
+    let rect = |name: &str| crate::diagnostics::current_rect(&ctx, name);
+    // Room to spare: every folder shows.
+    for _ in 0..2 {
+        paint_status_row(&mut app, &ctx, 0.0);
+    }
+    assert!(rect("status-crumb:crates").is_some());
+    assert!(rect("status-crumb-fold").is_none());
+    // The items after the crumbs need most of the row: the leading folders
+    // fold into `…`, and the file and the caret's symbol stay.
+    let trailing = 720.0;
+    for _ in 0..2 {
+        paint_status_row(&mut app, &ctx, trailing);
+    }
+    let text = paint_status_row(&mut app, &ctx, trailing);
+    assert!(rect("status-crumb:crates").is_none(), "{text:?}");
+    assert!(text.iter().any(|line| line == "…"), "{text:?}");
+    for name in [
+        "status-crumb-fold",
+        "status-crumb:toolbar.rs",
+        "status-crumb-symbol",
+    ] {
+        assert!(rect(name).is_some(), "{name}: {text:?}");
+    }
+    let symbol = rect("status-crumb-symbol").expect("symbol crumb");
+    assert!(symbol.right() <= 1200.0 - trailing, "{symbol:?}");
 }

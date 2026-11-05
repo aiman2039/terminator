@@ -143,6 +143,7 @@ impl ViewPass<'_> {
             hunks: gutter_hunks,
             deleted: self.frame.change_colors[2],
             can_stage: !self.doc.dirty(),
+            commit_lock: self.frame.commit_lock,
         });
         let Some(hunk) = index.and_then(|index| gutter_hunks.get(index)) else {
             return;
@@ -186,7 +187,7 @@ impl ViewPass<'_> {
         let Some(live) = self.doc.doc.as_mut() else {
             return;
         };
-        self.requests.completion_request = complete::after_frame(complete::AfterFrameInput {
+        let after = complete::after_frame(complete::AfterFrameInput {
             ui,
             popup: &mut self.popups.completion,
             buffer: live,
@@ -195,6 +196,9 @@ impl ViewPass<'_> {
             manual: self.requests.complete_now,
             caret_rect: self.requests.caret_rect,
             server: native_lsp::server_language(self.frame.language).is_some(),
+            triggers: &self.frame.completion_triggers,
         });
+        self.requests.completion_ask = after.ask;
+        self.requests.accepted_completion = after.accepted;
     }
 }

@@ -1,10 +1,15 @@
 use super::*;
 
 impl LspManager {
-    /// Ask for completions at `position`. Returns the request's generation
-    /// (a later request supersedes it), or `None` when no ready server
-    /// tracks the file.
-    pub fn request_completion(&mut self, path: &Path, position: L::Position) -> Option<u64> {
+    /// Ask for completions at `position`; `trigger` says why. Returns the
+    /// request's generation (a later request supersedes it), or `None`
+    /// when no ready server tracks the file.
+    pub fn request_completion(
+        &mut self,
+        path: &Path,
+        position: L::Position,
+        trigger: L::CompletionTrigger,
+    ) -> Option<u64> {
         let doc = self.docs.get(path)?;
         let (key, uri) = (doc.server.clone(), doc.uri.clone());
         let server = self.servers.get_mut(&key)?;
@@ -16,9 +21,12 @@ impl LspManager {
         };
         self.completion_generation = self.completion_generation.wrapping_add(1);
         let generation = self.completion_generation;
-        let _ = server
-            .inbox
-            .send(L::completion(&L::RequestId::Number(number), &uri, position));
+        let _ = server.inbox.send(L::completion(
+            &L::RequestId::Number(number),
+            &uri,
+            position,
+            trigger,
+        ));
         server.pending.insert(
             number,
             Pending::Completion {

@@ -67,27 +67,21 @@ impl App {
             return;
         };
         let (prompt, verb) = pending.prompt();
+        let op = pending.into_op();
+        // A commit running in this repository disables the action; the
+        // question stays until the commit ends.
+        let lock = self.commit_wait(self.git_root().as_deref(), op.commit_risk());
         ui.horizontal(|ui| {
             ui.label(prompt);
-            if ui.button(verb).clicked() {
+            if appearance::enabled_unless(ui, lock, |ui| ui.button(verb)).clicked()
+                && self.queue_workspace(op)
+            {
                 self.git.confirm = None;
-                self.queue_workspace(pending.into_op());
             }
             if ui.button("Cancel").clicked() {
                 self.git.confirm = None;
             }
         });
-    }
-
-    /// Put a failed commit's message back into an empty draft. A push that
-    /// failed after a successful commit keeps the draft clear.
-    pub(crate) fn restore_failed_commit(&mut self, error: &str) {
-        let Some(message) = self.git.commit_inflight.take() else {
-            return;
-        };
-        if !error.starts_with(workspace_ops::PUSH_FAILED) && self.git.commit.trim().is_empty() {
-            self.git.commit = message;
-        }
     }
 
     pub(super) fn pending_delete_bar(&mut self, ui: &mut egui::Ui) {
@@ -157,7 +151,8 @@ impl App {
         });
     }
 
-    /// Contents search results, grouped by file. Clicking a hit opens that file.
+    /// Contents search results, grouped by file. Clicking a hit opens that
+    /// file at the match.
     pub(crate) fn explorer_results(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
         if let Some(error) = &self.explorer_search_error {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
@@ -177,7 +172,7 @@ impl App {
             ui.weak("Searching…");
         }
         let root = self.op_root().unwrap_or_else(|| cwd.to_path_buf());
-        let mut open: Option<PathBuf> = None;
+        let mut open: Option<(PathBuf, u32, u32)> = None;
         let mut last: Option<&Path> = None;
         for hit in &self.explorer_search {
             if last != Some(hit.path.as_path()) {
@@ -220,11 +215,15 @@ impl App {
                 response.rect,
             );
             if response.clicked() {
-                open = Some(hit.path.clone());
+                open = Some((hit.path.clone(), hit.line, hit.column));
             }
         }
-        if let Some(path) = open {
-            self.activate_file_action(ui, &path, FileAction::Open);
+        if let Some((path, line, character)) = open {
+            let at = terminator_native_edit::lsp::Position {
+                line: line.saturating_sub(1),
+                character,
+            };
+            self.activate_file_at(ui, &path, at);
         }
     }
 

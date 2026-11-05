@@ -12,6 +12,9 @@ use std::sync::Arc;
 pub(crate) struct Viewport {
     pub(crate) top: usize,
     pub(crate) bottom: usize,
+    /// Line of the row at the top edge, rounded: where a reopened file
+    /// scrolls back to.
+    pub(crate) scroll: usize,
 }
 
 /// A scroll the view should apply after keys (`zz`, Ctrl-E, Ctrl-D, …).
@@ -124,6 +127,8 @@ pub struct VimEngine {
     /// Modeless multiple carets besides the primary one (`IntelliJ`
     /// Alt+Shift+click, Add Selection for Next Occurrence).
     pub(crate) extra_carets: Vec<super::carets::Caret>,
+    /// The stops of an inserted snippet while Tab moves between them.
+    pub(crate) snippet: Option<super::ide::SnippetSession>,
     pub(crate) x: Extra,
 }
 
@@ -155,6 +160,7 @@ impl Default for VimEngine {
             modeless: false,
             extend_stack: Vec::new(),
             extra_carets: Vec::new(),
+            snippet: None,
             x: Extra::default(),
         }
     }

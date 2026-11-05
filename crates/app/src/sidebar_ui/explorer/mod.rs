@@ -2,6 +2,7 @@
 mod dnd;
 mod entry;
 mod session_row;
+mod status;
 mod tool;
 mod tree;
 
@@ -72,8 +73,6 @@ struct RowContext<'a> {
     rows: &'a [crate::sidebar_cache::ExplorerRow],
     focus: egui::Id,
     focused_file: Option<PathBuf>,
-    open_shortcut: String,
-    split_shortcut: String,
 }
 
 pub(crate) struct ExplorerReveal {
@@ -144,10 +143,80 @@ impl App {
         Some((file, root))
     }
 
+    /// Why the current file cannot be revealed in the Explorer.
+    pub(crate) fn explorer_reveal_note(&self) -> &'static str {
+        if self.focused_local_file().is_some() {
+            "The focused file is outside the Explorer folder"
+        } else {
+            "Focus a local file to reveal it in Explorer"
+        }
+    }
+
     pub(crate) fn reveal_current_file_in_explorer(&mut self, host: egui::Id) -> bool {
         let Some((file, root)) = self.explorer_reveal_candidate() else {
             return false;
         };
+        self.reveal_under(host, file, root)
+    }
+
+    /// Status-bar breadcrumb: show the Explorer and select `target`, the
+    /// focused file or one of its folders. Like Locate, a folder above the
+    /// shell directory is shown from the project root. The first Explorer
+    /// that paints takes the reveal.
+    pub(crate) fn reveal_in_explorer(&mut self, target: &Path) -> bool {
+        let Some((file, shell_root)) = self.explorer_reveal_candidate() else {
+            return false;
+        };
+        let inside = |root: &Path| target.starts_with(root) && target != root;
+        let root = if inside(shell_root.as_path()) {
+            shell_root
+        } else {
+            match self.selected_project().map(|project| project.path.clone()) {
+                Some(root) if inside(root.as_path()) => root,
+                _ => return false,
+            }
+        };
+        if !file.starts_with(target) || !self.reveal_under(egui::Id::NULL, file.clone(), root) {
+            return false;
+        }
+        if target != file
+            && let Some(reveal) = self.explorer_reveal.as_mut()
+        {
+            // Scroll to the folder, not to the file inside it.
+            reveal.pending_scroll = false;
+        }
+        // "Always select opened file" must not take the selection back.
+        self.explorer_followed = Some(file);
+        self.explorer_selection = vec![target.to_path_buf()];
+        self.explorer_anchor = Some(target.to_path_buf());
+        self.explorer_scroll_to = Some(target.to_path_buf());
+        self.show_explorer();
+        true
+    }
+
+    /// Show the Explorer where it already is, else in the sidebar the mode
+    /// treats as primary (left in IDE mode, right otherwise).
+    fn show_explorer(&mut self) {
+        let prefs = &mut self.preferences;
+        let left = prefs.left_visible && prefs.left_tool == Some(SidebarTool::Explorer);
+        let right = prefs.visible && !prefs.right_projects && prefs.tool == SidebarTool::Explorer;
+        if left || right {
+            return;
+        }
+        if prefs.ide_mode {
+            prefs.left_tool = Some(SidebarTool::Explorer);
+            prefs.left_visible = true;
+        } else {
+            prefs.right_projects = false;
+            prefs.tool = SidebarTool::Explorer;
+            prefs.visible = true;
+        }
+    }
+
+    /// Open the folders between `root` and `file` and point the Explorer
+    /// in `host` at `root`, scrolled to `file`. `Id::NULL` lets the first
+    /// Explorer that paints take it.
+    fn reveal_under(&mut self, host: egui::Id, file: PathBuf, root: PathBuf) -> bool {
         let Some(project) = self.selected.clone() else {
             return false;
         };
@@ -176,7 +245,7 @@ impl App {
         let Some(cwd) = self.cwd() else {
             return "Explorer — no selected directory".into();
         };
-        let unconfirmed = self.context_session().is_some_and(|s| !s.cwd_confirmed);
+        let unconfirmed = self.folder_session().is_some_and(|s| !s.cwd_confirmed);
         format!(
             "Explorer\n{}{}",
             cwd.display(),

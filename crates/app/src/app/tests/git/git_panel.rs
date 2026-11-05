@@ -1,7 +1,11 @@
 use super::*;
 use crate::app::FileActionInput;
 
-fn run_git_outcome(app: &mut App, ctx: &egui::Context, outcome: sidebar_ui::GitPanelOutcome) {
+pub(super) fn run_git_outcome(
+    app: &mut App,
+    ctx: &egui::Context,
+    outcome: sidebar_ui::GitPanelOutcome,
+) {
     let mut outcome = Some(outcome);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         if let Some(outcome) = outcome.take() {
@@ -226,7 +230,10 @@ fn git_panel_clicks_reuse_an_open_diff_instead_of_duplicating() {
                         open_shortcut: "",
                         compare: None,
                         base_ref: None,
-                        committing: false,
+                        focus_message: false,
+                        commit_run: None,
+                        commit_lock: Default::default(),
+                        commit_failure: None,
                     };
                     sidebar_ui::git_panel(ui, &mut { input })
                 };
@@ -344,12 +351,7 @@ fn commit_switch_and_refresh_invalidate_git_lists() {
     app.update_tx
         .send(Update::Workspace(
             PathBuf::from("/repo"),
-            workspace_ops::Op::Commit {
-                message: "nope".into(),
-                amend: false,
-                signoff: false,
-                push: false,
-            },
+            commit_op("nope", false),
             Err("commit failed".into()),
         ))
         .unwrap();
@@ -358,12 +360,7 @@ fn commit_switch_and_refresh_invalidate_git_lists() {
     app.update_tx
         .send(Update::Workspace(
             PathBuf::from("/repo"),
-            workspace_ops::Op::Commit {
-                message: "yes".into(),
-                amend: false,
-                signoff: false,
-                push: false,
-            },
+            commit_op("yes", false),
             Ok(workspace_ops::Report::Message("Committed".into())),
         ))
         .unwrap();
@@ -442,12 +439,7 @@ fn git_views_load_asynchronously_and_reload_after_a_commit() {
     app.update_tx
         .send(Update::Workspace(
             PathBuf::from("/repo"),
-            workspace_ops::Op::Commit {
-                message: "m".into(),
-                amend: false,
-                signoff: false,
-                push: false,
-            },
+            commit_op("m", false),
             Ok(workspace_ops::Report::Message("Committed".into())),
         ))
         .unwrap();
@@ -492,61 +484,211 @@ fn discard_and_drop_wait_for_confirmation() {
     );
 }
 
-#[test]
-fn failed_commit_restores_the_draft_but_failed_push_does_not() {
-    let (mut app, ctx, _dir) = fixture();
-    let commit = |push| workspace_ops::Op::Commit {
-        message: "msg".into(),
+fn commit_op(message: &str, push: bool) -> workspace_ops::Op {
+    workspace_ops::Op::Commit {
+        message: message.into(),
         amend: false,
         signoff: false,
         push,
-    };
+        cancel: Default::default(),
+    }
+}
+
+pub(super) fn click_commit(app: &mut App, ctx: &egui::Context, push: bool) {
+    run_git_outcome(
+        app,
+        ctx,
+        sidebar_ui::GitPanelOutcome {
+            commit: !push,
+            commit_push: push,
+            ..Default::default()
+        },
+    );
+}
+
+/// The commit job the panel queued: its root and op.
+pub(super) fn sent_commit(requests: &mpsc::Receiver<Job>) -> (PathBuf, workspace_ops::Op) {
+    requests
+        .try_iter()
+        .find_map(|job| match job {
+            Job::Workspace(root, op @ workspace_ops::Op::Commit { .. }) => Some((root, op)),
+            _ => None,
+        })
+        .expect("a commit job was queued")
+}
+
+pub(super) fn reply(
+    app: &mut App,
+    ctx: &egui::Context,
+    job: (PathBuf, workspace_ops::Op),
+    result: Result<workspace_ops::Report, String>,
+) {
+    let (root, op) = job;
+    app.update_tx
+        .send(Update::Workspace(root, op, result))
+        .unwrap();
+    drain_updates(app, ctx);
+}
+
+#[test]
+fn failed_commit_restores_the_draft_but_failed_push_does_not() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    let pushed = format!("{} (exit status: 1)\nrejected", workspace_ops::PUSH_FAILED);
+    for (push, error, restored) in [
+        (false, "Commit failed (exit status: 1)\nhook rejected", true),
+        (true, pushed.as_str(), false),
+    ] {
+        app.git.commit = "msg".into();
+        click_commit(&mut app, &ctx, push);
+        assert!(app.git.commit.is_empty());
+        assert!(app.git.run.is_some());
+        reply(&mut app, &ctx, sent_commit(&requests), Err(error.into()));
+        assert_eq!(app.git.commit == "msg", restored, "{error}");
+        assert!(app.git.run.is_none());
+        // The panel keeps the output; the status bar names the failure.
+        assert_eq!(app.git.commit_failure.as_deref(), Some(error));
+        assert_eq!(app.error.as_deref(), error.lines().next());
+    }
     app.git.commit = "msg".into();
+    click_commit(&mut app, &ctx, false);
+    assert!(app.git.commit_failure.is_none(), "a new commit clears it");
+    let ok = Ok(workspace_ops::Report::Message("Committed".into()));
+    reply(&mut app, &ctx, sent_commit(&requests), ok);
+    assert!(app.git.commit.is_empty());
+    assert!(app.git.run.is_none());
+    assert_eq!(app.info.as_deref(), Some("Committed"));
+}
+
+#[test]
+fn commit_progress_and_cancel_follow_the_job() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.git.list_root = Some(PathBuf::from("/a"));
+    app.git.commit = "msg".into();
+    click_commit(&mut app, &ctx, true);
+    let job = sent_commit(&requests);
+    let workspace_ops::Op::Commit {
+        cancel, push: true, ..
+    } = &job.1
+    else {
+        panic!("Commit and Push queues a pushing commit");
+    };
+    let token = cancel.clone();
+    let progress = |app: &App| {
+        app.git.run.as_ref().map(|run| {
+            let progress = run.progress();
+            (progress.phase, progress.cancelling)
+        })
+    };
+    assert_eq!(
+        progress(&app),
+        Some((sidebar_ui::CommitPhase::Committing, false))
+    );
+    // The commit landed; the push runs, and the lists show the commit.
+    reply(
+        &mut app,
+        &ctx,
+        job.clone(),
+        Ok(workspace_ops::Report::Pushing),
+    );
+    assert_eq!(
+        progress(&app),
+        Some((sidebar_ui::CommitPhase::Pushing, false))
+    );
+    assert!(app.git.list_root.is_none());
+    app.git.list_root = Some(PathBuf::from("/a"));
+    // Cancel stops the job; the panel waits for its reply.
     run_git_outcome(
         &mut app,
         &ctx,
         sidebar_ui::GitPanelOutcome {
-            commit: true,
+            cancel_commit: true,
             ..Default::default()
         },
     );
-    assert!(app.git.commit.is_empty());
-    assert_eq!(app.git.commit_inflight.as_deref(), Some("msg"));
-    app.update_tx
-        .send(Update::Workspace(
-            PathBuf::from("/repo"),
-            commit(false),
-            Err("hook rejected".into()),
-        ))
-        .unwrap();
-    drain_updates(&mut app, &ctx);
-    assert_eq!(app.git.commit, "msg");
-    assert!(app.git.commit_inflight.is_none());
+    assert!(token.is_cancelled());
+    assert_eq!(
+        progress(&app),
+        Some((sidebar_ui::CommitPhase::Pushing, true))
+    );
+    reply(
+        &mut app,
+        &ctx,
+        job,
+        Err(workspace_ops::PUSH_CANCELLED.into()),
+    );
+    assert!(app.git.run.is_none());
+    assert!(app.git.commit.is_empty(), "the commit landed");
+    assert_eq!(app.info.as_deref(), Some(workspace_ops::PUSH_CANCELLED));
+    assert!(app.git.commit_failure.is_none(), "a cancel is a notice");
+    assert!(app.git.list_root.is_none(), "the log changed");
+}
 
-    app.git.commit.clear();
-    app.git.commit_inflight = Some("msg".into());
-    app.update_tx
-        .send(Update::Workspace(
-            PathBuf::from("/repo"),
-            commit(true),
-            Err(format!("{}: rejected", workspace_ops::PUSH_FAILED)),
-        ))
-        .unwrap();
-    drain_updates(&mut app, &ctx);
-    assert!(app.git.commit.is_empty());
-    assert!(app.git.commit_inflight.is_none());
+#[test]
+fn a_second_commit_click_waits_for_the_running_job() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.git.commit = "first".into();
+    click_commit(&mut app, &ctx, false);
+    let job = sent_commit(&requests);
+    app.git.commit = "second".into();
+    click_commit(&mut app, &ctx, true);
+    assert!(
+        requests
+            .try_iter()
+            .all(|job| !matches!(job, Job::Workspace(_, workspace_ops::Op::Commit { .. }))),
+        "no second commit job"
+    );
+    assert_eq!(app.git.commit, "second", "the new draft stays");
+    // A cancelled commit gives its message back only to an empty draft.
+    run_git_outcome(
+        &mut app,
+        &ctx,
+        sidebar_ui::GitPanelOutcome {
+            cancel_commit: true,
+            ..Default::default()
+        },
+    );
+    reply(
+        &mut app,
+        &ctx,
+        job,
+        Err(workspace_ops::COMMIT_CANCELLED.into()),
+    );
+    assert_eq!(app.git.commit, "second");
+    assert_eq!(app.info.as_deref(), Some(workspace_ops::COMMIT_CANCELLED));
+    app.git.commit = "third".into();
+    click_commit(&mut app, &ctx, false);
+    sent_commit(&requests);
+}
 
-    app.git.commit_inflight = Some("msg".into());
-    app.update_tx
-        .send(Update::Workspace(
-            PathBuf::from("/repo"),
-            commit(false),
-            Ok(workspace_ops::Report::Message("Committed".into())),
-        ))
-        .unwrap();
-    drain_updates(&mut app, &ctx);
-    assert!(app.git.commit.is_empty());
-    assert!(app.git.commit_inflight.is_none());
+#[test]
+fn a_dismissed_commit_failure_leaves_the_panel() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.git.commit = "msg".into();
+    click_commit(&mut app, &ctx, false);
+    reply(
+        &mut app,
+        &ctx,
+        sent_commit(&requests),
+        Err("Commit failed (exit status: 1)\nhook said no".into()),
+    );
+    assert!(app.git.commit_failure.is_some());
+    run_git_outcome(
+        &mut app,
+        &ctx,
+        sidebar_ui::GitPanelOutcome {
+            dismiss_commit_failure: true,
+            ..Default::default()
+        },
+    );
+    assert!(app.git.commit_failure.is_none());
 }
 
 #[test]

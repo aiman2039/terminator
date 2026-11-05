@@ -1,36 +1,19 @@
-//! The buffer borrow for one native view: status rows, the source view,
-//! and what its outcome asks for.
+//! The buffer borrow for one native view: in-file bars, the source view,
+//! the Markdown toolbar, and what the source view's outcome asks for.
+use super::source_options::{FindMatches, SourceMarks};
 use super::*;
-use crate::native_editor::extras::SquiggleSets;
 use crate::native_editor::file_io::LineEnding;
 use terminator_native_edit::highlight::HighlightCache;
 use terminator_native_edit::inlay::InlayCache;
 use terminator_native_edit::view::{ChangeMark, SourceOutcome};
-
-/// Find matches as `(line, start, end)` for the source view.
-type FindMatches = Arc<Vec<(usize, usize, usize)>>;
 
 /// Source view results the popups drawn after it need.
 struct SourceShown {
     outcome: Option<SourceOutcome>,
     revision_before: u64,
     gutter_hunks: Arc<Vec<gutter::GutterHunk>>,
-}
-
-/// Per-frame decorations computed from the buffer for the source view.
-struct SourceMarks {
-    mode: markdown::Mode,
-    read_only: bool,
-    soft_wrap: bool,
-    squiggles: crate::native_editor::extras::SquiggleSets,
-    inlay_hints: Arc<Vec<terminator_native_edit::inlay::InlayHint>>,
-    change_marks: Arc<Vec<ChangeMark>>,
-    popup_keys: bool,
-    find_matches: FindMatches,
-    find_current: Option<usize>,
-    /// Large-file mode is off (small file, or the user enabled it).
-    full_features: bool,
-    status_items: Arc<Vec<String>>,
+    /// The source and preview area, under the in-file bars and find bar.
+    area: egui::Rect,
 }
 
 struct GutterMarksInput<'a> {
@@ -64,9 +47,9 @@ impl ViewPass<'_> {
     pub(super) fn run(mut self, ui: &mut egui::Ui, decor: SourceDecor) -> Option<PostEdit> {
         // Split views of one buffer keep their own caret and layout.
         self.doc.enter_view(&self.frame.source_id);
+        let pass = ui.ctx().cumulative_pass_nr();
+        self.doc.drawn.insert(self.frame.source_id.clone(), pass);
         let mut post = PostEdit::Keep;
-        let heading_jump = self.header(ui);
-        self.jump_to_heading(ui, heading_jump);
         self.save_error_row(ui);
         self.follow_disk(ui);
         self.large_file_bar(ui);
@@ -75,6 +58,9 @@ impl ViewPass<'_> {
         }
         let shown = self.show_source(ui, decor)?;
         self.adopt_outcome(ui, shown.outcome, &mut post);
+        if self.frame.is_markdown {
+            self.markdown_toolbar(ui, shown.area);
+        }
         self.problems_panel(ui);
         self.actions_popup(ui);
         self.gutter_popup(ui, &shown.gutter_hunks);
@@ -108,14 +94,11 @@ impl ViewPass<'_> {
         self.frame.rename_applying || self.frame.remote_snapshot
     }
 
-    fn jump_to_heading(&mut self, ui: &egui::Ui, heading_jump: Option<usize>) {
-        if let Some(line) = heading_jump
-            && let Some(buffer) = self.doc.doc.as_mut()
-        {
-            self.doc.markdown_mode = markdown::Mode::Edit;
-            self.doc.engine.place_cursor(buffer, line, 0);
-            ui.memory_mut(|memory| memory.request_focus(self.file_focus()));
-        }
+    /// Keyboard focus id of this view's source widget. Clicking a toolbar
+    /// button moves focus to it; buttons hand focus back to the file so
+    /// arrows and typing keep editing text.
+    pub(super) fn file_focus(&self) -> egui::Id {
+        source_focus_id(&self.frame.source_id)
     }
 
     /// Draw the find bar and the source view (unless Markdown preview
@@ -132,12 +115,13 @@ impl ViewPass<'_> {
             return None;
         };
         let (mode, soft_wrap) = Self::layout_mode(frame, doc.markdown_mode, &doc.engine);
-        let squiggles = if full_features {
-            doc.extras
-                .squiggles(buffer, (&frame.problems, frame.problems_generation))
-        } else {
-            SquiggleSets::default()
-        };
+        // A remembered scroll waits for a frame that draws the source.
+        let top_line = (mode != markdown::Mode::Preview)
+            .then(|| doc.top_line.take())
+            .flatten();
+        let squiggles = Self::squiggle_sets(&mut doc.extras, buffer, frame, full_features);
+        self.requests.squiggles = (Arc::clone(&squiggles.0), Arc::clone(&squiggles.1));
+        let yield_copy = crate::native_editor::quick_doc::popup_holds_copy(ui.ctx());
         let inlay_hints = Self::inlay_hints(&mut doc.inlay, buffer, frame.inlay_answer.as_ref());
         let revision_before = buffer.revision();
         // Gutter changes against HEAD, once per edit (or new base).
@@ -159,6 +143,7 @@ impl ViewPass<'_> {
                 source_id: &frame.source_id,
             },
         );
+        let area = ui.available_rect_before_wrap();
         let options = Self::source_options(
             frame,
             decor,
@@ -174,6 +159,8 @@ impl ViewPass<'_> {
                 find_current,
                 full_features,
                 status_items,
+                yield_copy,
+                top_line,
             },
         );
         let outcome = Self::render_source(
@@ -193,6 +180,7 @@ impl ViewPass<'_> {
             outcome,
             revision_before,
             gutter_hunks,
+            area,
         })
     }
 
@@ -290,79 +278,6 @@ impl ViewPass<'_> {
         (find_matches, find_current)
     }
 
-    fn source_options(frame: &ViewFrame, decor: SourceDecor, marks: SourceMarks) -> SourceOptions {
-        let SourceDecor {
-            marks: diagnostics,
-            reference,
-            annotations,
-        } = decor;
-        let SourceMarks {
-            mode,
-            read_only,
-            soft_wrap,
-            squiggles,
-            inlay_hints,
-            change_marks,
-            popup_keys,
-            find_matches,
-            find_current,
-            full_features,
-            status_items,
-        } = marks;
-        let (squiggles, squiggle_tails) = squiggles;
-        let style = appearance::editor_style();
-        // Markdown keeps its one-point bump over the code font.
-        let bump = if frame.is_markdown { 1.0 } else { 0.0 };
-        SourceOptions {
-            vim: frame.vim,
-            read_only,
-            menu_style: Some(appearance::menu_style),
-            menu_header: Some(appearance::target_header),
-            menu_item: Some(|ui, label, icon, shortcut| {
-                appearance::menu_item(appearance::MenuItemInput {
-                    ui,
-                    label,
-                    icon,
-                    shortcut,
-                })
-            }),
-            soft_wrap,
-            font_size: style.prefs.editor_font_size + bump,
-            // Markdown prose reads better with at least 1.3 spacing.
-            line_height: if frame.is_markdown {
-                style.prefs.editor_line_spacing.max(1.3)
-            } else {
-                style.prefs.editor_line_spacing
-            },
-            caret_blink: style.prefs.editor_caret_blink,
-            rainbow_brackets: style.prefs.editor_rainbow_brackets,
-            jetbrains_keys: style.prefs.editor_jetbrains_keys,
-            read_clipboard: Some(crate::clipboard::read_text),
-            palette: Some(style.palette),
-            status_items,
-            large_file_override: full_features,
-            error_lens: style.prefs.editor_error_lens,
-            squiggle_tails,
-            scroll_fraction: if mode == markdown::Mode::Split {
-                frame.preview.scroll
-            } else {
-                None
-            },
-            diagnostics,
-            squiggles,
-            find_matches,
-            find_current,
-            popup_keys,
-            change_marks,
-            change_colors: frame.change_colors,
-            inlay_hints,
-            reference: Some(reference),
-            annotations,
-            blame: frame.blame_offer,
-            ..SourceOptions::default()
-        }
-    }
-
     /// Show the source view as the mode wants it: alone, in the left half
     /// of a Markdown split, or not at all (preview only).
     fn render_source(
@@ -425,6 +340,7 @@ impl ViewPass<'_> {
         requests.caret_rect = outcome.as_ref().and_then(|outcome| outcome.caret_rect);
         if let Some(outcome) = outcome.as_ref() {
             requests.blame_toggle = outcome.toggle_blame;
+            requests.git_compare = outcome.git_compare;
             let web = ui.input(|input| input.modifiers.command);
             requests.blame_click = outcome.annotation_clicked.map(|line| (line, web));
         }
@@ -436,9 +352,11 @@ impl ViewPass<'_> {
             });
         }
         requests.source_scroll = outcome.as_ref().map(|outcome| outcome.scroll_fraction);
+        requests.hover_spot = outcome.as_ref().and_then(|outcome| outcome.hover);
         let Some(outcome) = outcome else {
             return;
         };
+        self.status_menus(ui, &outcome.status_rects);
         #[cfg(feature = "test-support")]
         Self::record_fixture_rects(ui, &outcome);
         for effect in outcome.effects {
@@ -463,6 +381,7 @@ impl ViewPass<'_> {
         if self.requests.activated_editor || ui.memory(|memory| memory.has_focus(self.file_focus()))
         {
             self.doc.focused_view = Some(self.frame.source_id.clone());
+            self.doc.focused_at = Some(Instant::now());
         }
         self.doc.restore_focused_view();
     }

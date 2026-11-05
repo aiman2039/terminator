@@ -86,7 +86,7 @@ pub(super) fn explorer_toggle(input: ExplorerToggleInput<'_>) -> egui::Response 
     if selected || response.hovered() {
         ui.painter().rect_filled(
             response.rect,
-            4,
+            appearance::WIDGET_RADIUS,
             if selected {
                 ui.visuals().selection.bg_fill
             } else {
@@ -113,7 +113,7 @@ pub(super) fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMod
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
     let base_id = response.id;
     ui.painter()
-        .rect_filled(rect, 6, ui.visuals().faint_bg_color);
+        .rect_filled(rect, appearance::WIDGET_RADIUS, ui.visuals().faint_bg_color);
     let half = rect.width() / 2.0;
     for (index, (label, value, target)) in [
         ("Names", ExplorerSearchMode::Names, "explorer-mode-names"),
@@ -154,7 +154,7 @@ pub(super) fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMod
             cell.center(),
             egui::Align2::CENTER_CENTER,
             label,
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(appearance::FONT_SMALL),
             if selected {
                 ui.visuals().text_color()
             } else {
@@ -178,8 +178,9 @@ pub enum ExplorerLocal {
     History,
     /// Open the file's Local History snapshots.
     LocalHistory,
-    /// Diff the working file against a branch (or other revision).
-    CompareWith(String),
+    /// Pick a branch, tag, revision, or commit to diff the working file
+    /// against.
+    Compare(crate::revision_compare::PickerMode),
     Reveal,
     CopyRelative,
     CopyName,
@@ -237,11 +238,10 @@ pub(crate) struct ExplorerFileRowInput<'a> {
     /// A language server reports an error in this file.
     pub errors: bool,
     pub theme: &'a AppearanceConfig,
-    pub open_shortcut: &'a str,
-    pub split_shortcut: &'a str,
     pub selected: bool,
     pub perforce: bool,
-    pub git_branches: Option<&'a [String]>,
+    /// The file is in a Git repository: offer history and Compare.
+    pub git: bool,
     pub marks: FileRowMarks,
 }
 
@@ -253,11 +253,9 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
         ignored,
         errors,
         theme,
-        open_shortcut,
-        split_shortcut,
         selected,
         perforce,
-        git_branches,
+        git,
         marks,
     } = input;
     let mut outcome = ExplorerRowOutcome::default();
@@ -300,10 +298,8 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
     }
     let menu = FileRowMenu {
         path,
-        open_shortcut,
-        split_shortcut,
         perforce,
-        git_branches,
+        git,
         marks,
     };
     appearance::context_menu(&r, |ui| menu.show(ui, &mut outcome));
@@ -363,9 +359,9 @@ pub(super) fn paint_header_count(input: PaintHeaderCountInput<'_>) {
     );
 }
 
-/// Count badge digits on sidebar icons; the smallest size that stays legible
-/// inside the 22pt icon square.
-const BADGE_FONT: f32 = 10.0;
+/// Count badge digits on sidebar icons: the caption role, legible inside
+/// the 22pt icon square.
+const BADGE_FONT: f32 = appearance::FONT_CAPTION;
 
 pub(super) const ATTENTION_ACTION_SIZE: f32 = 22.0;
 

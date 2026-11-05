@@ -1,7 +1,8 @@
 use super::*;
 
 /// Minimal `initialize`: single `rootUri`, hover/definition/diagnostics
-/// capability, explicit UTF-16 positions (matches [`char_col_to_utf16`]).
+/// capability, save notifications ([`did_save`]), explicit UTF-16
+/// positions (matches [`char_col_to_utf16`]).
 #[must_use]
 pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
     request(
@@ -14,7 +15,7 @@ pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
                 "general": { "positionEncodings": ["utf-16"] },
                 "workspace": { "workspaceEdit": { "documentChanges": true } },
                 "textDocument": {
-                    "synchronization": { "didSave": false },
+                    "synchronization": { "didSave": true },
                     "hover": { "contentFormat": ["markdown", "plaintext"] },
                     "definition": { "linkSupport": true },
                     "implementation": { "linkSupport": true },
@@ -49,7 +50,13 @@ pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
                         "completionItem": {
                             "snippetSupport": true,
                             "documentationFormat": ["markdown", "plaintext"],
+                            "labelDetailsSupport": true,
+                            // Asked for when an item is selected or accepted.
+                            "resolveSupport": {
+                                "properties": ["documentation", "detail", "additionalTextEdits"],
+                            },
                         },
+                        "contextSupport": true,
                     },
                     "publishDiagnostics": { "relatedInformation": true },
                 },
@@ -128,6 +135,36 @@ pub fn did_close(uri: &Url) -> Vec<u8> {
     )
 }
 
+/// `didSave` after a buffer was written to disk. `text` goes along only
+/// when the server asked for it (see [`save_include_text`]).
+#[must_use]
+pub fn did_save(uri: &Url, text: Option<&str>) -> Vec<u8> {
+    let params = match text {
+        Some(text) => serde_json::json!({ "textDocument": { "uri": uri.as_str() }, "text": text }),
+        None => serde_json::json!({ "textDocument": { "uri": uri.as_str() } }),
+    };
+    notification("textDocument/didSave", params)
+}
+
+/// Whether a server wants [`did_save`], read from `textDocumentSync` in
+/// its `initialize` capabilities. `None`: send nothing. `Some(include_text)`:
+/// send it, with the text when `save.includeText` is true. A bare sync
+/// kind other than `None` (0) wants saves without text, as in VS Code.
+#[must_use]
+pub fn save_include_text(capabilities: &Value) -> Option<bool> {
+    match capabilities.get("textDocumentSync")? {
+        Value::Number(kind) => kind.as_u64().is_some_and(|kind| kind > 0).then_some(false),
+        Value::Object(options) => match options.get("save")? {
+            Value::Bool(true) => Some(false),
+            Value::Object(save) => {
+                Some(save.get("includeText").and_then(Value::as_bool) == Some(true))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// `textDocument/hover` at a UTF-16 position.
 #[must_use]
 pub fn hover(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
@@ -154,17 +191,22 @@ pub fn definition(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
     )
 }
 
-/// `textDocument/completion` at a UTF-16 position (invoked, not triggered
-/// by a character: servers then return their full list for the prefix).
+/// `textDocument/completion` at a UTF-16 position. `trigger` says why:
+/// an invoked request gets the server's full list for the prefix.
 #[must_use]
-pub fn completion(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
+pub fn completion(
+    id: &RequestId,
+    uri: &Url,
+    position: Position,
+    trigger: CompletionTrigger,
+) -> Vec<u8> {
     request(
         id,
         "textDocument/completion",
         serde_json::json!({
             "textDocument": { "uri": uri.as_str() },
             "position": { "line": position.line, "character": position.character },
-            "context": { "triggerKind": 1 },
+            "context": trigger.context(),
         }),
     )
 }

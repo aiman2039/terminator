@@ -280,6 +280,7 @@ impl App {
         // buffer: dropping it while another view stays open would reload
         // from disk on the next frame and lose unsaved changes.
         if !self.all_native_tab_paths().contains(&path.to_owned()) {
+            self.remember_native_state(path);
             self.native_docs.remove(path);
         }
         if self

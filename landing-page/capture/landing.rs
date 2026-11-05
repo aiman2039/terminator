@@ -61,7 +61,7 @@ pub fn run(o: &Options) -> Result<()> {
         plain(&h, o, name, actions, ms)?;
         Ok(())
     };
-    scene_ed("ide", "explorer", &[md.clone(), left.clone()], json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1700,"target":"tool-ide-mode"}]), 3400)?;
+    scene_ed("ide", "explorer", &[md.clone(), left.clone()], json!([{"at_ms":1700,"target":"tool-ide-mode"}]), 3400)?;
     scene_ed("nvim", "explorer", &[code.clone(), right.clone()], json!([]), 3000)?;
     scene_ed("markdown", "explorer", &[md.clone(), right.clone()], json!([{"at_ms":900,"target":"markdown-mode:Split"}]), 3000)?;
     let _ = scene_ed("player", "explorer", &[code.clone(), right.clone()], json!([{"at_ms":900,"target":"player-chrome"}]), 3000);
@@ -73,9 +73,9 @@ pub fn run(o: &Options) -> Result<()> {
         plain(&h, o, name, actions, ms)?;
         Ok(())
     };
-    scene("settings", "explorer", false, json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1700,"target":"settings"}]), 2600)?;
-    scene("settings-notifications", "explorer", false, json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1700,"target":"settings"},{"at_ms":2600,"target":"settings-section:Notifications"}]), 3200)?;
-    scene("settings-hooks", "explorer", false, json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1700,"target":"settings"},{"at_ms":2600,"target":"settings-section:Agent Hooks"}]), 3200)?;
+    scene("settings", "explorer", false, json!([{"at_ms":1700,"target":"settings"}]), 2600)?;
+    scene("settings-notifications", "explorer", false, json!([{"at_ms":1700,"target":"settings"},{"at_ms":2600,"target":"settings-section:Notifications"}]), 3200)?;
+    scene("settings-hooks", "explorer", false, json!([{"at_ms":1700,"target":"settings"},{"at_ms":2600,"target":"settings-section:Agent Hooks"}]), 3200)?;
     let mut p = prefs(&h)?;
     p.as_object_mut().unwrap().insert("left_agents".into(), json!(true));
     save_prefs(&h, &p)?;

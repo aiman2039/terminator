@@ -193,9 +193,118 @@ fn typing_at_the_end_of_a_crlf_line_keeps_one_line_break() {
 }
 
 #[test]
+fn undo_and_redo_report_where_the_text_changed() {
+    let mut doc = Doc::new("hello");
+    doc.insert(5, " world");
+    let undone = doc.undo_change().expect("one step");
+    assert_eq!(undone.range, 5..5, "the removed text leaves an empty spot");
+    let redone = doc.redo_change().expect("one step");
+    assert_eq!(redone.range, 5..11, "the text put back");
+    doc.delete(0..2);
+    assert_eq!(doc.undo_change().expect("delete").range, 0..2);
+    assert_eq!(doc.text(), "hello world");
+    assert_eq!(doc.undo_change().expect("insert").range, 5..5);
+    assert_eq!(doc.undo_change(), None);
+    assert_eq!(Doc::new("x").redo_change(), None);
+}
+
+#[test]
+fn group_undo_reports_one_span_over_every_edit() {
+    let mut doc = Doc::new("mid");
+    doc.begin_undo_group();
+    doc.insert(0, "A");
+    doc.insert(4, "Z");
+    doc.end_undo_group();
+    assert_eq!(doc.text(), "AmidZ");
+    assert_eq!(doc.undo_change().expect("group").range, 0..3);
+    assert_eq!(doc.text(), "mid");
+    assert_eq!(doc.redo_change().expect("group").range, 0..5);
+    // A change that replaced text spans the text put back.
+    let mut doc = Doc::new("foo bar");
+    doc.begin_undo_group();
+    doc.delete(4..7);
+    doc.insert(4, "X");
+    doc.insert(5, "Y");
+    doc.end_undo_group();
+    assert_eq!(doc.undo_change().expect("change").range, 4..7);
+    assert_eq!(doc.text(), "foo bar");
+}
+
+#[test]
+fn undo_returns_the_selection_noted_before_the_edit() {
+    let mut doc = Doc::new("hello world");
+    doc.note_selection(Some((6, 11)));
+    doc.delete(6..11);
+    let undone = doc.undo_change().expect("delete");
+    assert_eq!(undone.selection, Some((6, 11)));
+    // Redo leaves the text the note belongs to; a second undo has it.
+    assert_eq!(doc.redo_change().expect("redo").selection, None);
+    assert_eq!(doc.undo_change().expect("again").selection, Some((6, 11)));
+}
+
+#[test]
+fn only_the_next_new_step_keeps_a_note() {
+    let mut doc = Doc::new("abc");
+    doc.note_selection(Some((1, 3)));
+    doc.delete(1..3);
+    doc.end_run();
+    doc.insert(1, "x");
+    assert_eq!(doc.undo_change().expect("insert").selection, None);
+    assert_eq!(doc.undo_change().expect("delete").selection, Some((1, 3)));
+    // A typing run keeps the note from its start; later notes merge away.
+    let mut doc = Doc::new("");
+    doc.note_selection(Some((0, 0)));
+    doc.insert(0, "a");
+    doc.note_selection(Some((1, 1)));
+    doc.insert(1, "b");
+    let run = doc.undo_change().expect("run");
+    assert_eq!((run.range, run.selection), (0..0, Some((0, 0))));
+    // A unit keeps the note from before it opened.
+    let mut doc = Doc::new("ab");
+    doc.note_selection(Some((2, 0)));
+    doc.begin_undo_group();
+    doc.delete(0..2);
+    doc.note_selection(Some((0, 0)));
+    doc.insert(0, "c");
+    doc.end_undo_group();
+    assert_eq!(doc.undo_change().expect("unit").selection, Some((2, 0)));
+    // A cleared note is gone.
+    doc.note_selection(Some((0, 1)));
+    doc.note_selection(None);
+    doc.insert(0, "z");
+    assert_eq!(doc.undo_change().expect("edit").selection, None);
+}
+
+#[test]
 fn content_hash_streams_chunks_like_hashing_the_text() {
     let text = "x".repeat(10_000) + "\nyé\r\n";
     let doc = Doc::new(text.clone());
     assert_eq!(doc.content_hash(), super::hash_text(&text));
     assert_ne!(doc.content_hash(), super::hash_text("other"));
+}
+
+#[test]
+fn the_journal_lists_the_edits_after_a_revision_until_it_forgets_them() {
+    let mut doc = Doc::new("abc");
+    let start = doc.revision();
+    doc.insert(1, "XY");
+    doc.delete(0..1);
+    assert_eq!(
+        doc.changes_since(start),
+        Some(vec![Change::insert(1, 2), Change::delete(0, 1)])
+    );
+    let now = doc.revision();
+    assert_eq!(doc.changes_since(now), Some(Vec::new()));
+    // Undo and redo are edits too.
+    doc.undo();
+    assert_eq!(doc.changes_since(now), Some(vec![Change::insert(0, 1)]));
+    let undone = doc.revision();
+    doc.redo();
+    assert_eq!(doc.changes_since(undone), Some(vec![Change::delete(0, 1)]));
+    // Another buffer's revision, or one too old, is not known.
+    assert_eq!(doc.changes_since(Doc::new("x").revision()), None);
+    for _ in 0..1100 {
+        doc.insert(0, "x");
+    }
+    assert_eq!(doc.changes_since(now), None);
 }
