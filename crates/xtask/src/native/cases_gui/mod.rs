@@ -35,7 +35,7 @@ pub(crate) fn external(o: &Options) -> Result<()> {
         h: &h,
         opts: o,
         name: "external-failure",
-        actions: json!([{"at_ms":1100,"target":"explorer-file:space file.rs","right_click":true},{"at_ms":1600,"target":"Open externally"},{"at_ms":2400,"target":"settings"}]),
+        actions: json!([{"at_ms":1100,"target":"explorer-file:space file.rs","right_click":true},{"at_ms":1600,"target":"Open externally"},{"at_ms":2400,"target":"header-overflow"},{"at_ms":2700,"target":"settings"}]),
         after: 4900,
     })?;
     let error = logs
