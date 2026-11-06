@@ -386,6 +386,8 @@ mod tests {
             last_connected: 0,
             command_timeout_seconds: None,
             mosh: false,
+            shell_command: None,
+            mosh_command: None,
         }
     }
     #[test]

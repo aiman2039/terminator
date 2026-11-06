@@ -2,12 +2,16 @@
 use crate::ssh::SshOptions;
 use serde::{Deserialize, Serialize};
 
+mod commands;
 mod forward;
 pub mod mosh;
+mod paths;
+pub use commands::{COMMANDS_CAPABILITY, DEFAULT_SHELL_COMMAND, normalize_command};
 pub use forward::{
     ActiveForward, BIND_ADDRESS, FORWARDING_CAPABILITY, Forward, ForwardError, ForwardFailure,
     ForwardStatus, MAX_FORWARDS, validate_forwards,
 };
+pub use paths::{validate_file_name, validate_relative};
 
 pub const CAPABILITY: &str = "ssh-projects-v1";
 /// `RemoveRemoteProject`, `SetRemoteProjectGroup` and [`HOME_ROOT`] probes.
@@ -51,6 +55,11 @@ pub enum RemoteError {
     InvalidFileName { name: String },
     #[error("SSH command timeout must be between 5 and 120 seconds")]
     InvalidTimeout { seconds: u32 },
+    #[error(
+        "Host commands must be one trimmed, non-empty line of at most {} bytes",
+        commands::MAX_COMMAND_LEN
+    )]
+    InvalidCommand { command: String },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteProject {
@@ -82,6 +91,15 @@ pub struct RemoteProject {
     /// Omitted when off.
     #[serde(default, skip_serializing_if = "is_false")]
     pub mosh: bool,
+    /// Host command a new SSH or Mosh shell terminal runs after `cd` to its
+    /// folder (`ssh-commands-v1`), for example `tmux new -A -s main`.
+    /// `None` starts the login shell ([`DEFAULT_SHELL_COMMAND`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_command: Option<String>,
+    /// `mosh-server` command line (`ssh-commands-v1`); the daemon adds
+    /// `-- sh -c <script>`. `None` uses [`mosh::default_server_command`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mosh_command: Option<String>,
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -115,6 +133,7 @@ impl RemoteProject {
         {
             return Err(RemoteError::InvalidTimeout { seconds });
         }
+        commands::validate_commands(self)?;
         let valid_id = self.id.len() <= 128
             && self
                 .id
@@ -173,19 +192,6 @@ impl RemoteProject {
     pub fn identity_path(&self) -> std::path::PathBuf {
         std::path::PathBuf::from(format!("/__terminator_remote__/{}", self.id))
     }
-}
-pub fn validate_relative(path: &str) -> Result<(), RemoteError> {
-    let valid = path.len() <= 4096
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && !path.chars().any(char::is_control)
-        && !path.split('/').any(|part| part == ".." || part == ".");
-    if !valid {
-        return Err(RemoteError::InvalidRelativePath {
-            path: path.to_owned(),
-        });
-    }
-    Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteSession {
@@ -260,22 +266,6 @@ pub struct TransferStatus {
     /// Set when `error` is a classified SSH connection failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<crate::ssh::SshError>,
-}
-/// A file name an upload may create: one path component, no controls.
-pub fn validate_file_name(name: &str) -> Result<(), RemoteError> {
-    let valid = !name.is_empty()
-        && name.len() <= 255
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.chars().any(char::is_control);
-    if !valid {
-        return Err(RemoteError::InvalidFileName {
-            name: name.to_owned(),
-        });
-    }
-    Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
@@ -367,6 +357,8 @@ mod tests {
             last_connected: 0,
             command_timeout_seconds: None,
             mosh: false,
+            shell_command: None,
+            mosh_command: None,
         };
         assert_ne!(p.identity_path(), std::path::PathBuf::from(&p.root));
         assert_eq!(
@@ -391,6 +383,8 @@ mod tests {
             last_connected: 0,
             command_timeout_seconds: None,
             mosh: false,
+            shell_command: None,
+            mosh_command: None,
         };
         // Unset: older readers see the same JSON, and Settings decides.
         assert!(
@@ -412,14 +406,6 @@ mod tests {
             p.command_timeout_seconds = Some(bad);
             assert!(p.validate().is_err(), "{bad}");
         }
-    }
-    #[test]
-    fn upload_names_are_single_safe_components() {
-        for name in ["", ".", "..", "a/b", "a\\b", "a\nb", &"x".repeat(256)] {
-            assert!(validate_file_name(name).is_err(), "{name:?}");
-        }
-        assert!(validate_file_name("report final.pdf").is_ok());
-        assert!(validate_file_name(".env").is_ok());
     }
     #[test]
     fn only_upload_and_download_start_transfers() {

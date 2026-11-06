@@ -16,6 +16,8 @@ pub(crate) fn blank_project() -> RemoteProject {
         last_connected: 0,
         command_timeout_seconds: None,
         mosh: false,
+        shell_command: None,
+        mosh_command: None,
     }
 }
 
@@ -158,6 +160,64 @@ pub(super) fn mosh_field(ui: &mut egui::Ui, value: &mut bool, enabled: bool) {
         "Needs mosh on this computer and mosh-server on the host, with UDP ports 60000–61000 open. Files, Git and transfers still use SSH.",
         "",
     );
+}
+
+/// The terminal command, and the `mosh-server` command while Mosh is on.
+/// `enabled` only when the daemon honors them (`ssh-commands-v1`).
+pub(super) fn command_fields(ui: &mut egui::Ui, draft: &mut RemoteProject, enabled: bool) {
+    ui.add_enabled_ui(enabled, |ui| {
+        command_field(
+            ui,
+            "Terminal command",
+            &mut draft.shell_command,
+            terminator_core::remote::DEFAULT_SHELL_COMMAND,
+        );
+        form::hint(
+            ui,
+            "Runs on the host in the project folder for each new terminal, for example `tmux new -A -s main`. Editors do not use it.",
+            "",
+        );
+        if draft.mosh {
+            command_field(
+                ui,
+                "Mosh server command",
+                &mut draft.mosh_command,
+                terminator_core::remote::mosh::default_server_command(),
+            );
+            form::hint(
+                ui,
+                "Terminator adds `-- sh -c <terminal script>`. It must print MOSH CONNECT, as `mosh-server new` does.",
+                "",
+            );
+        }
+    })
+    .response
+    .on_disabled_hover_text("Requires an updated session service.");
+}
+
+/// An editable host command that shows `default` until changed. Blank or
+/// the default saves nothing, so a later default still applies.
+fn command_field(ui: &mut egui::Ui, label: &str, value: &mut Option<String>, default: &str) {
+    form::label(ui, label);
+    ui.horizontal(|ui| {
+        let mut text = value.clone().unwrap_or_else(|| default.to_owned());
+        let width = (ui.available_width() - 70.0).max(80.0);
+        let response = ui.add(
+            appearance::singleline(&mut text)
+                .font(egui::TextStyle::Monospace)
+                .desired_width(width),
+        );
+        if response.changed() {
+            *value = terminator_core::remote::normalize_command(&text, default);
+        }
+        if ui
+            .add_enabled(value.is_some(), egui::Button::new("Default"))
+            .on_hover_text("Use the default command")
+            .clicked()
+        {
+            *value = None;
+        }
+    });
 }
 
 /// A key file path; `~/` expands to the home directory, blank clears it.

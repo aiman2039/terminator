@@ -1,7 +1,9 @@
 //! SSH host Properties on the SSH page: add, edit or duplicate a saved SSH
 //! project. Same look as VNC Properties: a titled card, section captions,
 //! labels above fields, and one accent button.
-use super::fields::{connection_fields, group_field, mosh_field, sign_in_fields, timeout_field};
+use super::fields::{
+    command_fields, connection_fields, group_field, mosh_field, sign_in_fields, timeout_field,
+};
 use super::*;
 use crate::vnc_ui::form;
 use eframe::egui::RichText;
@@ -165,6 +167,7 @@ impl App {
             host_timeout,
         );
         mosh_field(ui, &mut draft.mosh, mosh);
+        command_fields(ui, draft, has(terminator_core::remote::COMMANDS_CAPABILITY));
         let config = hosts.and_then(|h| h.iter().find(|h| h.alias == draft.ssh.host));
         if let Some(found) = remote.probe.poll(&draft.ssh.host) {
             remote.resolved = Some(found);

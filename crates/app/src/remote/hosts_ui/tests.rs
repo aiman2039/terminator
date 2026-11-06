@@ -14,6 +14,8 @@ fn project(id: &str, host: &str, group: Option<&str>) -> RemoteProject {
         last_connected: 0,
         command_timeout_seconds: None,
         mosh: false,
+        shell_command: None,
+        mosh_command: None,
     }
 }
 fn names(groups: &[HostGroup<'_>]) -> Vec<(Option<String>, Vec<String>)> {
