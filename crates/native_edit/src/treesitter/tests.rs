@@ -149,3 +149,64 @@ fn oversized_buffers_fall_back() {
     let big = "x\n".repeat(MAX_HIGHLIGHT_BYTES / 2 + 1);
     assert!(highlight_text(Language::Rust, &big, &theme).is_none());
 }
+
+/// A language, its starting text, and `(from, to)` edits.
+type Case = (
+    Language,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+#[test]
+fn incremental_highlight_matches_the_full_highlighter_across_edits() {
+    let theme = crate::highlight::theme(true).expect("islands dark");
+    let cases: [Case; 3] = [
+        (
+            Language::Rust,
+            "#[derive(Debug)]\npub const SCALE: u64 = 1_000_000;\nstruct S { a: u64 }\n// note\nfn f(s: &S) -> u64 { s.a }\npub enum E {\n    Variant,\n}\n",
+            &[
+                ("fn f", "fn renamed"),
+                ("// note", "/* block */ \"str\""),
+                ("Variant,", "Variant,\n    Other(u8),"),
+                ("SCALE", ""),
+            ],
+        ),
+        (
+            Language::Python,
+            "import os\n\ndef f(x):\n    \"\"\"Doc.\"\"\"\n    return x + 1  # one\n\nclass C:\n    pass\n",
+            &[
+                ("return x + 1", "return f(x) * 2"),
+                ("class C", "@dec\nclass D"),
+                ("import os\n", ""),
+            ],
+        ),
+        (
+            Language::JavaScript,
+            "const a = 1;\nfunction f(b) {\n  // c\n  return `t${b}`;\n}\nclass K { m() { return 2; } }\n",
+            &[
+                ("const a = 1;", "let a = 'x';"),
+                ("return 2;", "return this.m();"),
+                ("// c\n", ""),
+            ],
+        ),
+    ];
+    for (language, start, edits) in cases {
+        let mut state = None;
+        let mut text = start.to_owned();
+        let first = highlight_incremental(language, &text, theme, &mut state);
+        assert_eq!(
+            first,
+            highlight_text(language, &text, theme),
+            "{language:?}"
+        );
+        for (from, to) in edits {
+            text = text.replacen(from, to, 1);
+            let incremental = highlight_incremental(language, &text, theme, &mut state);
+            assert_eq!(
+                incremental,
+                highlight_text(language, &text, theme),
+                "{language:?} after {from:?} -> {to:?}"
+            );
+        }
+    }
+}

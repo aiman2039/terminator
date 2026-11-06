@@ -1,5 +1,11 @@
 //! Revision-keyed highlight cache shared by a buffer's views.
-use super::{Language, MAX_HIGHLIGHT_BYTES, SYNC_HIGHLIGHT_BYTES, Span, highlight_lf, rainbow};
+use super::{
+    Language, MAX_HIGHLIGHT_BYTES, SYNC_HIGHLIGHT_BYTES, Span, highlight_lf_kept, rainbow,
+};
+
+/// The buffer's last highlighted text and syntax tree, shared with the
+/// highlight worker, so an edit re-parses only what changed.
+type Syntax = std::sync::Arc<std::sync::Mutex<Option<crate::treesitter::SyntaxState>>>;
 use crate::doc::Buffer;
 use crate::doc::normalize_breaks;
 use crate::rows::{RowCache, VisualRow};
@@ -25,6 +31,8 @@ pub struct HighlightCache {
     folds: crate::fold::Folds,
     /// The worker highlight in flight, if any (see [`HighlightCache::ensure_async`]).
     running: Option<(HighlightKey, std::sync::mpsc::Receiver<Vec<Vec<Span>>>)>,
+    /// Kept text and tree for incremental parsing (see [`Syntax`]).
+    syntax: Syntax,
 }
 
 /// What one highlight result was computed for.
@@ -41,13 +49,16 @@ fn compute_lines_capped(
     language: Language,
     text: &str,
     (dark, rainbow): (bool, bool),
-    cap: usize,
+    (cap, syntax): (usize, &Syntax),
 ) -> Vec<Vec<Span>> {
     if text.len() > cap {
         return Vec::new();
     }
     let text = &*normalize_breaks(text);
-    match highlight_lf(language, text, dark) {
+    let mut kept = syntax
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match highlight_lf_kept(language, text, dark, Some(&mut kept)) {
         Some(mut lines) => {
             if rainbow {
                 rainbow::apply(&mut lines, text, dark);
@@ -102,7 +113,7 @@ impl HighlightCache {
             language,
             &text,
             (dark, self.rainbow),
-            self.cap(),
+            (self.cap(), &self.syntax),
         ));
         self.adopt(HighlightKey {
             language,
@@ -167,6 +178,7 @@ impl HighlightCache {
         };
         let ctx = ctx.clone();
         let cap = self.cap();
+        let syntax = std::sync::Arc::clone(&self.syntax);
         let (tx, rx) = std::sync::mpsc::channel();
         // The text follows the spawn, so a failed spawn still has it.
         let (text_tx, text_rx) = std::sync::mpsc::channel::<String>();
@@ -176,7 +188,12 @@ impl HighlightCache {
                 let Ok(text) = text_rx.recv() else {
                     return;
                 };
-                let lines = compute_lines_capped(key.language, &text, (key.dark, key.rainbow), cap);
+                let lines = compute_lines_capped(
+                    key.language,
+                    &text,
+                    (key.dark, key.rainbow),
+                    (cap, &syntax),
+                );
                 let _ = tx.send(lines);
                 ctx.request_repaint();
             });

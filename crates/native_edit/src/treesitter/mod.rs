@@ -9,9 +9,11 @@
 //! Parse failures, grammar mismatches, and oversized buffers fall back
 //! to syntect (the 256KB cap bounds parse work; no timeout API exists
 //! on this tree-sitter version).
+mod incremental;
 mod outline;
 #[cfg(test)]
 mod tests;
+pub use incremental::{SyntaxState, highlight_incremental};
 pub use outline::{has_outline, outline};
 use std::collections::HashMap;
 use syntect::highlighting::Theme;
