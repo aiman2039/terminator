@@ -50,12 +50,23 @@ impl Viewer<'_> {
         }
         let slot =
             ui.allocate_response(egui::vec2(ui.available_width(), 26.0), egui::Sense::hover());
+        // The field itself is frameless, so this row would read as terminal
+        // text. Draw an input box (surface fill, focus stroke) behind it.
+        let field = slot.rect.shrink2(egui::vec2(6.0, 2.0));
+        let visuals = ui.visuals();
+        ui.painter().rect(
+            field,
+            4.0,
+            visuals.extreme_bg_color,
+            visuals.selection.stroke,
+            egui::StrokeKind::Inside,
+        );
         self.app
             .inline_rename(super::super::menus::InlineRenameInput {
                 ui,
                 sid,
                 surface: RenameSurface::Pane,
-                rect: slot.rect,
+                rect: field.shrink2(egui::vec2(6.0, 0.0)),
             });
     }
 }

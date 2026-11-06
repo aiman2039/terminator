@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod appearance_tests;
 mod bars;
+mod center_card;
+pub use center_card::*;
 mod controls;
 mod editor;
 pub use editor::*;

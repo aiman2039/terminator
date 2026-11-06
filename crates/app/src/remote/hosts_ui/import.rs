@@ -108,7 +108,7 @@ impl App {
             .id_salt("ssh-import")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                form::card(ui, |ui| {
+                form::column(ui, |ui| {
                     ui.label(
                         RichText::new("Import hosts")
                             .size(crate::appearance::FONT_HEADING)

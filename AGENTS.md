@@ -46,6 +46,8 @@ Use rustfmt defaults, four-space indentation, `snake_case` functions/modules, an
 
 Keep every toolbar icon on one row and one size. Use the shared `appearance` helpers (`sidebar_action`, `selectable_icon`, `icon_menu_button`, `compact_menu_button`, `text_menu_button`; in the window header `framed_icon`, `framed_icon_button`, `tool_button`; glyph plus text `icon_label_button`) so frameless controls keep a fixed square regardless of ambient `interact_size`; never mix a framed or differently sized button beside them. Sizes are `TOOLBAR_ICON` (glyph), `TOOLBAR_BUTTON` (compact rows) and `HEADER_BUTTON` (window header). A menu item shows a shortcut only when that key runs that exact item.
 
+Center-pane pages (Settings, SSH, VNC, worktree form) paint in `appearance::center_card`: a margin on each side, a click on the margin closes the page, and content scrolls inside the card. Right-aligned form footers use `appearance::footer_row`, not `with_layout(right_to_left)`.
+
 Take text sizes and corner radii from `appearance/scale.rs` (`FONT_*` and `RADIUS_*` tokens, or `egui::CornerRadius::ZERO`). Do not write a literal font size or corner radius in `crates/app/src`; `appearance::scale_tests` fails on one. Terminal and editor text follow the user's size settings; give any other exception a reason in that test's allowlist.
 
 ## Architecture & Behavior Constraints

@@ -184,23 +184,32 @@ impl App {
         let mut submit = false;
         let mut browse = false;
         let mut cancel = false;
-        ui.set_min_size(ui.available_size());
-        ui.horizontal(|ui| {
-            ui.strong("New task worktree");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if appearance::sidebar_action(ui, "X", "Close").clicked() {
-                    cancel = true;
-                }
+        let style = appearance::CenterCardStyle::new(&self.theme);
+        let ((), dismissed) = appearance::center_card(ui, style, |ui| {
+            ui.set_min_size(ui.available_size());
+            ui.horizontal(|ui| {
+                ui.strong("New task worktree");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                        cancel = true;
+                    }
+                });
             });
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical()
+                .id_salt("worktree-form")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.worktree_form(WorktreeFormInput {
+                        ui,
+                        draft: &mut draft,
+                        submit: &mut submit,
+                        browse: &mut browse,
+                        cancel: &mut cancel,
+                    });
+                });
         });
-        ui.add_space(8.0);
-        self.worktree_form(WorktreeFormInput {
-            ui,
-            draft: &mut draft,
-            submit: &mut submit,
-            browse: &mut browse,
-            cancel: &mut cancel,
-        });
+        cancel |= dismissed;
         if browse {
             self.browse_target = Some(BrowseTarget::WorktreeDest);
         }

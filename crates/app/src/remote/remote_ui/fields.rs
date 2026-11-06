@@ -170,7 +170,10 @@ pub(super) fn command_fields(ui: &mut egui::Ui, draft: &mut RemoteProject, enabl
             ui,
             "Terminal command",
             &mut draft.shell_command,
-            terminator_core::remote::DEFAULT_SHELL_COMMAND,
+            (
+                terminator_core::remote::DEFAULT_SHELL_COMMAND,
+                "Default (login shell)",
+            ),
         );
         form::hint(
             ui,
@@ -182,7 +185,10 @@ pub(super) fn command_fields(ui: &mut egui::Ui, draft: &mut RemoteProject, enabl
                 ui,
                 "Mosh server command",
                 &mut draft.mosh_command,
-                terminator_core::remote::mosh::default_server_command(),
+                (
+                    terminator_core::remote::mosh::default_server_command(),
+                    "Default (mosh-server new)",
+                ),
             );
             form::hint(
                 ui,
@@ -195,18 +201,27 @@ pub(super) fn command_fields(ui: &mut egui::Ui, draft: &mut RemoteProject, enabl
     .on_disabled_hover_text("Requires an updated session service.");
 }
 
-/// An editable host command that shows `default` until changed. Blank or
-/// the default saves nothing, so a later default still applies.
-fn command_field(ui: &mut egui::Ui, label: &str, value: &mut Option<String>, default: &str) {
+/// An editable host command; blank shows `placeholder`, and the full
+/// default is on hover. Blank or the default saves nothing, so a later
+/// default still applies.
+fn command_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<String>,
+    (default, placeholder): (&str, &str),
+) {
     form::label(ui, label);
     ui.horizontal(|ui| {
-        let mut text = value.clone().unwrap_or_else(|| default.to_owned());
+        let mut text = value.clone().unwrap_or_default();
         let width = (ui.available_width() - 70.0).max(80.0);
-        let response = ui.add(
-            appearance::singleline(&mut text)
-                .font(egui::TextStyle::Monospace)
-                .desired_width(width),
-        );
+        let response = ui
+            .add(
+                appearance::singleline(&mut text)
+                    .font(egui::TextStyle::Monospace)
+                    .hint_text(placeholder)
+                    .desired_width(width),
+            )
+            .on_hover_text(format!("Default: {default}"));
         if response.changed() {
             *value = terminator_core::remote::normalize_command(&text, default);
         }

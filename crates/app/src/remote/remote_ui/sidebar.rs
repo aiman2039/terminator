@@ -317,19 +317,27 @@ fn git_change_row(input: GitChangeRowInput<'_>) {
     let _ = project_id;
     let x = change.status.as_bytes().first().copied().unwrap_or(b' ');
     let y = change.status.as_bytes().get(1).copied().unwrap_or(b' ');
-    let response = ui.selectable_label(false, format!("{}  {}", change.status, change.path));
-    #[cfg(feature = "test-support")]
-    crate::diagnostics::record(
-        ui.ctx(),
-        &format!("remote-git:{project_id}:{}", change.path),
-        response.rect,
-    );
-    if response.clicked() {
-        actions.diff = Some((change.path.clone(), y == b' ' && x != b'?'));
-    }
-    if appearance::sidebar_action(ui, "FileCode", "Open remote file").clicked() {
-        actions.open = Some((change.path.clone(), false));
-    }
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if appearance::sidebar_action(ui, "FileCode", "Open remote file").clicked() {
+            actions.open = Some((change.path.clone(), false));
+        }
+        let text = format!("{}  {}", change.status, change.path);
+        let response = ui
+            .with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Button::selectable(false, text).truncate())
+                    .on_hover_text(&change.path)
+            })
+            .inner;
+        #[cfg(feature = "test-support")]
+        crate::diagnostics::record(
+            ui.ctx(),
+            &format!("remote-git:{project_id}:{}", change.path),
+            response.rect,
+        );
+        if response.clicked() {
+            actions.diff = Some((change.path.clone(), y == b' ' && x != b'?'));
+        }
+    });
 }
 
 struct FileMenuInput<'a> {

@@ -148,17 +148,25 @@ pub(super) fn endpoint(
 /// Widest a form card grows in a large pane.
 const CARD_WIDTH: f32 = 560.0;
 
-/// A centered, framed card for a form in the main pane.
+/// A centered, framed card for a form outside a center card (a VNC tab).
 pub(crate) fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    column(ui, |ui| {
+        egui::Frame::group(ui.style())
+            .inner_margin(16.0)
+            .corner_radius(8.0)
+            .show(ui, add)
+            .inner
+    })
+}
+
+/// A centered form column without a frame, for forms already inside
+/// `appearance::center_card`.
+pub(crate) fn column<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.vertical_centered(|ui| {
         ui.set_max_width(CARD_WIDTH.min(ui.available_width()));
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.add_space(12.0);
-            egui::Frame::group(ui.style())
-                .inner_margin(16.0)
-                .corner_radius(8.0)
-                .show(ui, add)
-                .inner
+            add(ui)
         })
         .inner
     })

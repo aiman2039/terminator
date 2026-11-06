@@ -9,7 +9,7 @@ impl App {
         }
         let failed = appearance::color(&self.theme.status_failed);
         let accent = appearance::color(&self.theme.accent);
-        form::card(ui, |ui| {
+        form::column(ui, |ui| {
             let editor = &mut self.vnc_sidebar;
             let title = if editor.editing_id.is_some() {
                 format!("{} – Properties", display_title(editor))
@@ -137,14 +137,12 @@ impl App {
     }
 
     fn vnc_properties_footer(&mut self, ui: &mut egui::Ui) {
-        let (save, save_connect, cancel) = ui
-            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let save_connect = form::primary_button(ui, "Save & Connect").clicked();
-                let save = ui.button("Save").clicked();
-                let cancel = ui.button("Cancel").clicked();
-                (save, save_connect, cancel)
-            })
-            .inner;
+        let (save, save_connect, cancel) = appearance::footer_row(ui, |ui| {
+            let save_connect = form::primary_button(ui, "Save & Connect").clicked();
+            let save = ui.button("Save").clicked();
+            let cancel = ui.button("Cancel").clicked();
+            (save, save_connect, cancel)
+        });
         if cancel {
             self.close_vnc_properties();
         }

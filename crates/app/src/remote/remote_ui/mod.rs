@@ -83,6 +83,10 @@ pub(crate) struct RemoteUi {
     pub open: bool,
     /// The host in SSH Properties. A non-empty id edits that saved project.
     pub draft: Option<RemoteProject>,
+    /// The draft as opened, to tell whether the form has unsaved changes.
+    pub draft_origin: Option<RemoteProject>,
+    /// A margin click on a changed form asks before it discards the draft.
+    pub confirm_discard: bool,
     pub error: Option<String>,
     /// The classified SSH failure behind `error`, for its fix button.
     pub failure: Option<SshFailure>,
@@ -148,13 +152,20 @@ impl RemoteUi {
         self.connect_after = draft.id.is_empty();
         self.save_after_probe = false;
         self.resolved = None;
+        self.draft_origin = Some(draft.clone());
         self.draft = Some(draft);
+        self.confirm_discard = false;
         self.config_generation
     }
     pub(crate) fn close(&mut self) {
         self.open = false;
         self.active = None;
         self.busy = false;
+        self.confirm_discard = false;
+    }
+    /// Properties is open and the form differs from the host as opened.
+    pub(crate) fn draft_changed(&self) -> bool {
+        self.open && self.draft.is_some() && self.draft != self.draft_origin
     }
 }
 pub(crate) fn location_label(session: &terminator_core::Session) -> String {

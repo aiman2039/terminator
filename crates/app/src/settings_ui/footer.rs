@@ -49,30 +49,10 @@ impl App {
     /// margin around the card closes Settings (unsaved changes still ask).
     pub(crate) fn settings_center(&mut self, ui: &mut egui::Ui) {
         let mut frame = SettingsFrame::default();
-        let outer = ui.available_rect_before_wrap();
-        let card = settings_card_rect(outer);
-        ui.painter().rect_filled(
-            outer,
-            egui::CornerRadius::ZERO,
-            appearance::color(&self.theme.window),
-        );
-        let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card));
-        egui::Frame::new()
-            .fill(appearance::color(&self.theme.surface))
-            .stroke(egui::Stroke::new(
-                self.theme.border_width.max(1.0),
-                appearance::color(&self.theme.border),
-            ))
-            .corner_radius(appearance::PANEL_RADIUS)
-            .inner_margin(egui::Margin::same(14))
-            .show(&mut card_ui, |ui| {
-                ui.set_max_size(card.shrink(SETTINGS_CARD_PADDING).size());
-                self.paint_settings(ui, &mut frame);
-            });
-        ui.allocate_rect(outer, egui::Sense::hover());
-        if background_clicked(ui, outer, card) {
-            frame.hide = true;
-        }
+        let style = appearance::CenterCardStyle::new(&self.theme);
+        let ((), dismissed) =
+            appearance::center_card(ui, style, |ui| self.paint_settings(ui, &mut frame));
+        frame.hide |= dismissed;
         self.finish_settings_frame(frame);
     }
 
@@ -170,33 +150,4 @@ impl App {
             self.request_settings_close();
         }
     }
-}
-
-/// Inner padding of the Settings card (matches the frame margin).
-const SETTINGS_CARD_PADDING: f32 = 14.0;
-
-/// Card inside the center pane: a margin on each side so the background
-/// stays visible and clickable, and a capped width on wide windows.
-pub(super) fn settings_card_rect(outer: egui::Rect) -> egui::Rect {
-    const MAX_WIDTH: f32 = 1100.0;
-    let margin_x = (outer.width() * 0.06).clamp(12.0, 64.0);
-    let margin_y = (outer.height() * 0.06).clamp(12.0, 48.0);
-    let width = (outer.width() - 2.0 * margin_x).clamp(0.0, MAX_WIDTH);
-    let height = (outer.height() - 2.0 * margin_y).max(0.0);
-    egui::Rect::from_center_size(outer.center(), egui::vec2(width, height))
-}
-
-/// A primary click this frame on the center pane, outside the card, and
-/// on the Settings layer (so a popup or dialog above it does not count).
-fn background_clicked(ui: &egui::Ui, outer: egui::Rect, card: egui::Rect) -> bool {
-    let Some(pos) = ui.input(|input| {
-        input
-            .pointer
-            .primary_clicked()
-            .then(|| input.pointer.interact_pos())
-            .flatten()
-    }) else {
-        return false;
-    };
-    outer.contains(pos) && !card.contains(pos) && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
 }

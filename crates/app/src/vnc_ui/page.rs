@@ -19,18 +19,22 @@ impl App {
             self.workspace_center(ui);
             return;
         }
-        egui::Frame::NONE.inner_margin(16.0).show(ui, |ui| {
+        let style = appearance::CenterCardStyle::new(&self.theme);
+        let (close, dismissed) = appearance::center_card(ui, style, |ui| {
+            let mut close = false;
             ui.set_min_size(ui.available_size());
             ui.horizontal(|ui| {
-                ui.label(RichText::new("VNC").size(18.0).strong());
+                ui.label(RichText::new("VNC").size(appearance::FONT_TITLE).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if appearance::sidebar_action(ui, "X", "Close").clicked() {
-                        self.vnc_page_open = false;
-                    }
+                    close = appearance::sidebar_action(ui, "X", "Close").clicked();
                 });
             });
             ui.add_space(8.0);
             self.vnc_address_book(ui, PAGE_KEY);
+            close
         });
+        if close || dismissed {
+            self.vnc_page_open = false;
+        }
     }
 }
