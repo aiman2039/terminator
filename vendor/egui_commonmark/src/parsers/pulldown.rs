@@ -270,8 +270,11 @@ impl CommonMarkViewerInternal {
 
             // deferral to make it consistent no matter whether the target is before or after the link
             let source_id = viewer_id(options);
-            *scroll_cache(cache, &source_id).scroll_to_id_target_mut() =
-                self.deferred_scroll_to_heading.take();
+            // Terminator: keep a target set earlier until its heading takes
+            // it; a later show call (another block) must not clear it.
+            if let Some(target) = self.deferred_scroll_to_heading.take() {
+                *scroll_cache(cache, &source_id).scroll_to_id_target_mut() = Some(target);
+            }
 
             if let Some(source_id) = split_points_id {
                 scroll_cache(cache, &source_id).page_size =

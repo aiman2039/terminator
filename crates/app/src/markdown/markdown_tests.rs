@@ -27,6 +27,54 @@ mod tests {
     }
 
     #[test]
+    fn a_long_preview_keeps_its_scroll_height_and_reaches_the_end_when_virtualized() {
+        let source = (0..400).fold(String::new(), |mut source, n| {
+            use std::fmt::Write as _;
+            let _ = write!(source, "Paragraph {n:03} with some words.\n\n");
+            source
+        });
+        let mut preview = Preview::default();
+        preview.apply(Ok(prepare(snapshot(&source))));
+        let ctx = egui::Context::default();
+        let mut frame = |fraction: Option<f32>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    preview.show_synced(super::super::previews::ShowSyncedInput {
+                        ui,
+                        sid: "long",
+                        status_override: None,
+                        scroll_fraction: fraction,
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            let texts = crate::app::painted_text(&output.shapes);
+            (preview.cache_scroll_height_for_test(), texts)
+        };
+        // The first frame measures every block; later ones skip far ones.
+        let (measured, _) = frame(None);
+        let (culled, _) = frame(None);
+        assert!(measured > 400.0 * 20.0, "{measured}");
+        // Same scroll range, give or take the one item gap at the end.
+        assert!((measured - culled).abs() <= 10.0, "{measured} vs {culled}");
+        frame(Some(1.0));
+        let (_, texts) = frame(Some(1.0));
+        assert!(
+            texts
+                .iter()
+                .any(|(pos, text)| text.contains("Paragraph 399") && pos.y < 700.0),
+            "the last block paints at the end"
+        );
+    }
+
+    #[test]
     fn preview_places_source_newlines_and_html_breaks_on_separate_rows() {
         fn rows(shape: &egui::Shape, out: &mut Vec<(f32, String)>) {
             match shape {

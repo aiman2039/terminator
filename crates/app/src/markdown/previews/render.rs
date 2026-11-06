@@ -1,7 +1,11 @@
+use super::super::blocks::BlockHeights;
 use super::super::html::{Document, Link, usize_from_f32};
 use super::{Preview, ShowSyncedInput};
 use eframe::egui;
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer, newline};
+
+/// Blocks painted beyond the visible part, above and below.
+const PAINT_MARGIN: f32 = 1200.0;
 use std::sync::Arc;
 
 impl Preview {
@@ -47,11 +51,17 @@ impl Preview {
                 self.preview_rect,
             );
         }
+        // A link to a `#heading` scrolls when the heading paints: paint
+        // every block until it did.
+        let heading_scroll = egui_commonmark::heading_scroll_pending(&mut self.cache);
         let output = self.scroll_area(ui, sid, scroll_fraction).show(ui, |ui| {
             PreviewBody {
                 document,
                 cache: &mut self.cache,
                 textures: &self.mermaid_textures,
+                heights: &mut self.block_heights,
+                generation: self.applied_generation,
+                paint_all: heading_scroll,
             }
             .show(ui);
         });
@@ -163,6 +173,11 @@ struct PreviewBody<'a> {
     document: &'a Document,
     cache: &'a mut CommonMarkCache,
     textures: &'a [egui::TextureHandle],
+    heights: &'a mut BlockHeights,
+    /// Identifies the document for `heights`.
+    generation: u64,
+    /// Paint every block (a heading scroll is pending).
+    paint_all: bool,
 }
 
 impl PreviewBody<'_> {
@@ -176,6 +191,7 @@ impl PreviewBody<'_> {
                 ui.set_max_width(width);
                 egui::Frame::NONE.inner_margin(18).show(ui, |ui| {
                     Self::apply_style(ui);
+                    self.heights.begin(self.generation, ui.available_width());
                     self.content(ui);
                 });
             });
@@ -204,27 +220,51 @@ impl PreviewBody<'_> {
 
     fn content(&mut self, ui: &mut egui::Ui) {
         let document = self.document;
-        if document.mermaid.is_empty() {
-            self.show_text(ui, &document.text);
-            return;
-        }
         let mut position = 0;
         for (diagram, texture) in document.mermaid.iter().zip(self.textures) {
-            if let Some(before) = document.text.get(position..diagram.range.start)
-                && !before.is_empty()
-            {
-                self.show_text(ui, before);
-            }
+            self.show_range(ui, position..diagram.range.start);
             ui.add(
                 egui::Image::from_texture(texture)
                     .max_size(egui::vec2(ui.available_width(), 1200.0)),
             );
             position = diagram.range.end;
         }
-        if let Some(after) = document.text.get(position..)
-            && !after.is_empty()
-        {
-            self.show_text(ui, after);
+        self.show_range(ui, position..document.text.len());
+    }
+
+    /// The text in `range`, one top-level block at a time. A block far
+    /// outside the view whose height is known only takes that height.
+    fn show_range(&mut self, ui: &mut egui::Ui, range: std::ops::Range<usize>) {
+        let document = self.document;
+        let visible = ui.clip_rect().expand2(egui::vec2(0.0, PAINT_MARGIN));
+        let mut first = true;
+        for block in &document.blocks {
+            let start = block.start.max(range.start);
+            let end = block.end.min(range.end);
+            let Some(text) = document
+                .text
+                .get(start..end)
+                .filter(|text| !text.trim().is_empty())
+            else {
+                continue;
+            };
+            // Separate viewer calls drop the blank line the viewer puts
+            // between blocks: one ends a block, one starts the next.
+            if !first {
+                newline(ui);
+                newline(ui);
+            }
+            first = false;
+            let top = ui.cursor().min.y;
+            if let Some(height) = self.heights.get(start)
+                && !self.paint_all
+                && (top + height < visible.min.y || top > visible.max.y)
+            {
+                ui.add_space(height);
+                continue;
+            }
+            self.show_text(ui, text);
+            self.heights.set(start, ui.cursor().min.y - top);
         }
     }
 

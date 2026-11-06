@@ -1,3 +1,4 @@
+mod blocks;
 mod html;
 pub(crate) mod images;
 #[cfg(test)]
