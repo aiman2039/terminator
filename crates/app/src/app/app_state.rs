@@ -247,6 +247,8 @@ pub struct App {
     pub(crate) error_cwd: Option<PathBuf>,
     pub(crate) missing_path_reports: u8,
     pub(crate) info: Option<String>,
+    /// The info text on screen and when it appeared: it clears after a while.
+    pub(crate) info_since: Option<(String, std::time::Instant)>,
     pub(crate) add_project: bool,
     pub(crate) settings_open: bool,
     pub(crate) settings_session: bool,

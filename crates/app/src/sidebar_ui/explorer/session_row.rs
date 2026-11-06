@@ -175,19 +175,42 @@ impl App {
                 self.close_session = Some(session.id.clone());
                 ui.close();
             }
-        } else if appearance::menu_item(appearance::MenuItemInput {
+        } else {
+            self.remove_record_item(ui, &session.id);
+        }
+    }
+
+    /// Removing a historical record cannot be undone: the first click arms
+    /// the row (the menu stays open), the second removes.
+    fn remove_record_item(&mut self, ui: &mut egui::Ui, sid: &str) {
+        let armed_id = egui::Id::unique(("remove-history-armed", sid));
+        let armed = ui
+            .data(|data| data.get_temp::<bool>(armed_id))
+            .unwrap_or(false);
+        let label = if armed {
+            "Remove record: click again to confirm"
+        } else {
+            "Remove historical record…"
+        };
+        if !appearance::menu_item(appearance::MenuItemInput {
             ui,
-            label: "Remove historical record",
+            label,
             icon: "X",
             shortcut: "",
         })
         .clicked()
         {
+            return;
+        }
+        if armed {
+            ui.data_mut(|data| data.remove::<bool>(armed_id));
             self.send(Request::Remove {
-                session: session.id.clone(),
+                session: sid.to_owned(),
             });
-            self.remove_tab(&session.id);
+            self.remove_tab(sid);
             ui.close();
+        } else {
+            ui.data_mut(|data| data.insert_temp(armed_id, true));
         }
     }
 

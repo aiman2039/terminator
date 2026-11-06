@@ -4,6 +4,9 @@
 
 use crate::*;
 
+/// How long an info note stays in the status bar.
+const INFO_TTL: std::time::Duration = std::time::Duration::from_secs(8);
+
 impl App {
     pub(super) fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -72,6 +75,7 @@ impl App {
     /// The single most urgent status message, falling back to the count
     /// of running sessions.
     fn status_banner(&mut self, ui: &mut egui::Ui) {
+        self.expire_info(ui.ctx());
         // A count only: holding the tab list across the chain would
         // borrow self while the banner bodies need `&mut self`.
         let unavailable_tabs = self.unavailable_tabs().len();
@@ -88,23 +92,57 @@ impl App {
             });
         } else if unavailable_tabs > 0 {
             ui.horizontal_wrapped(|ui| self.unavailable_tabs_banner(ui, unavailable_tabs));
-        } else if let Some(message) = &self.state.degraded {
-            ui.colored_label(appearance::color(&self.theme.status_waiting), message);
+        } else if let Some(message) = self.state.degraded.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(appearance::color(&self.theme.status_waiting), message);
+                self.info_row(ui);
+            });
         } else if self.installation_mismatched() {
             if ui.small_button("Review installation…").clicked() {
                 self.open_installation_settings();
             }
             self.restart_session_button(ui, true);
             ui.weak("App and session service use different installations.");
-        } else if let Some(info) = self.info.clone() {
-            ui.horizontal(|ui| {
-                if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
-                    self.info = None;
-                }
-                ui.label(info);
-            });
+        } else if self.info.is_some() {
+            ui.horizontal(|ui| self.info_row(ui));
         } else {
             ui.horizontal(|ui| self.running_sessions_label(ui));
+        }
+    }
+
+    /// The info note with its Dismiss button; nothing when there is none.
+    fn info_row(&mut self, ui: &mut egui::Ui) {
+        let Some(info) = self.info.clone() else {
+            return;
+        };
+        if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
+            self.info = None;
+        }
+        ui.label(info);
+    }
+
+    /// Info notes are short-lived: one clears [`INFO_TTL`] after it first
+    /// showed (a new text starts the time again), so a stale note never
+    /// hides the running-sessions count.
+    pub(crate) fn expire_info(&mut self, ctx: &egui::Context) {
+        let Some(info) = self.info.as_ref() else {
+            self.info_since = None;
+            return;
+        };
+        let now = std::time::Instant::now();
+        let since = match &self.info_since {
+            Some((text, at)) if text == info => *at,
+            _ => {
+                self.info_since = Some((info.clone(), now));
+                now
+            }
+        };
+        let shown = now.saturating_duration_since(since);
+        if shown >= INFO_TTL {
+            self.info = None;
+            self.info_since = None;
+        } else {
+            ctx.request_repaint_after(INFO_TTL.saturating_sub(shown));
         }
     }
 

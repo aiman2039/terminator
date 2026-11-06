@@ -18,6 +18,9 @@ const INDENT: f32 = 14.0;
 const CHEVRON: f32 = 16.0;
 const BADGE: f32 = 16.0;
 
+/// A file outline, shared with the views that show it.
+type Outline = Arc<[Symbol]>;
+
 /// Panel options and per-file tree state. Collapsed nodes are keyed by
 /// their name path, so they survive edits that shift symbol indices.
 #[derive(Default)]
@@ -29,7 +32,7 @@ pub(crate) struct StructureState {
     autoscroll_off: bool,
     markdown: Option<(PathBuf, u64, Arc<[Symbol]>)>,
     /// Syntax-tree outline (no language server answer yet), per revision.
-    syntax: Option<(PathBuf, u64, Arc<[Symbol]>)>,
+    syntax: Option<(PathBuf, u64, Option<Outline>)>,
     /// Last caret-selected node, so the tree scrolls only when it changes.
     followed: Option<(PathBuf, String)>,
 }
@@ -169,18 +172,23 @@ impl App {
     pub(crate) fn syntax_outline(&mut self, path: &Path) -> Option<Arc<[Symbol]>> {
         let doc = self.native_docs.get(path)?.buffer()?;
         let revision = doc.revision();
+        // Cached per revision, "no outline" too: the status-bar breadcrumbs
+        // ask every frame, and a text copy of a large log each frame is slow.
         if let Some((cached, at, outline)) = &self.structure.syntax
             && cached == path
             && *at == revision
         {
-            return Some(Arc::clone(outline));
+            return outline.clone();
         }
         let language =
             terminator_native_edit::highlight::language_for_path(&path.to_string_lossy());
-        let outline: Arc<[Symbol]> =
-            terminator_native_edit::treesitter::outline(language, &doc.text())?.into();
-        self.structure.syntax = Some((path.to_owned(), revision, Arc::clone(&outline)));
-        Some(outline)
+        let outline: Option<Arc<[Symbol]>> =
+            terminator_native_edit::treesitter::has_outline(language, doc.len_bytes())
+                .then(|| terminator_native_edit::treesitter::outline(language, &doc.text()))
+                .flatten()
+                .map(Into::into);
+        self.structure.syntax = Some((path.to_owned(), revision, outline.clone()));
+        outline
     }
 
     /// Outline for any file: Markdown headings, else the server's symbols

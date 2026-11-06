@@ -478,8 +478,9 @@ impl TerminalBackend {
         term.selection = Some(selection);
         self.capture_selection(&term);
     }
+    /// The selected text as the terminal holds it now (for copy).
     pub fn selectable_content(&self) -> String {
-        self.last_content.selected_text.clone()
+        self.term.lock().selection_to_string().unwrap_or_default()
     }
 
     /// One grid row as searchable text. `columns[c]` is the grid column of
@@ -584,8 +585,15 @@ impl TerminalBackend {
         let cursor = terminal.grid_mut().cursor_cell().clone();
         self.last_content.grid = snapshot_viewport(terminal.grid());
         self.last_content.display_offset = terminal.grid().display_offset();
+        // The selected text is built only when the selection moves: with a
+        // large selection held while output streams, building it on every
+        // sync (under the term lock) is slow. Copy reads it fresh
+        // ([`Self::selectable_content`]); this copy answers "is anything
+        // selected" for the frame.
+        if selectable_range != previous_range {
+            self.last_content.selected_text = terminal.selection_to_string().unwrap_or_default();
+        }
         self.last_content.selectable_range = selectable_range;
-        self.last_content.selected_text = terminal.selection_to_string().unwrap_or_default();
         self.last_content.cursor = cursor;
         self.last_content.terminal_mode = *terminal.mode();
         self.last_content.terminal_size = self.size;

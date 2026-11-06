@@ -12,7 +12,7 @@
 mod outline;
 #[cfg(test)]
 mod tests;
-pub use outline::outline;
+pub use outline::{has_outline, outline};
 use std::collections::HashMap;
 use syntect::highlighting::Theme;
 use syntect::parsing::{MatchPower, Scope, ScopeStack};

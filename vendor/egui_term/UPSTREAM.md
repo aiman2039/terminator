@@ -8,6 +8,13 @@ Plain Ctrl-6 sends `0x1e` (Ctrl-^, the vim alternate file), Ctrl-2 and
 Ctrl-Space send NUL, and Ctrl-/ sends `0x1f`, as in xterm and Alacritty.
 Before this, only the Ctrl+Shift forms sent these characters.
 
+## Selection text on demand (2026-11-06)
+
+`sync` rebuilds `RenderableContent::selected_text` only when the selection
+range changes, so a large selection held while output streams does not cost
+a full text build under the term lock on every sync. `selectable_content`
+reads the selection fresh from the terminal, for copy.
+
 ## Type-ahead prediction (2026-11-02)
 
 `backend/typeahead.rs` adds local echo prediction for slow sessions

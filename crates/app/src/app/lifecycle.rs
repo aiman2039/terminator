@@ -240,6 +240,7 @@ impl App {
             error_cwd: None,
             missing_path_reports: 0,
             info: None,
+            info_since: None,
             add_project: false,
             settings_open: false,
             settings_session: false,

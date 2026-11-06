@@ -82,9 +82,15 @@ impl LspManager {
     }
 
     /// `(errors, warnings, total)` across every tracked file, for the
-    /// status bar. Missing severity counts toward the total only.
+    /// status bar. Missing severity counts toward the total only. Counted
+    /// once per diagnostics generation: the status bar asks every frame.
     #[must_use]
     pub fn problem_counts(&self) -> (usize, usize, usize) {
+        if let Some((generation, counts)) = self.problem_totals.get()
+            && generation == self.diagnostics_generation
+        {
+            return counts;
+        }
         let mut errors: usize = 0;
         let mut warnings: usize = 0;
         let mut total: usize = 0;
@@ -98,7 +104,10 @@ impl LspManager {
                 }
             }
         }
-        (errors, warnings, total)
+        let counts = (errors, warnings, total);
+        self.problem_totals
+            .set(Some((self.diagnostics_generation, counts)));
+        counts
     }
 
     /// Whether a document is tracked for `path` (a server was consulted).
@@ -128,5 +137,33 @@ impl LspManager {
             return None;
         }
         Some(format!("Starting {}…", doc.server.language))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn problem_counts_are_counted_again_only_when_diagnostics_change() {
+        let mut manager = LspManager::trusting();
+        let error = |line| L::Diagnostic {
+            range: L::Range {
+                start: L::Position { line, character: 0 },
+                end: L::Position { line, character: 1 },
+            },
+            severity: Some(L::Severity::Error),
+            message: "bad".into(),
+        };
+        manager
+            .diagnostics
+            .insert(crate::test_path("/tmp/a.rs"), vec![error(0)]);
+        assert_eq!(manager.problem_counts(), (1, 0, 1));
+        manager
+            .diagnostics
+            .insert(crate::test_path("/tmp/b.rs"), vec![error(1)]);
+        assert_eq!(manager.problem_counts(), (1, 0, 1), "same generation");
+        manager.bump_diagnostics();
+        assert_eq!(manager.problem_counts(), (2, 0, 2));
     }
 }

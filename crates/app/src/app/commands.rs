@@ -355,7 +355,13 @@ impl App {
         self.open_scrollback_search(ctx, &sid);
     }
 
-    pub(crate) fn copy_active_working_directory(&self, ctx: &egui::Context) {
+    /// Copy `text` and say so in the status bar (`what` names it).
+    pub(crate) fn copy_with_note(&mut self, ctx: &egui::Context, text: String, what: &str) {
+        ctx.copy_text(text);
+        self.info = Some(format!("{what} copied"));
+    }
+
+    pub(crate) fn copy_active_working_directory(&mut self, ctx: &egui::Context) {
         let directory = self
             .active_session_record()
             .map(session_directory)
@@ -363,7 +369,7 @@ impl App {
         let Some(directory) = directory else {
             return;
         };
-        ctx.copy_text(directory);
+        self.copy_with_note(ctx, directory, "Working directory");
     }
 
     pub(crate) fn rename_active_terminal(&mut self) {

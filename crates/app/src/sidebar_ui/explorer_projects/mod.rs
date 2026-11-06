@@ -183,8 +183,8 @@ impl App {
             }
             ExplorerLocal::LocalHistory => self.open_local_history(path.to_owned()),
             ExplorerLocal::CopyRelative => {
-                ui.ctx()
-                    .copy_text(workspace_ops::relative_display(&root, path));
+                let relative = workspace_ops::relative_display(&root, path);
+                self.copy_with_note(ui.ctx(), relative, "Relative path");
             }
             ExplorerLocal::History => {
                 let Some(cwd) = self

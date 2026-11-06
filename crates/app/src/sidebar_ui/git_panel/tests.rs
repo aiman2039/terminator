@@ -195,3 +195,92 @@ fn running_commit_shows_its_step_cancel_and_the_last_failure() {
     assert!(texts.iter().any(|painted| painted == "Cancelling…"));
     assert!(!click("git-commit-cancel", true).cancel_commit);
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn culled_change_rows_keep_the_full_scroll_range() {
+    let root = PathBuf::from("/repo");
+    let context = ContextData {
+        cwd: root.clone(),
+        root: Some(root.clone()),
+        perforce: None,
+        git_dirs: vec![],
+        branch: "main".into(),
+        changes: (0..3000)
+            .map(|i| terminator_git::Change {
+                path: root.join(format!("file{i:04}.rs")),
+                status: " M".into(),
+            })
+            .collect(),
+        decorations: std::collections::HashMap::default(),
+        stats: std::collections::HashMap::default(),
+        error: None,
+    };
+    let theme = AppearanceConfig::default();
+    for view_list in [false, true] {
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 700.0));
+        let draw = |events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut draft = String::new();
+                    let mut input = GitPanelInput {
+                        context: &context,
+                        prepared: None,
+                        review_mode: ReviewMode::Native,
+                        neovim_review: false,
+                        theme: &theme,
+                        history: false,
+                        view_list,
+                        commits: &[],
+                        shelves: &[],
+                        branches: &[],
+                        commit_draft: &mut draft,
+                        recent_messages: &[],
+                        amend: &mut false,
+                        signoff: &mut false,
+                        collapse_generation: 0,
+                        open_shortcut: "",
+                        compare: None,
+                        base_ref: None,
+                        focus_message: false,
+                        commit_run: None,
+                        commit_lock: CommitLock::default(),
+                        commit_failure: None,
+                    };
+                    git_panel(ui, &mut input);
+                },
+            );
+            output.textures_delta.clear();
+            crate::app::painted_text(&output.shapes)
+        };
+        let pointer = egui::pos2(180.0, 600.0);
+        draw(vec![egui::Event::PointerMoved(pointer)]);
+        // Scroll to the very end: the last row must be there, on screen.
+        for _ in 0..4 {
+            draw(vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: egui::vec2(0.0, -1.0e6),
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::default(),
+            }]);
+        }
+        let texts = draw(vec![]);
+        let last = texts
+            .iter()
+            .find(|(_, text)| text == "file2999.rs")
+            .unwrap_or_else(|| panic!("last row painted (list: {view_list})"));
+        assert!(screen.contains(last.0), "{:?} on screen", last.0);
+        assert!(
+            !texts.iter().any(|(_, text)| text == "file0000.rs"),
+            "the first row scrolled away"
+        );
+    }
+}
