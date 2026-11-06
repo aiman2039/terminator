@@ -48,14 +48,23 @@ pub(super) fn large_snapshots() -> Result<()> {
         "Legacy client did not receive an actionable size error"
     );
     let paths = terminator_core::Paths::at(h.root.clone());
-    let hint = serde_json::from_value::<terminator_core::State>(state)?.snapshot_hint();
-    ensure!(
-        matches!(
+    // The new shell can still bump the revision (pid, cwd) between the read
+    // and the check, so take a fresh hint until one revision holds still.
+    let mut state = state;
+    let mut unchanged = false;
+    for _ in 0..20 {
+        let hint = serde_json::from_value::<terminator_core::State>(state)?.snapshot_hint();
+        if matches!(
             terminator_core::conditional_snapshot(&paths, Some(hint))?,
             terminator_core::Response::Unchanged
-        ),
-        "Conditional snapshot changed"
-    );
+        ) {
+            unchanged = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+        state = h.state()?;
+    }
+    ensure!(unchanged, "Conditional snapshot changed");
     h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
     h.wait(|st| session(st, id(&shell))["lifecycle"] == "ended", 5)?;
     h.restart()?;

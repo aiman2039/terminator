@@ -661,7 +661,9 @@ async fn filtered_file_refuses_hunk_staging_and_keeps_the_index() {
     let fixture = Fixture::new("file.txt", Some("pointer\n"));
     std::fs::write(
         fixture.dir.path().join(".gitattributes"),
-        "file.txt filter=lfs\n",
+        // An unconfigured driver: a global `filter.lfs` (Windows runners)
+        // would start git-lfs on every diff and time out the fixture.
+        "file.txt filter=fixture\n",
     )
     .unwrap();
     std::fs::write(fixture.absolute(), "content\n").unwrap();

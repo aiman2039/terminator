@@ -223,7 +223,7 @@ async fn deleted_and_recreated_root_refreshes_and_keeps_watching() {
     w.refresh
         .send(Some(request(&root, 1, &visible, false)))
         .unwrap();
-    refresh_until(&mut w.owner.events, 1, 10, |_, d| {
+    refresh_until(&mut w.owner.events, 1, 20, |_, d| {
         lists(d, &root, "before.txt")
     })
     .await;
@@ -235,14 +235,14 @@ async fn deleted_and_recreated_root_refreshes_and_keeps_watching() {
     w.refresh
         .send(Some(request(&root, 2, &visible, false)))
         .unwrap();
-    refresh_until(&mut w.owner.events, 2, 10, |_, d| {
+    refresh_until(&mut w.owner.events, 2, 20, |_, d| {
         lists(d, &root, "recreated.txt") && !lists(d, &root, "before.txt")
     })
     .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     std::fs::write(root.join("after.txt"), "").unwrap();
     // Well inside the 30 s safety poll: only a live watch sees this.
-    refresh_until(&mut w.owner.events, 2, 10, |_, d| {
+    refresh_until(&mut w.owner.events, 2, 20, |_, d| {
         lists(d, &root, "after.txt")
     })
     .await;

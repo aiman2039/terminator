@@ -49,8 +49,10 @@ fn wait_prompt(h: &Harness, shell: &Value) -> Result<()> {
 /// A command's prompt hook can still run when the close is sent. A refused
 /// close changes nothing, so try again until the shell closes or 5 s pass.
 fn close_when_idle(h: &Harness, target: &Value, generation: &str) -> Result<Value> {
+    // Five shells start in parallel; a loaded CI host can take over 5 s to
+    // print the first zsh prompt. A closed shell returns at once.
     let end = Instant::now()
-        .checked_add(Duration::from_secs(5))
+        .checked_add(Duration::from_secs(20))
         .ok_or_else(|| anyhow!("idle deadline overflow"))?;
     loop {
         let outcome = close(h, &[target], generation)?;
