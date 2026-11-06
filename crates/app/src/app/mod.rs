@@ -11,6 +11,7 @@ mod command_blocks;
 mod commands;
 mod docking;
 pub(crate) mod drag_state;
+mod drop_zone;
 #[cfg(test)]
 mod editor_drag_tests;
 #[cfg(test)]
@@ -44,6 +45,7 @@ mod tests;
 pub(crate) use tests::support::{drain_updates, painted_text};
 pub(crate) mod types;
 mod updates;
+pub(crate) use updates::{PostCreate, PostCreateQueue};
 #[cfg(test)]
 mod vnc_tests;
 pub(crate) mod window;

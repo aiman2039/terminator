@@ -209,6 +209,7 @@ impl App {
                 }
             }
             Action::NextAttention => self.next_attention(),
+            Action::AskAgent => self.open_ask_agent(),
             Action::NewBrowser => self.open_new_browser_tab(None),
             Action::NewVnc => self.open_new_vnc_tab(None),
             Action::SwitcherNext => self.step_switcher(false),
@@ -234,7 +235,8 @@ impl App {
             | Action::GitCompareRevision
             | Action::GitShowHistory
             | Action::GitAnnotate
-            | Action::GitStageAll => self.run_git_action(action),
+            | Action::GitStageAll
+            | Action::GitShowAllChanges => self.run_git_action(action),
         }
     }
 

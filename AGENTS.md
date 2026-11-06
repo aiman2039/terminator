@@ -79,6 +79,9 @@ Take text sizes and corner radii from `appearance/scale.rs` (`FONT_*` and `RADIU
 - Compare with… is read-only and opens the native revision diff. A typed revision that starts with `-` or has spaces is refused, and it must pass `git rev-parse --verify <rev>^{commit}` before a diff opens.
 - Commit Log filters and Go to Hash run local `git log` as replaceable background jobs, never a daemon request. Typed values never reach Git as options: use `--grep=`/`--author=` values, full ref names, and paths after `--`.
 - A missing project folder (moved or deleted, for example a removed Git worktree) shows "Folder not found" with Locate Folder…, Remove Project and Retry, not the Privacy hint. Locate Folder… opens the picked folder as a project. The daemon has no relocate request; a new one needs a new capability and this fallback. Never run `git worktree prune` or another Git command for this. Every folder pick gives a visible result.
+- New task makes a worktree, a terminal and an optional Browser tab. It types the agent command but never presses Enter.
+- Resume conversation and Ask agent's Paste and send run text only on an explicit click.
+- Per-project init command (`project-init-v1`) runs in new local shell terminals only; editors, reviews and SSH terminals skip it.
 
 ## Testing Guidelines
 

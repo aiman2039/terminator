@@ -19,48 +19,7 @@ pub(crate) struct HoverPopup {
     pub(crate) rect: egui::Rect,
 }
 
-/// Drop zone within a hovered split leaf while a terminal is dragged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PaneDropZone {
-    /// The middle: swap single panes or join the leaf.
-    Center,
-    /// An edge band: open the dragged pane in a new split beside the leaf.
-    Above,
-    Below,
-    Left,
-    Right,
-}
-impl PaneDropZone {
-    pub(crate) fn split(self) -> Option<egui_dock::Split> {
-        match self {
-            Self::Center => None,
-            Self::Above => Some(egui_dock::Split::Above),
-            Self::Below => Some(egui_dock::Split::Below),
-            Self::Left => Some(egui_dock::Split::Left),
-            Self::Right => Some(egui_dock::Split::Right),
-        }
-    }
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Center => "Place terminal here",
-            Self::Above => "Split above",
-            Self::Below => "Split below",
-            Self::Left => "Split left",
-            Self::Right => "Split right",
-        }
-    }
-    /// The part of the leaf the dragged pane will occupy.
-    pub(crate) fn landing(self, rect: egui::Rect) -> egui::Rect {
-        let center = rect.center();
-        match self {
-            Self::Center => rect,
-            Self::Above => egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), center.y)),
-            Self::Below => egui::Rect::from_min_max(egui::pos2(rect.left(), center.y), rect.max),
-            Self::Left => egui::Rect::from_min_max(rect.min, egui::pos2(center.x, rect.bottom())),
-            Self::Right => egui::Rect::from_min_max(egui::pos2(center.x, rect.top()), rect.max),
-        }
-    }
-}
+pub(crate) use super::drop_zone::PaneDropZone;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
@@ -109,6 +68,12 @@ pub(crate) enum Tab {
         cwd: PathBuf,
         path: PathBuf,
     },
+    /// Every changed file of a repository in one scrolling view (layout v11):
+    /// the staged side, or the working tree with untracked files.
+    ChangesDiff {
+        cwd: PathBuf,
+        staged: bool,
+    },
     Vnc {
         #[serde(default)]
         id: String,
@@ -151,6 +116,7 @@ impl Tab {
 
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
+            Self::ChangesDiff { .. } => 11,
             Self::Merge { .. } => 10,
             Self::RevisionDiff { .. } | Self::FileHistory { .. } => 9,
             Self::Diff {
@@ -357,7 +323,7 @@ pub(crate) enum Update {
     RadioCatalog(std::sync::Arc<Vec<player::radio::Station>>),
     RestartFinished(String),
     ServiceStarted(Result<(), String>),
-    WorktreeCreated(Box<State>, String, bool),
+    WorktreeCreated(Box<State>, String, worktree_ui::TaskStart),
     IdleClosed(
         editor_close::Target,
         Vec<String>,

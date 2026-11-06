@@ -109,6 +109,7 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
     Action::GitShowHistory,
     Action::GitAnnotate,
     Action::GitStageAll,
+    Action::GitShowAllChanges,
 ];
 
 #[test]

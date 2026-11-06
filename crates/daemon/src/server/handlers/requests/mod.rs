@@ -202,6 +202,9 @@ impl Shared {
             Request::AddProject { path } => self.on_add_project(&path),
             Request::SaveLayout { project, layout } => self.on_save_layout(&project, layout),
             Request::SelectProject { project } => self.on_select_project(project),
+            Request::SetInitCommand { project, command } => {
+                self.on_set_init_command(&project, command.as_deref())
+            }
             Request::Cwd { session, path } => self.on_cwd(&session, path),
             Request::Focus { session } => Ok(self.on_focus(&session)),
             Request::Notice { id, action } => self.on_notice(&id, &action),

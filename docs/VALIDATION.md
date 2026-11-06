@@ -6086,3 +6086,30 @@ Branch `review-fixes` (commits `d923629`..`9591b8b`).
 
 Not verified by hand: Ctrl-6 in a real Neovim terminal and in the native
 editor on macOS (Mission Control "Switch to Desktop 6" can take Ctrl-6 first).
+
+## Agent UX: state pills, New task, Resume, ctl agents/wait, All changes, Ask agent, init command, tab groups (2026-11-06)
+
+Branch `feat/agent-ux` (not committed at the time of this record).
+
+- Unit and fixture tests cover: post-create input waits for the backend and
+  for a prompt (`post_create_input_waits_for_backend_attach`); session row
+  state text and the joined Agents summary; New task types the agent command
+  without Enter and opens the Browser URL
+  (`new_task_types_agent_command_without_enter`); Resume conversation creates
+  a terminal in the session folder with the quoted resume command and Enter
+  (`resume_button_runs_resume_in_session_cwd`); `ctl wait` state matching and
+  ended sessions, `ctl agents` rows; layout v11 round trip and v12 rejection;
+  Show All Changes opens one tab and loads each visible file; Ask agent text
+  and the no-agent case; init command validation and editor skip (daemon);
+  tab-group activity label, session move and tab reorder; the tab-group
+  double-click rename still works with the new drag source.
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings`, `sh scripts/check.sh sarah` and
+  `cargo test --workspace --all-features --locked` passed (GUI crate 1518
+  passed, 5 ignored). The `terminal_pane.rs:57` literal radius now uses
+  `appearance::RADIUS_SMALL`.
+
+Not verified: no native GUI fixture, `cargo xtask integration` or manual run.
+Not tested: `ctl wait` timeout against a live daemon, text reaching a real
+agent PTY (Ask agent, Resume, New task), the init command in a real shell,
+mouse drag in the session tree, and the `open_link` failure path.

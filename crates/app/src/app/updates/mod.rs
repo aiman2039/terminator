@@ -20,6 +20,7 @@ mod vnc;
 use editors::ImageInput;
 use git::{DirectoryPreviewInput, RefreshInput};
 use sessions::FloatCreatedInput;
+pub(crate) use sessions::{PostCreate, PostCreateQueue};
 
 impl App {
     pub(crate) fn process_updates(&mut self, ctx: &egui::Context) {
@@ -210,8 +211,8 @@ impl App {
                 });
             }
             Update::ClipboardPaste(session, text) => self.handle_clipboard_paste(&session, &text),
-            Update::WorktreeCreated(state, project, open_terminal) => {
-                self.handle_worktree_created(*state, project, open_terminal);
+            Update::WorktreeCreated(state, project, start) => {
+                self.handle_worktree_created(*state, project, start);
             }
             Update::RestartFinished(message) => self.handle_restart_finished(&message),
             Update::ServiceStarted(result) => self.handle_service_started(result),

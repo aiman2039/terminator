@@ -211,46 +211,7 @@ impl App {
             ui.separator();
             ui.weak("Tabs in this pane");
             for tab in tabs {
-                let label = match &tab {
-                    Tab::Terminal(sid) => self
-                        .state
-                        .sessions
-                        .iter()
-                        .find(|s| &s.id == sid)
-                        .map(|s| s.label.clone())
-                        .unwrap_or_else(|| "Terminal".into()),
-                    Tab::Diff { path, .. } | Tab::Image { path } => path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    Tab::NativeEditor { path } => path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    Tab::Browser { target, .. } => target.title(),
-                    Tab::Player => "Player".into(),
-                    Tab::CommitLog { .. } => "Commit Log".into(),
-                    Tab::Blame { path, .. } => format!(
-                        "Blame {}",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    ),
-                    Tab::RevisionDiff { .. } | Tab::FileHistory { .. } | Tab::Merge { .. } => {
-                        tab.git_title()
-                    }
-                    Tab::Vnc {
-                        label, host, port, ..
-                    } => {
-                        if !label.trim().is_empty() {
-                            label.clone()
-                        } else if !host.trim().is_empty() {
-                            format!("{host}:{port}")
-                        } else {
-                            "VNC Viewer".into()
-                        }
-                    }
-                };
+                let label = self.drag_title(&tab);
                 if appearance::menu_item(appearance::MenuItemInput {
                     ui,
                     label: &label,

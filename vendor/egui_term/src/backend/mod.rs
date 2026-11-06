@@ -691,9 +691,10 @@ impl TerminalBackend {
             }
         }
 
-        open::that(url).unwrap_or_else(|_| {
-            panic!("link opening is failed");
-        })
+        // A link that no app can open must not crash the GUI.
+        if let Err(error) = open::that(&url) {
+            eprintln!("Could not open link {url}: {error}");
+        }
     }
 
     fn process_mouse_report(

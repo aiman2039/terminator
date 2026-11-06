@@ -67,6 +67,32 @@ pub(crate) fn agent_reference(
     format!("@{}#{lines}", shown.display())
 }
 
+impl NativeDoc {
+    /// First and last selected line, 1-based; the caret line without a
+    /// selection.
+    pub(crate) fn selected_lines(&self) -> (usize, usize) {
+        let caret = self.engine.cursor();
+        let (from, to) = self.engine.selection().unwrap_or((caret, caret));
+        let (first, last) = (from.line.min(to.line), from.line.max(to.line));
+        (first.saturating_add(1), last.saturating_add(1))
+    }
+}
+
+impl App {
+    /// `@path#L…` for the focused native editor's selection, if any.
+    pub(crate) fn editor_agent_reference(&self) -> Option<String> {
+        let target = self.editor_command_target()?;
+        let lines = self.native_docs.get(&target.path)?.selected_lines();
+        let root = self.selected_project().map(|project| project.path.clone());
+        Some(agent_reference(
+            &target.path,
+            root.as_deref(),
+            lines.0,
+            lines.1,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod agent_reference_tests {
     use super::agent_reference;

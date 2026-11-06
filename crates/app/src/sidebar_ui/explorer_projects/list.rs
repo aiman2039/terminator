@@ -282,7 +282,8 @@ impl App {
             self.open_worktree_wizard();
             ui.close();
         }
-        if self.has_worktrees() {
+        self.init_command_item(ui, p);
+        if self.has_worktrees() || self.has_project_init() {
             ui.separator();
         }
         if self.managed_worktree(&p.id).is_some()

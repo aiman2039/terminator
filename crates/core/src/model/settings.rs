@@ -109,6 +109,7 @@ impl Settings {
             ("navigate_forward".into(), "command+alt+Right".into()),
             ("recent_files".into(), "command+E".into()),
             ("next_attention".into(), "command+shift+J".into()),
+            ("ask_agent".into(), "command+alt+A".into()),
             ("new_browser".into(), "command+alt+B".into()),
             ("new_vnc".into(), "command+alt+V".into()),
             ("diff_next_change".into(), "F7".into()),

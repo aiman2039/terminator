@@ -33,6 +33,7 @@ impl RequestClass {
                 | Request::SetRemoteProjectForwards { .. }
                 | Request::SaveLayout { .. }
                 | Request::SelectProject { .. }
+                | Request::SetInitCommand { .. }
                 | Request::Settings(_)
                 | Request::WorktreeAdd { .. }
                 | Request::WorktreeRemove { .. }

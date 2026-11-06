@@ -1,4 +1,5 @@
 //! GUI client for `worktrees-v1`. Git still owns the checkout.
+pub(crate) use super::task_form::TaskStart;
 use crate::*;
 
 fn start_revision(ui: &mut egui::Ui, draft: &mut WorktreeDraft) {
@@ -51,13 +52,19 @@ pub(crate) struct WorktreeFormInput<'a> {
     pub(crate) cancel: &'a mut bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct WorktreeDraft {
     pub source: String,
     pub start: String,
     pub branch: String,
     pub dest: PathBuf,
     pub open_terminal: bool,
+    /// Short task name. Editing it sets the branch and destination.
+    pub task: String,
+    /// Typed into the new terminal without Enter. The user starts the agent.
+    pub agent_command: String,
+    /// Optional http(s) URL opened in a Browser tab.
+    pub browser_url: String,
 }
 
 pub(crate) fn default_branch(name: &str) -> String {
@@ -161,6 +168,9 @@ impl App {
             branch,
             dest,
             open_terminal: true,
+            task: String::new(),
+            agent_command: self.preferences.task_agent_command.clone(),
+            browser_url: String::new(),
         };
         // `git rev-parse` runs on a worker; the form opens when it answers.
         let _ = self
@@ -233,13 +243,13 @@ impl App {
             "Creates an isolated git checkout as a new project. You start agents in its terminal.",
         );
         ui.add_space(8.0);
-        let source_name = self
+        let source = self
             .state
             .projects
             .iter()
-            .find(|project| project.id == draft.source)
-            .map(|project| project.name.clone())
-            .unwrap_or_else(|| "Project".into());
+            .find(|project| project.id == draft.source);
+        let source_name = source.map_or_else(|| "Project".into(), |project| project.name.clone());
+        let source_path = source.map(|project| project.path.clone());
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label: "Source project",
@@ -248,6 +258,7 @@ impl App {
                 ui.label(source_name);
             },
         });
+        super::task_form::task_name(ui, draft, source_path.as_deref());
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label: "Start from",
@@ -276,6 +287,7 @@ impl App {
             &mut draft.open_terminal,
             "Create a terminal in the new project",
         );
+        super::task_form::task_extras(ui, draft);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let (create, close) = form_buttons(ui, draft);
@@ -289,6 +301,9 @@ impl App {
     }
 
     pub(crate) fn submit_worktree(&mut self, draft: &WorktreeDraft) {
+        if !self.accept_task(draft) {
+            return;
+        }
         let _ = self.jobs.send(Job::CreateWorktree(draft.clone()));
     }
 
@@ -351,6 +366,7 @@ mod tests {
             branch: "task".into(),
             dest,
             open_terminal: true,
+            ..Default::default()
         }
     }
 

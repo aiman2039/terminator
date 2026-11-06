@@ -56,7 +56,7 @@ impl Viewer<'_> {
         let visuals = ui.visuals();
         ui.painter().rect(
             field,
-            4.0,
+            appearance::RADIUS_SMALL,
             visuals.extreme_bg_color,
             visuals.selection.stroke,
             egui::StrokeKind::Inside,

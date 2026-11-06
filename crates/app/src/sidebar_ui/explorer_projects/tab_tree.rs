@@ -19,7 +19,9 @@ struct TabGroupHeader<'a> {
     named: bool,
     renaming: bool,
     selected: bool,
-    count: usize,
+    /// Agent states of the group's sessions, or their count.
+    trailing: String,
+    waiting: bool,
 }
 
 /// Preferences key of a workspace tab's sidebar node; present (false)
@@ -189,12 +191,16 @@ impl App {
                 .and_then(|sid| by_id.get(sid.as_str()))
                 .map(|session| session.as_ref())
             {
-                self.session_row_in_tab(SessionRowInTabInput {
+                let response = self.session_row_in_tab(SessionRowInTabInput {
                     ui,
                     session,
                     project_id,
                     tab_id,
                 });
+                if let Some(response) = response {
+                    Self::tree_session_row_dnd(&response, (project_id, &session.id));
+                    self.tree_drop_target(ui, &response, (project_id, tab_id));
+                }
             }
             return;
         }
@@ -202,6 +208,10 @@ impl App {
         let key = tab_expanded_key(project_id, tab_id);
         let mut tab_expanded = self.preferences.expanded.get(&key).copied().unwrap_or(true);
         let active_tab = workspace_active == Some(tab_id.as_str());
+        let states: Vec<Option<AgentState>> = sids
+            .iter()
+            .map(|sid| self.present_session(sid).lifecycle)
+            .collect();
         let header = TabGroupHeader {
             project_id,
             tab_id,
@@ -210,7 +220,13 @@ impl App {
             named: group_name.is_some(),
             renaming: renaming_group,
             selected: self.selected.as_deref() == Some(project_id) && active_tab,
-            count: sids.len(),
+            trailing: super::tree_dnd::group_activity(&states, sids.len()),
+            waiting: states.iter().flatten().any(|state| {
+                matches!(
+                    state,
+                    AgentState::WaitingInput | AgentState::WaitingPermission
+                )
+            }),
         };
         let (tab_left, rename_action) = ui
             .horizontal(|ui| self.tab_group_header(ui, &header, &mut tab_expanded))
@@ -221,8 +237,10 @@ impl App {
                 ui.spacing_mut().indent += tab_left - ui.next_widget_position().x;
                 ui.indent(format!("sidebar-tab-body:{tab_id}"), |ui| {
                     for sid in sids {
-                        if let Some(session) = by_id.get(sid.as_str()) {
-                            self.session_row(ui, session);
+                        if let Some(session) = by_id.get(sid.as_str())
+                            && let Some(response) = self.session_row(ui, session)
+                        {
+                            Self::tree_session_row_dnd(&response, (project_id, sid));
                         }
                     }
                 });
@@ -303,8 +321,12 @@ impl App {
             icon: "LayoutDashboard",
             selected: header.selected,
             height: self.theme.row_height(),
-            trailing: &header.count.to_string(),
-            tint: appearance::color(&self.theme.secondary),
+            trailing: &header.trailing,
+            tint: appearance::color(if header.waiting {
+                &self.theme.status_waiting
+            } else {
+                &self.theme.secondary
+            }),
         })
         .on_hover_text(format!("Tab group\n{label}\nDouble-click to rename"));
         #[cfg(feature = "test-support")]
@@ -313,6 +335,14 @@ impl App {
             &format!("sidebar-tab:{}", header.tab_id),
             response.rect,
         );
+        Self::tree_drag_source(
+            &response,
+            super::tree_dnd::TreeDrag::Group {
+                project: header.project_id.to_owned(),
+                tab: header.tab_id.clone(),
+            },
+        );
+        self.tree_drop_target(ui, &response, (header.project_id, header.tab_id));
         let mut rename_action = GroupRenameAction::None;
         appearance::context_menu(&response, |ui| {
             rename_action = Self::tab_group_menu(ui, header.named);

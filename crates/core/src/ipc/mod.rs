@@ -203,6 +203,12 @@ pub enum Request {
     SelectProject {
         project: String,
     },
+    /// Set or clear (`None` or blank) a local project's init command
+    /// (`project-init-v1`).
+    SetInitCommand {
+        project: String,
+        command: Option<String>,
+    },
     Create {
         project: String,
         cwd: Option<PathBuf>,
@@ -361,6 +367,7 @@ impl Request {
             Self::TrustHostKey { .. } => "TrustHostKey",
             Self::SaveLayout { .. } => "SaveLayout",
             Self::SelectProject { .. } => "SelectProject",
+            Self::SetInitCommand { .. } => "SetInitCommand",
             Self::Create { .. } => "Create",
             Self::Stop { .. } => "Stop",
             Self::Rename { .. } => "Rename",

@@ -25,6 +25,47 @@ mod tests {
     }
 
     #[test]
+    fn agents_summary_joins_attention_and_activity() {
+        assert_eq!(activity_label(0, 0), "");
+        assert_eq!(activity_label(2, 0), "2 working");
+        assert_eq!(activity_label(0, 1), "1 done");
+        assert_eq!(activity_label(2, 1), "2 working · 1 done");
+        assert_eq!(join_labels("", ""), "");
+        assert_eq!(join_labels("1 waiting", ""), "1 waiting");
+        assert_eq!(join_labels("", "2 working"), "2 working");
+        assert_eq!(
+            join_labels("1 waiting", "2 working · 1 done"),
+            "1 waiting · 2 working · 1 done"
+        );
+    }
+
+    #[test]
+    fn session_row_state_shows_wait_age_and_hides_unknown() {
+        use crate::agent_presence::row_state;
+        let state = |s, since| row_state(s, since, 1_000);
+        assert_eq!(
+            state(AgentState::WaitingInput, Some(988)).as_deref(),
+            Some("waiting 12s")
+        );
+        assert_eq!(
+            state(AgentState::WaitingPermission, Some(880)).as_deref(),
+            Some("waiting 2m")
+        );
+        assert_eq!(
+            state(AgentState::WaitingInput, None).as_deref(),
+            Some("waiting")
+        );
+        assert_eq!(
+            state(AgentState::Running, Some(0)).as_deref(),
+            Some("working")
+        );
+        assert_eq!(state(AgentState::Completed, None).as_deref(), Some("done"));
+        assert_eq!(state(AgentState::Failed, None).as_deref(), Some("failed"));
+        assert_eq!(state(AgentState::Unknown, None), None);
+        assert_eq!(state(AgentState::Stopped, None), None);
+    }
+
+    #[test]
     fn explorer_query_filter_is_case_insensitive_and_keeps_directories() {
         // The needle is the pre-lowercased query hoisted out of the per-file
         // loop; labels may use any case.

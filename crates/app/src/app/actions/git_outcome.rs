@@ -38,6 +38,9 @@ impl App {
         if outcome.view_log {
             self.open_commit_log();
         }
+        if let Some(staged) = outcome.show_changes {
+            self.open_changes_diff(staged);
+        }
         for clicked in std::mem::take(&mut outcome.clicked) {
             self.activate_file_action(ui, &clicked.path, clicked.action);
         }

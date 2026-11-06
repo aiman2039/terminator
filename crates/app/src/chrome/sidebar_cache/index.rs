@@ -99,7 +99,13 @@ impl App {
             .or_default();
         match presented.lifecycle {
             Some(AgentState::WaitingInput | AgentState::WaitingPermission) => flags.0 = true,
-            Some(AgentState::Running) => flags.1 = true,
+            Some(AgentState::Running) => {
+                flags.1 = true;
+                index.working_count = index.working_count.saturating_add(1);
+            }
+            Some(AgentState::Completed) => {
+                index.done_count = index.done_count.saturating_add(1);
+            }
             _ => {}
         }
         if session.kind == SessionKind::Editor {

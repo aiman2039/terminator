@@ -277,6 +277,47 @@ fn git_fixture() -> (App, egui::Context, tempfile::TempDir) {
     (app, ctx, dir)
 }
 
+/// Show All Changes opens one tab (a second run focuses it), and painting
+/// it loads the diff of each file section on screen.
+#[test]
+fn show_all_changes_opens_one_tab_that_loads_each_visible_file() {
+    let (mut app, ctx, _dir) = git_fixture();
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.run_git_action(Action::GitShowAllChanges);
+    let tab = Tab::ChangesDiff {
+        cwd: "/a".into(),
+        staged: false,
+    };
+    assert_eq!(app.layouts["a"].active_pane(), Some(&tab));
+    let tabs = app.layouts["a"].tabs.len();
+    app.run_git_action(Action::GitShowAllChanges);
+    assert_eq!(app.layouts["a"].tabs.len(), tabs);
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 600.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+            app.paint_dock(ui, "a", &mut dock);
+            app.layouts.insert("a".into(), dock);
+        },
+    );
+    output.textures_delta.clear();
+    let loads: Vec<PathBuf> = received
+        .try_iter()
+        .filter_map(|job| match job {
+            Job::Diff(Tab::Diff { path, .. }) => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(loads, [PathBuf::from("/a/a.rs"), PathBuf::from("/a/b.rs")]);
+}
+
 #[test]
 fn cmd_9_focuses_the_first_change_and_arrow_keys_walk_the_git_panel() {
     let (mut app, ctx, _dir) = git_fixture();

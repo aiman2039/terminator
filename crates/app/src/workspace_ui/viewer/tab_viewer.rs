@@ -139,6 +139,7 @@ impl TabViewer for Viewer<'_> {
             Tab::RevisionDiff { .. } => self.app.revision_diff_view(ui, tab),
             Tab::FileHistory { .. } => self.app.file_history_view(ui, tab),
             Tab::Merge { .. } => self.app.merge_view(ui, tab),
+            Tab::ChangesDiff { .. } => self.app.changes_diff_view(ui, tab),
             Tab::Vnc {
                 id,
                 session,

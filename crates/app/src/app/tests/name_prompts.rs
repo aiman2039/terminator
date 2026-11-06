@@ -146,6 +146,7 @@ fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
         branch: "task".into(),
         dest: "/tmp/task".into(),
         open_terminal: true,
+        ..Default::default()
     });
     assert!(app.strip_terminal_input_enabled("named"));
     app.worktree_draft = None;

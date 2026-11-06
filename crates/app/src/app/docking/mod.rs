@@ -141,7 +141,8 @@ impl App {
                 | Tab::Blame { cwd, .. }
                 | Tab::RevisionDiff { cwd, .. }
                 | Tab::FileHistory { cwd, .. }
-                | Tab::Merge { cwd, .. } => Some(cwd.clone()),
+                | Tab::Merge { cwd, .. }
+                | Tab::ChangesDiff { cwd, .. } => Some(cwd.clone()),
             })
     }
 

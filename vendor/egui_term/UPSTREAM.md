@@ -327,3 +327,8 @@ An explicit pointer press takes terminal keyboard focus before input is read,
 including when another editor currently holds it. Passive painting still leaves
 other widgets focused. A native Copy event with plain Control held writes ETX
 even when terminal text is selected. Command+C and Ctrl+Shift+C keep copying.
+
+## Failed link open does not panic (2026-11-06)
+
+`open_link` panicked when the OS could not open a Cmd-clicked link. It now
+writes the error to stderr and returns, so the GUI stays up.

@@ -1,4 +1,5 @@
 //! User-invoked high-level controls. Never called by observational agent hooks.
+mod agents;
 mod lookup;
 mod projects;
 mod sessions;
@@ -23,6 +24,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Control {
     List,
+    /// List agents with their hook-reported state and age in seconds.
+    Agents {
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Wait for an agent state. Exits 0 on a match, 2 on timeout, 3 when the session ends.
+    Wait(WaitArgs),
     /// Close the GUI and shut down the daemon after flushing saved history.
     Shutdown(ShutdownArgs),
     AddRemoteProject(AddRemoteProjectArgs),
@@ -118,6 +126,15 @@ struct CreateArgs {
     background: bool,
 }
 #[derive(Args)]
+struct WaitArgs {
+    session: String,
+    #[arg(long, value_enum)]
+    state: agents::WaitFor,
+    /// Seconds to wait. Omit to wait without a limit.
+    #[arg(long)]
+    timeout: Option<u64>,
+}
+#[derive(Args)]
 struct SplitArgs {
     session: String,
     #[arg(value_parser=["left","right","up","down"])]
@@ -169,6 +186,11 @@ pub fn run(args: &[String]) -> Result<()> {
     let value = match cli.command {
         Control::Shutdown(args) => ctl.shutdown(args)?,
         Control::List => ctl.list(),
+        Control::Agents { project } => ctl.agents(project)?,
+        Control::Wait(args) => match ctl.wait(args)? {
+            Ok(value) => value,
+            Err(code) => std::process::exit(code),
+        },
         Control::AddRemoteProject(args) => ctl.add_remote_project(args)?,
         Control::AddProject { path } => ctl.add_project(path)?,
         Control::Create(args) => ctl.create(args)?,

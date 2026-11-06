@@ -241,6 +241,9 @@ pub struct UiPreferences {
     pub history_sort: HistorySort,
     #[serde(default)]
     pub history_filter: String,
+    /// Last agent command typed in the New task form.
+    #[serde(default)]
+    pub task_agent_command: String,
     /// Hosts sidebar search text.
     #[serde(default)]
     pub hosts_filter: String,
@@ -334,6 +337,7 @@ impl Default for UiPreferences {
             project_activity: HashMap::new(),
             history_sort: HistorySort::LatestActivity,
             history_filter: String::new(),
+            task_agent_command: String::new(),
             hosts_filter: String::new(),
             hosts_collapsed: HashSet::new(),
             hosts_recent_first: false,

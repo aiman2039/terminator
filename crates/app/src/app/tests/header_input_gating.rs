@@ -445,6 +445,7 @@ fn command_dialogs_suspend_terminal_input_until_dismissed() {
         branch: "task".into(),
         dest: "/tmp/task".into(),
         open_terminal: true,
+        ..Default::default()
     });
     assert!(!app.terminal_input_enabled("shell"));
     app.worktree_draft = None;

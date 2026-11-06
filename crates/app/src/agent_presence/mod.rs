@@ -11,7 +11,10 @@ mod owner;
 mod presence_tests;
 mod presentation;
 mod queries;
+mod resume;
 pub(crate) use cache::PresentationCache;
 pub(crate) use counts::{AttentionCounts, attention_status_icon, notice_pending};
 pub(crate) use presentation::AgentPresentation;
+#[cfg(test)]
+pub(crate) use presentation::row_state;
 pub(crate) use queries::notice_preview;

@@ -117,6 +117,8 @@ pub struct GitPanelOutcome {
     pub refresh: bool,
     /// User pressed the View log button.
     pub view_log: bool,
+    /// Show all changes of a side in one view (`true` = staged).
+    pub show_changes: Option<bool>,
     pub history: Option<bool>,
     pub collapse: bool,
     pub commit: bool,

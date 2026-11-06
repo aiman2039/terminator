@@ -85,6 +85,46 @@ fn sidebar_group_is_abstract_and_renames_without_touching_sessions() {
     assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Agents"));
 }
 
+/// Dropping a session row on another tab group moves its pane there, and
+/// dropping a tab group row on another puts it at that position.
+#[test]
+fn session_tree_drops_move_panes_and_reorder_tab_groups() {
+    let (mut app, _ctx, _dir) = fixture();
+    let tab = |id: &str, sids: &[&str]| crate::workspace::WorkspaceTab {
+        id: id.into(),
+        name: None,
+        pinned: false,
+        primary: Some(Tab::Terminal(sids[0].into())),
+        layout: egui_dock::DockState::new(
+            sids.iter()
+                .map(|sid| Tab::Terminal((*sid).to_string()))
+                .collect(),
+        ),
+    };
+    let mut workspace =
+        Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal("s1".into())]));
+    workspace.tabs[0] = tab("g1", &["s1", "s3"]);
+    workspace.tabs.push(tab("g2", &["s2"]));
+    app.layouts.insert("a".into(), workspace);
+    let group_of = |app: &App, sid: &str| {
+        app.layouts["a"]
+            .tabs
+            .iter()
+            .find(|group| group.layout.find_tab(&Tab::Terminal(sid.into())).is_some())
+            .map(|group| group.id.clone())
+    };
+    app.move_session_to_tab_group("a", "s3", "g2");
+    assert_eq!(group_of(&app, "s3").as_deref(), Some("g2"));
+    assert!(app.pending_layout_save);
+    app.reorder_tab_group("a", "g2", "g1");
+    let order: Vec<&str> = app.layouts["a"]
+        .tabs
+        .iter()
+        .map(|g| g.id.as_str())
+        .collect();
+    assert_eq!(order, ["g2", "g1"]);
+}
+
 #[test]
 fn sidebar_models_reuse_data_until_snapshot_or_filter_changes() {
     let (mut app, _, _dir) = fixture();
@@ -219,7 +259,7 @@ fn opening_or_creating_a_project_ranks_it_by_latest_activity() {
         .send(Update::WorktreeCreated(
             Box::new(app.state.clone()),
             "a".into(),
-            false,
+            worktree_ui::TaskStart::default(),
         ))
         .unwrap();
     drain_until_project_activity(DrainUntilProjectActivityInput {
