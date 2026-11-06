@@ -169,10 +169,40 @@ impl Shared {
     }
 
     pub(crate) fn history_clear(&self, session: Option<String>, remove: bool) -> Result<()> {
+        self.history_request(|tx| HistoryJob::Clear(session, remove, tx))
+    }
+
+    /// Ask the history worker and wait for its answer, 3 s in all. The
+    /// queue is bounded: while heavy output keeps it full, the request
+    /// waits for room only until the same deadline, so a slow disk never
+    /// holds a request (and its client slot) past the client's timeout.
+    pub(crate) fn history_request<T>(
+        &self,
+        job: impl FnOnce(mpsc::Sender<Result<T, String>>) -> HistoryJob,
+    ) -> Result<T> {
+        let deadline = std::time::Instant::now()
+            .checked_add(Duration::from_secs(3))
+            .context("History deadline overflow")?;
         let (tx, rx) = mpsc::channel();
-        self.history.send(HistoryJob::Clear(session, remove, tx))?;
-        rx.recv_timeout(Duration::from_secs(3))?
-            .map_err(anyhow::Error::msg)
+        let mut job = job(tx);
+        loop {
+            match self.history.try_send(job) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Full(back)) => {
+                    ensure!(
+                        std::time::Instant::now() < deadline,
+                        "History storage is busy"
+                    );
+                    job = back;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    anyhow::bail!("History storage worker stopped")
+                }
+            }
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        rx.recv_timeout(left)?.map_err(anyhow::Error::msg)
     }
     pub(crate) fn persist(&self) -> Result<()> {
         let s = relock(&self.state).clone();

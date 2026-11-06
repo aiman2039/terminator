@@ -50,6 +50,9 @@ impl App {
             gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone()).unwrap_or_else(
                 |error| {
                     crate::console::Console::err(format_args!("start GUI services: {error:#}"));
+                    crate::install::installation::show_start_failure(&format!(
+                        "Start GUI services: {error:#}"
+                    ));
                     std::process::exit(1);
                 },
             );

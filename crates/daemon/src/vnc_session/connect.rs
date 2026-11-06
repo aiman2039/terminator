@@ -43,7 +43,9 @@ impl Shared {
             let _ = terminator_core::generations::Catalog::open(paths)
                 .and_then(|c| c.save_workspace(&relock(&self.state)));
         }
-        let _ = self.persist();
+        if let Err(e) = self.persist() {
+            self.degraded(&format!("VNC session not saved: {e}"));
+        }
 
         self.clear_stale_vnc_runtimes(&stale);
         self.start_vnc_runtime(sid, spec, saved_credential);

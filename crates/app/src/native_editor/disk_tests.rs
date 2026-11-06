@@ -164,6 +164,23 @@ fn saving_a_hard_linked_file_keeps_both_names_on_one_file() {
     assert_eq!(std::fs::read_to_string(&other).unwrap(), "new\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn an_in_place_save_shrinks_the_file_and_keeps_no_safety_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.txt");
+    let other = dir.path().join("b.txt");
+    std::fs::write(&path, "a much longer old text\n").unwrap();
+    std::fs::hard_link(&path, &other).unwrap();
+    super::file_io::NativeFileIo::write(&path, b"short\n").unwrap();
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "short\n");
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+}
+
 #[test]
 fn a_disk_change_is_not_a_conflict_while_a_save_runs() {
     let mut native = NativeDoc::loaded(PathBuf::from("/tmp/saving.txt"), "x");

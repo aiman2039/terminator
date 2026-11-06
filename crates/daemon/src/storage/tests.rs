@@ -73,6 +73,33 @@ fn age_rotation_and_existing_segments() {
     assert!(!legacy.exists());
 }
 #[test]
+fn a_history_file_deleted_by_hand_does_not_stop_pruning() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path().into());
+    paths.init().unwrap();
+    let (gone, kept) = (id(), id());
+    let mut history = History::new(paths.clone()).unwrap();
+    history.append(&gone, b"gone").unwrap();
+    history.append(&kept, b"kept").unwrap();
+    history
+        .flush_closing_idle(std::time::Duration::ZERO)
+        .unwrap();
+    fs::remove_file(&history_files(&paths, Some(&gone))[0]).unwrap();
+    for segment in history.segments.values_mut() {
+        segment.created = 0;
+    }
+    let mut pruned = history.prune(&Settings::default()).unwrap();
+    pruned.sort();
+    let mut expected = vec![gone, kept.clone()];
+    expected.sort();
+    assert_eq!(pruned, expected);
+    assert!(history_files(&paths, Some(&kept)).is_empty());
+    assert!(
+        history.per_session.is_empty(),
+        "no zero entries stay behind"
+    );
+}
+#[test]
 fn sqlite_roundtrip_and_recovery() {
     let tmp = tempfile::tempdir().unwrap();
     let p = Paths::at(tmp.path().into());

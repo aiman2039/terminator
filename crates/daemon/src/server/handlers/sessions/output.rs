@@ -101,6 +101,7 @@ impl Shared {
     ) {
         let replies = self.spawn_reply_writer(runtime);
         let mut bytes = [0u8; 8192];
+        let mut panicked = false;
         while let Ok(n) = reader.read(&mut bytes) {
             if n == 0 {
                 break;
@@ -108,7 +109,22 @@ impl Shared {
             let Some(data) = bytes.get(..n) else {
                 break;
             };
-            enqueue_replies(&replies, self.apply_output(sid, runtime, data));
+            // A parser panic must not end the reader: nothing would drain
+            // the PTY, so the program would block on output and the session
+            // would hang without a word. Report it once and keep reading.
+            let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.apply_output(sid, runtime, data)
+            }));
+            match applied {
+                Ok(pending) => enqueue_replies(&replies, pending),
+                Err(_) if !panicked => {
+                    panicked = true;
+                    self.degraded(&format!(
+                        "Terminal output parser failed for session {sid}; output is still saved to history"
+                    ));
+                }
+                Err(_) => {}
+            }
             self.queue_history(sid, data);
         }
     }

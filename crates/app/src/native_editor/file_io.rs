@@ -271,7 +271,8 @@ impl NativeFileIo {
     /// file is replaced atomically.
     pub(super) fn write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         if Self::write_in_place_needed(path) {
-            std::fs::write(path, bytes).context("Write file")
+            let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            Self::write_in_place(&target, bytes)
         } else {
             Self::write_atomically(path, bytes)
         }
@@ -304,6 +305,47 @@ impl NativeFileIo {
         false
     }
 
+    /// Rewrite `target` in place (hard links and owner stay) without
+    /// losing text: the new bytes go to a synced sibling copy first, then
+    /// over the old bytes (no truncation before the write), then the
+    /// length is set. If the in-place write fails, the copy is kept and
+    /// the error names it.
+    fn write_in_place(target: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+        use std::io::Write as _;
+        let dir = target.parent().context("File has no parent folder")?;
+        let name = target
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let copy = dir.join(format!(".{name}.terminator-unsaved-{}", std::process::id()));
+        let mut file = std::fs::File::create(&copy).context("Create safety copy")?;
+        let staged = file
+            .write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .context("Write safety copy");
+        drop(file);
+        if let Err(error) = staged {
+            let _ = std::fs::remove_file(&copy);
+            return Err(error);
+        }
+        let written = (|| -> std::io::Result<()> {
+            let mut file = std::fs::OpenOptions::new().write(true).open(target)?;
+            file.write_all(bytes)?;
+            file.set_len(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+            file.sync_all()
+        })();
+        match written {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&copy);
+                Ok(())
+            }
+            Err(error) => Err(anyhow::Error::new(error).context(format!(
+                "Write file; the new text is kept in {}",
+                copy.display()
+            ))),
+        }
+    }
+
     /// Replace a file's contents without a window where it is truncated or
     /// half-written: write a sibling temp file, give it the target's
     /// permissions, then rename it over the target. A symlink is followed so
@@ -322,7 +364,7 @@ impl NativeFileIo {
             if Self::owner_differs(&temp, &target) {
                 drop(file);
                 let _ = std::fs::remove_file(&temp);
-                return std::fs::write(&target, bytes).context("Write file");
+                return Self::write_in_place(&target, bytes);
             }
             file.write_all(bytes).context("Write file")?;
             file.sync_all().context("Flush file")?;
