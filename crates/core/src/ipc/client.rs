@@ -138,6 +138,7 @@ pub(crate) fn redirect_allowed(request: &Request) -> bool {
             | Request::SetRemoteProjectForwards { .. }
             | Request::SaveLayout { .. }
             | Request::SelectProject { .. }
+            | Request::SetInitCommand { .. }
             | Request::Settings(_)
             | Request::WorktreeAdd { .. }
             | Request::WorktreeRemove { .. }

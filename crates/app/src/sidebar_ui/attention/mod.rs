@@ -389,6 +389,25 @@ pub(super) fn attention_badge_label(waiting: usize, unread: usize) -> String {
     }
 }
 
+/// "2 working · 1 done" for live agents. Empty when there are none.
+pub(super) fn activity_label(working: usize, done: usize) -> String {
+    match (working, done) {
+        (0, 0) => String::new(),
+        (working, 0) => format!("{working} working"),
+        (0, done) => format!("{done} done"),
+        (working, done) => format!("{working} working · {done} done"),
+    }
+}
+
+/// Joins the attention badge and the activity label with " · ".
+pub(super) fn join_labels(first: &str, second: &str) -> String {
+    match (first.is_empty(), second.is_empty()) {
+        (true, _) => second.to_owned(),
+        (_, true) => first.to_owned(),
+        _ => format!("{first} · {second}"),
+    }
+}
+
 pub(super) fn notice_preview(markdown: &str) -> String {
     agent_notice_preview(markdown)
 }

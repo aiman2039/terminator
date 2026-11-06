@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -77,6 +77,10 @@ impl Shared {
             .spawn_command(command)
             .context("Could not start shell/editor")?;
         drop(pair.slave);
+        if let Some(input) = init_input(launch, target.init_command.as_deref()) {
+            // The terminal line buffers it until the shell reads its input.
+            let _ = relock(&writer).write_all(input.as_bytes());
+        }
         let pid = child.process_id();
         let parser = vt100::Parser::new_with_callbacks(
             24,
@@ -185,5 +189,29 @@ impl Shared {
                 "Session running, recovery persistence failed: {e}"
             ));
         }
+    }
+}
+
+/// What a new session types first: the project's init command and Enter,
+/// for shell terminals only. Editors and reviews ignore it.
+fn init_input(launch: Launch, command: Option<&str>) -> Option<String> {
+    matches!(launch, Launch::Shell)
+        .then_some(command)
+        .flatten()
+        .map(|command| format!("{command}\r"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_command_skipped_for_editors() {
+        assert_eq!(
+            init_input(Launch::Shell, Some("make dev")).as_deref(),
+            Some("make dev\r")
+        );
+        assert_eq!(init_input(Launch::Shell, None), None);
+        assert_eq!(init_input(Launch::Editor, Some("make dev")), None);
     }
 }

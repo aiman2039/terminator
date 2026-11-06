@@ -21,6 +21,8 @@ const SYMBOL_QUERY_DELAY: Duration = Duration::from_millis(180);
 /// rebuilds them.
 const STATE_REFRESH: Duration = Duration::from_secs(1);
 
+pub(crate) use ask::AskAgent;
+
 pub(crate) const FILTER_FILES: u8 = 1 << 0;
 pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
 const FILTER_PROJECTS: u8 = 1 << 2;
@@ -336,6 +338,7 @@ impl PaletteItem {
     }
 }
 
+mod ask;
 mod center;
 mod index;
 mod items;

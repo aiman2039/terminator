@@ -111,6 +111,11 @@ fn git_group_header(
     );
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         git_group_bulk_action(ui, prepared, lock, outcome);
+        if group != terminator_git::GitGroup::Conflicts
+            && appearance::sidebar_action(ui, "FileDiff", "Show all changes").clicked()
+        {
+            outcome.show_changes = Some(group == terminator_git::GitGroup::Staged);
+        }
     });
     check_clicked
 }

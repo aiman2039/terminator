@@ -143,6 +143,7 @@ impl App {
             close_workspace_queue: Vec::new(),
             close_workspace_prompted: None,
             workspace_insert: HashMap::new(),
+            post_create: PostCreateQueue::default(),
             workspace_visible: None,
             layout_saved: HashMap::new(),
             layout_pending: HashMap::new(),

@@ -8,7 +8,7 @@ impl App {
         ui: &mut egui::Ui,
         session: &Session,
         rename_tab: Option<(&str, &str)>,
-    ) {
+    ) -> Option<egui::Response> {
         let presented = self.present_session(&session.id);
         let editing = self.renaming(&session.id, RenameSurface::Sidebar);
         let height = if !editing && presented.notice_preview.is_some() {
@@ -17,7 +17,7 @@ impl App {
             appearance::SESSION_ROW_HEIGHT
         };
         if !editing && skip_clipped_row(ui, height) {
-            return;
+            return None;
         }
         let index = self.sidebar_index();
         let response = self.session_row_widget(
@@ -52,6 +52,7 @@ impl App {
         appearance::context_menu(&response, |ui| {
             self.session_row_menu(ui, session, rename_tab);
         });
+        Some(response)
     }
 
     /// The row itself: status icon, label, trailing state, and hover text.
@@ -63,17 +64,27 @@ impl App {
             note,
         } = view;
         let unread_terminal = note.is_some_and(|n| !n.dismissed);
-        let color = appearance::color(if unread_terminal {
-            &self.theme.accent
-        } else {
-            &self.theme.secondary
-        });
         let secondary = self.session_row_secondary(session);
+        // A live agent row shows its state ("waiting 2m", "working") in the
+        // state color; "ended" and "background" still win.
+        let agent_state = presented
+            .row_state(now())
+            .filter(|_| secondary.is_empty() && !editing);
+        let color = match (presented.lifecycle, &agent_state) {
+            (Some(state), Some(_)) => state_color(state, &self.theme),
+            _ => appearance::color(if unread_terminal {
+                &self.theme.accent
+            } else {
+                &self.theme.secondary
+            }),
+        };
         // The status icon carries agent state; the dot is for terminal notices.
         let trailing = if editing {
             ""
         } else if !secondary.is_empty() {
             secondary
+        } else if let Some(state) = &agent_state {
+            state
         } else if unread_terminal {
             "●"
         } else {
@@ -176,6 +187,19 @@ impl App {
                 ui.close();
             }
         } else {
+            if let Some(command) = self.resume_command(&session.id)
+                && appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: "Resume conversation",
+                    icon: "Play",
+                    shortcut: "",
+                })
+                .on_hover_text(&command)
+                .clicked()
+            {
+                self.resume_conversation(session, command);
+                ui.close();
+            }
             self.remove_record_item(ui, &session.id);
         }
     }

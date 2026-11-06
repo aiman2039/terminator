@@ -292,13 +292,28 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(11);
+        saved["version"] = serde_json::json!(12);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()
                 .to_string()
                 .contains("Unsupported")
         );
+    }
+
+    #[test]
+    fn changes_diff_layout_v11_round_trips() {
+        let mut workspace = Workspace::empty();
+        let tab = Tab::ChangesDiff {
+            cwd: "/repo".into(),
+            staged: true,
+        };
+        workspace.add("changes".into(), tab.clone());
+        assert_eq!(workspace.version, 11);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert_eq!(restored.version, 11);
+        assert!(restored.contains(&tab));
     }
 
     #[test]

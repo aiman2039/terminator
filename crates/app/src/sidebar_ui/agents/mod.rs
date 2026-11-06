@@ -1,7 +1,8 @@
 mod live;
 
 use super::attention::{
-    AttentionCard, NoticeGroup, attention_badge_label, attention_card, state_color,
+    AttentionCard, NoticeGroup, activity_label, attention_badge_label, attention_card, join_labels,
+    state_color,
 };
 use super::explorer_rows::{
     PaintHeaderCountInput, cached_variable_card, paint_header_count, skip_clipped_row,
@@ -80,11 +81,11 @@ impl App {
     /// Header bell. Same square as the hide-sidebar control, with a corner count.
     pub(crate) fn header_agents_button(&mut self, ui: &mut egui::Ui) {
         let (waiting, unread) = self.attention_counts();
-        let badge = attention_badge_label(waiting, unread);
-        let tip = if badge.is_empty() {
+        let summary = self.agents_summary();
+        let tip = if summary.is_empty() {
             "Pending agent notifications. Click to switch between Agents and Projects.".to_string()
         } else {
-            format!("{badge}. Click to switch between Agents and Projects.")
+            format!("{summary}. Click to switch between Agents and Projects.")
         };
         let response = appearance::framed_icon_button(appearance::FramedIconButtonInput {
             ui,
@@ -115,11 +116,11 @@ impl App {
     }
 
     pub(crate) fn header_agents_menu(&mut self, ui: &mut egui::Ui) -> bool {
-        let badge = self.agent_bar_badge();
-        let label = if badge.is_empty() {
+        let summary = self.agents_summary();
+        let label = if summary.is_empty() {
             "Agents".to_string()
         } else {
-            format!("Agents · {badge}")
+            format!("Agents · {summary}")
         };
         let mark = if self.left_agents_shown() { "✓" } else { "" };
         let clicked = appearance::menu_item(appearance::MenuItemInput {
@@ -341,5 +342,21 @@ impl App {
     pub(crate) fn attention_counts(&self) -> (usize, usize) {
         let index = self.sidebar_index();
         (index.waiting_count, index.unread_count)
+    }
+
+    /// Live agents that work and live agents that are done, from hooks.
+    pub(crate) fn activity_counts(&self) -> (usize, usize) {
+        let index = self.sidebar_index();
+        (index.working_count, index.done_count)
+    }
+
+    /// "1 waiting · 2 working · 1 done": attention first, then activity.
+    pub(crate) fn agents_summary(&self) -> String {
+        let (waiting, unread) = self.attention_counts();
+        let (working, done) = self.activity_counts();
+        join_labels(
+            &attention_badge_label(waiting, unread),
+            &activity_label(working, done),
+        )
     }
 }

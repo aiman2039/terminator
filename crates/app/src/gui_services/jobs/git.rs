@@ -253,6 +253,7 @@ impl Services {
         cancel: CancellationToken,
         updates: &mut Vec<Update>,
     ) -> Result<()> {
+        let start = draft.task_start();
         let client = self.client();
         anyhow::ensure!(
             matches!(
@@ -277,7 +278,7 @@ impl Services {
         };
         let project = checkout_project(&state, &canonical)
             .context("Created worktree missing from inventory")?;
-        updates.push(Update::WorktreeCreated(state, project, draft.open_terminal));
+        updates.push(Update::WorktreeCreated(state, project, start));
         Ok(())
     }
 

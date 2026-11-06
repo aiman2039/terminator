@@ -378,6 +378,7 @@ impl App {
             | Tab::RevisionDiff { .. }
             | Tab::FileHistory { .. }
             | Tab::Merge { .. }
+            | Tab::ChangesDiff { .. }
             | Tab::Vnc { .. } => true,
         };
         let survives = old_group

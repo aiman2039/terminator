@@ -52,6 +52,10 @@ pub(crate) struct Index {
     pub terminal_pending: Vec<TerminalNotice>,
     pub unread_count: usize,
     pub waiting_count: usize,
+    /// Live sessions whose agent hook state is Running.
+    pub working_count: usize,
+    /// Live sessions whose agent hook state is Completed.
+    pub done_count: usize,
     pub terminal_layout_keys: HashMap<String, u64>,
     pub resumable: Vec<Session>,
     pub children: HashMap<String, Vec<Arc<terminator_core::Project>>>,

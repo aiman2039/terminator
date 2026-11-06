@@ -247,6 +247,8 @@ pub use error::{SettingsError, StateError};
 
 pub const METADATA_SETTINGS_CAPABILITY: &str = "metadata-settings-v1";
 pub const WORKTREES_CAPABILITY: &str = "worktrees-v1";
+/// `State::init_commands` is stored and run in new local shell terminals.
+pub const PROJECT_INIT_CAPABILITY: &str = "project-init-v1";
 pub const SHUTDOWN_IF_IDLE_CAPABILITY: &str = "shutdown-if-idle-v1";
 pub const STABLE_HELPER_CAPABILITY: &str = "stable-helper-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
@@ -309,6 +311,10 @@ pub struct State {
     pub settings: Settings,
     pub recent_events: Vec<String>,
     pub selected_project: Option<String>,
+    /// Command typed into each new local shell terminal of a project, by
+    /// project ID (`project-init-v1`). Editors and SSH terminals ignore it.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub init_commands: std::collections::BTreeMap<String, String>,
     pub degraded: Option<String>,
 }
 impl State {

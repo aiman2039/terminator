@@ -144,6 +144,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         NTFY_CAPABILITY.into(),
         DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
+        PROJECT_INIT_CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
         terminator_core::command_blocks::CAPABILITY.into(),
         SESSION_FOR_PIDS_CAPABILITY.into(),

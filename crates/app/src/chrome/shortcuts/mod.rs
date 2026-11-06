@@ -87,6 +87,7 @@ actions! {
     NavigateForward => "navigate_forward", "Forward", "ArrowRight";
     RecentFiles => "recent_files", "Recent files", "History";
     NextAttention => "next_attention", "Next agent needing attention", "Bell";
+    AskAgent => "ask_agent", "Ask agent…", "Terminal";
     NewBrowser => "new_browser", "New browser tab", "Globe";
     NewVnc => "new_vnc", "New VNC viewer", "Monitor";
     DiffNextChange => "diff_next_change", "Diff: next change", "ArrowDown";
@@ -102,6 +103,7 @@ actions! {
     GitShowHistory => "git_show_history", "Git: Show History", "History";
     GitAnnotate => "git_annotate", "Git: Annotate with Git Blame", "History";
     GitStageAll => "git_stage_all", "Git: Stage All", "Plus";
+    GitShowAllChanges => "git_show_all_changes", "Git: Show All Changes", "FileDiff";
     // Backward first: egui ignores extra Shift, so Ctrl+Tab would also
     // consume Ctrl+Shift+Tab.
     SwitcherBack => "tab_switcher_back", "Recent tab switcher (backward)", "Files";

@@ -75,6 +75,19 @@ impl Shared {
         Ok(Outcome::Changed)
     }
 
+    pub(super) fn on_set_init_command(
+        &self,
+        project: &str,
+        command: Option<&str>,
+    ) -> Result<Outcome> {
+        let mut s = relock(&self.state);
+        if !set_init_command(&mut s, project, command)? {
+            return Ok(Outcome::Reply(Response::Ok));
+        }
+        s.revision = s.revision.saturating_add(1);
+        Ok(Outcome::Changed)
+    }
+
     pub(super) fn on_select_project(&self, project: String) -> Result<Outcome> {
         let mut s = relock(&self.state);
         ensure!(
@@ -91,5 +104,50 @@ impl Shared {
         s.selected_project = Some(project);
         s.revision = s.revision.saturating_add(1);
         Ok(Outcome::Changed)
+    }
+}
+
+/// Stores (or clears, when blank) a local project's init command. True when
+/// it changed.
+fn set_init_command(s: &mut State, project: &str, command: Option<&str>) -> Result<bool> {
+    let command = command.and_then(|text| remote::normalize_command(text, ""));
+    if let Some(command) = &command {
+        ensure!(
+            command.len() <= remote::MAX_COMMAND_LEN && !command.chars().any(char::is_control),
+            "Init command must be one line"
+        );
+    }
+    ensure!(
+        s.projects.iter().any(|p| p.id == project),
+        "Init commands are for local projects"
+    );
+    Ok(match command {
+        Some(command) => {
+            s.init_commands.insert(project.to_owned(), command.clone()) != Some(command)
+        }
+        None => s.init_commands.remove(project).is_some(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_command_is_one_line_for_a_local_project() {
+        let mut s = State::default();
+        s.projects.push(Project {
+            id: "p".into(),
+            name: "p".into(),
+            path: "/p".into(),
+            layout: serde_json::Value::Null,
+        });
+        assert!(set_init_command(&mut s, "p", Some(" make dev ")).unwrap());
+        assert_eq!(s.init_commands["p"], "make dev");
+        assert!(!set_init_command(&mut s, "p", Some("make dev")).unwrap());
+        assert!(set_init_command(&mut s, "p", Some("a\nb")).is_err());
+        assert!(set_init_command(&mut s, "ssh", Some("x")).is_err());
+        assert!(set_init_command(&mut s, "p", Some("  ")).unwrap());
+        assert!(s.init_commands.is_empty());
     }
 }

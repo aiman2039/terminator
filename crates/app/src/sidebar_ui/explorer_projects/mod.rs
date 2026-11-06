@@ -1,6 +1,8 @@
+mod init_command;
 mod list;
 mod style;
 mod tab_tree;
+mod tree_dnd;
 
 pub(crate) use style::{ProjectNames, apply_project_names};
 

@@ -38,6 +38,7 @@ mod missing_folder;
 mod name_prompts;
 mod native_editor_panes;
 mod pane_drag;
+mod post_create;
 mod project_sidebar;
 mod ssh_page;
 #[cfg(feature = "test-support")]

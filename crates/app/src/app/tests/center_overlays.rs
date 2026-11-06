@@ -175,6 +175,7 @@ fn navigation_closes_worktree_draft_form() {
         branch: "task".into(),
         dest: "/tmp/task".into(),
         open_terminal: true,
+        ..Default::default()
     });
     app.hide_center_overlay();
     assert!(app.worktree_draft.is_none());
@@ -190,12 +191,13 @@ fn worktree_form_stays_open_until_creation_succeeds() {
         branch: "task".into(),
         dest: "/tmp/task".into(),
         open_terminal: false,
+        ..Default::default()
     };
     app.worktree_draft = Some(draft.clone());
     app.submit_worktree(&draft);
     assert!(app.worktree_draft.is_some());
     let state = app.state.clone();
-    app.handle_worktree_created(state, "a".into(), false);
+    app.handle_worktree_created(state, "a".into(), worktree_ui::TaskStart::default());
     assert!(app.worktree_draft.is_none());
 }
 
@@ -208,6 +210,7 @@ fn worktree_wizard_opens_only_after_the_git_probe_confirms() {
         branch: "task".into(),
         dest: "/tmp/task".into(),
         open_terminal: true,
+        ..Default::default()
     };
     app.apply_worktree_probe(draft.clone(), false);
     assert!(app.worktree_draft.is_none());

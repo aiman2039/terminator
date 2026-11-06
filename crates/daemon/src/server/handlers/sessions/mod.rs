@@ -30,6 +30,8 @@ struct Target {
     settings: Settings,
     cwd: PathBuf,
     generation: String,
+    /// The project's init command (`project-init-v1`); local projects only.
+    init_command: Option<String>,
 }
 
 impl Target {
@@ -114,7 +116,7 @@ impl Shared {
             .find(|p| p.id == project)
             .cloned();
         let requested_cwd = cwd.clone();
-        let (settings, root, generation) = {
+        let (settings, root, generation, init_command) = {
             let s = relock(&self.state);
             ensure!(
                 !s.worktrees
@@ -135,6 +137,7 @@ impl Shared {
                         .clone()
                 },
                 s.generation.clone(),
+                s.init_commands.get(project).cloned(),
             )
         };
         let cwd = if remote_project.is_some() {
@@ -142,12 +145,14 @@ impl Shared {
         } else {
             Self::local_cwd(root, cwd)?
         };
+        let init_command = init_command.filter(|_| remote_project.is_none());
         Ok(Target {
             remote_project,
             requested_cwd,
             settings,
             cwd,
             generation,
+            init_command,
         })
     }
 

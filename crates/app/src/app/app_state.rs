@@ -99,12 +99,12 @@ pub struct App {
     /// Dirty native buffer the current workspace close already asked about.
     pub(crate) close_workspace_prompted: Option<PathBuf>,
     pub(crate) workspace_insert: HashMap<String, usize>,
+    pub(crate) post_create: PostCreateQueue,
     pub(crate) workspace_visible: Option<(String, String)>,
     pub(crate) layout_saved: HashMap<String, String>,
     pub(crate) layout_pending: HashMap<String, String>,
-    /// Serialized signature of the last persistable layouts sent to the daemon.
-    /// `save_layouts` compares against it so an unchanged workspace set does not
-    /// clone workspaces, cross a thread, or wake the GUI every second.
+    /// Signature of the last layouts sent to the daemon. `save_layouts` skips an unchanged
+    /// set: no workspace clone, no thread crossing, no GUI wake every second.
     pub(crate) layout_signature: Option<Vec<(String, u64)>>,
     pub(crate) layout_generation: u64,
     pub(crate) selected: Option<String>,

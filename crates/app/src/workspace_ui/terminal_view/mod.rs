@@ -40,6 +40,10 @@ impl Viewer<'_> {
         if self.show_attach_retry(ui, &session.id) || !self.ensure_terminal_backend(ui, session) {
             return;
         }
+        if self.app.post_create.by_session.contains_key(&session.id) {
+            self.app.flush_pending_input(&session.id);
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
+        }
         let Some(frame) = self.paint_terminal(ui, session, modifier_pressed) else {
             return;
         };

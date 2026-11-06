@@ -15,7 +15,7 @@ impl Viewer<'_> {
                 session.lifecycle
             ),
         );
-        self.agent_resume_rows(ui, sid);
+        self.agent_resume_rows(ui, session);
         if ui.button("Open a fresh shell here").clicked() {
             self.open_fresh_shell(session);
         }
@@ -34,14 +34,15 @@ impl Viewer<'_> {
         self.saved_scrollback(ui, sid, key);
     }
 
-    fn agent_resume_rows(&mut self, ui: &mut egui::Ui, sid: &str) {
+    fn agent_resume_rows(&mut self, ui: &mut egui::Ui, session: &Session) {
         let mut copied = None;
+        let mut run = None;
         for a in self
             .app
             .state
             .agents
             .iter()
-            .filter(|a| a.session_id == *sid)
+            .filter(|a| a.session_id == session.id)
         {
             let Some(resume) = &a.resume else {
                 ui.weak(format!("{}: resume command unavailable", a.kind));
@@ -50,6 +51,9 @@ impl Viewer<'_> {
             let text = resume.display();
             ui.horizontal(|ui| {
                 ui.monospace(&text);
+                if ui.small_button("Resume conversation").clicked() {
+                    run = Some(text.clone());
+                }
                 if ui.small_button("Copy resume").clicked() {
                     copied = Some(text.clone());
                 }
@@ -57,6 +61,9 @@ impl Viewer<'_> {
         }
         if let Some(text) = copied {
             self.app.copy_with_note(ui.ctx(), text, "Resume command");
+        }
+        if let Some(command) = run {
+            self.app.resume_conversation(session, command);
         }
     }
 

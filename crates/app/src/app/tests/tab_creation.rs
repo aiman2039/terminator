@@ -14,7 +14,10 @@ fn worktree_completion_opens_only_the_requested_projects_terminal() {
             .send(Update::WorktreeCreated(
                 Box::new(app.state.clone()),
                 "b".into(),
-                open_terminal,
+                worktree_ui::TaskStart {
+                    open_terminal,
+                    ..Default::default()
+                },
             ))
             .unwrap();
         drain_updates(&mut app, &ctx);
@@ -40,6 +43,40 @@ fn worktree_completion_opens_only_the_requested_projects_terminal() {
     }
 }
 
+/// New task types the agent command into its terminal without Enter and
+/// opens the Browser URL. The user starts the agent.
+#[test]
+fn new_task_types_agent_command_without_enter() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, _requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    let start = worktree_ui::TaskStart {
+        open_terminal: true,
+        agent_command: "claude".into(),
+        browser_url: "http://localhost:3000".into(),
+    };
+    app.update_tx
+        .send(Update::WorktreeCreated(
+            Box::new(app.state.clone()),
+            "b".into(),
+            start,
+        ))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    let queued: Vec<_> = app.post_create.by_tab.values().cloned().collect();
+    assert_eq!(
+        queued,
+        vec![PostCreate {
+            input: "claude".into(),
+            enter: false,
+        }]
+    );
+    assert!(matches!(
+        app.layouts["b"].active_pane(),
+        Some(Tab::Browser { .. })
+    ));
+}
+
 /// A created worktree that cannot be selected (here: removed) never gets
 /// its terminal in the project that stays selected.
 #[test]
@@ -56,7 +93,14 @@ fn worktree_completion_starts_no_terminal_in_another_project() {
         removed: true,
     });
     app.update_tx
-        .send(Update::WorktreeCreated(Box::new(state), "b".into(), true))
+        .send(Update::WorktreeCreated(
+            Box::new(state),
+            "b".into(),
+            worktree_ui::TaskStart {
+                open_terminal: true,
+                ..Default::default()
+            },
+        ))
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert_eq!(app.selected.as_deref(), Some("a"));

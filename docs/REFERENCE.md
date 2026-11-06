@@ -45,6 +45,7 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 - Right-click a terminal or its tab for **New tab**, **Split up**, **Split down**, **Split left**, and **Split right**. Each split stays inside its owning top-level tab.
 - Launch agents and manage worktrees in the terminal yourself. The app does not launch agents or perform Git writes.
 - Project arrows expand/collapse independently of selection and persist across restarts. The project-list header icons order visible projects by name A → Z (default), name Z → A, or latest activity, and restore a removed project; the choice persists in `ui-preferences.json`. Latest activity is the latest of session creation, agent updates, notice times, and restoring, adding, or creating a project. Selecting a visible project does not change its rank. The window header holds project tabs and the Explorer, Agents, Git, and Settings icons. Explorer, Agents, and Git switch the right sidebar; click the active tool to collapse it. The left Agents row stays compact (waiting/unread counts) until opened. Explorer, Git, and History do not list attention events. Agents lists undismissed, unsnoozed notifications for all projects, including retained events from ended sessions and terminal notices. Unresolved waiting events appear first. Waiting input and permission notices leave the inbox when the agent continues or a newer request replaces them; completed and failed notices remain until the session is focused or the notice is dismissed. The Agents header waiting badge uses that same list, not live agent sessions. Working agents without notifications do not create cards. Sidebar width persists globally. Settings → Place notifications at the side hides the top Attention strip (default); unchecking it restores the top strip.
+- Right-click a local project for **Init command…** (`project-init-v1`). The daemon types that one line and Enter into each new shell terminal of the project, for example `source .venv/bin/activate`. Editors, reviews and SSH terminals skip it. Blank removes it.
 - Select a project to restore its own layout. A terminal that changes directory stays under its owning project; the file/Git sidebar follows its effective directory.
 - Single-click anywhere on an Explorer file row to open a new editor tab. Right-click a file path to open the editor, a new editor split, or an external editor. The Explorer, Git, and Perforce file menus show no shortcut next to **Open file** or **Open in editor split**, because no shortcut does these actions. `command+O` uses the native file picker (Cmd+O on macOS, Ctrl+Shift+O on Linux). Change it in Settings → Shortcuts. Settings shortcuts and JetBrains keymap chords are consumed by the GUI and are not typed into the terminal; on Linux a focused terminal keeps Alt+letter and Alt+digit. Other Command/Ctrl chords go to the focused terminal as kitty CSI u (Command is Super, so Neovim `<D-u>` works); Ctrl+A–Z stay control characters, and Cmd/Ctrl+C/V copy and paste. Drag selects terminal text even in nvim or a full-screen agent. Scrolling during that drag extends the selection by the lines the viewport actually moved through local history, including when the terminal is not full screen; a scroll that cannot move leaves the selection where it is. On the alternate screen the wheel goes to the agent and the selection grows by that line count until the pointer moves. Holding the pointer outside the pane keeps scrolling. Then Cmd+C (macOS) or Ctrl+Shift+C (Linux) copies it. Empty copy does not clear the clipboard. A wheel that is not part of a selection still goes to the app when it enables mouse reporting. On the alternate screen, a wheel that is not a mouse report is sent as cursor keys.
 - Settings → Terminal & Editor retains embedded Neovim, terminal-editor, and external-editor modes. External presets include System default, VS Code, Cursor, RustRover, Zed, and Custom. Named presets use macOS application launching or Linux CLI launchers. Custom takes an executable and one literal argument per row; the absolute file path is appended without shell evaluation. **Choose file and test…** launches the draft without saving. Missing launchers and failed exits appear in the status bar; long-running editors remain independent of the GUI.
@@ -568,6 +569,8 @@ terminator-hook ctl create PROJECT_ID --background
 terminator-hook ctl split SESSION_ID right
 terminator-hook ctl send SESSION_ID 'cargo test' --enter
 terminator-hook ctl read SESSION_ID --screen
+terminator-hook ctl agents --project PROJECT_ID
+terminator-hook ctl wait SESSION_ID --state waiting --timeout 600
 terminator-hook ctl open-file PROJECT_ID /absolute/image.png
 terminator-hook ctl worktree add PROJECT_ID /absolute/task-checkout --branch task-name
 terminator-hook ctl worktree list PROJECT_ID
@@ -578,6 +581,13 @@ terminator-hook ctl shutdown
 terminator-hook ctl shutdown --stop-all
 terminator-hook ctl shutdown --stop-all --relaunch
 ```
+
+`ctl agents` prints each session's newest agent record as JSON: session,
+project, label, live, kind, hook-reported state and age in seconds. `ctl wait`
+checks the daemon snapshot every 500 ms. `--state` is `waiting` (input or
+permission), `done`, `failed` or `any-stop`. It prints the state and exits 0
+on a match, 2 when `--timeout` seconds pass, and 3 when the session ends. It
+needs `agent-presence-v1`. Both use hook state only, never terminal text.
 
 Run shutdown from Terminal.app or another terminal outside Terminator. The default
 refuses live sessions. Explicit `--stop-all` closes the GUI through its normal
@@ -876,6 +886,15 @@ green the same change on both sides.
 
 Long lines are clipped, not wrapped. Binary conflicts must be resolved in a
 terminal. The tab is saved in layout version 10.
+
+**Git: Show All Changes** (Find Action), or the file-diff button on a Git
+panel group header, opens one tab with every changed file of that side:
+staged, or the working tree with untracked files. Each file has a header with
+its path and line counts. An open section is the native single-file diff, so
+hunk Stage, Unstage, and Discard (with confirmation) work as there and wait for
+a running commit. A section loads its diff only while it is on screen. Files
+after the first 50 start collapsed. The list follows the Git panel's
+repository. The tab is saved in layout version 11.
 
 When a native diff refuses a binary PNG, JPEG, WebP, GIF, BMP, ICO, or TIFF
 file, the diff shows the old and new images. The captions give file size and

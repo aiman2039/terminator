@@ -97,9 +97,10 @@ impl Viewer<'_> {
                 path.file_name().unwrap_or_default().to_string_lossy()
             )
             .into(),
-            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } | Tab::Merge { .. } => {
-                tab.git_title().into()
-            }
+            Tab::RevisionDiff { .. }
+            | Tab::FileHistory { .. }
+            | Tab::Merge { .. }
+            | Tab::ChangesDiff { .. } => tab.git_title().into(),
             Tab::Vnc {
                 label, host, port, ..
             } => if !label.trim().is_empty() {

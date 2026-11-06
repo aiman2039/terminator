@@ -17,6 +17,7 @@ pub(crate) const GIT_ACTIONS: &[Action] = &[
     Action::GitShowHistory,
     Action::GitAnnotate,
     Action::GitStageAll,
+    Action::GitShowAllChanges,
 ];
 
 impl App {
@@ -25,6 +26,9 @@ impl App {
     pub(crate) fn git_action_applies(&self, action: Action) -> bool {
         match action {
             Action::GitCommit | Action::GitShowLog => self.local_git_context().is_some(),
+            Action::GitShowAllChanges => self
+                .local_git_context()
+                .is_some_and(|context| !context.changes.is_empty()),
             Action::GitRefresh => {
                 self.selected_remote_project().is_none() && self.context.is_some()
             }
@@ -62,6 +66,7 @@ impl App {
             Action::GitShowHistory => self.show_focused_file_history(),
             Action::GitAnnotate => self.annotate_active_editor(),
             Action::GitStageAll => self.stage_all_changes(),
+            Action::GitShowAllChanges => self.open_changes_diff(false),
             _ => {}
         }
     }

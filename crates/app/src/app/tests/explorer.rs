@@ -958,6 +958,7 @@ fn moving_a_folder_carries_open_buffers_selection_and_expansion() {
 }
 
 #[test]
+#[cfg(feature = "test-support")]
 fn rename_and_new_items_edit_inline_in_the_tree() {
     let (mut app, ctx, dir) = keyboard_tree();
     let (jobs, received) = mpsc::channel();

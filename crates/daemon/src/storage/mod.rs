@@ -101,6 +101,7 @@ impl Store {
             );
             owned = state.clone();
             owned.projects.clear();
+            owned.init_commands.clear();
             owned.worktrees.clear();
             owned.vnc_profiles.clear();
             owned.selected_project = None;

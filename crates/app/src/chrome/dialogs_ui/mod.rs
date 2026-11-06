@@ -60,6 +60,8 @@ impl App {
         self.audio_directory_picker(frame);
         self.open_file_picker(frame);
         self.worktree_remove_dialog(ctx);
+        self.ask_agent_dialog(ctx);
+        self.init_command_dialog(ctx);
         self.missing_offer_dialog(ctx);
         self.browse_target_picker(frame);
     }

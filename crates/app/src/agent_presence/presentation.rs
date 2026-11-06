@@ -42,6 +42,17 @@ pub(super) struct Diagnostics {
 }
 
 impl AgentPresentation {
+    /// Short trailing text for a session row, such as `waiting 2m`.
+    /// Computed per frame: the age must not be cached.
+    pub fn row_state(&self, now: u64) -> Option<String> {
+        let since = self
+            .diagnostics
+            .as_ref()
+            .and_then(|d| d.hook.as_ref())
+            .map(|hook| hook.updated);
+        row_state(self.lifecycle?, since, now)
+    }
+
     pub fn diagnostics(&self, now: u64) -> String {
         let Some(d) = &self.diagnostics else {
             return "Unknown session".into();
@@ -58,5 +69,35 @@ impl AgentPresentation {
             unread: self.unread,
             now,
         })
+    }
+}
+
+/// Trailing row text for a hook state. Waiting shows its age, because a
+/// long wait needs attention. No text for unknown or stopped agents.
+pub(crate) fn row_state(state: AgentState, since: Option<u64>, now: u64) -> Option<String> {
+    let label = match state {
+        AgentState::WaitingInput | AgentState::WaitingPermission => {
+            return Some(match since {
+                Some(since) => format!("waiting {}", short_age(since, now)),
+                None => "waiting".into(),
+            });
+        }
+        AgentState::Running => "working",
+        AgentState::Completed => "done",
+        AgentState::Failed => "failed",
+        AgentState::Unknown | AgentState::Stopped => return None,
+    };
+    Some(label.into())
+}
+
+/// `12s`, `4m` or `2h`.
+fn short_age(since: u64, now: u64) -> String {
+    let age = now.saturating_sub(since);
+    if age < 60 {
+        format!("{age}s")
+    } else if age < 3600 {
+        format!("{}m", age / 60)
+    } else {
+        format!("{}h", age / 3600)
     }
 }

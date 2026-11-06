@@ -83,6 +83,7 @@ impl App {
                 },
             ),
             Some(tab @ Tab::Merge { .. }) => TabFace::plain(tab.git_title(), "GitCompareArrows"),
+            Some(tab @ Tab::ChangesDiff { .. }) => TabFace::plain(tab.git_title(), "FileDiff"),
             Some(Tab::Vnc {
                 label,
                 session,

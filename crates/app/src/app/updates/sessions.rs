@@ -56,17 +56,15 @@ impl App {
         &mut self,
         state: State,
         project: String,
-        open_terminal: bool,
+        start: worktree_ui::TaskStart,
     ) {
         self.worktree_draft = None;
         self.missing_projects.remove(&project);
         self.apply_state(state);
         self.reveal_project(project.clone());
         // A project that cannot be selected keeps the old selection: its
-        // terminal must not start there.
-        if open_terminal && self.selected.as_deref() == Some(project.as_str()) {
-            self.create(None);
-        }
+        // terminal and browser must not open there.
+        self.start_task(&project, start);
     }
 
     pub(super) fn handle_workspace_created(
@@ -84,6 +82,9 @@ impl App {
                 .insert(session.id.clone(), anchors.clone());
         }
         let index = self.workspace_insert.remove(&id).unwrap_or(usize::MAX);
+        if let Some(post) = self.post_create.by_tab.remove(&id) {
+            self.post_create.by_session.insert(session.id.clone(), post);
+        }
         self.layouts
             .entry(project.clone())
             .or_insert_with(Workspace::empty)
@@ -239,6 +240,27 @@ impl App {
         }
     }
 
+    /// Types a new terminal's pending input once its shell has drawn
+    /// something (the prompt). Before that, the text could reach the shell
+    /// before its line editor is ready.
+    pub(crate) fn flush_pending_input(&mut self, session: &str) {
+        let Some(backend) = self.backends.get(session) else {
+            return;
+        };
+        if !self.post_create.by_session.contains_key(session) || !shows_prompt(backend) {
+            return;
+        }
+        let Some(post) = self.post_create.by_session.remove(session) else {
+            return;
+        };
+        self.handle_clipboard_paste(session, &post.input);
+        if post.enter
+            && let Some(backend) = self.backends.get_mut(session)
+        {
+            backend.process_command(egui_term::BackendCommand::Write(b"\r".to_vec()));
+        }
+    }
+
     pub(crate) fn handle_clipboard_paste(&mut self, session: &str, text: &str) {
         // Resolve by captured identity, never by current focus.
         if let Some(backend) = self.backends.get_mut(session) {
@@ -247,4 +269,29 @@ impl App {
             backend.process_command(egui_term::BackendCommand::Write(bytes));
         }
     }
+}
+
+/// True once the terminal shows any non-blank cell, such as a prompt.
+pub(crate) fn shows_prompt(backend: &egui_term::TerminalBackend) -> bool {
+    backend
+        .last_content()
+        .grid
+        .display_iter()
+        .any(|cell| !cell.c.is_whitespace())
+}
+
+/// Text to type into a new terminal once its shell shows a prompt.
+/// `enter` is set only for an explicit user action that runs a command.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PostCreate {
+    pub(crate) input: String,
+    pub(crate) enter: bool,
+}
+
+/// Input for new terminals: by top-level tab ID until the daemon replies,
+/// then by session until the first prompt shows.
+#[derive(Default)]
+pub(crate) struct PostCreateQueue {
+    pub(crate) by_tab: std::collections::HashMap<String, PostCreate>,
+    pub(crate) by_session: std::collections::HashMap<String, PostCreate>,
 }

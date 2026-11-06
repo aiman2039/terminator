@@ -6,7 +6,9 @@ mod commands;
 mod forward;
 pub mod mosh;
 mod paths;
-pub use commands::{COMMANDS_CAPABILITY, DEFAULT_SHELL_COMMAND, normalize_command};
+pub use commands::{
+    COMMANDS_CAPABILITY, DEFAULT_SHELL_COMMAND, MAX_COMMAND_LEN, normalize_command,
+};
 pub use forward::{
     ActiveForward, BIND_ADDRESS, FORWARDING_CAPABILITY, Forward, ForwardError, ForwardFailure,
     ForwardStatus, MAX_FORWARDS, validate_forwards,

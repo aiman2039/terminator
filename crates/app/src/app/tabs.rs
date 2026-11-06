@@ -29,6 +29,8 @@ impl Tab {
             } => format!("{} ({} ↔ {})", name(path), short(left), short(right)),
             Self::FileHistory { path, .. } => format!("History {}", name(path)),
             Self::Merge { path, .. } => format!("Merge {}", name(path)),
+            Self::ChangesDiff { staged: true, .. } => "Staged changes".into(),
+            Self::ChangesDiff { .. } => "All changes".into(),
             _ => String::new(),
         }
     }
@@ -83,6 +85,15 @@ impl App {
     /// A new terminal tab whose shell starts in `cwd` (the project default
     /// when `None`).
     pub(crate) fn create_workspace_tab_in(&mut self, index: Option<usize>, cwd: Option<PathBuf>) {
+        self.create_workspace_tab_with(index, cwd, None);
+    }
+    /// A new terminal tab that types `post` once its shell shows a prompt.
+    pub(crate) fn create_workspace_tab_with(
+        &mut self,
+        index: Option<usize>,
+        cwd: Option<PathBuf>,
+        post: Option<PostCreate>,
+    ) {
         self.hide_center_overlay();
         let Some(project) = self.selected.clone() else {
             return;
@@ -93,6 +104,9 @@ impl App {
         let tab_id = id();
         if let Some(index) = index {
             self.workspace_insert.insert(tab_id.clone(), index);
+        }
+        if let Some(post) = post.filter(|post| !post.input.is_empty()) {
+            self.post_create.by_tab.insert(tab_id.clone(), post);
         }
         let _ = self.jobs.send(Job::rpc(
             Request::Create {

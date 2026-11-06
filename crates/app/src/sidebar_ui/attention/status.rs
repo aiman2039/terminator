@@ -104,8 +104,7 @@ impl App {
     }
 
     pub(crate) fn notification_status_badge(&mut self, ui: &mut egui::Ui) {
-        let (waiting, unread) = self.attention_counts();
-        let label = attention_badge_label(waiting, unread);
+        let label = self.agents_summary();
         let response = appearance::icon_label_button(appearance::IconLabelButtonInput {
             ui,
             icon: "Bell",

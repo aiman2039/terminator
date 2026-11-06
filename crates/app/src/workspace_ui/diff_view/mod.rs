@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod body;
+mod changes;
 mod files;
 mod keys;
 mod notice;

@@ -80,7 +80,7 @@ impl App {
     }
 
     /// Short label for a dragged tab ghost.
-    pub(super) fn drag_title(&self, tab: &Tab) -> String {
+    pub(in crate::workspace_ui) fn drag_title(&self, tab: &Tab) -> String {
         match tab {
             Tab::Terminal(sid) => self
                 .state
@@ -106,9 +106,10 @@ impl App {
                 "Blame {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
-            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } | Tab::Merge { .. } => {
-                tab.git_title()
-            }
+            Tab::RevisionDiff { .. }
+            | Tab::FileHistory { .. }
+            | Tab::Merge { .. }
+            | Tab::ChangesDiff { .. } => tab.git_title(),
             Tab::Vnc {
                 label, host, port, ..
             } => {

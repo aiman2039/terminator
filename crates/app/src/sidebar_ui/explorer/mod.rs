@@ -118,7 +118,7 @@ impl App {
                         && !session.review
                 })
                 .and_then(|session| session.file.clone()),
-            Tab::CommitLog { .. } | Tab::Player | Tab::Vnc { .. } => None,
+            Tab::CommitLog { .. } | Tab::ChangesDiff { .. } | Tab::Player | Tab::Vnc { .. } => None,
         }
     }
 
@@ -281,19 +281,26 @@ impl App {
         self.sidebar_index().faces.get(project_id).copied()
     }
 
-    pub(super) fn session_row(&mut self, ui: &mut egui::Ui, session: &Session) {
-        self.session_row_for_tab(ui, session, None);
+    pub(super) fn session_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &Session,
+    ) -> Option<egui::Response> {
+        self.session_row_for_tab(ui, session, None)
     }
 
     /// One session row that stands in for a single-terminal tab. It offers to
     /// name that tab, since the tab node is not painted.
-    pub(super) fn session_row_in_tab(&mut self, input: SessionRowInTabInput<'_>) {
+    pub(super) fn session_row_in_tab(
+        &mut self,
+        input: SessionRowInTabInput<'_>,
+    ) -> Option<egui::Response> {
         let SessionRowInTabInput {
             ui,
             session,
             project_id,
             tab_id,
         } = input;
-        self.session_row_for_tab(ui, session, Some((project_id, tab_id)));
+        self.session_row_for_tab(ui, session, Some((project_id, tab_id)))
     }
 }
