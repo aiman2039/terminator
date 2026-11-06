@@ -397,10 +397,6 @@ pub struct App {
     /// Jump history for Back/Forward.
     pub(crate) nav_back: Vec<crate::native_editor::NavLocation>,
     pub(crate) nav_forward: Vec<crate::native_editor::NavLocation>,
-    /// The active editor file, and the one active before it
-    /// (Ctrl-^ / Ctrl-6 alternate file).
-    pub(crate) editor_current: Option<PathBuf>,
-    pub(crate) editor_alternate: Option<PathBuf>,
     pub(crate) native_rename: Option<native_editor::RenameDialog>,
     pub(crate) file_index: terminator_native_edit::finder::FileIndex,
     pub(crate) file_index_rx:
@@ -409,6 +405,8 @@ pub struct App {
     pub(crate) file_index_at: Option<std::time::Instant>,
     pub(crate) pending_unavailable_close: Vec<String>,
     pub(crate) pending_quit_all: Option<bool>,
+    /// Vim navigation from native editors, run after check-in.
+    pub(crate) native_nav: native_editor::NavPending,
     pub(crate) open_path: bool,
     /// A diff navigation shortcut or palette command for the active diff
     /// tab, applied when that tab paints next.

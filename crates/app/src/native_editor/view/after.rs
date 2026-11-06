@@ -179,8 +179,8 @@ impl App {
         if let Some((mark, text)) = requests.gutter_stage.take() {
             self.stage_gutter_block(path, mark, text);
         }
-        if let Some(name) = requests.goto_file.take() {
-            self.start_goto_file(ctx, path, name);
+        if let Some(request) = requests.goto_file.take() {
+            self.start_goto_file(ctx, path, request);
         }
         self.finish_goto_file(path);
         if requests.alternate_file {
@@ -188,27 +188,43 @@ impl App {
                 Some(target) if target.path != path => {
                     self.queue_jump(path, &target.path, Some((target.line, target.character)));
                 }
-                _ => self.info = Some("No alternate file".to_owned()),
+                _ => self.native_notice(path, "E23: No alternate file"),
             }
         }
     }
 
-    /// `gf`: resolve the name on the file pool (it stats candidates, which
-    /// can block on slow volumes), never on the GUI thread.
-    fn start_goto_file(&mut self, ctx: &egui::Context, path: &Path, name: String) {
+    /// `gf` and `:e`: resolve the name on the file pool (it stats
+    /// candidates, which can block on slow volumes), never on the GUI
+    /// thread. `edit` (`:e`, `:sp file`) also accepts a new file; `place`
+    /// opens it in a split or a new tab instead of the focused pane.
+    fn start_goto_file(
+        &mut self,
+        ctx: &egui::Context,
+        path: &Path,
+        (name, edit, place): (
+            String,
+            bool,
+            Option<terminator_native_edit::vim::SplitPlace>,
+        ),
+    ) {
         let root = self.selected_project().map(|project| project.path.clone());
         let (current, wanted, ctx) = (path.to_owned(), name.clone(), ctx.clone());
         let rx = super::super::disk::run_on_files(
             &self.services,
             ("native-goto-file", path, Policy::ReplaceableRead),
             move || {
-                let target = goto_file::resolve_goto_file(&wanted, &current, root.as_deref());
+                let target = if edit {
+                    goto_file::resolve_edit_file(&wanted, &current, root.as_deref())
+                } else {
+                    goto_file::resolve_goto_file(&wanted, &current, root.as_deref())
+                        .map(|(path, line, column)| (path, line, column, false))
+                };
                 ctx.request_repaint();
                 Ok(target)
             },
         );
         match (rx, self.native_docs.get_mut(path)) {
-            (Some(rx), Some(doc)) => doc.extras.goto = Some((name, rx)),
+            (Some(rx), Some(doc)) => doc.extras.goto = Some((name, place, rx)),
             _ => self.info = Some("Could not look up the file".to_owned()),
         }
     }
@@ -219,10 +235,23 @@ impl App {
             return;
         };
         match doc.extras.take_goto() {
-            Some((_, Some((target, line, column)))) => {
-                self.queue_jump(path, &target, Some((line, column)));
+            Some((_, place, Some((target, line, column, new)))) => {
+                if new {
+                    self.native_nav.new_files.insert(target.clone());
+                }
+                match place {
+                    None => self.queue_jump(path, &target, Some((line, column))),
+                    Some(place) => {
+                        let line = line.saturating_add(1);
+                        self.native_nav
+                            .split_opens
+                            .push((path.to_owned(), target, line, place));
+                    }
+                }
             }
-            Some((name, None)) => self.info = Some(format!("Can't find file \"{name}\" in path")),
+            Some((name, _, None)) => {
+                self.native_notice(path, format!("E447: Can't find file \"{name}\" in path"));
+            }
             None => {}
         }
     }
@@ -332,6 +361,21 @@ impl App {
         // check until check-in.
         if requests.quit_all.is_some() {
             self.pending_quit_all = requests.quit_all;
+        }
+        if requests.history.is_some() {
+            self.native_nav.history = requests.history;
+        }
+        if requests.pane_move.is_some() {
+            self.native_nav.pane_move = requests.pane_move;
+        }
+        if requests.cycle_tab.is_some() {
+            self.native_nav.cycle_tab = requests.cycle_tab;
+        }
+        if requests.save_all {
+            self.native_save_all();
+        }
+        if requests.recent_files {
+            self.run_shortcut(ui.ctx(), crate::chrome::shortcuts::Action::RecentFiles);
         }
         // The issuing viewport travels with the request so splits land
         // in the floating window they were typed in.

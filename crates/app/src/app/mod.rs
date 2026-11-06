@@ -16,6 +16,7 @@ mod editor_drag_tests;
 #[cfg(test)]
 mod file_reuse_tests;
 mod files;
+mod pane_focus;
 pub(crate) use files::OpenFileInput;
 pub(crate) use files::OpenFileModeInput;
 pub(crate) mod frame;

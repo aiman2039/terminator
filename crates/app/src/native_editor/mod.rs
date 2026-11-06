@@ -42,6 +42,7 @@ use doc::*;
 pub(crate) use file_io::LineEnding;
 pub(crate) use find::FindBar;
 pub(crate) use find_files::{FindInFiles, explorer_has_focus, note_explorer_focus};
+pub(crate) use goto_file::NavPending;
 pub(crate) use gutter::{GitBases, GutterPopup};
 pub(crate) use hierarchy::HierarchyView;
 pub(crate) use navigation::{NavLocation, UsagesView, read_line_previews};
@@ -108,6 +109,7 @@ impl App {
         let remote_snapshot = crate::remote_ui::is_snapshot(&self.paths.data, path);
         self.native_docs.entry(path.to_owned()).or_insert_with(|| {
             let mut doc = NativeDoc::new(path.to_owned(), !vim);
+            doc.new_file = self.native_nav.new_files.remove(path);
             // Where the file was left, put back once it loads.
             doc.restore = self.preferences.editor_states.get(path).cloned();
             if remote_snapshot {

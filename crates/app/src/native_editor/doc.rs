@@ -106,6 +106,10 @@ pub struct NativeDoc {
         Option<tokio::sync::mpsc::UnboundedReceiver<anyhow::Result<Option<SystemTime>>>>,
     pub(super) load_error: Option<String>,
     pub(super) save_error: Option<String>,
+    /// A vim message (`:q` refused, `E492`), with the buffer revision it
+    /// was set at: the next edit clears it. Not a save failure, so it
+    /// does not pause autosave.
+    pub(crate) notice: Option<(String, u64)>,
     pub(super) loading: bool,
     pub(super) saving: bool,
     pub(super) force_save: bool,
@@ -116,6 +120,9 @@ pub struct NativeDoc {
     /// Loads read the file's `.editorconfig` (local files only; remote
     /// snapshots detect their indentation from the text).
     pub(super) read_editorconfig: bool,
+    /// `:e newfile`: a missing file loads as an empty new buffer (only
+    /// the first load; later reloads report it missing as usual).
+    pub(super) new_file: bool,
     /// The `.editorconfig` settings of the last load: its save rules.
     pub(super) file_config: EditorConfig,
     pub(super) save_rx: Option<tokio::sync::mpsc::UnboundedReceiver<SaveResult>>,
@@ -205,6 +212,21 @@ impl NativeDoc {
         Some((u32::try_from(cursor.line).ok()?, character))
     }
 
+    /// Show a vim message until the buffer next changes.
+    pub(crate) fn set_notice(&mut self, message: impl Into<String>) {
+        let revision = self.doc.as_ref().map_or(0, Buffer::revision);
+        self.notice = Some((message.into(), revision));
+    }
+
+    /// The current vim message; `None` once the buffer changed after it.
+    pub(crate) fn current_notice(&mut self) -> Option<String> {
+        let revision = self.doc.as_ref().map_or(0, Buffer::revision);
+        if self.notice.as_ref().is_some_and(|(_, at)| *at != revision) {
+            self.notice = None;
+        }
+        self.notice.as_ref().map(|(message, _)| message.clone())
+    }
+
     pub(crate) fn new(path: PathBuf, insert_first: bool) -> Self {
         let mut engine = VimEngine::new();
         engine.apply_vimrc(vimrc_options().clone());
@@ -238,10 +260,12 @@ impl NativeDoc {
             dirty_memo: std::cell::Cell::new((0, false)),
             loaded_mtime: None,
             read_limit: MAX_NATIVE_BYTES,
+            new_file: false,
             mtime_check: None,
             mtime_rx: None,
             load_error: None,
             save_error: None,
+            notice: None,
             loading: false,
             saving: false,
             force_save: false,

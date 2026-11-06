@@ -101,6 +101,10 @@ struct ViewRequests {
     /// different view of the file may render first.
     wq_issuer: Option<CloseIssuer>,
     quit_all: Option<bool>,
+    /// Ctrl-O / Ctrl-I past the buffer's jumps: Back (false) or Forward.
+    history: Option<bool>,
+    /// Ctrl-W h/j/k/l/w: focus another pane.
+    pane_move: Option<terminator_native_edit::vim::PaneMove>,
     splits: Vec<NativeSplit>,
     /// Quick Documentation asked for at the caret (F1, `K`, …).
     quick_doc_at: Option<quick_doc::Spot>,
@@ -121,8 +125,19 @@ struct ViewRequests {
     /// Add to agent context: 1-based first and last line.
     agent_context: Option<(usize, usize)>,
     open_file_picker: bool,
-    /// `gf`: the file name under the cursor, unresolved.
-    goto_file: Option<String>,
+    /// `gf` (false) or `:e` (true): the file name, unresolved, and the
+    /// split or new tab for `:sp file` / `:vs file` / `:tabe file`.
+    goto_file: Option<(
+        String,
+        bool,
+        Option<terminator_native_edit::vim::SplitPlace>,
+    )>,
+    /// `:wa`: save every modified native buffer.
+    save_all: bool,
+    /// `:bn` (true) / `:bp` (false): cycle the focused pane's tabs.
+    cycle_tab: Option<bool>,
+    /// `:ls` / `:b`: open Recent Files.
+    recent_files: bool,
     /// Ctrl-^ / Ctrl-6: edit the alternate file.
     alternate_file: bool,
     activated_editor: bool,

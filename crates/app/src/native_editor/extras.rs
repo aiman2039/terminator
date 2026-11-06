@@ -8,11 +8,14 @@ use std::time::Instant;
 use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::lsp as native_lsp;
 use terminator_native_edit::view::{Squiggle, squiggle_tails, squiggles};
+use terminator_native_edit::vim::SplitPlace;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::error::TryRecvError;
 
 /// A `gf` target: file, zero-based line and column.
-pub(super) type GotoTarget = Option<(PathBuf, u32, u32)>;
+/// Path, zero-based line and column, and whether `:e` makes a new file.
+pub(super) type GotoTarget = Option<(PathBuf, u32, u32, bool)>;
+pub(super) type GotoReceiver = UnboundedReceiver<anyhow::Result<GotoTarget>>;
 
 #[derive(Default)]
 pub(crate) struct DocExtras {
@@ -20,7 +23,7 @@ pub(crate) struct DocExtras {
     pub(super) large_override: bool,
     squiggles: Option<SquiggleCache>,
     /// `gf` resolving on the file pool: the name and the answer.
-    pub(super) goto: Option<(String, UnboundedReceiver<anyhow::Result<GotoTarget>>)>,
+    pub(super) goto: Option<(String, Option<SplitPlace>, GotoReceiver)>,
     /// Revision and time of the last edit, for delayed autosave.
     pub(super) last_edit: Option<(u64, Instant)>,
     /// The view that had keyboard focus last frame (focus-loss autosave).
@@ -76,15 +79,15 @@ impl DocExtras {
     }
 
     /// The `gf` answer, once it landed.
-    pub(super) fn take_goto(&mut self) -> Option<(String, GotoTarget)> {
-        let (_, rx) = self.goto.as_mut()?;
+    pub(super) fn take_goto(&mut self) -> Option<(String, Option<SplitPlace>, GotoTarget)> {
+        let (_, _, rx) = self.goto.as_mut()?;
         let answer = match rx.try_recv() {
             Ok(answer) => answer.ok().flatten(),
             Err(TryRecvError::Empty) => return None,
             Err(TryRecvError::Disconnected) => None,
         };
-        let (name, _) = self.goto.take()?;
-        Some((name, answer))
+        let (name, place, _) = self.goto.take()?;
+        Some((name, place, answer))
     }
 }
 

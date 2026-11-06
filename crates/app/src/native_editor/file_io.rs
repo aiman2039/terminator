@@ -11,7 +11,7 @@ pub(super) struct LoadedFile {
     pub(super) text: String,
     pub(super) mtime: Option<SystemTime>,
     pub(super) encoding: TextEncoding,
-    pub(super) fingerprint: Fingerprint,
+    pub(super) fingerprint: Option<Fingerprint>,
 }
 
 /// What a finished save reports back.
@@ -217,6 +217,26 @@ impl LineEnding {
 pub(super) struct NativeFileIo;
 
 impl NativeFileIo {
+    /// [`Self::read`]; with `new_file`, a missing file is an empty new
+    /// buffer with no disk fingerprint, so its first save sees no conflict.
+    pub(super) fn read_or_new(
+        path: &Path,
+        limit: u64,
+        new_file: bool,
+    ) -> anyhow::Result<LoadedFile> {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if new_file && error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(LoadedFile {
+                    text: String::new(),
+                    mtime: None,
+                    encoding: TextEncoding::default(),
+                    fingerprint: None,
+                })
+            }
+            _ => Self::read(path, limit),
+        }
+    }
+
     pub(super) fn read(path: &Path, limit: u64) -> anyhow::Result<LoadedFile> {
         let file = std::fs::File::open(path).context("Open file")?;
         anyhow::ensure!(file.metadata()?.is_file(), "Not a regular file");
@@ -237,7 +257,7 @@ impl NativeFileIo {
             text,
             mtime,
             encoding,
-            fingerprint,
+            fingerprint: Some(fingerprint),
         })
     }
 

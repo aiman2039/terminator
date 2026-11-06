@@ -83,11 +83,11 @@ pub(super) fn run_on_files<T: Send + 'static>(
 /// GUI thread never walks the folders above the file.
 fn load(
     path: &Path,
-    limit: u64,
+    (limit, new_file): (u64, bool),
     base: Option<(u64, String)>,
     editorconfig: bool,
 ) -> anyhow::Result<Loaded> {
-    let mut file = NativeFileIo::read(path, limit)?;
+    let mut file = NativeFileIo::read_or_new(path, limit, new_file)?;
     let (text, line_ending) = LineEnding::decode(std::mem::take(&mut file.text));
     file.text = text;
     let config = if editorconfig {
@@ -234,11 +234,12 @@ impl NativeDoc {
         }
         let path = self.path.clone();
         let (limit, editorconfig) = (self.read_limit, self.read_editorconfig);
+        let new_file = self.new_file && self.doc.is_none();
         let base = self.doc.as_ref().map(|doc| (doc.revision(), doc.text()));
         match run_on_files(
             services,
             ("native-load", &self.path, Policy::ReplaceableRead),
-            move || load(&path, limit, base, editorconfig),
+            move || load(&path, (limit, new_file), base, editorconfig),
         ) {
             Some(rx) => {
                 self.load_rx = Some(rx);
@@ -329,7 +330,7 @@ impl NativeDoc {
         self.file_config = config;
         self.loaded_mtime = file.mtime;
         self.reset_mtime();
-        self.disk.fingerprint = Some(file.fingerprint);
+        self.disk.fingerprint = file.fingerprint;
         self.disk.reload_seen = Some(Stamp(file.mtime));
         self.line_ending = line_ending;
         self.encoding = file.encoding;

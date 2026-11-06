@@ -2,6 +2,12 @@ Vendored from https://github.com/kemokempo/egui_term at 31bbc7ab8503c9518fcee571
 
 Local integration changes: expose a path token lookup for the context menu; allow keyboard input to the focused terminal when the pointer is elsewhere while preserving pointer hit testing.
 
+## Ctrl digit control characters (2026-11-06)
+
+Plain Ctrl-6 sends `0x1e` (Ctrl-^, the vim alternate file), Ctrl-2 and
+Ctrl-Space send NUL, and Ctrl-/ sends `0x1f`, as in xterm and Alacritty.
+Before this, only the Ctrl+Shift forms sent these characters.
+
 ## Type-ahead prediction (2026-11-02)
 
 `backend/typeahead.rs` adds local echo prediction for slow sessions

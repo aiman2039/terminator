@@ -178,8 +178,13 @@ impl VimEngine {
             }
             "noh" | "nohlsearch" => Vec::new(),
             "e" | "edit" => match arg.trim() {
-                "" | "!" => vec![Effect::Bell],
-                path => vec![Effect::GotoFile(path.to_string())],
+                "" => vec![Effect::Reload { force: false }],
+                "!" => vec![Effect::Reload { force: true }],
+                "#" | "! #" | "!#" => vec![Effect::AlternateFile],
+                path => {
+                    let path = path.strip_prefix('!').map_or(path, str::trim_start);
+                    vec![Effect::EditFile(path.to_string())]
+                }
             },
             _ if range.is_none() => Self::ex_effects(cmd),
             _ => vec![Effect::Bell],

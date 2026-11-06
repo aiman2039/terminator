@@ -29,9 +29,10 @@ mod tests;
 #[cfg(test)]
 mod vim_tests;
 mod visual;
+mod window;
 mod words;
 pub use carets::Caret;
 pub use ide::{CaretOffsets, IdeMotion, SnippetMark};
 pub use input::mapping::{MapMode, Mapping, Mappings};
-pub use mode::{Cursor, Effect, Key, ModalEngine, Mode};
+pub use mode::{Cursor, Effect, Key, ModalEngine, Mode, PaneMove, SplitPlace};
 pub use state::{ViewScroll, VimEngine, VimrcOptions, parse_vimrc};

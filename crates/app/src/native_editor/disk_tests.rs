@@ -75,6 +75,22 @@ fn a_missing_file_is_retried_until_it_appears() {
 }
 
 #[test]
+fn edit_of_a_new_file_opens_empty_and_the_first_save_creates_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("new.txt");
+    let app = app(dir.path());
+    let mut native = NativeDoc::new(path.clone(), false);
+    native.new_file = true;
+    pump(&mut native, &app, |native| native.doc.is_some());
+    assert_eq!(native.load_error, None);
+    assert_eq!(native.doc.as_ref().unwrap().text(), "");
+    native.doc.as_mut().unwrap().insert(0, "made\n");
+    save(&mut native, &app);
+    assert_eq!(native.save_error, None);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "made\n");
+}
+
+#[test]
 fn a_reload_while_the_file_is_gone_keeps_the_buffer() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gone.txt");
