@@ -269,7 +269,7 @@ impl ViewPass<'_> {
                 read_only,
             })
         };
-        let find_matches = Arc::new(matches.iter().map(|m| (m.line, m.start, m.end)).collect());
+        let find_matches = bar.spans(&matches);
         let find_current = bar.current;
         if outcome.close {
             *find = None;

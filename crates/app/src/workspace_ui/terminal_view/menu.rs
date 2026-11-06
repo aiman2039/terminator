@@ -167,7 +167,8 @@ impl Viewer<'_> {
         })
         .clicked()
         {
-            ui.ctx().copy_text(session_directory(session));
+            self.app
+                .copy_with_note(ui.ctx(), session_directory(session), "Working directory");
             ui.close();
         }
     }

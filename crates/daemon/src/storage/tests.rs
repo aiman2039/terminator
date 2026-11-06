@@ -73,6 +73,33 @@ fn age_rotation_and_existing_segments() {
     assert!(!legacy.exists());
 }
 #[test]
+fn a_history_file_deleted_by_hand_does_not_stop_pruning() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path().into());
+    paths.init().unwrap();
+    let (gone, kept) = (id(), id());
+    let mut history = History::new(paths.clone()).unwrap();
+    history.append(&gone, b"gone").unwrap();
+    history.append(&kept, b"kept").unwrap();
+    history
+        .flush_closing_idle(std::time::Duration::ZERO)
+        .unwrap();
+    fs::remove_file(&history_files(&paths, Some(&gone))[0]).unwrap();
+    for segment in history.segments.values_mut() {
+        segment.created = 0;
+    }
+    let mut pruned = history.prune(&Settings::default()).unwrap();
+    pruned.sort();
+    let mut expected = vec![gone, kept.clone()];
+    expected.sort();
+    assert_eq!(pruned, expected);
+    assert!(history_files(&paths, Some(&kept)).is_empty());
+    assert!(
+        history.per_session.is_empty(),
+        "no zero entries stay behind"
+    );
+}
+#[test]
 fn sqlite_roundtrip_and_recovery() {
     let tmp = tempfile::tempdir().unwrap();
     let p = Paths::at(tmp.path().into());
@@ -213,6 +240,26 @@ fn invalid_json_row_is_quarantined_not_loaded() {
         state.degraded
     );
     assert_eq!(corrupt_names(&p.data).len(), 1);
+}
+#[test]
+fn state_from_a_newer_version_fails_without_quarantine() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = Paths::at(tmp.path().into());
+    p.init().unwrap();
+    let (db, _) = Store::open(&p).unwrap();
+    // Well-formed JSON with a value only a newer build knows (a downgrade).
+    let mut newer = serde_json::to_value(State::default()).unwrap();
+    newer["settings"]["editor_mode"] = serde_json::json!("from_the_future");
+    db.conn
+        .execute(
+            "INSERT INTO app_state(id,json) VALUES(1,?1)",
+            [newer.to_string()],
+        )
+        .unwrap();
+    drop(db);
+    let error = Store::open(&p).err().expect("a newer state does not load");
+    assert!(format!("{error:#}").contains("newer"), "{error:#}");
+    assert!(corrupt_names(&p.data).is_empty(), "the newer state is kept");
 }
 #[test]
 fn invalid_settings_are_reset_to_defaults() {

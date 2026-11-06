@@ -71,7 +71,7 @@ impl Shared {
             let _ = self.ntfy.try_send(ping);
         }
         self.alert_unfocused(nid, should_os);
-        Ok(Outcome::Changed)
+        Ok(Outcome::Deferred)
     }
 
     /// Raises an OS alert unless the GUI reported focus within the last 4 s.

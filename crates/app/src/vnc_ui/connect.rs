@@ -208,13 +208,11 @@ impl PasswordPrompt {
         }
         ui.add_space(8.0);
         ui.separator();
-        let (connect, back) = ui
-            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let connect = form::primary_button(ui, "Connect").clicked();
-                let back = ui.button("All hosts").clicked();
-                (connect, back)
-            })
-            .inner;
+        let (connect, back) = appearance::footer_row(ui, |ui| {
+            let connect = form::primary_button(ui, "Connect").clicked();
+            let back = ui.button("All hosts").clicked();
+            (connect, back)
+        });
         if back {
             view.save_profile = true;
             view.draft_password.clear();

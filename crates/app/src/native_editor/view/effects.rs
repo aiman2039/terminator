@@ -18,7 +18,19 @@ impl ViewPass<'_> {
             Effect::OpenFilePicker => self.requests.open_file_picker = true,
             Effect::Hover => self.request_hover(ui),
             Effect::GotoDefinition => self.requests.goto_at = Some(self.caret_at()),
-            Effect::GotoFile(name) => self.requests.goto_file = Some(name),
+            Effect::GotoFile(name) => self.requests.goto_file = Some((name, false, None)),
+            Effect::EditFile(name) => self.requests.goto_file = Some((name, true, None)),
+            Effect::SplitFile { path, place } => {
+                self.requests.goto_file = Some((path, true, Some(place)));
+            }
+            Effect::SaveAll => self.requests.save_all = true,
+            Effect::CycleTab { forward } => self.requests.cycle_tab = Some(forward),
+            Effect::RecentFiles => self.requests.recent_files = true,
+            Effect::Message(message) => self.doc.set_notice(message),
+            Effect::Reload { force } => self.reload(force),
+            Effect::JumpBack => self.requests.history = Some(false),
+            Effect::FocusPane(direction) => self.requests.pane_move = Some(direction),
+            Effect::JumpForward => self.requests.history = Some(true),
             Effect::AlternateFile => self.requests.alternate_file = true,
             Effect::GotoImplementation => {
                 self.requests.locate_at =
@@ -48,10 +60,21 @@ impl ViewPass<'_> {
         }
     }
 
+    /// `:e` reloads a clean buffer; `:e!` drops unsaved changes too.
+    fn reload(&mut self, force: bool) {
+        if force || !self.doc.dirty() {
+            self.doc.request_reload(force);
+        } else {
+            self.doc
+                .set_notice("E37: No write since last change (add ! to override)");
+        }
+    }
+
     /// `:q` refuses a dirty buffer.
     fn quit(&mut self, post: &mut PostEdit) {
         if self.doc.dirty() {
-            self.doc.save_error = Some("No write since last change (add ! to override)".into());
+            self.doc
+                .set_notice("E37: No write since last change (add ! to override)");
         } else {
             *post = PostEdit::Close { force: false };
         }

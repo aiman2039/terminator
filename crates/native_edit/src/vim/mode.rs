@@ -45,8 +45,44 @@ pub enum Key {
     Ctrl(char),
 }
 
+/// Ctrl-W pane moves; the GUI owns the layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneMove {
+    Left,
+    Right,
+    Up,
+    Down,
+    /// `Ctrl-W w`: the next pane, wrapping.
+    Next,
+}
+
+/// Where `:sp file`, `:vs file` and `:tabe file` open their file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitPlace {
+    Below,
+    Beside,
+    NewTab,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
+    /// `:wa`: save every modified native buffer.
+    SaveAll,
+    /// `:bn` / `:bp`: the next or previous tab of the focused pane.
+    CycleTab {
+        forward: bool,
+    },
+    /// `:ls`, `:buffers`, `:b`: the Recent Files list.
+    RecentFiles,
+    /// `:sp file`, `:vs file`, `:tabe file`: open another file there.
+    SplitFile {
+        path: String,
+        place: SplitPlace,
+    },
+    /// A vim message for the editor's message row (`E492: …`).
+    Message(String),
+    /// Ctrl-W h/j/k/l/w: focus another pane.
+    FocusPane(PaneMove),
     Bell,
     Save,
     SaveForce,
@@ -77,8 +113,22 @@ pub enum Effect {
     /// Open the file named under the cursor (`gf`). The text may end in
     /// `:line[:col]`; the GUI resolves it against the file and project.
     GotoFile(String),
-    /// Edit the alternate (previously active) file (Ctrl-^ / Ctrl-6).
+    /// Edit the alternate (previously active) file (Ctrl-^ / Ctrl-6,
+    /// `:e#`).
     AlternateFile,
+    /// Ctrl-O past the oldest jump of this buffer: go Back in the GUI's
+    /// cross-file navigation history.
+    JumpBack,
+    /// Ctrl-I past the newest jump of this buffer: go Forward.
+    JumpForward,
+    /// `:e path`: like [`Effect::GotoFile`], but a missing file opens as
+    /// a new buffer that the first write creates.
+    EditFile(String),
+    /// `:e` reloads the file from disk; with `force` (`:e!`) unsaved
+    /// changes are dropped, without it a dirty buffer refuses.
+    Reload {
+        force: bool,
+    },
     /// Jump to the implementations of the symbol under the cursor
     /// (Cmd/Ctrl+Alt+B); several open the chooser.
     GotoImplementation,
@@ -194,6 +244,8 @@ pub(crate) enum Prefix {
     Z,
     /// `g`: the `g` commands (`gg`, `gu`, `gv`, …); counts may follow.
     G,
+    /// Ctrl-W: window (pane) commands.
+    Window,
 }
 
 #[derive(Clone, Debug, Default)]

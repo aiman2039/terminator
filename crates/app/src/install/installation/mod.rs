@@ -309,6 +309,18 @@ pub fn show_crash_dialog(notice: &CrashNotice) {
     let _ = show_message("Terminator crashed", &notice.dialog_body(), false);
 }
 
+/// The GUI could not start: an app opened from Finder or the Dock has no
+/// console, so say why in a dialog before it exits.
+pub fn show_start_failure(error: &str) {
+    if terminator_core::crash::dialog_enabled() {
+        let _ = show_message(
+            "Terminator could not start",
+            &format!("{error}\n\nTerminal sessions keep running in the background."),
+            false,
+        );
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn show_message(title: &str, description: &str, open_applications: bool) -> bool {
     use objc2::MainThreadMarker;

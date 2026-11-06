@@ -1,7 +1,7 @@
 //! Command-line mode: `/` and `?` search, `:set`, and the ex commands.
 use super::super::doc::Buffer;
-use super::mode::Effect;
 use super::mode::Key;
+use super::mode::{Effect, SplitPlace};
 use super::state::VimEngine;
 
 impl VimEngine {
@@ -100,24 +100,61 @@ impl VimEngine {
         }
     }
 
+    /// File, buffer and window commands the GUI carries out. Anything
+    /// else is vim's `E492` in the editor's message row, not a silent bell.
     pub(super) fn ex_effects(command: &str) -> Vec<Effect> {
-        match command {
-            "w" => vec![Effect::Save],
-            "w!" => vec![Effect::SaveForce],
-            "q" => vec![Effect::Quit],
-            "q!" => vec![Effect::QuitForce],
+        let command = command.trim();
+        let name_len = command
+            .chars()
+            .take_while(char::is_ascii_alphabetic)
+            .count();
+        let (name, rest) = command.split_at(name_len.min(command.len()));
+        let bang = rest.starts_with('!');
+        let arg = rest.trim_start_matches('!').trim();
+        let split = |place| {
+            if arg.is_empty() {
+                None
+            } else {
+                Some(vec![Effect::SplitFile {
+                    path: arg.to_string(),
+                    place,
+                }])
+            }
+        };
+        match (name, bang, arg.is_empty()) {
+            ("w" | "write", false, true) => vec![Effect::Save],
+            ("w" | "write", true, true) => vec![Effect::SaveForce],
+            ("q" | "quit", false, true) => vec![Effect::Quit],
+            ("q" | "quit", true, true) => vec![Effect::QuitForce],
             // `:qw` is not real vim, but listed next to `:wq` so often
             // that accepting it avoids a dead end.
-            "wq" | "qw" | "x" => vec![Effect::WriteQuit { force: false }],
-            "wq!" | "qw!" | "x!" => vec![Effect::WriteQuit { force: true }],
-            "qa" => vec![Effect::QuitAll { force: false }],
-            "qa!" => vec![Effect::QuitAll { force: true }],
+            ("wq" | "qw" | "x", force, true) => vec![Effect::WriteQuit { force }],
+            ("qa" | "qall" | "quitall", force, true) => vec![Effect::QuitAll { force }],
+            ("wa" | "wall", _, true) => vec![Effect::SaveAll],
+            ("bn" | "bnext", _, true) => vec![Effect::CycleTab { forward: true }],
+            ("bp" | "bprevious" | "bN" | "bNext", _, true) => {
+                vec![Effect::CycleTab { forward: false }]
+            }
+            ("bd" | "bdelete" | "bw" | "bwipeout", false, true) => vec![Effect::Quit],
+            ("bd" | "bdelete" | "bw" | "bwipeout", true, true) => vec![Effect::QuitForce],
+            ("ls" | "buffers" | "files" | "b" | "buffer", _, _) => vec![Effect::RecentFiles],
             // Workspace layout stays with the GUI: the engine only asks,
             // via effects the session layer maps to tabs.
-            "split" | "sp" => vec![Effect::Split],
-            "vsplit" | "vs" => vec![Effect::Vsplit],
-            "tabnew" => vec![Effect::TabNew],
-            _ => vec![Effect::Bell],
+            ("split" | "sp", _, _) => {
+                split(SplitPlace::Below).unwrap_or_else(|| vec![Effect::Split])
+            }
+            ("vsplit" | "vs", _, _) => {
+                split(SplitPlace::Beside).unwrap_or_else(|| vec![Effect::Vsplit])
+            }
+            ("tabnew" | "tabe" | "tabedit", _, _) => {
+                split(SplitPlace::NewTab).unwrap_or_else(|| vec![Effect::TabNew])
+            }
+            ("w" | "write", _, false) => vec![Effect::Message(
+                "E: :w {file} is not supported (write the current file with :w)".into(),
+            )],
+            _ => vec![Effect::Message(format!(
+                "E492: Not an editor command: {command}"
+            ))],
         }
     }
 

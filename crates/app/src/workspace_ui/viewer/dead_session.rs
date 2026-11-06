@@ -34,7 +34,8 @@ impl Viewer<'_> {
         self.saved_scrollback(ui, sid, key);
     }
 
-    fn agent_resume_rows(&self, ui: &mut egui::Ui, sid: &str) {
+    fn agent_resume_rows(&mut self, ui: &mut egui::Ui, sid: &str) {
+        let mut copied = None;
         for a in self
             .app
             .state
@@ -50,9 +51,12 @@ impl Viewer<'_> {
             ui.horizontal(|ui| {
                 ui.monospace(&text);
                 if ui.small_button("Copy resume").clicked() {
-                    ui.ctx().copy_text(text);
+                    copied = Some(text.clone());
                 }
             });
+        }
+        if let Some(text) = copied {
+            self.app.copy_with_note(ui.ctx(), text, "Resume command");
         }
     }
 
@@ -97,7 +101,7 @@ impl Viewer<'_> {
                     .hint_text("Filter saved scrollback")
                     .desired_width(220.0),
             );
-            if appearance::sidebar_action(ui, "X", "Back").clicked() {
+            if appearance::sidebar_action(ui, "ArrowLeft", "Back").clicked() {
                 self.app.search_session = None;
                 self.app.history_filter.remove(sid);
             }

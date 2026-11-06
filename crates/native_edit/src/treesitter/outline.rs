@@ -34,6 +34,13 @@ fn outline_kinds(language: Language) -> &'static [(&'static str, &'static str)] 
     }
 }
 
+/// Whether [`outline`] can list symbols for a text of `bytes`: callers
+/// check this before they copy the text out of a buffer.
+#[must_use]
+pub fn has_outline(language: Language, bytes: usize) -> bool {
+    !outline_kinds(language).is_empty() && bytes <= MAX_HIGHLIGHT_BYTES
+}
+
 /// Outline from the syntax tree, for when no language server answers:
 /// declarations with their names and nesting. `None` for languages
 /// without a bundled grammar.

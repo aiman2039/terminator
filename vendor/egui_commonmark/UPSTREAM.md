@@ -35,3 +35,8 @@ Headings use the `Heading` text style family at every level, with sizes
 stepped between `Body` and `Heading` (the backend only colors levels 2-6
 strong, at sizes close to H1). H1 and H2 paint a GitHub-style divider in
 the gap below the heading text; the layout does not change.
+
+Local change (2026-11-06): a heading-scroll target stays set until its
+heading paints; a later `show` call no longer clears it, so a host can show
+one document as several calls. `newline` (the gap between blocks) and
+`heading_scroll_pending` are public for Terminator's virtualized preview.

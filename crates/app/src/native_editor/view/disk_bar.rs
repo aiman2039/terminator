@@ -11,6 +11,11 @@ const MAX_COMPARE_LINES: usize = 2000;
 
 impl ViewPass<'_> {
     pub(super) fn save_error_row(&mut self, ui: &mut egui::Ui) {
+        if let Some(notice) = self.doc.current_notice() {
+            ui.horizontal(|ui| {
+                ui.colored_label(self.frame.failed_color, notice);
+            });
+        }
         let Some(error) = self.doc.save_error.clone() else {
             return;
         };

@@ -35,7 +35,7 @@ impl App {
             dock.set_focused_node_and_surface(path.node_path());
             return;
         }
-        if let Some(direction) = split {
+        if let Some(direction) = split.filter(|d| !Self::stacks(d)) {
             let tree = dock.main_surface_mut();
             if !tree.is_empty() {
                 let node = tree.focused_leaf().unwrap_or(NodeIndex::root());

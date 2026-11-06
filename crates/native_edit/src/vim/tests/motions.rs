@@ -1,6 +1,6 @@
 //! Motions, text objects, search, marks, jumps and scrolling.
 use super::super::super::doc::Doc;
-use super::super::mode::{Cursor, Key, ModalEngine, Mode};
+use super::super::mode::{Cursor, Effect, Key, ModalEngine, Mode};
 use super::super::state::{ViewScroll, VimEngine};
 use super::super::vim_tests::tests::keys;
 
@@ -192,6 +192,19 @@ fn jump_list_walks_back_and_forth() {
 }
 
 #[test]
+fn jump_list_ends_hand_over_to_the_cross_file_history() {
+    let (mut eng, mut doc) = engine("a\nb\n");
+    assert_eq!(
+        eng.press_key(&mut doc, Key::Ctrl('o')),
+        vec![Effect::JumpBack]
+    );
+    assert_eq!(
+        eng.press_key(&mut doc, Key::Ctrl('i')),
+        vec![Effect::JumpForward]
+    );
+}
+
+#[test]
 fn marks_jump_by_line_and_exactly() {
     let (mut eng, mut doc) = engine("ab\n  cd\nef\n");
     keys(&mut eng, &mut doc, "jllmaG'a");
@@ -257,4 +270,25 @@ fn visual_mode_takes_objects_and_jumps() {
     keys(&mut eng, &mut doc, "Gvggd");
     assert_eq!(eng.mode(), Mode::Normal);
     assert_eq!(doc.text(), "\n");
+}
+
+#[test]
+fn ctrl_w_prefix_moves_splits_and_closes_panes() {
+    use super::super::mode::PaneMove;
+    let (mut eng, mut doc) = engine("a\n");
+    let mut window = |second: Key| {
+        assert!(eng.press_key(&mut doc, Key::Ctrl('w')).is_empty());
+        eng.press_key(&mut doc, second)
+    };
+    assert_eq!(
+        window(Key::Char('l')),
+        vec![Effect::FocusPane(PaneMove::Right)]
+    );
+    assert_eq!(
+        window(Key::Ctrl('w')),
+        vec![Effect::FocusPane(PaneMove::Next)]
+    );
+    assert_eq!(window(Key::Char('v')), vec![Effect::Vsplit]);
+    assert_eq!(window(Key::Char('q')), vec![Effect::Quit]);
+    assert_eq!(window(Key::Char('%')), vec![Effect::Bell]);
 }

@@ -343,20 +343,26 @@ impl GitPanelPass<'_, '_> {
     }
 
     fn flat_list(&mut self, ui: &mut egui::Ui, row_ctx: &GitRowCtx<'_>) {
+        let rows = self.prepared.groups.iter().flat_map(|prepared| {
+            prepared
+                .entries
+                .iter()
+                .zip(&prepared.labels)
+                .map(|(change, label)| (prepared.group, change, label))
+        });
         let mut any = false;
-        for prepared in &self.prepared.groups {
-            for (change, label) in prepared.entries.iter().zip(&prepared.labels) {
-                any = true;
-                git_change_row(GitChangeRowInput {
-                    ui,
-                    ctx: row_ctx,
-                    outcome: self.outcome,
-                    change,
-                    group: prepared.group,
-                    label,
-                });
-            }
-        }
+        let outcome = &mut *self.outcome;
+        tree::cull_rows(ui, rows, |ui, (group, change, label)| {
+            any = true;
+            git_change_row(GitChangeRowInput {
+                ui,
+                ctx: row_ctx,
+                outcome,
+                change,
+                group,
+                label,
+            });
+        });
         if !any {
             ui.weak("Working tree clean");
         }

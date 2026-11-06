@@ -66,6 +66,8 @@ pub(crate) struct Shared {
     pub(crate) worktree_operations: Mutex<()>,
     pub(crate) terminal_operations: Mutex<()>,
     pub(crate) shutdown: AtomicBool,
+    /// A deferred change waits to be persisted (see `Outcome::Deferred`).
+    pub(crate) persist_pending: AtomicBool,
     pub(crate) history: SyncSender<HistoryJob>,
     pub(crate) alerts: SyncSender<String>,
     pub(crate) ntfy: SyncSender<ntfy::Ping>,

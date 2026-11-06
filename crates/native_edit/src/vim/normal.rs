@@ -108,6 +108,8 @@ impl VimEngine {
         let ch = match key {
             Key::Char(c) => Some(c),
             Key::Enter if matches!(prefix, Prefix::Replace | Prefix::Z) => Some('\n'),
+            // Ctrl-W Ctrl-H is Ctrl-W h, as in vim.
+            Key::Ctrl(c) if prefix == Prefix::Window => Some(c),
             _ => None,
         };
         let Some(ch) = ch.filter(|_| key != Key::Escape) else {
@@ -136,6 +138,7 @@ impl VimEngine {
                 self.finish_simple(done)
             }
             Prefix::G => self.g_command(doc, key),
+            Prefix::Window => self.window_command(ch),
         }
     }
 
@@ -356,6 +359,7 @@ impl VimEngine {
             Key::Char('"') => Some(Prefix::Register),
             Key::Char('@') => Some(Prefix::Play),
             Key::Char('z') => Some(Prefix::Z),
+            Key::Ctrl('w') => Some(Prefix::Window),
             Key::Char('q') if self.x.recording_macro.is_none() => Some(Prefix::Record),
             _ => None,
         });
@@ -379,14 +383,8 @@ impl VimEngine {
                 self.scroll_key(doc, c, (count, typed));
                 self.finish_simple(true)
             }
-            Key::Ctrl('o') => {
-                let ok = self.walk_jumps(doc, true, count);
-                self.finish_simple(ok)
-            }
-            Key::Ctrl('i') | Key::Tab => {
-                let ok = self.walk_jumps(doc, false, count);
-                self.finish_simple(ok)
-            }
+            Key::Ctrl('o') => self.walk_jumps_or_history(doc, true, count),
+            Key::Ctrl('i') | Key::Tab => self.walk_jumps_or_history(doc, false, count),
             // Ctrl-^ (Ctrl-6): edit the alternate file; the GUI owns files.
             Key::CtrlCaret => {
                 self.finish_simple(true);

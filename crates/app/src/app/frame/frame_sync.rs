@@ -3,6 +3,9 @@
 
 use crate::*;
 
+/// Hidden terminals that stay attached (see `prune_hidden_backends`).
+const KEEP_HIDDEN_BACKENDS: usize = 4;
+
 impl App {
     pub(crate) fn save_changed_preferences(&mut self) {
         let backing_off = self
@@ -32,10 +35,36 @@ impl App {
         // dock is checked back in and every copy has had its say.
         self.prune_vnc_views();
         self.markdown.end_frame(ctx);
-        self.backends
-            .retain(|sid, _| self.visible_sessions.contains(sid));
+        self.prune_hidden_backends();
     }
 
+    /// Hidden terminals stay attached for a quick switch back: the
+    /// [`KEEP_HIDDEN_BACKENDS`] most recently painted ones. Re-attaching
+    /// spawns a helper process and replays the screen; more than a few
+    /// would keep parsing output nobody sees.
+    fn prune_hidden_backends(&mut self) {
+        let hidden: Vec<(Option<Instant>, String)> = self
+            .backends
+            .iter()
+            .filter(|(sid, _)| !self.visible_sessions.contains(*sid))
+            .map(|(sid, backend)| (backend.last_painted(), sid.clone()))
+            .collect();
+        for sid in hidden_backends_to_drop(hidden, KEEP_HIDDEN_BACKENDS) {
+            self.backends.remove(&sid);
+        }
+    }
+}
+
+/// The hidden backends past the `keep` most recently painted ones.
+pub(crate) fn hidden_backends_to_drop(
+    mut hidden: Vec<(Option<Instant>, String)>,
+    keep: usize,
+) -> Vec<String> {
+    hidden.sort_by_key(|(painted, _)| std::cmp::Reverse(*painted));
+    hidden.into_iter().skip(keep).map(|(_, sid)| sid).collect()
+}
+
+impl App {
     /// Remembers the active shell per project and tells the daemon when
     /// focus moved.
     pub(super) fn sync_terminal_focus(&mut self) {
@@ -133,5 +162,25 @@ impl App {
         }) {
             self.dismiss_hover_popup(ctx);
         }
+    }
+}
+
+#[cfg(test)]
+mod hidden_backend_tests {
+    use super::hidden_backends_to_drop;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_most_recently_painted_hidden_terminals_stay_attached() {
+        let now = Instant::now();
+        let ago = |secs| now.checked_sub(Duration::from_secs(secs));
+        let hidden = vec![
+            (ago(50), "old".to_owned()),
+            (ago(1), "newest".to_owned()),
+            (None, "never".to_owned()),
+            (ago(10), "recent".to_owned()),
+        ];
+        assert_eq!(hidden_backends_to_drop(hidden.clone(), 2), ["old", "never"]);
+        assert!(hidden_backends_to_drop(hidden, 4).is_empty());
     }
 }

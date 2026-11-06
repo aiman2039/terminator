@@ -719,3 +719,25 @@ fn status_breadcrumb_folds_leading_folders_to_leave_room_for_the_row() {
     let symbol = rect("status-crumb-symbol").expect("symbol crumb");
     assert!(symbol.right() <= 1200.0 - trailing, "{symbol:?}");
 }
+
+#[test]
+fn an_info_note_clears_after_a_while_and_a_new_one_restarts_the_time() {
+    let (mut app, ctx, _dir) = fixture();
+    app.info = Some("Copied".into());
+    app.expire_info(&ctx);
+    assert_eq!(app.info.as_deref(), Some("Copied"));
+    let old = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_mins(1))
+        .unwrap();
+    app.info_since = Some(("Copied".into(), old));
+    app.info = Some("Saved".into());
+    app.expire_info(&ctx);
+    assert_eq!(
+        app.info.as_deref(),
+        Some("Saved"),
+        "a new text starts again"
+    );
+    app.info_since = Some(("Saved".into(), old));
+    app.expire_info(&ctx);
+    assert_eq!(app.info, None);
+}

@@ -78,6 +78,18 @@ pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};
 pub use egui_commonmark_backend::misc::CommonMarkCache;
+/// Terminator: the blank line the viewer puts between blocks, for hosts
+/// that show a document one block per call.
+pub use egui_commonmark_backend::elements::newline;
+
+/// Terminator: true while a `#heading` link waits for its heading to paint
+/// (default viewer id). A host that skips painting far blocks paints them
+/// all until it lands.
+pub fn heading_scroll_pending(cache: &mut CommonMarkCache) -> bool {
+    egui_commonmark_backend::misc::viewer_cache(cache, &egui::Id::NULL)
+        .scroll_to_id_target()
+        .is_some()
+}
 
 #[cfg(feature = "better_syntax_highlighting")]
 pub use egui_commonmark_backend::syntect;

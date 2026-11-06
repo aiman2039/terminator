@@ -75,6 +75,22 @@ fn a_missing_file_is_retried_until_it_appears() {
 }
 
 #[test]
+fn edit_of_a_new_file_opens_empty_and_the_first_save_creates_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("new.txt");
+    let app = app(dir.path());
+    let mut native = NativeDoc::new(path.clone(), false);
+    native.new_file = true;
+    pump(&mut native, &app, |native| native.doc.is_some());
+    assert_eq!(native.load_error, None);
+    assert_eq!(native.doc.as_ref().unwrap().text(), "");
+    native.doc.as_mut().unwrap().insert(0, "made\n");
+    save(&mut native, &app);
+    assert_eq!(native.save_error, None);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "made\n");
+}
+
+#[test]
 fn a_reload_while_the_file_is_gone_keeps_the_buffer() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gone.txt");
@@ -146,6 +162,23 @@ fn saving_a_hard_linked_file_keeps_both_names_on_one_file() {
     std::fs::hard_link(&path, &other).unwrap();
     super::file_io::NativeFileIo::write(&path, b"new\n").unwrap();
     assert_eq!(std::fs::read_to_string(&other).unwrap(), "new\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_in_place_save_shrinks_the_file_and_keeps_no_safety_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.txt");
+    let other = dir.path().join("b.txt");
+    std::fs::write(&path, "a much longer old text\n").unwrap();
+    std::fs::hard_link(&path, &other).unwrap();
+    super::file_io::NativeFileIo::write(&path, b"short\n").unwrap();
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "short\n");
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
 }
 
 #[test]

@@ -2,6 +2,41 @@ Vendored from https://github.com/kemokempo/egui_term at 31bbc7ab8503c9518fcee571
 
 Local integration changes: expose a path token lookup for the context menu; allow keyboard input to the focused terminal when the pointer is elsewhere while preserving pointer hit testing.
 
+## Ctrl digit control characters (2026-11-06)
+
+Plain Ctrl-6 sends `0x1e` (Ctrl-^, the vim alternate file), Ctrl-2 and
+Ctrl-Space send NUL, and Ctrl-/ sends `0x1f`, as in xterm and Alacritty.
+Before this, only the Ctrl+Shift forms sent these characters.
+
+## Lighter search rows (2026-11-06)
+
+`search_rows` builds each row with the free function `search_row`. A row
+with one char per cell leaves `SearchRow::columns` empty and
+`SearchRow::column` maps a char index to its own column; only rows with
+wide or combining chars keep the table. `TerminalBackend::last_painted`
+reports when a pane last painted the backend.
+
+## Merged cell backgrounds (2026-11-06)
+
+`paint_terminal` merges runs of same-colored cell backgrounds on a row into
+one rect and paints them all first, above the terminal background and under
+text, cursor and underlines. A full-screen TUI no longer pushes one rect per
+cell.
+
+## One queued Wakeup per backend (2026-11-06)
+
+The event subscription thread forwards a `Wakeup` only when none is waiting
+in the app channel; the app calls `TerminalBackend::wakeup_received` when it
+takes one. Heavy output in a hidden terminal no longer fills the unbounded
+channel. Other events are forwarded as before.
+
+## Selection text on demand (2026-11-06)
+
+`sync` rebuilds `RenderableContent::selected_text` only when the selection
+range changes, so a large selection held while output streams does not cost
+a full text build under the term lock on every sync. `selectable_content`
+reads the selection fresh from the terminal, for copy.
+
 ## Type-ahead prediction (2026-11-02)
 
 `backend/typeahead.rs` adds local echo prediction for slow sessions

@@ -41,10 +41,16 @@ pub(crate) struct FindBar {
     pub current: Option<usize>,
     /// `(buffer revision, query key)` the cached matches belong to.
     cache: Option<(u64, String, Arc<Vec<FindMatch>>)>,
+    /// The matches as `(line, start, end)` highlight spans, made once per
+    /// match list (the view asks every frame).
+    spans: Option<(Arc<Vec<FindMatch>>, FindSpans)>,
     pub error: Option<String>,
     /// Render pass that last drew the bar (one view draws it per pass).
     pub drawn: Option<u64>,
 }
+
+/// Find matches as `(line, start char, end char)` for the view.
+pub(crate) type FindSpans = Arc<Vec<(usize, usize, usize)>>;
 
 /// What the bar asks of the editor after painting.
 #[derive(Default)]
@@ -67,6 +73,7 @@ impl FindBar {
             focus: true,
             current: None,
             cache: None,
+            spans: None,
             error: None,
             drawn: None,
         }
@@ -113,6 +120,19 @@ impl FindBar {
             .size_limit(1 << 20)
             .build()
             .map_err(|error| error.to_string())
+    }
+
+    /// Highlight spans for `matches`, reused while the match list is the
+    /// same one.
+    pub(crate) fn spans(&mut self, matches: &Arc<Vec<FindMatch>>) -> FindSpans {
+        if let Some((source, spans)) = &self.spans
+            && Arc::ptr_eq(source, matches)
+        {
+            return Arc::clone(spans);
+        }
+        let spans: FindSpans = Arc::new(matches.iter().map(|m| (m.line, m.start, m.end)).collect());
+        self.spans = Some((Arc::clone(matches), Arc::clone(&spans)));
+        spans
     }
 
     /// Matches for the current buffer revision (cached).

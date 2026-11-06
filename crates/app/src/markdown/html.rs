@@ -25,6 +25,8 @@ fn resolve_link(path: &Path, target: &str) -> Option<Link> {
 }
 pub(super) struct Document {
     pub(super) text: String,
+    /// Top-level Markdown blocks of `text` (see `blocks::split_blocks`).
+    pub(super) blocks: Vec<std::ops::Range<usize>>,
     pub(super) mermaid: Vec<super::mermaid::Diagram>,
     pub(super) words: usize,
     pub(super) headings: usize,
@@ -334,6 +336,7 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
     let headings = count_headings(&text);
     let mermaid = super::mermaid::render_fences(&text);
     Document {
+        blocks: super::blocks::split_blocks(&text),
         text,
         mermaid,
         words,

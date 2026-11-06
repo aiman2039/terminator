@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use terminator_core::*;
@@ -15,11 +15,7 @@ const STOP_REPEAT: Duration = Duration::from_secs(1);
 
 impl Shared {
     pub(super) fn on_prune_history(&self, budget: u64) -> Result<Outcome> {
-        let (tx, rx) = mpsc::channel();
-        self.history.send(HistoryJob::Prune(budget, tx))?;
-        let ids = rx
-            .recv_timeout(Duration::from_secs(3))?
-            .map_err(anyhow::Error::msg)?;
+        let ids = self.history_request(|tx| HistoryJob::Prune(budget, tx))?;
         let mut state = relock(&self.state);
         for session in &mut state.sessions {
             if ids.contains(&session.id) {
@@ -214,11 +210,7 @@ impl Shared {
 
     /// Waits up to 3 s for the history worker to write pending scrollback.
     pub(super) fn flush_history(&self) -> Result<()> {
-        let (tx, rx) = mpsc::channel();
-        self.history.send(HistoryJob::Flush(tx))?;
-        rx.recv_timeout(Duration::from_secs(3))?
-            .map_err(anyhow::Error::msg)?;
-        Ok(())
+        self.history_request(HistoryJob::Flush)
     }
 }
 

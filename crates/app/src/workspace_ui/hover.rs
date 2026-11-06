@@ -238,9 +238,16 @@ impl App {
         let Some(backend) = self.backends.get(sid) else {
             return;
         };
-        let selection = &backend.last_content().selected_text;
+        // Build the text only for an actual copy, fresh from the terminal.
+        if backend.last_content().selected_text.is_empty()
+            || !ctx
+                .input(|input| clipboard::terminal_copy_requested(&input.events, input.modifiers))
+        {
+            return;
+        }
+        let selection = backend.selectable_content();
         if let Some(text) = ctx.input_mut(|input| {
-            clipboard::take_terminal_copy(&mut input.events, input.modifiers, selection)
+            clipboard::take_terminal_copy(&mut input.events, input.modifiers, &selection)
         }) {
             ctx.copy_text(text);
         }

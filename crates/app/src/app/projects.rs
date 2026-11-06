@@ -76,6 +76,15 @@ impl App {
     /// of opening a side split or a new top-level tab. It travels the
     /// existing `Option<&str>` split plumbing untouched.
     pub(crate) const SPLIT_HERE: &str = "here";
+    /// Code navigation (`gf`, Ctrl-^, go to declaration, Back), as in
+    /// JetBrains: focus the file's tab when the project already shows it,
+    /// else stack it into the focused leaf.
+    pub(crate) const SPLIT_NAV: &str = "nav";
+
+    /// True for split markers that stack into the focused leaf.
+    pub(crate) fn stacks(direction: &str) -> bool {
+        direction == Self::SPLIT_HERE || direction == Self::SPLIT_NAV
+    }
 
     /// Maps a file action to its split routing. `Here` stacks into the
     /// focused leaf; `Split` opens a side split; anything else opens a
@@ -94,7 +103,8 @@ impl App {
             .entry(project.into())
             .or_insert_with(Workspace::empty);
         dock.version = dock.version.max(tab.layout_version());
-        if !(split.is_some() && matches!(tab, Tab::NativeEditor { .. }))
+        let new_view = split.is_some_and(|split| split != Self::SPLIT_NAV);
+        if !(new_view && matches!(tab, Tab::NativeEditor { .. }))
             && let Some(path) = dock.find_tab(&tab)
         {
             let _ = dock.set_active_tab(path);
@@ -102,7 +112,7 @@ impl App {
             return;
         }
         if let Some(direction) = split {
-            if direction == Self::SPLIT_HERE {
+            if Self::stacks(direction) {
                 dock.push_to_focused_leaf(tab);
                 return;
             }
@@ -152,7 +162,7 @@ impl App {
         if let Some(path) = anchors.iter().find_map(|anchor| dock.find_tab(anchor)) {
             dock.set_focused_node_and_surface(path.node_path());
         }
-        if let Some(direction) = split {
+        if let Some(direction) = split.filter(|d| !Self::stacks(d)) {
             let tree = dock.main_surface_mut();
             if !tree.is_empty() {
                 let node = tree.focused_leaf().unwrap_or(NodeIndex::root());

@@ -137,7 +137,10 @@ pub(super) mod tests {
         assert_eq!(fx, vec![Effect::WriteQuit { force: false }]);
         keys(&mut eng, &mut doc, ":nope");
         let fx = eng.press_key(&mut doc, Key::Enter);
-        assert_eq!(fx, vec![Effect::Bell]);
+        assert_eq!(
+            fx,
+            vec![Effect::Message("E492: Not an editor command: nope".into())]
+        );
         assert_eq!(eng.mode(), Mode::Normal);
     }
 
@@ -443,7 +446,30 @@ pub(super) mod tests {
         assert_eq!(ex("x!"), vec![Effect::WriteQuit { force: true }]);
         assert_eq!(ex("qa"), vec![Effect::QuitAll { force: false }]);
         assert_eq!(ex("qa!"), vec![Effect::QuitAll { force: true }]);
-        assert_eq!(ex("wqa"), vec![Effect::Bell]);
+        assert_eq!(
+            ex("wqa"),
+            vec![Effect::Message("E492: Not an editor command: wqa".into())]
+        );
+        assert_eq!(ex("wa"), vec![Effect::SaveAll]);
+        assert_eq!(ex("bn"), vec![Effect::CycleTab { forward: true }]);
+        assert_eq!(ex("bp"), vec![Effect::CycleTab { forward: false }]);
+        assert_eq!(ex("bd!"), vec![Effect::QuitForce]);
+        assert_eq!(ex("ls"), vec![Effect::RecentFiles]);
+        assert_eq!(ex("sp"), vec![Effect::Split]);
+        assert_eq!(
+            ex("vs src/lib.rs"),
+            vec![Effect::SplitFile {
+                path: "src/lib.rs".into(),
+                place: super::super::mode::SplitPlace::Beside,
+            }]
+        );
+        assert_eq!(
+            ex("tabe new.rs"),
+            vec![Effect::SplitFile {
+                path: "new.rs".into(),
+                place: super::super::mode::SplitPlace::NewTab,
+            }]
+        );
     }
 
     #[test]

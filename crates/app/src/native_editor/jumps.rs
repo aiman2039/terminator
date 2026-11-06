@@ -48,7 +48,7 @@ impl App {
                 .at_position
                 .then(|| target.range.start.line.checked_add(1))
                 .flatten(),
-            split: None,
+            split: Some(Self::SPLIT_NAV),
         });
         if !jump.at_position {
             return;
@@ -96,6 +96,45 @@ impl App {
     /// project — or beside/below inside the issuing floating window.
     /// Both views share the one buffer and engine for now (one cursor
     /// across panes); per-view cursors are future work.
+    /// `:sp file` / `:vs file` / `:tabe file`: open `target` below,
+    /// beside, or in a new top-level tab of the issuing file's project.
+    pub(super) fn open_split_target(
+        &mut self,
+        (from, target, line, place): (
+            PathBuf,
+            PathBuf,
+            u32,
+            terminator_native_edit::vim::SplitPlace,
+        ),
+    ) {
+        use terminator_native_edit::vim::SplitPlace;
+        let Some(project) = self.project_with_native_tab(&from) else {
+            return;
+        };
+        self.record_jump_origin();
+        self.open_native(OpenNativeInput {
+            project: &project,
+            path: target,
+            line: Some(line),
+            split: match place {
+                SplitPlace::Below => Some("down"),
+                SplitPlace::Beside => Some("right"),
+                SplitPlace::NewTab => None,
+            },
+        });
+    }
+
+    /// `:wa`: start a save of every modified native buffer.
+    pub(crate) fn native_save_all(&mut self) {
+        let services = self.services.clone();
+        for doc in self.native_docs.values_mut() {
+            if doc.dirty() && !doc.saving {
+                doc.force_save = false;
+                doc.start_save(&services);
+            }
+        }
+    }
+
     pub(super) fn split_native_view(
         &mut self,
         viewport: egui::ViewportId,

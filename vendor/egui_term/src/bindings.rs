@@ -239,6 +239,12 @@ fn default_keyboard_bindings() -> Vec<(Binding<InputKind>, BindingAction)> {
         CloseBracket, Modifiers::CTRL; BindingAction::Char('\x1d');
         Backslash,    Modifiers::CTRL; BindingAction::Char('\x1c');
         Minus,        Modifiers::CTRL; BindingAction::Char('\x1f');
+        // xterm/Alacritty: Ctrl-6 is Ctrl-^ (vim alternate file), Ctrl-2
+        // and Ctrl-Space are NUL, Ctrl-/ is Ctrl-_.
+        Num6,         Modifiers::CTRL; BindingAction::Char('\x1e');
+        Num2,         Modifiers::CTRL; BindingAction::Char('\x00');
+        Space,        Modifiers::CTRL; BindingAction::Char('\x00');
+        Slash,        Modifiers::CTRL; BindingAction::Char('\x1f');
         // SHIFT
         Enter,      Modifiers::SHIFT; BindingAction::Char('\x0d');
         Backspace,  Modifiers::SHIFT; BindingAction::Char('\x7f');
@@ -389,6 +395,27 @@ mod tests {
             ),
             BindingAction::Copy
         );
+    }
+
+    #[test]
+    fn ctrl_digits_and_space_send_xterm_control_characters() {
+        let layout = BindingsLayout::shared();
+        for (key, expected) in [
+            (Key::Num6, '\x1e'),
+            (Key::Num2, '\x00'),
+            (Key::Space, '\x00'),
+            (Key::Slash, '\x1f'),
+        ] {
+            assert_eq!(
+                layout.get_action(
+                    InputKind::KeyCode(key),
+                    Modifiers::CTRL,
+                    TerminalMode::empty()
+                ),
+                BindingAction::Char(expected),
+                "{key:?}"
+            );
+        }
     }
 
     #[test]

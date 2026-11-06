@@ -44,7 +44,9 @@ impl Shared {
         let _ = reader_finished.recv_timeout(READER_DRAIN);
         Self::end_subscribers(&runtime);
         self.record_exit(&sid, exit.ok().map(|e| e.exit_code()));
-        let _ = self.persist();
+        if let Err(e) = self.persist() {
+            self.degraded(&format!("Session exit not saved: {e}"));
+        }
         if !relock(&self.state).sessions.iter().any(|r| r.id == sid) {
             let _ = self.history_clear(Some(sid.clone()), true);
         }

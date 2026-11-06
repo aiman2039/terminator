@@ -36,6 +36,8 @@ pub(crate) struct Preview {
     pub(super) preview_rect: egui::Rect,
     pub scroll_fraction: f32,
     pub(super) cache_scroll_height: f32,
+    /// Painted heights of the document's blocks (virtualized paint).
+    pub(super) block_heights: super::blocks::BlockHeights,
 }
 impl Default for Preview {
     fn default() -> Self {
@@ -51,16 +53,24 @@ impl Default for Preview {
             preview_rect: egui::Rect::NOTHING,
             scroll_fraction: 0.0,
             cache_scroll_height: 0.0,
+            block_heights: super::blocks::BlockHeights::default(),
         }
     }
 }
 impl Preview {
+    /// Content height of the last painted frame.
+    #[cfg(test)]
+    pub(crate) fn cache_scroll_height_for_test(&self) -> f32 {
+        self.cache_scroll_height
+    }
+
     pub(super) fn apply(&mut self, result: Result<Document, String>) {
         match result {
             Ok(document) => {
                 self.cache.clear_viewers();
                 self.cache.link_hooks_clear();
                 self.mermaid_textures.clear();
+                self.block_heights = super::blocks::BlockHeights::default();
                 for link in document.links.keys() {
                     self.cache.add_link_hook(link);
                 }

@@ -19,9 +19,11 @@ pub(super) fn subtitle(project: &RemoteProject, now: u64) -> String {
 impl App {
     pub(super) fn host_row(&mut self, ui: &mut egui::Ui, project: &RemoteProject, managed: bool) {
         ui.horizontal(|ui| {
-            self.host_status_and_name(ui, project);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.host_row_actions(ui, project, managed);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    self.host_status_and_name(ui, project);
+                });
             });
         });
         ui.indent(("host-root", &project.id), |ui| {
@@ -54,7 +56,7 @@ impl App {
         ui.colored_label(color, "●").on_hover_text(tip);
         let selected = self.selected.as_deref() == Some(project.id.as_str())
             || self.remote_ui.hosts.cursor.as_deref() == Some(project.id.as_str());
-        let name = ui.selectable_label(selected, &project.name);
+        let name = ui.add(egui::Button::selectable(selected, &project.name).truncate());
         if name.double_clicked() {
             self.open_host_terminal(project.id.clone());
         } else if name.clicked() {

@@ -145,7 +145,9 @@ impl HistoryWorker {
                 }
                 state.revision = state.revision.saturating_add(1);
                 drop(state);
-                let _ = s.persist();
+                if let Err(e) = s.persist() {
+                    s.degraded(&format!("History truncation not saved: {e}"));
+                }
             }
             Ok(_) => {}
             Err(e) => s.degraded(&format!("History cleanup failed: {e}")),

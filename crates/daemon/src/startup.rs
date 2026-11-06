@@ -249,6 +249,7 @@ pub(crate) fn start_shared(input: StartInput) -> Started {
         worktree_operations: Mutex::new(()),
         terminal_operations: Mutex::new(()),
         shutdown: AtomicBool::new(false),
+        persist_pending: AtomicBool::new(false),
         history,
         alerts,
         ntfy: ntfy::start(),

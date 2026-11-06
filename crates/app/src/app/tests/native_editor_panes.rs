@@ -660,3 +660,43 @@ fn async_close_completion_keeps_a_buffer_that_became_dirty() {
     // The close waits on the prompt instead of being dropped.
     assert_eq!(app.close_workspace, Some(("a".into(), tab_id)));
 }
+
+#[test]
+fn code_navigation_stacks_in_the_focused_pane_and_reuses_an_open_tab() {
+    let (mut app, _, _dir) = fixture();
+    let from = crate::test_path("/a/from.rs");
+    let to = crate::test_path("/a/to.rs");
+    app.layouts.insert(
+        "a".into(),
+        Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: from.clone(),
+        }])),
+    );
+    let navigate = |app: &mut App, path: &Path| {
+        let after = app.editor_target("a", None, Some(App::SPLIT_NAV));
+        app.open_gui_tab(
+            "a".into(),
+            Tab::NativeEditor {
+                path: path.to_owned(),
+            },
+            after,
+        );
+    };
+    // `gf`: a new editor tab in the same pane, not a new top-level tab.
+    navigate(&mut app, &to);
+    let workspace = &app.layouts["a"];
+    assert_eq!(workspace.tabs.len(), 1);
+    let leaves: Vec<usize> = workspace
+        .iter_leaves()
+        .map(|(_, leaf)| leaf.tabs.len())
+        .collect();
+    assert_eq!(leaves, vec![2]);
+    // Ctrl-^ back: the open tab is focused, no copy is added.
+    navigate(&mut app, &from);
+    assert_eq!(docked_copies(&app, "a", &from), 1);
+    assert_eq!(docked_copies(&app, "a", &to), 1);
+    assert!(matches!(
+        app.layouts["a"].active_pane(),
+        Some(Tab::NativeEditor { path }) if *path == from
+    ));
+}

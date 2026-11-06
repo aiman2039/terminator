@@ -50,6 +50,9 @@ impl App {
             gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone()).unwrap_or_else(
                 |error| {
                     crate::console::Console::err(format_args!("start GUI services: {error:#}"));
+                    crate::install::installation::show_start_failure(&format!(
+                        "Start GUI services: {error:#}"
+                    ));
                     std::process::exit(1);
                 },
             );
@@ -237,6 +240,7 @@ impl App {
             error_cwd: None,
             missing_path_reports: 0,
             info: None,
+            info_since: None,
             add_project: false,
             settings_open: false,
             settings_session: false,
@@ -328,8 +332,6 @@ impl App {
             commit_files: HashMap::new(),
             nav_back: Vec::new(),
             nav_forward: Vec::new(),
-            editor_current: None,
-            editor_alternate: None,
             native_rename: None,
             file_index: terminator_native_edit::finder::FileIndex::empty(),
             file_index_rx: None,
@@ -337,6 +339,7 @@ impl App {
             file_index_at: None,
             pending_unavailable_close: Vec::new(),
             pending_quit_all: None,
+            native_nav: native_editor::NavPending::default(),
             open_path: false,
             diff_nav: None,
             pick_audio: false,

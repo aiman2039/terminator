@@ -194,7 +194,26 @@ fn visual_colon_runs_on_the_selection_and_edit_opens_files() {
     eng.press_key(&mut doc, Key::Enter);
     assert_eq!(doc.text(), "a\nb\nb\n");
     let fx = ex(&mut eng, &mut doc, ":e src/main.rs");
-    assert_eq!(fx, vec![Effect::GotoFile("src/main.rs".into())]);
+    assert_eq!(fx, vec![Effect::EditFile("src/main.rs".into())]);
+}
+
+#[test]
+fn edit_hash_is_the_alternate_file_and_bare_edit_reloads() {
+    let (mut eng, mut doc) = engine("a\n");
+    assert_eq!(ex(&mut eng, &mut doc, ":e#"), vec![Effect::AlternateFile]);
+    assert_eq!(ex(&mut eng, &mut doc, ":e #"), vec![Effect::AlternateFile]);
+    assert_eq!(
+        ex(&mut eng, &mut doc, ":e"),
+        vec![Effect::Reload { force: false }]
+    );
+    assert_eq!(
+        ex(&mut eng, &mut doc, ":e!"),
+        vec![Effect::Reload { force: true }]
+    );
+    assert_eq!(
+        ex(&mut eng, &mut doc, ":e! new.rs"),
+        vec![Effect::EditFile("new.rs".into())]
+    );
 }
 
 #[test]

@@ -183,7 +183,7 @@ impl App {
                 split: None,
                 external: true,
             }),
-            FileAction::Copy => ui.ctx().copy_text(path.display().to_string()),
+            FileAction::Copy => self.copy_with_note(ui.ctx(), path.display().to_string(), "Path"),
             FileAction::StagedDiff | FileAction::WorkingDiff => {
                 if let Some(root) = self.git_root() {
                     let available = self

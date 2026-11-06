@@ -1,6 +1,34 @@
 //! Grouped change sections and the per-folder change tree.
 use super::*;
 
+/// Change rows painted beyond the visible part, above and below.
+const CULL_MARGIN: f32 = 400.0;
+
+/// Thousands of changes: lay out and paint only rows near the visible
+/// part. The first row sets the stride (rows are one fixed height); rows
+/// far outside only take their height, so the scroll range is unchanged.
+/// The margin keeps the next row there for arrow keys, so keyboard focus
+/// can move to it and scroll it into view.
+pub(super) fn cull_rows<T>(
+    ui: &mut egui::Ui,
+    rows: impl IntoIterator<Item = T>,
+    mut draw: impl FnMut(&mut egui::Ui, T),
+) {
+    let visible = ui.clip_rect().expand2(egui::vec2(0.0, CULL_MARGIN));
+    let mut stride: Option<f32> = None;
+    for row in rows {
+        let top = ui.cursor().min.y;
+        if let Some(stride) = stride
+            && (top + stride < visible.min.y || top > visible.max.y)
+        {
+            ui.add_space(stride);
+            continue;
+        }
+        draw(ui, row);
+        stride.get_or_insert(ui.cursor().min.y - top);
+    }
+}
+
 /// Orca-style section header with per-section stage/unstage all. The body is a
 /// directory tree (JetBrains-style), collapsible per folder.
 pub(super) struct GitGroupSectionInput<'a, 'b> {
@@ -286,16 +314,20 @@ pub(super) fn git_change_tree(input: GitChangeTreeInput<'_, '_>) {
     ui.horizontal_top(|ui| {
         ui.add_space(gutter);
         ui.vertical(|ui| {
-            for (change, label) in node.files.iter().zip(&node.labels) {
-                git_change_row(GitChangeRowInput {
-                    ui,
-                    ctx,
-                    outcome,
-                    change,
-                    group,
-                    label,
-                });
-            }
+            cull_rows(
+                ui,
+                node.files.iter().zip(&node.labels),
+                |ui, (change, label)| {
+                    git_change_row(GitChangeRowInput {
+                        ui,
+                        ctx,
+                        outcome,
+                        change,
+                        group,
+                        label,
+                    });
+                },
+            );
         });
     });
 }

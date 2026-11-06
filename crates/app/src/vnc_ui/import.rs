@@ -211,7 +211,7 @@ impl App {
         let mut close = false;
         let mut pick_files = false;
         let mut save = Vec::new();
-        form::card(ui, |ui| {
+        form::column(ui, |ui| {
             ui.label(RichText::new("Import hosts").size(16.0).strong());
             ui.horizontal(|ui| {
                 if ui.button("From ~/.ssh/config").clicked() {
@@ -223,7 +223,7 @@ impl App {
             ui.add_space(8.0);
             ui.separator();
             let count = import.candidates.iter().filter(|c| c.selected).count();
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            appearance::footer_row(ui, |ui| {
                 let label = format!("Import {count}");
                 if ui
                     .add_enabled(count > 0, egui::Button::new(label))

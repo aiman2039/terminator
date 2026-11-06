@@ -110,7 +110,8 @@ fn crash_dir(data_dir: &Path) -> PathBuf {
     data_dir.join(CRASHES)
 }
 
-fn dialog_enabled() -> bool {
+/// False in CI, capture fixtures, and with `TERMINATOR_CRASH_DIALOG=0`.
+pub fn dialog_enabled() -> bool {
     dialog_allowed(
         std::env::var_os("CI").is_some(),
         std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some(),

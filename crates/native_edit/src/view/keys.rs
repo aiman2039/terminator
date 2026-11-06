@@ -72,7 +72,7 @@ fn key_name_char(key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
 
 /// A Ctrl chord vim owns in its current mode, as an engine key: Ctrl-V /
 /// Ctrl-Q block select and Ctrl-6 alternate file (Normal and Visual),
-/// redo, scrolling, jumps and increment (Normal), scrolling (Visual) and
+/// redo, scrolling, jumps, increment and Ctrl-W panes (Normal), scrolling (Visual) and
 /// Ctrl-W / Ctrl-U / Ctrl-O (Insert). These win over IDE chords such as
 /// Ctrl-A select all, so Linux (where Ctrl is Command) matches macOS.
 #[must_use]
@@ -101,7 +101,7 @@ pub fn vim_ctrl_key(
         _ => return None,
     };
     let owned = match mode {
-        Mode::Normal => "rdufbeyoiax",
+        Mode::Normal => "rdufbeyoiaxw",
         Mode::Visual | Mode::VisualLine | Mode::VisualBlock => "dufbey",
         Mode::Insert => "wuo",
         Mode::Command => "",

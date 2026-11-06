@@ -7,6 +7,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use terminator_core::*;
+
+mod decode;
 pub struct Store {
     conn: Connection,
     owner: Option<String>,
@@ -27,7 +29,7 @@ impl Store {
             Ok(opened) => Ok(opened),
             // Disk full, read-only or busy is not damage: never quarantine a
             // good store for it.
-            Err(error) if !Self::corrupt(&error) => Err(error),
+            Err(error) if !decode::corrupt(&error) => Err(error),
             Err(error) => {
                 // A damaged store must never prevent startup: quarantine the
                 // files for forensics and start from defaults. If the
@@ -58,17 +60,6 @@ impl Store {
             }
         }
     }
-    /// Only damaged content (SQLite corrupt/not-a-database, bad JSON) counts.
-    fn corrupt(error: &anyhow::Error) -> bool {
-        use rusqlite::{Error::SqliteFailure, ErrorCode};
-        error.chain().any(|e| {
-            e.is::<serde_json::Error>()
-                || e.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
-                    matches!(e, SqliteFailure(f, _)
-                        if matches!(f.code, ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase))
-                })
-        })
-    }
     fn read(paths: &Paths) -> Result<(Self, State)> {
         let conn = Connection::open(paths.data.join("state.sqlite3"))?;
         conn.execute_batch(
@@ -79,9 +70,7 @@ impl Store {
             match conn.query_row::<String, _, _>("SELECT json FROM app_state WHERE id=1", [], |r| {
                 r.get(0)
             }) {
-                Ok(json) => {
-                    serde_json::from_str(&json).context("Stored state is not valid JSON")?
-                }
+                Ok(json) => decode::state(&json)?,
                 Err(rusqlite::Error::QueryReturnedNoRows) => State::default(),
                 Err(e) => return Err(e.into()),
             };
@@ -361,7 +350,12 @@ impl History {
                 .file
                 .flush()?;
         }
-        fs::remove_file(path)?;
+        // A file removed by hand is already gone: forget it and go on, or
+        // every later prune fails here and the budget stops working.
+        match fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
         let segment = self
             .segments
             .remove(path)
@@ -369,6 +363,9 @@ impl History {
         self.total = self.total.saturating_sub(segment.size);
         if let Some(size) = self.per_session.get_mut(&session) {
             *size = size.saturating_sub(segment.size);
+            if *size == 0 && !self.segments.values().any(|s| s.session == session) {
+                self.per_session.remove(&session);
+            }
         }
         Ok(session)
     }
@@ -406,11 +403,7 @@ impl History {
                     .ok_or_else(|| anyhow!("Missing history segment"))?;
                 (segment.created, segment.session.clone())
             };
-            let session_usage = self
-                .per_session
-                .get(&session)
-                .copied()
-                .ok_or_else(|| anyhow!("Missing session history"))?;
+            let session_usage = self.per_session.get(&session).copied().unwrap_or(0);
             if now().saturating_sub(created) > max_age
                 || self.total > budget
                 || session_usage > session_limit

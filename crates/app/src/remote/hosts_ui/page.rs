@@ -31,8 +31,9 @@ impl App {
 
     /// The main pane while the SSH page is open.
     pub(crate) fn ssh_page_center(&mut self, ui: &mut egui::Ui) {
-        let mut close = false;
-        egui::Frame::NONE.inner_margin(16.0).show(ui, |ui| {
+        let style = appearance::CenterCardStyle::new(&self.theme);
+        let (mut close, dismissed) = appearance::center_card(ui, style, |ui| {
+            let mut close = false;
             ui.set_min_size(ui.available_size());
             ui.horizontal(|ui| {
                 ui.label(RichText::new("SSH").size(appearance::FONT_TITLE).strong());
@@ -41,6 +42,7 @@ impl App {
                 });
             });
             ui.add_space(8.0);
+            close |= self.ssh_discard_bar(ui);
             if self.remote_ui.open {
                 self.ssh_properties_body(ui);
             } else if self.remote_ui.import.is_some() {
@@ -53,13 +55,41 @@ impl App {
                     "Restart the session service to enable SSH projects.",
                 );
             }
+            close
         });
+        // A margin click must not silently drop a changed host form.
+        if dismissed && self.remote_ui.draft_changed() {
+            self.remote_ui.confirm_discard = true;
+        } else {
+            close |= dismissed;
+        }
         if close {
             self.remote_ui.close();
             self.remote_ui.import = None;
             self.remote_ui.hosts.page_open = false;
             self.selection_generation = self.selection_generation.wrapping_add(1);
         }
+    }
+
+    /// Asked after a margin click on a changed host form. Returns whether
+    /// the user chose to discard the changes.
+    fn ssh_discard_bar(&mut self, ui: &mut egui::Ui) -> bool {
+        if !self.remote_ui.confirm_discard {
+            return false;
+        }
+        let mut discard = false;
+        ui.horizontal(|ui| {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "Discard the unsaved changes to this host?",
+            );
+            discard = ui.button("Discard changes").clicked();
+            if ui.button("Keep editing").clicked() {
+                self.remote_ui.confirm_discard = false;
+            }
+        });
+        ui.add_space(8.0);
+        discard
     }
 
     fn ssh_address_book(&mut self, ui: &mut egui::Ui) {

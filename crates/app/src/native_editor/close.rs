@@ -320,6 +320,18 @@ impl App {
         if let Some(force) = self.pending_quit_all.take() {
             self.drain_quit_all(force);
         }
+        if let Some(forward) = self.native_nav.history.take() {
+            self.navigate_history(forward);
+        }
+        if let Some(direction) = self.native_nav.pane_move.take() {
+            self.focus_pane_toward(direction);
+        }
+        if let Some(forward) = self.native_nav.cycle_tab.take() {
+            self.cycle_pane_tab(forward);
+        }
+        for open in std::mem::take(&mut self.native_nav.split_opens) {
+            self.open_split_target(open);
+        }
     }
 
     /// `:qa` takes every view including floating ones; without `!` a
@@ -335,7 +347,7 @@ impl App {
             if !dirty.is_empty() {
                 for path in &dirty {
                     if let Some(doc) = self.native_docs.get_mut(path) {
-                        doc.save_error = Some("Unsaved changes (add ! to override)".into());
+                        doc.set_notice("E37: No write since last change (add ! to override)");
                     }
                 }
                 return;

@@ -94,7 +94,7 @@ impl App {
         self.open_file(OpenFileInput {
             path: target.path.clone(),
             line: position.line.checked_add(1),
-            split: None,
+            split: Some(Self::SPLIT_NAV),
             external: false,
         });
         if self.native_pending_line.contains_key(&absolute) {

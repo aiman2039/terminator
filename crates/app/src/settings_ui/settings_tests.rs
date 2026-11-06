@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn settings_card_leaves_a_clickable_margin() {
         let outer = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
-        let card = super::super::footer::settings_card_rect(outer);
+        let card = crate::appearance::center_card_rect(outer);
         assert!(outer.contains_rect(card));
         assert!(card.width() <= 1100.0);
         assert!(card.min.y > outer.min.y && card.max.y < outer.max.y);

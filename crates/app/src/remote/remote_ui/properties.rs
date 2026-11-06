@@ -104,7 +104,7 @@ impl App {
             .id_salt("ssh-properties")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                form::card(ui, |ui| {
+                form::column(ui, |ui| {
                     ui.label(RichText::new(title).size(appearance::FONT_HEADING).strong());
                     ui.add_space(6.0);
                     self.ssh_properties_form(ui, editing, &mut actions);
@@ -133,7 +133,8 @@ impl App {
             return;
         };
         ui.add_space(8.0);
-        form::card(ui, |ui| {
+        form::column(ui, |ui| {
+            ui.separator();
             form::section(ui, "Port forwards");
             self.forwards_section(ui, &saved);
         });
@@ -226,7 +227,7 @@ impl App {
         ui.checkbox(&mut remote.connect_after, label);
         ui.add_space(6.0);
         ui.separator();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        appearance::footer_row(ui, |ui| {
             ui.add_enabled_ui(supported && !remote.busy, |ui| {
                 let save = if editing { "Save" } else { "Add host" };
                 actions.save = form::primary_button(ui, save).clicked();

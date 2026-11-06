@@ -253,6 +253,9 @@ enum PumpEvent {
     },
 }
 
+/// `(errors, warnings, total)` problems, for the status bar.
+pub type ProblemCounts = (usize, usize, usize);
+
 pub struct LspManager {
     servers: HashMap<ServerKey, Server>,
     docs: HashMap<PathBuf, OpenDoc>,
@@ -266,6 +269,8 @@ pub struct LspManager {
     /// Bumped whenever `diagnostics` or `spell_diagnostics` change, so
     /// views cache derived underlines without comparing diagnostics.
     diagnostics_generation: u64,
+    /// Status-bar `problem_counts` and the generation they were counted at.
+    problem_totals: std::cell::Cell<Option<(u64, ProblemCounts)>>,
     /// Settings → Check spelling.
     spell_enabled: bool,
     action_wait: Option<ActionWait>,
@@ -336,6 +341,7 @@ impl LspManager {
             spell_docs: HashMap::new(),
             spell_diagnostics: HashMap::new(),
             diagnostics_generation: 0,
+            problem_totals: std::cell::Cell::new(None),
             // Settings turn it on (default true) when the state loads.
             spell_enabled: false,
             action_wait: None,

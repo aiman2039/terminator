@@ -365,7 +365,12 @@ impl App {
         Ok(())
     }
     pub(crate) fn open_gui_tab(&mut self, project: String, tab: Tab, after: After) {
-        if matches!(after, After::Workspace(..)) && self.focus_file_view(&project, &tab) {
+        let reuse = match &after {
+            After::Workspace(..) => true,
+            After::CreateAt(_, _, split) => split.as_deref() == Some(Self::SPLIT_NAV),
+            _ => false,
+        };
+        if reuse && self.focus_file_view(&project, &tab) {
             return;
         }
         self.place_gui_tab(project, tab, after);

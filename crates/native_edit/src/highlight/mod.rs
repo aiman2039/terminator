@@ -227,13 +227,30 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
 /// [`highlight_text`] for text already split with `\n` only (see
 /// [`crate::doc::normalize_breaks`]), with no size cap.
 pub(crate) fn highlight_lf(language: Language, text: &str, dark: bool) -> Option<Vec<Vec<Span>>> {
+    highlight_lf_kept(language, text, dark, None)
+}
+
+/// [`highlight_lf`]; with `syntax`, tree-sitter re-parses only the edit
+/// since the last text kept there (see `treesitter::highlight_incremental`).
+pub(crate) fn highlight_lf_kept(
+    language: Language,
+    text: &str,
+    dark: bool,
+    syntax: Option<&mut Option<crate::treesitter::SyntaxState>>,
+) -> Option<Vec<Vec<Span>>> {
     // tree-sitter first for supported languages (returns None when
     // the language is unsupported, so this doubles as the check);
     // syntect fallback.
-    if let Some(native_theme) = theme(dark)
-        && let Some(spans) = crate::treesitter::highlight_text(language, text, native_theme)
-    {
-        return Some(spans);
+    if let Some(native_theme) = theme(dark) {
+        let spans = match syntax {
+            Some(state) => {
+                crate::treesitter::highlight_incremental(language, text, native_theme, state)
+            }
+            None => crate::treesitter::highlight_text(language, text, native_theme),
+        };
+        if spans.is_some() {
+            return spans;
+        }
     }
     let (syntaxes, _) = assets();
     let syntax = match language {

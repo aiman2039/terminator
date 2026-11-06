@@ -215,3 +215,47 @@ fn hosts_sidebar_lists_forwards_without_edit_forms() {
     assert!(!texts.iter().any(|t| t == "Local port"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Save"), "{texts:?}");
 }
+
+fn click_ssh_margin(app: &mut App, ctx: &egui::Context) {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
+    let pos = egui::pos2(4.0, 400.0);
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    for events in [
+        vec![],
+        vec![egui::Event::PointerMoved(pos), button(true)],
+        vec![button(false)],
+    ] {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            },
+            |ui| app.ssh_page_or_vnc_center(ui),
+        );
+        output.textures_delta.clear();
+    }
+}
+
+#[test]
+fn margin_click_asks_before_discarding_a_changed_host_form() {
+    let (mut app, ctx, _dir) = fixture();
+    app.new_ssh_host();
+    app.remote_ui.draft.as_mut().unwrap().ssh.host = "build.example.com".into();
+    click_ssh_margin(&mut app, &ctx);
+    assert!(app.remote_ui.open);
+    assert!(app.remote_ui.confirm_discard);
+}
+
+#[test]
+fn margin_click_closes_an_unchanged_host_form() {
+    let (mut app, ctx, _dir) = fixture();
+    app.new_ssh_host();
+    click_ssh_margin(&mut app, &ctx);
+    assert!(!app.ssh_page_visible());
+}

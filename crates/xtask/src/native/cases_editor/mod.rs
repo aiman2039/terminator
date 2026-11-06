@@ -38,6 +38,41 @@ pub(crate) fn inline_rename(o: &Options) -> Result<()> {
     })?;
     h.assert_pids(&s)
 }
+/// IDE mode moves shells into the bottom strip. A rename from the terminal
+/// menu must paint an editable field there.
+pub(crate) fn ide_rename(o: &Options) -> Result<()> {
+    let (h, _, s, _) = setup("ide-titles")?;
+    let mut preferences = super::dispatch::prefs(&h)?;
+    let fields = preferences
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("preferences are not an object"))?;
+    fields.insert("ide_mode".into(), json!(true));
+    fields.insert("ide_sidebars_full_height".into(), json!(false));
+    fields.insert("visible".into(), json!(false));
+    super::dispatch::save_prefs(&h, &preferences)?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "ide-renamed",
+        actions: json!([{"at_ms":1500,"target":"ide-terminal-panel","hover_offset":[400.0,1.0],"hold":true},{"at_ms":1700,"target":"projects-sidebar","hover_offset":[150.0,40.0]},{"at_ms":1900,"target":"projects-sidebar","hover_offset":[150.0,40.0],"release_button":true},{"at_ms":2500,"target":"terminal","right_click":true},{"at_ms":2900,"target":"Rename terminal…"},{"at_ms":3400,"target":"rename-input","text":"Strip shell"},{"at_ms":4200,"target":"rename-input","key":"Enter"}]),
+        after: 5200,
+    })?;
+    let state = h.state()?;
+    ensure!(
+        sessions(&state)
+            .iter()
+            .any(|session| session["label"] == "Strip shell"),
+        "IDE strip rename did not save"
+    );
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "ide-editing",
+        actions: json!([{"at_ms":1500,"target":"terminal","right_click":true},{"at_ms":1900,"target":"Rename terminal…"},{"at_ms":2400,"target":"rename-input","text":"Editing strip"}]),
+        after: 3200,
+    })?;
+    h.assert_pids(&s)
+}
 pub(crate) fn editor_lifecycle(o: &Options) -> Result<()> {
     let (h, _, s, root) = setup("editor-isolation")?;
     fs::write(root.join("source.rs"), "fn main() {}\n")?;
