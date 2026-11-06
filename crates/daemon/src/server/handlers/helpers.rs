@@ -204,9 +204,16 @@ impl Shared {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         rx.recv_timeout(left)?.map_err(anyhow::Error::msg)
     }
+    /// Save the whole state now; this also carries every deferred change.
     pub(crate) fn persist(&self) -> Result<()> {
+        // Cleared before the copy: a change made after it sets it again.
+        self.persist_pending
+            .store(false, std::sync::atomic::Ordering::Release);
         let s = relock(&self.state).clone();
-        relock(&self.store).save(&s)
+        relock(&self.store).save(&s).inspect_err(|_| {
+            self.persist_pending
+                .store(true, std::sync::atomic::Ordering::Release);
+        })
     }
     pub(crate) fn runtime(&self, id: &str) -> Result<Arc<Mutex<Runtime>>> {
         relock(&self.sessions)

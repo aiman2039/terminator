@@ -40,6 +40,11 @@ impl GenerationWorker {
                 if shared.shutdown.load(Ordering::Acquire) {
                     break;
                 }
+                if shared.persist_pending.load(Ordering::Acquire)
+                    && let Err(error) = shared.persist()
+                {
+                    shared.degraded(&format!("Agent state not saved: {error:#}"));
+                }
                 if let Err(error) = worker.tick(&shared) {
                     shared.degraded(&format!("Generation maintenance: {error:#}"));
                 }
@@ -70,7 +75,10 @@ impl GenerationWorker {
         let _coordination = generations::coordinate(root)?;
         let catalog = generations::Catalog::open(root)?;
         let owner = relock(&shared.state).generation.clone();
-        catalog.refresh(&mut relock(&shared.state))?;
+        // A newer generation may write workspace data this build cannot
+        // read. Draining generations do not need it: they must still see
+        // that they drain and retire, so the error waits until then.
+        let refreshed = catalog.refresh(&mut relock(&shared.state));
         if catalog.active()?.as_deref() == Some(&owner) && !shared.shutdown.load(Ordering::Acquire)
         {
             let _ = catalog.restore_serving();
@@ -83,6 +91,7 @@ impl GenerationWorker {
                         && self.born.elapsed() > Duration::from_secs(30)))
         });
         let active_owner = catalog.active()?.as_deref() == Some(&owner);
+        refresh_needed(refreshed.map_err(Into::into), draining)?;
         Ok(Survey {
             owner,
             owners,
@@ -127,4 +136,24 @@ fn is_busy(error: &anyhow::Error) -> bool {
             Some(generations::GenerationsError::Busy { .. })
         )
     })
+}
+
+/// A failed workspace refresh stops the survey, except while this
+/// generation drains: it does not need the shared workspace, and it must
+/// still see that it drains so it can retire.
+fn refresh_needed(refreshed: Result<()>, draining: bool) -> Result<()> {
+    if draining { Ok(()) } else { refreshed }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::refresh_needed;
+
+    #[test]
+    fn a_draining_generation_retires_even_when_it_cannot_read_newer_workspace() {
+        let unreadable = || Err(anyhow::anyhow!("unknown variant `from_the_future`"));
+        assert!(refresh_needed(unreadable(), true).is_ok());
+        assert!(refresh_needed(unreadable(), false).is_err());
+        assert!(refresh_needed(Ok(()), false).is_ok());
+    }
 }

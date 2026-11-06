@@ -432,6 +432,10 @@ fn paint_terminal(
         text: String::new(),
         tracking,
     };
+    // Cell backgrounds merge into one rect per run of same-colored cells on
+    // a row (a full-screen TUI has thousands); they paint first, under text.
+    let mut backgrounds: Vec<Shape> = Vec::new();
+    let mut bg_run: Option<(Rect, Color32)> = None;
     // Group match ranges by grid line once per frame so per-cell lookup is cheap.
     let find_map: std::collections::HashMap<i32, Vec<(usize, usize, bool)>> = match find {
         Some(paint) => {
@@ -492,11 +496,23 @@ fn paint_terminal(
             }
         }
         if global_bg != bg {
-            shapes.push(Shape::Rect(RectShape::filled(
-                Rect::from_min_size(Pos2::new(x, y), Vec2::new(width + 1., cell_height + 1.)),
-                CornerRadius::ZERO,
-                bg,
-            )));
+            let cell =
+                Rect::from_min_size(Pos2::new(x, y), Vec2::new(width + 1., cell_height + 1.));
+            match &mut bg_run {
+                Some((rect, color))
+                    if *color == bg
+                        && rect.min.y == cell.min.y
+                        && (rect.max.x - 1. - cell.min.x).abs() < 0.5 =>
+                {
+                    rect.max.x = cell.max.x;
+                }
+                _ => {
+                    flush_background(&mut backgrounds, bg_run.take());
+                    bg_run = Some((cell, bg));
+                }
+            }
+        } else {
+            flush_background(&mut backgrounds, bg_run.take());
         }
         if hovered {
             shapes.push(Shape::LineSegment {
@@ -543,6 +559,9 @@ fn paint_terminal(
         }
     }
     flush_text_run(painter, &mut shapes, &mut run);
+    flush_background(&mut backgrounds, bg_run.take());
+    // Above the terminal background (shape 0), under everything else.
+    shapes.splice(1..1, backgrounds);
     paint_predictions(PredictionPaint {
         theme,
         regular,
@@ -555,6 +574,16 @@ fn paint_terminal(
         shapes: &mut shapes,
     });
     shapes
+}
+
+fn flush_background(backgrounds: &mut Vec<Shape>, run: Option<(Rect, Color32)>) {
+    if let Some((rect, color)) = run {
+        backgrounds.push(Shape::Rect(RectShape::filled(
+            rect,
+            CornerRadius::ZERO,
+            color,
+        )));
+    }
 }
 
 struct PredictionPaint<'a> {
@@ -1957,6 +1986,37 @@ mod paint_tests {
     fn style_change_splits_text_runs() {
         let galleys = text_galleys(&paint(&content_with("hello", Some(2))));
         assert_eq!(galleys, ["he", "llo"]);
+    }
+
+    #[test]
+    fn same_background_cells_merge_into_one_rect_under_the_text() {
+        let mut content = content_with("abcde", None);
+        for col in 0..5 {
+            content.grid[Point::new(Line(0), Column(col))].bg = if col < 3 {
+                Color::Named(NamedColor::Blue)
+            } else {
+                Color::Named(NamedColor::Red)
+            };
+        }
+        let shapes = paint(&content);
+        // Cell backgrounds are one cell high plus the 1 px overlap.
+        let backgrounds: Vec<(usize, Rect)> = shapes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, shape)| match shape {
+                Shape::Rect(rect) if (rect.rect.height() - 17.0).abs() < 0.01 => {
+                    Some((index, rect.rect))
+                }
+                _ => None,
+            })
+            .collect();
+        let widths: Vec<f32> = backgrounds.iter().map(|(_, rect)| rect.width()).collect();
+        assert_eq!(widths, [3.0 * 8.0 + 1.0, 2.0 * 8.0 + 1.0]);
+        let first_text = shapes
+            .iter()
+            .position(|shape| matches!(shape, Shape::Text(_)))
+            .expect("text");
+        assert!(backgrounds.iter().all(|(index, _)| *index < first_text));
     }
 
     #[test]

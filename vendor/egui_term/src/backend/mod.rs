@@ -225,6 +225,10 @@ pub struct TerminalBackend {
     grid_dirty: Arc<AtomicBool>,
     painted: Arc<AtomicBool>,
     repaint_budget: Arc<Mutex<RepaintBudget>>,
+    /// A Wakeup waits in the app channel; see [`Self::wakeup_received`].
+    wakeup_queued: Arc<AtomicBool>,
+    /// When a pane last painted this backend (see [`Self::last_painted`]).
+    last_painted: Mutex<Option<Instant>>,
     /// While a selection drag is active, an application clear must not drop it.
     selection_hold: bool,
     /// Grid point where the current drag started. Survives an application clear.
@@ -282,6 +286,8 @@ impl TerminalBackend {
         let grid_dirty_for_events = grid_dirty.clone();
         let painted = Arc::new(AtomicBool::new(false));
         let painted_for_events = painted.clone();
+        let wakeup_queued = Arc::new(AtomicBool::new(false));
+        let wakeup_queued_for_events = wakeup_queued.clone();
         let repaint_budget = repaint_budget(&app_context);
         let budget_for_events = repaint_budget.clone();
         let _pty_event_loop_thread = pty_event_loop.spawn();
@@ -291,7 +297,12 @@ impl TerminalBackend {
                 loop {
                     if let Ok(event) = event_receiver.recv() {
                         grid_dirty_for_events.store(true, Ordering::Relaxed);
-                        if pty_event_proxy_sender.send((id, event.clone())).is_err() {
+                        // One Wakeup waits in the app channel at a time: heavy
+                        // output in a hidden terminal (no repaint drains the
+                        // channel) must not queue one per output chunk.
+                        if forward_event(&event, &wakeup_queued_for_events)
+                            && pty_event_proxy_sender.send((id, event.clone())).is_err()
+                        {
                             break;
                         }
                         // Hidden terminals update their grid without waking the GUI.
@@ -328,10 +339,18 @@ impl TerminalBackend {
             grid_dirty,
             painted,
             repaint_budget,
+            wakeup_queued,
+            last_painted: Mutex::new(None),
             selection_hold: false,
             drag_anchor: None,
             type_ahead: typeahead::TypeAhead::default(),
         })
+    }
+
+    /// The app took this backend's Wakeup from the channel: the next
+    /// output may queue another one.
+    pub fn wakeup_received(&self) {
+        self.wakeup_queued.store(false, Ordering::Release);
     }
 
     /// Keep the in-progress drag if the application clears the screen.
@@ -488,40 +507,11 @@ impl TerminalBackend {
     /// Covers the live grid including retained scrollback; wrapped logical
     /// lines stay split across rows (matches cannot span rows in v1).
     pub fn search_rows(&self) -> Vec<SearchRow> {
-        use alacritty_terminal::term::cell::Flags;
         let term = self.term.lock();
         let grid = term.grid();
-        let mut rows = Vec::new();
-        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
-            let line = Line(line);
-            let mut text = String::new();
-            let mut columns = Vec::new();
-            for col in 0..grid.columns() {
-                let cell = &grid[line][Column(col)];
-                if cell
-                    .flags
-                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                {
-                    continue;
-                }
-                text.push(cell.c);
-                columns.push(col);
-                if let Some(extra) = cell.zerowidth() {
-                    for c in extra {
-                        text.push(*c);
-                        columns.push(col);
-                    }
-                }
-            }
-            let trimmed = text.trim_end().to_string();
-            columns.truncate(trimmed.chars().count());
-            rows.push(SearchRow {
-                line,
-                text: trimmed,
-                columns,
-            });
-        }
-        rows
+        (grid.topmost_line().0..=grid.bottommost_line().0)
+            .map(|line| search_row(grid, Line(line)))
+            .collect()
     }
 
     /// Literal search over the live grid plus scrollback. Never sends input.
@@ -531,9 +521,9 @@ impl TerminalBackend {
         let mut matches = Vec::new();
         for hit in crate::find::find_in_rows(&refs, query, case_insensitive) {
             let row = &rows[hit.row];
-            let (Some(&start), Some(&end)) = (
-                row.columns.get(hit.chars.start),
-                row.columns.get(hit.chars.end.saturating_sub(1)),
+            let (Some(start), Some(end)) = (
+                row.column(hit.chars.start),
+                row.column(hit.chars.end.saturating_sub(1)),
             ) else {
                 continue;
             };
@@ -644,9 +634,15 @@ impl TerminalBackend {
 
     /// Mark whether this terminal was painted in the current frame. Hidden
     /// terminals still record grid changes but do not wake the UI.
+    /// When a pane last painted this backend; `None` before the first paint.
+    pub fn last_painted(&self) -> Option<Instant> {
+        *self.last_painted.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn set_painted(&self, painted: bool) {
         self.painted.store(painted, Ordering::Relaxed);
         if painted {
+            *self.last_painted.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
             self.repaint_budget
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1595,13 +1591,83 @@ fn visible_regex_match_iter<'a>(
         .take_while(move |rm| rm.start().line <= viewport_end)
 }
 
+/// Whether the subscription thread sends `event` to the app: every event
+/// but a Wakeup while one is still queued (`wakeup_queued`, cleared by
+/// [`TerminalBackend::wakeup_received`]).
+fn forward_event(event: &Event, wakeup_queued: &AtomicBool) -> bool {
+    !(matches!(event, Event::Wakeup) && wakeup_queued.swap(true, Ordering::AcqRel))
+}
+
+/// One grid row as [`SearchRow`] text, for find and tab previews.
+fn search_row(
+    grid: &alacritty_terminal::Grid<alacritty_terminal::term::cell::Cell>,
+    line: Line,
+) -> SearchRow {
+    use alacritty_terminal::term::cell::Flags;
+    let mut text = String::new();
+    // Most rows have one char per cell: `columns` stays empty (see
+    // `SearchRow::column`) until a wide or combining char needs it.
+    let mut columns = Vec::new();
+    let mut mapped = false;
+    let mut chars = 0usize;
+    for col in 0..grid.columns() {
+        let cell = &grid[line][Column(col)];
+        if cell
+            .flags
+            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+        {
+            if !mapped {
+                mapped = true;
+                columns.extend(0..chars);
+            }
+            continue;
+        }
+        text.push(cell.c);
+        chars += 1;
+        if mapped {
+            columns.push(col);
+        }
+        if let Some(extra) = cell.zerowidth().filter(|extra| !extra.is_empty()) {
+            if !mapped {
+                mapped = true;
+                columns.extend(0..chars);
+            }
+            for c in extra {
+                text.push(*c);
+                chars += 1;
+                columns.push(col);
+            }
+        }
+    }
+    let trimmed = text.trim_end().to_string();
+    columns.truncate(trimmed.chars().count());
+    SearchRow {
+        line,
+        text: trimmed,
+        columns,
+    }
+}
+
 /// One grid row as searchable text. `columns[c]` is the grid column of the
-/// `c`-th char in `text`.
+/// `c`-th char in `text`; empty when every char is one cell
+/// (see [`SearchRow::column`]).
 #[derive(Clone, Debug)]
 pub struct SearchRow {
     pub line: Line,
     pub text: String,
     pub columns: Vec<usize>,
+}
+
+impl SearchRow {
+    /// Grid column of the `index`-th char of `text`.
+    #[must_use]
+    pub fn column(&self, index: usize) -> Option<usize> {
+        if self.columns.is_empty() {
+            (index < self.text.chars().count()).then_some(index)
+        } else {
+            self.columns.get(index).copied()
+        }
+    }
 }
 
 /// One literal find hit in grid coordinates (single row).
@@ -2143,5 +2209,72 @@ mod repaint_tests {
             &repaint_budget(&egui::Context::default()),
             &repaint_budget(&egui::Context::default())
         ));
+    }
+}
+
+#[cfg(test)]
+mod search_row_tests {
+    use super::search_row;
+    use alacritty_terminal::grid::Grid;
+    use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::term::cell::{Cell, Flags};
+
+    fn row(cells: &[(char, Flags)]) -> Grid<Cell> {
+        let mut grid = Grid::<Cell>::new(1, cells.len().max(1), 0);
+        for (col, (c, flags)) in cells.iter().enumerate() {
+            let cell = &mut grid[Point::new(Line(0), Column(col))];
+            cell.c = *c;
+            cell.flags = *flags;
+        }
+        grid
+    }
+
+    #[test]
+    fn plain_rows_map_chars_to_columns_without_a_table() {
+        let grid = row(&[
+            ('a', Flags::empty()),
+            ('b', Flags::empty()),
+            (' ', Flags::empty()),
+        ]);
+        let found = search_row(&grid, Line(0));
+        assert_eq!(found.text, "ab");
+        assert!(found.columns.is_empty());
+        assert_eq!(found.column(1), Some(1));
+        assert_eq!(found.column(2), None);
+    }
+
+    #[test]
+    fn wide_chars_skip_their_spacer_column() {
+        let grid = row(&[
+            ('a', Flags::empty()),
+            ('日', Flags::WIDE_CHAR),
+            (' ', Flags::WIDE_CHAR_SPACER),
+            ('b', Flags::empty()),
+        ]);
+        let found = search_row(&grid, Line(0));
+        assert_eq!(found.text, "a日b");
+        assert_eq!(
+            (0..3).map(|i| found.column(i)).collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(3)]
+        );
+    }
+}
+
+#[cfg(test)]
+mod wakeup_tests {
+    use super::{forward_event, Event};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn one_wakeup_waits_at_a_time_and_other_events_always_pass() {
+        let queued = AtomicBool::new(false);
+        assert!(forward_event(&Event::Wakeup, &queued));
+        assert!(!forward_event(&Event::Wakeup, &queued), "one is queued");
+        assert!(!forward_event(&Event::Wakeup, &queued));
+        assert!(forward_event(&Event::Bell, &queued));
+        assert!(forward_event(&Event::Exit, &queued));
+        // The app took it (`wakeup_received`): the next one is sent.
+        queued.store(false, Ordering::Release);
+        assert!(forward_event(&Event::Wakeup, &queued));
     }
 }

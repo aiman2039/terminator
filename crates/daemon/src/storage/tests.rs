@@ -242,6 +242,26 @@ fn invalid_json_row_is_quarantined_not_loaded() {
     assert_eq!(corrupt_names(&p.data).len(), 1);
 }
 #[test]
+fn state_from_a_newer_version_fails_without_quarantine() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = Paths::at(tmp.path().into());
+    p.init().unwrap();
+    let (db, _) = Store::open(&p).unwrap();
+    // Well-formed JSON with a value only a newer build knows (a downgrade).
+    let mut newer = serde_json::to_value(State::default()).unwrap();
+    newer["settings"]["editor_mode"] = serde_json::json!("from_the_future");
+    db.conn
+        .execute(
+            "INSERT INTO app_state(id,json) VALUES(1,?1)",
+            [newer.to_string()],
+        )
+        .unwrap();
+    drop(db);
+    let error = Store::open(&p).err().expect("a newer state does not load");
+    assert!(format!("{error:#}").contains("newer"), "{error:#}");
+    assert!(corrupt_names(&p.data).is_empty(), "the newer state is kept");
+}
+#[test]
 fn invalid_settings_are_reset_to_defaults() {
     let tmp = tempfile::tempdir().unwrap();
     let p = Paths::at(tmp.path().into());

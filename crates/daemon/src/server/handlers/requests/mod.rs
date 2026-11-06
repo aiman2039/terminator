@@ -10,7 +10,7 @@ mod vnc;
 mod worktrees;
 
 use anyhow::{Result, bail};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 use terminator_core::*;
 
 use super::super::shared::{Shared, relock};
@@ -26,6 +26,10 @@ enum Outcome {
     Reply(Response),
     /// State changed: save the shared workspace and persist before replying `Ok`.
     Changed,
+    /// High-rate state change (agent hooks): reply `Ok` now; the generation
+    /// worker persists within about a second, and any earlier persist
+    /// carries it too. Losing it in a crash costs only recent hook state.
+    Deferred,
 }
 
 impl Shared {
@@ -46,6 +50,11 @@ impl Shared {
         match self.dispatch(request)? {
             Outcome::Reply(response) => Ok(response),
             Outcome::Changed => self.commit_change(prepared.shared_write),
+            Outcome::Deferred if prepared.shared_write => self.commit_change(true),
+            Outcome::Deferred => {
+                self.persist_pending.store(true, Ordering::Release);
+                Ok(Response::Ok)
+            }
         }
     }
 

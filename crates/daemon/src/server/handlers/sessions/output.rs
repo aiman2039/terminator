@@ -100,33 +100,16 @@ impl Shared {
         mut reader: Box<dyn Read + Send>,
     ) {
         let replies = self.spawn_reply_writer(runtime);
-        let mut bytes = [0u8; 8192];
-        let mut panicked = false;
-        while let Ok(n) = reader.read(&mut bytes) {
-            if n == 0 {
-                break;
-            }
-            let Some(data) = bytes.get(..n) else {
-                break;
-            };
-            // A parser panic must not end the reader: nothing would drain
-            // the PTY, so the program would block on output and the session
-            // would hang without a word. Report it once and keep reading.
-            let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.apply_output(sid, runtime, data)
-            }));
-            match applied {
-                Ok(pending) => enqueue_replies(&replies, pending),
-                Err(_) if !panicked => {
-                    panicked = true;
-                    self.degraded(&format!(
-                        "Terminal output parser failed for session {sid}; output is still saved to history"
-                    ));
-                }
-                Err(_) => {}
-            }
-            self.queue_history(sid, data);
-        }
+        pump_guarded(
+            &mut reader,
+            |data| enqueue_replies(&replies, self.apply_output(sid, runtime, data)),
+            || {
+                self.degraded(&format!(
+                    "Terminal output parser failed for session {sid}; output is still saved to history"
+                ));
+            },
+            |data| self.queue_history(sid, data),
+        );
     }
 
     /// Feeds output to the parser and subscribers, raises the notices the
@@ -234,5 +217,75 @@ mod tests {
             Response::Ok,
             Duration::from_secs(5)
         ));
+    }
+}
+
+/// Read the PTY until it ends: `apply` each chunk, then `after` it. A panic
+/// in `apply` must not end the reader: nothing would drain the PTY, so the
+/// program would block on output and the session would hang without a
+/// word. The first panic is reported; reading goes on.
+fn pump_guarded(
+    reader: &mut dyn Read,
+    mut apply: impl FnMut(&[u8]),
+    mut report_panic: impl FnMut(),
+    mut after: impl FnMut(&[u8]),
+) {
+    let mut bytes = [0u8; 8192];
+    let mut panicked = false;
+    while let Ok(n) = reader.read(&mut bytes) {
+        if n == 0 {
+            break;
+        }
+        let Some(data) = bytes.get(..n) else {
+            break;
+        };
+        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply(data)));
+        if applied.is_err() && !panicked {
+            panicked = true;
+            report_panic();
+        }
+        after(data);
+    }
+}
+
+#[cfg(test)]
+mod pump_tests {
+    use super::pump_guarded;
+
+    /// Hands out one queued chunk per read.
+    struct Chunks(std::collections::VecDeque<&'static [u8]>);
+
+    impl std::io::Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let Some(chunk) = self.0.pop_front() else {
+                return Ok(0);
+            };
+            let n = chunk.len().min(buf.len());
+            buf.get_mut(..n)
+                .unwrap_or_default()
+                .copy_from_slice(chunk.get(..n).unwrap_or_default());
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn a_parser_panic_is_reported_once_and_the_pty_keeps_draining() {
+        let mut reader = Chunks([b"one".as_slice(), b"two", b"three"].into());
+        let (mut reports, mut drained) = (0, Vec::new());
+        pump_guarded(
+            &mut reader,
+            |data| assert_ne!(data, b"one".as_slice(), "parser bug"),
+            || reports += 1,
+            |data| drained.push(data.to_vec()),
+        );
+        let mut reader = Chunks([b"one".as_slice(), b"one"].into());
+        let mut again = 0;
+        pump_guarded(&mut reader, |_| panic!("parser bug"), || again += 1, |_| {});
+        assert_eq!(reports, 1);
+        assert_eq!(
+            drained,
+            [b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
+        );
+        assert_eq!(again, 1, "reported once, not per chunk");
     }
 }

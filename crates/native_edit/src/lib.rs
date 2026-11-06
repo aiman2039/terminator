@@ -15,6 +15,7 @@ pub mod indent;
 pub mod inlay;
 mod journal;
 pub mod lsp;
+mod row_edits;
 mod rows;
 pub mod spacers;
 pub mod treesitter;

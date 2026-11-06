@@ -48,15 +48,20 @@ pub struct RowLayout<'a> {
 /// buffer it derives from.
 #[derive(Default)]
 pub struct RowCache {
-    revision: u64,
-    columns: Option<usize>,
+    pub(crate) revision: u64,
+    pub(crate) columns: Option<usize>,
     folds: u64,
-    spacers: u64,
+    pub(crate) spacers: u64,
     /// Tab width the rows were laid out with.
-    tab: usize,
-    ready: bool,
-    rows: Vec<VisualRow>,
-    max_cells: usize,
+    pub(crate) tab: usize,
+    pub(crate) ready: bool,
+    pub(crate) rows: Vec<VisualRow>,
+    pub(crate) max_cells: usize,
+    /// Buffer lines at the last layout, and whether it had no folded
+    /// region and no spacer: then one edit can re-lay only its lines
+    /// (see `row_edits`).
+    pub(crate) lines: usize,
+    pub(crate) plain: bool,
 }
 
 impl RowCache {
@@ -100,6 +105,14 @@ impl RowCache {
         {
             return;
         }
+        let plain =
+            spacers.is_empty() && folds.is_none_or(|folds| folds.folded_starts().is_empty());
+        if plain && self.relayout_edit(doc, wrap_columns, folds) {
+            self.folds = fold_generation;
+            return;
+        }
+        self.plain = plain;
+        self.lines = doc.line_count();
         self.folds = fold_generation;
         self.spacers = spacer_key;
         self.tab = tab;
@@ -133,7 +146,7 @@ impl RowCache {
 }
 
 /// Display cells one row occupies, its wrap offset included.
-fn row_cells(row: &VisualRow, tab: usize) -> usize {
+pub(crate) fn row_cells(row: &VisualRow, tab: usize) -> usize {
     row.start
         .saturating_add(display_x(&row.text, row.text.chars().count(), tab))
 }
@@ -158,73 +171,88 @@ pub fn visual_rows_folded<B: Buffer>(
         if folds.is_some_and(|folds| folds.hidden(line)) {
             continue;
         }
-        let first = rows.len();
-        let text = doc.line_text(line);
-        let line_len = text.chars().count();
-        if line_len == 0 || wrap_columns.is_none() {
-            rows.push(VisualRow {
-                line,
-                start: 0,
-                end: line_len,
-                line_len,
-                text,
-                folded: false,
-                spacer: false,
-            });
-            mark_folded(MarkFoldedInput {
-                rows: &mut rows,
-                first,
-                line,
-                folds,
-            });
-            continue;
-        }
-        // Only wrapped lines need random access to their chars.
-        let chars: Vec<char> = text.chars().collect();
-        let limit = wrap_columns.unwrap_or(usize::MAX).max(1);
-        let mut start = 0;
-        while start < line_len {
-            let mut end = start;
-            let mut cells = 0usize;
-            let mut last_space = None;
-            while end < line_len {
-                let Some(ch) = chars.get(end).copied() else {
-                    break;
-                };
-                let next = advance_cell(cells, ch, tab);
-                if end > start && next > limit {
-                    break;
-                }
-                cells = next;
-                end = end.saturating_add(1);
-                if ch.is_whitespace() {
-                    last_space = Some(end);
-                }
-            }
-            if end < line_len
-                && let Some(space) = last_space.filter(|space| *space > start)
-            {
-                end = space;
-            }
-            rows.push(VisualRow {
-                line,
-                start,
-                end,
-                line_len,
-                text: chars.get(start..end).unwrap_or(&[]).iter().collect(),
-                folded: false,
-                spacer: false,
-            });
-            start = end;
-        }
+        layout_line(
+            &mut rows,
+            doc.line_text(line),
+            (line, wrap_columns, tab),
+            folds,
+        );
+    }
+    rows
+}
+
+/// Append the rows of one buffer line: the whole line, or its wrapped
+/// pieces. A break prefers the last space that fits.
+pub(crate) fn layout_line(
+    rows: &mut Vec<VisualRow>,
+    text: String,
+    (line, wrap_columns, tab): (usize, Option<usize>, usize),
+    folds: Option<&crate::fold::Folds>,
+) {
+    let first = rows.len();
+    let line_len = text.chars().count();
+    if line_len == 0 || wrap_columns.is_none() {
+        rows.push(VisualRow {
+            line,
+            start: 0,
+            end: line_len,
+            line_len,
+            text,
+            folded: false,
+            spacer: false,
+        });
         mark_folded(MarkFoldedInput {
-            rows: &mut rows,
+            rows: rows.as_mut_slice(),
             first,
             line,
             folds,
         });
+        return;
     }
-    rows
+    // Only wrapped lines need random access to their chars.
+    let chars: Vec<char> = text.chars().collect();
+    let limit = wrap_columns.unwrap_or(usize::MAX).max(1);
+    let mut start = 0;
+    while start < line_len {
+        let mut end = start;
+        let mut cells = 0usize;
+        let mut last_space = None;
+        while end < line_len {
+            let Some(ch) = chars.get(end).copied() else {
+                break;
+            };
+            let next = advance_cell(cells, ch, tab);
+            if end > start && next > limit {
+                break;
+            }
+            cells = next;
+            end = end.saturating_add(1);
+            if ch.is_whitespace() {
+                last_space = Some(end);
+            }
+        }
+        if end < line_len
+            && let Some(space) = last_space.filter(|space| *space > start)
+        {
+            end = space;
+        }
+        rows.push(VisualRow {
+            line,
+            start,
+            end,
+            line_len,
+            text: chars.get(start..end).unwrap_or(&[]).iter().collect(),
+            folded: false,
+            spacer: false,
+        });
+        start = end;
+    }
+    mark_folded(MarkFoldedInput {
+        rows: rows.as_mut_slice(),
+        first,
+        line,
+        folds,
+    });
 }
 
 struct MarkFoldedInput<'a> {

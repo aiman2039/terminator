@@ -24,6 +24,13 @@ impl App {
     fn handle_pty_event(&mut self, ctx: &egui::Context, id: u64, event: &PtyEvent) {
         if let PtyEvent::Wakeup = event
             && let Some(session) = self.backend_ids.get(&id)
+            && let Some(backend) = self.backends.get(session)
+            && backend.id() == id
+        {
+            backend.wakeup_received();
+        }
+        if let PtyEvent::Wakeup = event
+            && let Some(session) = self.backend_ids.get(&id)
             && let Some(find) = self.terminal_find.get_mut(session)
         {
             // New output: the open find bar rescans once (#176). The backend

@@ -186,7 +186,7 @@ impl App {
     /// are on screen.
     #[cfg(feature = "test-support")]
     fn fixture_terminal_scroll(&self, ctx: &egui::Context) -> serde_json::Value {
-        serde_json::json!(self.backends.iter().map(|(sid, backend)| {
+        serde_json::json!(self.backends.iter().filter(|(sid, _)| self.visible_sessions.contains(*sid)).map(|(sid, backend)| {
             let content = backend.last_content();
             let text: String = content.grid.display_iter().map(|cell| cell.c).collect();
             let samples: Vec<_> = (1..=160).filter(|n| text.contains(&format!("TSAMPLE{n:03}"))).collect();
