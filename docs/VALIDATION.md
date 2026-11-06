@@ -6051,3 +6051,38 @@ as before.
 --all-features -- -D warnings`, `sh scripts/check.sh sarah`, and
 `cargo test --workspace --all-features --locked` were run on this branch. No
 native GUI fixture or screenshot comparison was run.
+
+## Review fixes: Ctrl-6, vim navigation, robustness, performance (2026-11-06)
+
+Branch `review-fixes` (commits `d923629`..`9591b8b`).
+
+- Unit and fixture tests cover: terminal Ctrl-6/Ctrl-2/Ctrl-Space/Ctrl-/
+  control characters; `gf`/Ctrl-^ stacking in the focused pane and reusing an
+  open tab; `:e#`, `:e`, `:e!`, `:e newfile` (empty buffer, first save creates
+  it); Ctrl-O/Ctrl-I handing over to Back/Forward; Ctrl-W pane keys; `:wa`,
+  `:bn`, `:bp`, `:bd`, `:ls`, `:vs file`, `:tabe file`, `E492`; status-bar info
+  expiry; history pruning with a hand-deleted file; newer-version state kept
+  without quarantine; draining generation with an unreadable workspace; PTY
+  reader panic guard; in-place save shrink with no safety copy left; Git panel
+  row culling keeps the scroll range (tree and list); problem-count cache;
+  one queued Wakeup per terminal; hidden-terminal retention order; merged
+  cell backgrounds under text; search-row column table; one-edit editor row
+  relayout equals a full layout (with and without wrap); virtualized Markdown
+  preview keeps its scroll height (within one 10 px item gap) and paints the
+  end; incremental tree-sitter highlighting equals `tree_sitter_highlight`
+  for Rust, Python and JavaScript across edits.
+- `cargo xtask integration` passed. One earlier run hung in
+  `regressions::daemon::stalled_attachment` and a second had two daemon
+  startup timeouts (`shutdown_reply`, `missing_helper_health`) while another
+  build ran in parallel; the third run passed every case.
+- Native GUI: `cargo xtask gui smoke --sessions 50 --seconds 5`,
+  `cargo xtask gui editor-lifecycle` and `cargo xtask gui workspace-tabs`
+  passed (captures in `target/validation/native/`).
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings`, `sh scripts/check.sh sarah` and
+  `cargo test --workspace --all-features --locked` were run. The one failing
+  test, `appearance::scale_tests`, comes from uncommitted work of another
+  session (`workspace_ui/viewer/terminal_pane.rs:57`), not from this branch.
+
+Not verified by hand: Ctrl-6 in a real Neovim terminal and in the native
+editor on macOS (Mission Control "Switch to Desktop 6" can take Ctrl-6 first).
