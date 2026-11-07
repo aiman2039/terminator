@@ -34,11 +34,7 @@ impl Viewer<'_> {
             Self::zoom_placeholder(ui);
             return;
         }
-        if !self.app.connected {
-            ui.weak("Reconnecting to session daemon…");
-            return;
-        }
-        self.pane_scope(ui, &tab, |viewer, ui| viewer.terminal_body(ui, &session));
+        self.live_terminal_body(ui, &tab, &session);
     }
 
     /// The live terminal (or its markdown view) under the caption; the

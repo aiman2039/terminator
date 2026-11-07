@@ -1,12 +1,5 @@
-//! A change group's header row (`JetBrains` `Changes  2 files`) and the
-//! tree's expand/collapse-all generation.
+//! A change group's header row (`JetBrains` `Changes  2 files`).
 use super::*;
-
-/// Collapse all makes the tree generation odd and Expand all makes it even;
-/// a new generation gives every section and folder a fresh open state.
-pub(super) fn expanded_by_default(generation: u64) -> bool {
-    generation.is_multiple_of(2)
-}
 
 /// Group checkbox, the bold name with a dim `N files`, and the
 /// stage/unstage-all action, which `lock` disables. The name's menu shows
@@ -37,19 +30,12 @@ pub(super) fn git_group_header(
             .sense(egui::Sense::click()),
     );
     ui.add_space(4.0);
-    ui.add(egui::Label::new(RichText::new(files_hint(total)).weak()).selectable(false));
+    let hint = prepared.tree.files_hint();
+    ui.add(egui::Label::new(RichText::new(hint).weak()).selectable(false));
     if group != terminator_git::GitGroup::Conflicts {
         appearance::context_menu(&name, |ui| {
-            if appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: "Show all changes",
-                icon: "FileDiff",
-                shortcut: "",
-            })
-            .clicked()
-            {
+            if appearance::menu_action(ui, true, "Show all changes", "FileDiff").clicked() {
                 outcome.show_changes = Some(group == terminator_git::GitGroup::Staged);
-                ui.close();
             }
         });
     }

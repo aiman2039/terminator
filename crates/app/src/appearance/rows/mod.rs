@@ -132,6 +132,12 @@ pub(crate) struct FileRowInput<'a> {
 }
 
 pub fn file_row(input: FileRowInput<'_>) -> egui::Response {
+    file_row_marked(input, None)
+}
+
+/// A [`file_row`] with an optional small icon right after its name
+/// (Explorer File Nesting's chevron).
+pub fn file_row_marked(input: FileRowInput<'_>, after_label: Option<&str>) -> egui::Response {
     let FileRowInput {
         ui,
         label,
@@ -143,15 +149,23 @@ pub fn file_row(input: FileRowInput<'_>) -> egui::Response {
     } = input;
     ui.scope(|ui| {
         ui.visuals_mut().override_text_color = Some(tint);
-        row(RowInput {
+        row_ext(
             ui,
-            label,
-            icon,
-            selected,
-            height,
-            trailing,
-            tint,
-        })
+            RowSpec {
+                label,
+                icon,
+                selected,
+                height,
+                trailing,
+                tint,
+                icon_tint: None,
+                spin: false,
+                subtitle: None,
+                brand: None,
+                reserve_brand: false,
+                after_label,
+            },
+        )
     })
     .inner
 }
@@ -193,6 +207,7 @@ pub fn folder_row(input: FolderRowInput<'_>) -> egui::Response {
                     subtitle: None,
                     brand: None,
                     reserve_brand: false,
+                    after_label: None,
                 },
             )
         })
@@ -249,6 +264,7 @@ pub fn project_row(input: ProjectRowInput<'_>) -> egui::Response {
                 subtitle: None,
                 brand: None,
                 reserve_brand: false,
+                after_label: None,
             },
         )
     })
@@ -295,6 +311,7 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
                 subtitle: spec.subtitle,
                 brand: spec.brand,
                 reserve_brand: true,
+                after_label: None,
             },
         )
     })

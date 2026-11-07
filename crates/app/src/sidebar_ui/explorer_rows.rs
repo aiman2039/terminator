@@ -266,19 +266,24 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
     } else {
         git_color(theme, status)
     };
-    let r = appearance::file_row(appearance::FileRowInput {
-        ui,
-        label,
-        icon: icons::file_icon(path),
-        selected,
-        height: 24.0,
-        trailing: &status.to_string(),
-        tint: color,
-    })
+    // A nesting parent shows a chevron after its name, like JetBrains File
+    // Nesting: right while its nested files are hidden, down when shown.
+    let chevron = marks
+        .nested
+        .map(|open| if open { "ChevronDown" } else { "ChevronRight" });
+    let r = appearance::file_row_marked(
+        appearance::FileRowInput {
+            ui,
+            label,
+            icon: icons::file_icon(path),
+            selected,
+            height: 24.0,
+            trailing: &status.to_string(),
+            tint: color,
+        },
+        chevron,
+    )
     .interact(egui::Sense::drag());
-    if let Some(open) = marks.nested {
-        nested_chevron(ui, &r, label, open);
-    }
     // Tooltip text is only needed for the hovered row; formatting it for
     // every row on every scroll frame allocates heavily.
     let r = if r.hovered() {
@@ -313,32 +318,6 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
     appearance::context_menu(&r, |ui| menu.show(ui, &mut outcome));
     outcome.response = Some(r);
     outcome
-}
-
-/// A small chevron after a nesting parent's name, like JetBrains File
-/// Nesting: right when its nested files are hidden, down when shown.
-fn nested_chevron(ui: &egui::Ui, row: &egui::Response, label: &str, open: bool) {
-    if !ui.is_rect_visible(row.rect) {
-        return;
-    }
-    // `row_ext` starts the label 26 px in, in the body font.
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let text = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER)
-        .size()
-        .x;
-    let size = egui::vec2(12.0, 12.0);
-    let left = (row.rect.left() + 26.0 + text + 4.0).min(row.rect.right() - size.x);
-    let rect =
-        egui::Rect::from_min_size(egui::pos2(left, row.rect.center().y - size.y * 0.5), size);
-    egui::Image::new(icons::source(if open {
-        "ChevronDown"
-    } else {
-        "ChevronRight"
-    }))
-    .tint(ui.visuals().weak_text_color())
-    .paint_at(ui, rect);
 }
 
 pub(super) fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {

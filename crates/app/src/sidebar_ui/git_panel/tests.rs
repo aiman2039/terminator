@@ -129,8 +129,7 @@ fn running_commit_shows_its_step_cancel_and_the_last_failure() {
                     review_mode: ReviewMode::Native,
                     neovim_review: false,
                     theme: &theme,
-                    history: false,
-                    stash: false,
+                    tab: GitTab::Commit,
                     view_list: false,
                     commits: &[],
                     shelves: &[],
@@ -140,6 +139,7 @@ fn running_commit_shows_its_step_cancel_and_the_last_failure() {
                     amend: &mut false,
                     signoff: &mut false,
                     collapse_generation: 0,
+                    tree_open: true,
                     open_shortcut: "",
                     compare: None,
                     base_ref: None,
@@ -237,8 +237,7 @@ fn culled_change_rows_keep_the_full_scroll_range() {
                         review_mode: ReviewMode::Native,
                         neovim_review: false,
                         theme: &theme,
-                        history: false,
-                        stash: false,
+                        tab: GitTab::Commit,
                         view_list,
                         commits: &[],
                         shelves: &[],
@@ -248,6 +247,7 @@ fn culled_change_rows_keep_the_full_scroll_range() {
                         amend: &mut false,
                         signoff: &mut false,
                         collapse_generation: 0,
+                        tree_open: true,
                         open_shortcut: "",
                         compare: None,
                         base_ref: None,
@@ -314,13 +314,6 @@ fn change_tree_names_a_single_child_chain_once_like_jetbrains() {
     assert!(src.dirs.contains_key("palette"));
 }
 
-#[test]
-fn expand_and_collapse_all_start_a_new_open_state() {
-    assert!(expanded_by_default(0));
-    assert!(!expanded_by_default(1));
-    assert!(expanded_by_default(2));
-}
-
 /// Painted texts of one Commit tab frame, 360 × 700, with one staged file.
 fn commit_tab_texts(ctx: &egui::Context) -> Vec<(egui::Pos2, String)> {
     let root = PathBuf::from("/repo");
@@ -355,8 +348,7 @@ fn commit_tab_texts(ctx: &egui::Context) -> Vec<(egui::Pos2, String)> {
                 review_mode: ReviewMode::Native,
                 neovim_review: false,
                 theme: &theme,
-                history: false,
-                stash: false,
+                tab: GitTab::Commit,
                 view_list: false,
                 commits: &[],
                 shelves: &[],
@@ -366,6 +358,7 @@ fn commit_tab_texts(ctx: &egui::Context) -> Vec<(egui::Pos2, String)> {
                 amend: &mut false,
                 signoff: &mut false,
                 collapse_generation: 0,
+                tree_open: true,
                 open_shortcut: "",
                 compare: None,
                 base_ref: None,

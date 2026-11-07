@@ -104,7 +104,7 @@ pub(super) fn git_header(header: GitHeaderInput<'_>) {
     } = header;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let current = input.tab();
+        let current = input.tab;
         for (tab, label, target) in [
             (GitTab::Commit, "Commit", "git-changes"),
             (GitTab::Stash, "Stash", "git-stash"),
@@ -285,9 +285,9 @@ fn view_actions(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut GitP
         outcome.toggle_list = true;
     }
     if action(ui, "ChevronsUpDown", "Expand all", "git-expand").clicked() {
-        outcome.expand = true;
+        outcome.expand_all = Some(true);
     }
     if action(ui, "ChevronsDownUp", "Collapse all", "git-collapse").clicked() {
-        outcome.collapse = true;
+        outcome.expand_all = Some(false);
     }
 }

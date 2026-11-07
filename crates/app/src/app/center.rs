@@ -15,46 +15,49 @@ pub(crate) struct PaintFloatDockInput<'a> {
 
 impl App {
     pub(crate) fn center_pane(&mut self, ui: &mut egui::Ui) {
-        self.pane_ops.workspace_painted = false;
-        self.center_page_or_workspace(ui);
-        if !self.pane_ops.workspace_painted {
+        // A center page (Settings, SSH, VNC, …) painted instead of the
+        // workspace ends the zoom.
+        if !self.center_page_or_workspace(ui) {
             self.pane_ops.zoomed = None;
             self.pane_ops.zoom_request = None;
         }
     }
 
-    fn center_page_or_workspace(&mut self, ui: &mut egui::Ui) {
+    /// Paints a center page, else the workspace. True for the workspace.
+    fn center_page_or_workspace(&mut self, ui: &mut egui::Ui) -> bool {
         self.settings_unsaved_dialog(ui.ctx());
         if self.settings_open {
             self.settings_center(ui);
-            return;
+            return false;
         }
         if self.player_open {
             self.player_center(ui);
-            return;
+            return false;
         }
         // Search Everywhere floats above this pane (`show_palette`).
         if self.worktree_open {
             self.worktree_management_center(ui);
-            return;
+            return false;
         }
         if self.worktree_draft.is_some() {
             self.worktree_center(ui);
-            return;
+            return false;
         }
         if self.search_open {
             self.search_history_center(ui);
-            return;
+            return false;
         }
         if self.commands_session.is_some() {
             self.command_blocks_center(ui);
-            return;
+            return false;
         }
         if self.local_history.is_some() {
             self.local_history_center(ui);
-            return;
+            return false;
         }
+        let workspace = !self.ssh_page_visible() && !self.vnc_page_open;
         self.ssh_page_or_vnc_center(ui);
+        workspace
     }
 
     pub(crate) fn worktree_management_center(&mut self, ui: &mut egui::Ui) {

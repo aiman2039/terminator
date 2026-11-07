@@ -19,14 +19,16 @@ pub(crate) struct GitPanelState {
     pub(crate) commit_failure: Option<String>,
     pub(crate) amend: bool,
     pub(crate) signoff: bool,
-    pub(crate) history: bool,
-    /// The Stash tab is open.
-    pub(crate) stash: bool,
+    /// The open header tab.
+    pub(crate) tab: sidebar_ui::GitTab,
     pub(crate) branches: Vec<String>,
     pub(crate) log: Vec<(String, String)>,
     pub(crate) shelves: Vec<(String, String)>,
     pub(crate) list_root: Option<PathBuf>,
+    /// Expand/collapse-all generation; a new one resets the tree's open state.
     pub(crate) collapse: u64,
+    /// The last Collapse all is still in force (else everything starts open).
+    pub(crate) tree_collapsed: bool,
     /// Branch comparison for the current Git root (upstream, ahead/behind,
     /// and files committed since the base ref).
     pub(crate) compare: Option<workspace_ops::CompareData>,

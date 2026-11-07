@@ -530,8 +530,7 @@ mod tests {
                         review_mode: ReviewMode::Native,
                         neovim_review: false,
                         theme: &theme,
-                        history: false,
-                        stash: false,
+                        tab: GitTab::Commit,
                         view_list: false,
                         commits: &[],
                         shelves: &[],
@@ -541,6 +540,7 @@ mod tests {
                         amend: &mut false,
                         signoff: &mut false,
                         collapse_generation: 0,
+                        tree_open: true,
                         open_shortcut: "",
                         compare: Some(&compare),
                         base_ref: None,
@@ -612,8 +612,7 @@ mod tests {
                         review_mode: ReviewMode::Native,
                         neovim_review: false,
                         theme: &theme,
-                        history: false,
-                        stash: false,
+                        tab: GitTab::Commit,
                         view_list: false,
                         commits: &[],
                         shelves: &[],
@@ -623,6 +622,7 @@ mod tests {
                         amend: &mut false,
                         signoff: &mut false,
                         collapse_generation: 0,
+                        tree_open: true,
                         open_shortcut: "",
                         compare: Some(&compare),
                         base_ref: None,
@@ -653,8 +653,8 @@ mod tests {
             last
         };
         assert!(clicked("git-view-list").toggle_list);
-        assert!(clicked("git-expand").expand);
-        assert!(clicked("git-collapse").collapse);
+        assert_eq!(clicked("git-expand").expand_all, Some(true));
+        assert_eq!(clicked("git-collapse").expand_all, Some(false));
         assert_eq!(
             clicked("git-stash").tab,
             Some(crate::sidebar_ui::GitTab::Stash)

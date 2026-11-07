@@ -43,6 +43,15 @@ const PALETTE_FILTERS: &[(&str, u8)] = &[
     ("Settings", FILTER_SETTINGS),
 ];
 
+/// The project that owns session `id`.
+fn session_project<'a>(app: &'a App, id: &str) -> Option<&'a terminator_core::Project> {
+    let session = app.state.sessions.iter().find(|session| session.id == id)?;
+    app.state
+        .projects
+        .iter()
+        .find(|project| project.id == session.project_id)
+}
+
 fn compact_path(path: &Path) -> String {
     let parts: Vec<String> = path
         .components()
@@ -250,58 +259,46 @@ impl PaletteItem {
         }
     }
 
+    /// A file or symbol's project name and its path (with the symbol's
+    /// line, kind and container), the two halves of its detail.
+    fn path_parts<'a>(&self, app: &'a App) -> Option<(&'a str, String)> {
+        let (Self::File(path) | Self::Symbol { path, .. }) = self else {
+            return None;
+        };
+        let project = app.project_for_palette_path(path);
+        let relative = project.and_then(|project| path.strip_prefix(&project.path).ok());
+        let name = project.map_or("Other files", |project| project.name.as_str());
+        let path = compact_path(relative.unwrap_or(path));
+        let rest = if let Self::Symbol {
+            kind,
+            line,
+            container,
+            ..
+        } = self
+        {
+            let container = container
+                .as_deref()
+                .map_or(String::new(), |name| format!(" · {name}"));
+            format!("{path}:{} · {kind}{container}", line.saturating_add(1))
+        } else {
+            path
+        };
+        Some((name, rest))
+    }
+
     fn detail(&self, app: &App) -> String {
         match self {
-            Self::File(path) | Self::Symbol { path, .. } => {
-                let project = app.project_for_palette_path(path);
-                let relative = project.and_then(|project| path.strip_prefix(&project.path).ok());
-                let name = project.map_or("Other files", |project| project.name.as_str());
-                let path = compact_path(relative.unwrap_or(path));
-                if let Self::Symbol {
-                    kind,
-                    line,
-                    container,
-                    ..
-                } = self
-                {
-                    let container = container
-                        .as_deref()
-                        .map_or(String::new(), |name| format!(" · {name}"));
-                    format!(
-                        "{name} · {path}:{} · {kind}{container}",
-                        line.saturating_add(1)
-                    )
-                } else {
-                    format!("{name} · {path}")
-                }
-            }
+            Self::File(_) | Self::Symbol { .. } => self
+                .path_parts(app)
+                .map(|(name, rest)| format!("{name} · {rest}"))
+                .unwrap_or_default(),
             Self::Agent(id, _, summary) => {
-                let project = app
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| &session.id == id)
-                    .and_then(|session| {
-                        app.state
-                            .projects
-                            .iter()
-                            .find(|project| project.id == session.project_id)
-                    })
-                    .map_or("", |project| project.name.as_str());
+                let project = session_project(app, id).map_or("", |project| project.name.as_str());
                 format!("{project} · {summary}")
             }
-            Self::Session(id, _) => app
-                .state
-                .sessions
-                .iter()
-                .find(|session| &session.id == id)
-                .and_then(|session| {
-                    app.state
-                        .projects
-                        .iter()
-                        .find(|project| project.id == session.project_id)
-                })
-                .map_or_else(String::new, |project| project.name.clone()),
+            Self::Session(id, _) => {
+                session_project(app, id).map_or_else(String::new, |project| project.name.clone())
+            }
             Self::Project(id, _) => app
                 .state
                 .projects
@@ -321,44 +318,34 @@ impl PaletteItem {
         }
     }
 
-    /// Splits [`Self::detail`] for the Search Everywhere row: files and
-    /// symbols show their path inline and their project on the right.
+    /// The Search Everywhere row's texts: files and symbols show their path
+    /// inline and their project on the right.
     fn row_text(&self, app: &App) -> RowText {
-        let detail = self.detail(app);
         match self {
             Self::File(path) | Self::Symbol { path, .. } => {
-                let project = app
-                    .project_for_palette_path(path)
-                    .map_or("Other files", |project| project.name.as_str())
-                    .to_owned();
-                let inline = detail
-                    .strip_prefix(&format!("{project} · "))
-                    .unwrap_or(&detail)
-                    .to_owned();
+                let (project, inline) = self.path_parts(app).unwrap_or_default();
                 RowText {
                     inline,
-                    right: project,
+                    right: project.to_owned(),
                     footer: path.display().to_string(),
                 }
             }
-            Self::Agent(..) => {
-                let (project, summary) = detail.split_once(" · ").unwrap_or(("", &detail));
-                RowText {
-                    inline: summary.to_owned(),
-                    right: project.to_owned(),
-                    footer: summary.to_owned(),
-                }
-            }
+            Self::Agent(id, _, summary) => RowText {
+                inline: summary.clone(),
+                right: session_project(app, id)
+                    .map_or_else(String::new, |project| project.name.clone()),
+                footer: summary.clone(),
+            },
             Self::Session(..) | Self::Action(_) | Self::Editor(_) => RowText {
-                right: detail,
+                right: self.detail(app),
                 ..RowText::default()
             },
             Self::Project(..) => RowText {
-                footer: detail,
+                footer: self.detail(app),
                 ..RowText::default()
             },
             _ => RowText {
-                inline: detail,
+                inline: self.detail(app),
                 ..RowText::default()
             },
         }

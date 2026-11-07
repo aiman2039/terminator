@@ -34,27 +34,21 @@ pub(crate) fn palette_rect(content: egui::Rect) -> egui::Rect {
 /// Theme colors copied out before the body borrows the app.
 #[derive(Clone, Copy)]
 pub(super) struct PaletteColors {
-    pub(super) surface: egui::Color32,
     pub(super) field: egui::Color32,
     pub(super) border: egui::Color32,
     pub(super) text: egui::Color32,
     pub(super) secondary: egui::Color32,
     pub(super) accent: egui::Color32,
-    pub(super) selection: egui::Color32,
-    pub(super) hover: egui::Color32,
 }
 
 impl PaletteColors {
     pub(super) fn new(theme: &terminator_core::appearance::AppearanceConfig) -> Self {
         Self {
-            surface: appearance::color(&theme.surface),
             field: appearance::color(&theme.window),
             border: appearance::color(&theme.border),
             text: appearance::color(&theme.text),
             secondary: appearance::color(&theme.secondary),
             accent: appearance::color(&theme.accent),
-            selection: appearance::color(&theme.selection),
-            hover: appearance::color(&theme.hover),
         }
     }
 }
@@ -76,20 +70,8 @@ pub(super) fn palette_row(input: PaletteRowInput<'_>) -> egui::Response {
         selected,
         colors,
     } = input;
-    let size = egui::vec2(ui.available_width(), ROW_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let fill = if selected {
-        Some(colors.selection)
-    } else {
-        response.hovered().then_some(colors.hover)
-    };
-    if let Some(fill) = fill {
-        ui.painter().rect_filled(
-            rect,
-            egui::CornerRadius::same(appearance::RADIUS_SMALL),
-            fill,
-        );
-    }
+    let response = appearance::popup_row(ui, ROW_HEIGHT, selected);
+    let rect = response.rect;
     let empty = RowText::default();
     let text = text.unwrap_or(&empty);
     let mut row = ui.new_child(

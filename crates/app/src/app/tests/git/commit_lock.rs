@@ -588,13 +588,13 @@ fn git_panel_controls_that_could_change_the_commit_are_disabled_while_it_runs() 
     let mut pane = GitPane { time: 1.0 };
     let primary = egui::PointerButton::Primary;
     // Shelves are on the Stash tab.
-    run.app.git.stash = true;
+    run.app.git.tab = sidebar_ui::GitTab::Stash;
     pane.paint(&mut run, vec![]);
     for name in ["git-shelf-unshelve-stash@{0}", "git-shelf-drop-stash@{0}"] {
         let at = GitPane::target(&run, name).center();
         pane.click(&mut run, at, primary);
     }
-    run.app.git.stash = false;
+    run.app.git.tab = sidebar_ui::GitTab::Commit;
     pane.paint(&mut run, vec![]);
     for name in ["git-stage-all", "git-shelve"] {
         let at = GitPane::target(&run, name).center();

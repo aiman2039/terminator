@@ -72,17 +72,11 @@ impl Viewer<'_> {
     /// A floating window's way home: this pane to its old place, or the
     /// whole window (the same as closing it).
     fn float_dock_back_items(&mut self, ui: &mut egui::Ui, tab: &Tab, viewport: egui::ViewportId) {
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Dock back to main window",
-            icon: "ArrowDownToLine",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            self.app.pane_ops.dock_back = Some((viewport, Some(tab.clone())));
-            ui.close();
+        let back = "Dock back to main window";
+        if appearance::menu_action(ui, true, back, "ArrowDownToLine").clicked() {
+            self.app.pane_ops.float_return = Some((viewport, Some(tab.clone())));
         }
+        // The pane maps hold only the window under render.
         let panes = self
             .app
             .float_pane_tabs
@@ -90,16 +84,9 @@ impl Viewer<'_> {
             .map(Vec::len)
             .sum::<usize>();
         if panes > 1
-            && appearance::menu_item(appearance::MenuItemInput {
-                ui,
-                label: "Dock back all",
-                icon: "PanelsTopLeft",
-                shortcut: "",
-            })
-            .clicked()
+            && appearance::menu_action(ui, true, "Dock back all", "PanelsTopLeft").clicked()
         {
-            self.app.pane_ops.dock_back = Some((viewport, None));
-            ui.close();
+            self.app.pane_ops.float_return = Some((viewport, None));
         }
         ui.separator();
     }

@@ -1,7 +1,7 @@
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "./icons";
-import { DOWNLOAD, REPO, diffFor } from "./data";
+import { DOWNLOAD, REPO } from "./data";
 
 /* ============================ Tour (guided showcase) ============================ */
 export type TourAction =
@@ -15,17 +15,25 @@ export type TourAction =
   | "ide"
   | "history"
   | "markdown"
-  | "projects";
+  | "projects"
+  | "localhistory"
+  | "hosts"
+  | "vnc"
+  | "problems"
+  | "browser"
+  | "keys"
+  | "task";
 
 const DEMOS: { action: TourAction; title: string; body: string; cta: string }[] = [
   { action: "projects", title: "Projects & sessions", body: "Each project in the left sidebar owns its tabs and splits. Switch projects — layouts are preserved.", cta: "Show projects" },
   { action: "split", title: "Splits & persistent terminals", body: "Terminals live in the daemon. Split this pane, close tabs, come back — sessions keep running.", cta: "Split this pane" },
-  { action: "agents", title: "Agent inbox", body: "Claude Code, Codex, OpenCode, Muse, and Grok hooks report needs-input, permission, done, and failed.", cta: "Open the agent demo" },
-  { action: "diff", title: "Git reviews", body: "Native side-by-side diffs from read-only snapshots: HEAD → index, index → disk. The repo is never mutated.", cta: "Open a diff" },
+  { action: "agents", title: "Agent inbox", body: "Claude Code, Codex, OpenCode, Muse, Grok, and Cursor hooks report needs-input, permission, done, and failed.", cta: "Open the agent demo" },
+  { action: "diff", title: "Git, start to finish", body: "Side-by-side diffs, hunk staging, commit and push, commit log, blame, and a merge resolver.", cta: "Open a diff" },
+  { action: "localhistory", title: "Local History", body: "A snapshot of every file change, with a timeline, diff, and revert. A safety net while agents edit.", cta: "Open Local History" },
   { action: "markdown", title: "Markdown, images & files", body: "Files open in the right viewer: Markdown preview, image preview, browser tab, editor, or the player.", cta: "Open field-notes" },
   { action: "player", title: "Player & radio", body: "Audio opens in the chrome player — named playlists, shuffle, repeat, equalizer, and internet radio.", cta: "Open the player" },
   { action: "palette", title: "Command palette", body: "Jump across projects, sessions, files, and settings without touching the mouse.", cta: "Open palette (⌘K)" },
-  { action: "ide", title: "IDE mode", body: "Editor centered with a terminal strip docked below, toggled without losing any session.", cta: "Toggle IDE mode (⌘E)" },
+  { action: "ide", title: "IDE mode", body: "Native editor with LSP, Vim keys, and JetBrains shortcuts, plus a terminal strip below.", cta: "Toggle IDE mode (⌥⌘E)" },
 ];
 
 export function TourView({ onClose, onAction }: { onClose: () => void; onAction: (a: TourAction) => void }) {
@@ -64,7 +72,7 @@ export function TourView({ onClose, onAction }: { onClose: () => void; onAction:
           <strong>left sidebar</strong> lists projects and live sessions, the{" "}
           <strong>right sidebar</strong> is the tool panel (Explorer, Agents, Git, History, Info), and
           the <strong>terminal</strong> in the next pane is a working demo shell. Press{" "}
-          <span className="kbd">⌘K</span> for the command palette, <span className="kbd">⌘E</span> for
+          <span className="kbd">⌘K</span> for the command palette, <span className="kbd">⌥⌘E</span> for
           IDE mode, <span className="kbd">⌘T</span> for a new terminal tab — or start with a demo:
         </p>
         <div className="cards">
@@ -87,40 +95,72 @@ export function TourView({ onClose, onAction }: { onClose: () => void; onAction:
         </p>
         <ul>
           <li>Reconnect to running sessions after restart</li>
-          <li>Sort and filter projects</li>
-          <li>Rename, reorder, and close tabs in bulk</li>
+          <li>Shell integration: each command is a block you can jump to, copy, or rerun</li>
+          <li>New task: a Git worktree, a terminal, and your agent command, ready to go</li>
+          <li>Rename, reorder, and close tabs in bulk; <span className="kbd">Ctrl+Tab</span> switcher</li>
         </ul>
         <div className="tour-actions">
           <button className="small-btn" onClick={() => onAction("projects")}>Show projects</button>
           <button className="small-btn" onClick={() => onAction("split")}>Split this pane</button>
           <button className="small-btn" onClick={() => onAction("history")}>Search history</button>
+          <button className="small-btn" onClick={() => onAction("task")}>New task</button>
         </div>
         <h2 id="agents">Know the moment an agent needs you</h2>
         <p>
-          Hooks for Claude Code, Codex, OpenCode, Muse, and Grok report real lifecycle events. One
+          Hooks for Claude Code, Codex, OpenCode, Muse, Grok, and Cursor report real lifecycle events. One
           card per agent run, with go, snooze, and dismiss. The <strong>atlas-api</strong> project is
           staged with two live agents — one is waiting for permission right now.
         </p>
         <div className="tour-actions">
           <button className="small-btn" onClick={() => onAction("agents")}>Open the agent demo</button>
         </div>
-        <h2 id="editing">Files open the right way</h2>
+        <h2 id="editing">A real editor, and files that open the right way</h2>
         <p>
-          Images preview, HTML opens in a browser tab, Markdown previews, audio plays, code opens in
-          your own Neovim. Open as text bypasses any viewer. The <strong>field-notes</strong> project
-          stages Markdown and image tabs; try the files in the Explorer.
+          Code opens in a fast native editor: LSP completion, go to declaration, Problems and
+          Structure views, Vim keys, EditorConfig, and Replace in Files. JetBrains keys work in
+          every pane — double <span className="kbd">Shift</span>, <span className="kbd">⌘⇧A</span>,{" "}
+          <span className="kbd">⌘⇧O</span>, <span className="kbd">⌘E</span>. Prefer Neovim or another
+          editor? Choose it in Settings.
+        </p>
+        <p>
+          Images preview, HTML and URLs open in a native browser tab, Markdown has Edit, Preview,
+          and Split, and audio plays. Open as text bypasses any viewer. The{" "}
+          <strong>field-notes</strong> project stages Markdown and image tabs.
         </p>
         <div className="tour-actions">
           <button className="small-btn" onClick={() => onAction("markdown")}>Open field-notes</button>
+          <button className="small-btn" onClick={() => onAction("ide")}>Toggle IDE mode</button>
+          <button className="small-btn" onClick={() => onAction("browser")}>Open docs.html</button>
+          <button className="small-btn" onClick={() => onAction("keys")}>Go to File (⌘⇧O)</button>
+          <button className="small-btn" onClick={() => onAction("problems")}>Show Problems</button>
         </div>
-        <h2 id="git">Native diffs, never destructive</h2>
+        <h2 id="git">Git, start to finish</h2>
         <p>
-          Side-by-side by default, CodeDiff in Neovim in Settings. Reviews are read-only snapshots:
-          HEAD to index, index to disk. They never touch your repo.
+          Side-by-side diffs with hunk stage, unstage, and discard. Commit, amend, and push as
+          cancellable jobs. Commit log with filters, blame, Compare with…, and a merge resolver. Perforce is supported too. Neovim CodeDiff reviews stay available in Settings.
         </p>
         <div className="tour-actions">
           <button className="small-btn" onClick={() => onAction("diff")}>Open a diff</button>
           <button className="small-btn" onClick={() => onAction("git")}>Show Git panel</button>
+        </div>
+        <h2 id="remote">Remote machines, first class</h2>
+        <p>
+          SSH hosts with a remote Explorer, Git, editors, file transfers, and port forwards. Turn on
+          Mosh per host for terminals that survive bad networks. VNC sessions live in the daemon
+          too: close the tab and reattach later. Import hosts from <code>~/.ssh/config</code>. Nothing
+          is installed on the host.
+        </p>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("hosts")}>Show SSH hosts</button>
+          <button className="small-btn" onClick={() => onAction("vnc")}>Show VNC</button>
+        </div>
+        <h2 id="history">Local History</h2>
+        <p>
+          Terminator keeps a snapshot of every file change, with a timeline, a diff against the
+          current file, and revert. When an agent goes too far, go back.
+        </p>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("localhistory")}>Open Local History</button>
         </div>
         <h2 id="media">A built-in player. And internet radio.</h2>
         <p>
@@ -300,64 +340,6 @@ export function MarkdownView({ path, content, onClose }: { path: string; content
           </div>
         )}
         {(mode === "preview" || mode === "split") && <div className="md-preview">{renderMd(src)}</div>}
-      </div>
-    </>
-  );
-}
-
-/* ============================ Diff ============================ */
-export function DiffView({ path, staged, onClose }: { path: string; staged: boolean; onClose: () => void }) {
-  const [side, setSide] = useState(true);
-  const rows = diffFor(path, staged);
-  return (
-    <>
-      <div className="diff-bar">
-        <span className="mono">
-          {path} <span className="weak">M</span>
-        </span>
-        <span style={{ flex: 1 }} />
-        <button className="small-btn" onClick={() => setSide((s) => !s)}>
-          {side ? "Side by side" : "Inline"}
-        </button>
-        <span className="weak" style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 10 }}>
-          ···
-        </span>
-        <button className="md-tab" onClick={onClose} title="Close pane">
-          <Icon name="X" size={14} />
-        </button>
-      </div>
-      <div className="diff-body">
-        {side ? (
-          <div className="diff-side">
-            <div>
-              {rows
-                .filter(([k]) => k !== "add")
-                .map(([k, t], i) => (
-                  <div key={i} className={`diff-row ${k === "del" ? "del" : k === "hunk" ? "hunk" : ""}`}>
-                    <span className="ln">{k === "hunk" ? "" : i}</span>
-                    <span className="tx">{t}</span>
-                  </div>
-                ))}
-            </div>
-            <div>
-              {rows
-                .filter(([k]) => k !== "del")
-                .map(([k, t], i) => (
-                  <div key={i} className={`diff-row ${k === "add" ? "add" : k === "hunk" ? "hunk" : ""}`}>
-                    <span className="ln">{k === "hunk" ? "" : i}</span>
-                    <span className="tx">{t}</span>
-                  </div>
-                ))}
-            </div>
-          </div>
-        ) : (
-          rows.map(([k, t], i) => (
-            <div key={i} className={`diff-row ${k === "add" ? "add" : k === "del" ? "del" : k === "hunk" ? "hunk" : ""}`}>
-              <span className="ln">{k === "hunk" ? "" : i}</span>
-              <span className="tx">{k === "add" ? "+" : k === "del" ? "-" : " "}{t}</span>
-            </div>
-          ))
-        )}
       </div>
     </>
   );

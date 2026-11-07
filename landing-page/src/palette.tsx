@@ -11,7 +11,7 @@ export type Command = {
   run: () => void;
 };
 
-export function Palette({ commands, close }: { commands: Command[]; close: () => void }) {
+export function Palette({ commands, close, title }: { commands: Command[]; close: () => void; title?: string }) {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -47,7 +47,7 @@ export function Palette({ commands, close }: { commands: Command[]; close: () =>
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKey}
-          placeholder="Run a command, go to a session or file…"
+          placeholder={title ?? "Run a command, go to a session or file…"}
           aria-label="Command palette query"
         />
         <div className="pl-sep" />

@@ -37,7 +37,6 @@ pub(super) struct GitGroupSectionInput<'a, 'b> {
     pub(super) outcome: &'a mut GitPanelOutcome,
     pub(super) root: Option<&'a Path>,
     pub(super) prepared: &'a PreparedGroup,
-    pub(super) collapse_generation: u64,
 }
 
 pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
@@ -47,17 +46,13 @@ pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
         outcome,
         root,
         prepared,
-        collapse_generation,
     } = input;
     let group = prepared.group;
     let entries = &prepared.entries;
     let label = git_group_label(group);
-    let id = ui.make_persistent_id(("git-section", root, label, collapse_generation));
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        id,
-        expanded_by_default(collapse_generation),
-    );
+    let id = ui.make_persistent_id(("git-section", root, label, ctx.generation));
+    let state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, ctx.open);
     let mut group_check_clicked = false;
     // The group row has the tree's highlight, like the `JetBrains` root.
     let background = ui.painter().add(egui::Shape::Noop);
@@ -147,11 +142,16 @@ pub(in crate::sidebar_ui) struct ChangeTree {
     pub(in crate::sidebar_ui) files: Vec<terminator_git::Change>,
     labels: Vec<String>,
     count: usize,
+    /// `N files`, built once with the tree.
+    hint: String,
 }
 
 impl ChangeTree {
     pub(in crate::sidebar_ui) fn count_files(&self) -> usize {
         self.count
+    }
+    pub(super) fn files_hint(&self) -> &str {
+        &self.hint
     }
     pub(in crate::sidebar_ui) fn collect<'a>(&'a self, out: &mut Vec<&'a terminator_git::Change>) {
         out.extend(self.files.iter());
@@ -217,6 +217,7 @@ pub(super) fn compress_change_tree(node: &mut ChangeTree) {
         compress_change_tree(&mut child);
         node.dirs.insert(key, child);
     }
+    node.hint = files_hint(node.count);
 }
 
 pub(super) struct GitChangeTreeInput<'a, 'b> {
@@ -315,9 +316,8 @@ fn git_tree_folder(input: GitTreeFolderInput<'_, '_>) {
     let count = folder.child.count_files();
     let mut folder_response = None;
     let mut folder_check_clicked = false;
-    let open = expanded_by_default(ctx.generation);
     let mut header =
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open)
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, ctx.open)
             .show_header(ui, |ui| {
                 let (clicked, response) = folder.header(ui, ctx);
                 folder_check_clicked = clicked;
@@ -370,7 +370,7 @@ impl TreeFolder<'_> {
             });
             check_clicked = tri_checkbox(ui, state, ctx.lock.index);
         }
-        let hint = files_hint(count);
+        let hint = self.child.files_hint();
         let color = ui.visuals().text_color();
         let response = name_row(NameRowInput {
             ui,
@@ -378,7 +378,7 @@ impl TreeFolder<'_> {
             icon_tint: appearance::icon_color(),
             name: self.name,
             color,
-            hint: &hint,
+            hint,
             trailing: "",
         });
         (check_clicked, response)

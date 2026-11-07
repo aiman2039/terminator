@@ -60,7 +60,7 @@ impl App {
                     // The cards below must not also see this Enter.
                     ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
                 }
-                let clicked = form::primary_button(ui, "Connect").clicked();
+                let clicked = appearance::primary_button(ui, "Connect").clicked();
                 (enter || clicked, view.address.trim().to_owned())
             })
             .inner;

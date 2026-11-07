@@ -48,7 +48,7 @@ impl App {
                 ));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if form::primary_button(ui, "Quit").clicked() {
+                    if appearance::primary_button(ui, "Quit").clicked() {
                         choice = Some(QuitChoice::Keep);
                     }
                     if ui.button("Disconnect all and quit").clicked() {

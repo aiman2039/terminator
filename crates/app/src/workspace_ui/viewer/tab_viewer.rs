@@ -1,6 +1,5 @@
 use super::super::super::*;
 use super::Viewer;
-use crate::native_editor::NativeEditorViewInput;
 use crate::vnc_ui::VncViewInput;
 
 impl TabViewer for Viewer<'_> {
@@ -131,18 +130,7 @@ impl TabViewer for Viewer<'_> {
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
             Tab::NativeEditor { .. } if self.zoomed_here(tab) => Self::zoom_placeholder(ui),
-            Tab::NativeEditor { path } => {
-                let key = Tab::NativeEditor { path: path.clone() };
-                self.pane_scope(ui, &key, |viewer, ui| {
-                    viewer.app.native_editor_view(NativeEditorViewInput {
-                        ui,
-                        path,
-                        project: viewer.project.as_deref(),
-                        tab: viewer.tab.as_deref(),
-                        node: viewer.render_path,
-                    });
-                });
-            }
+            Tab::NativeEditor { .. } => self.editor_body(ui, tab),
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
             Tab::RevisionDiff { .. } => self.app.revision_diff_view(ui, tab),

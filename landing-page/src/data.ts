@@ -32,8 +32,10 @@ export type PaneContent =
   | { kind: "term"; sid: string }
   | { kind: "markdown"; path: string }
   | { kind: "editor"; path: string }
-  | { kind: "diff"; path: string; staged: boolean }
+  | { kind: "diff"; path: string }
   | { kind: "image"; path: string }
+  | { kind: "browser"; url: string }
+  | { kind: "localhistory"; path: string }
   | { kind: "tour" };
 
 export type Layout =
@@ -324,6 +326,8 @@ export function flattenFiles(nodes: FileNode[], out: FileNode[] = []): FileNode[
 
 export const allFiles = flattenFiles(fileTree);
 
+export const basename = (p: string) => p.split("/").pop() ?? p;
+
 export function fileIcon(name: string): string {
   if (name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js")) return "FileCode";
   if (name.endsWith(".rs")) return "FileCode";
@@ -338,38 +342,6 @@ export function fileIcon(name: string): string {
   return "File";
 }
 
-/* --------------------------- git --------------------------- */
-export const gitGroups: { title: string; count: number; files: FileNode[] }[] = [
-  {
-    title: "CHANGES",
-    count: 2,
-    files: [
-      { name: "app.ts", path: "src/app.ts", status: "M", contents: APP_TS },
-      { name: "README.md", path: "README.md", status: "M", contents: README_MD },
-    ],
-  },
-  {
-    title: "UNTRACKED FILES",
-    count: 1,
-    files: [{ name: "billing.ts", path: "src/billing.ts", status: "U", contents: BILLING_TS }],
-  },
-];
-
-export const diffFor = (path: string, staged: boolean) =>
-  staged
-    ? [
-        ["hunk", "@@ -1,1 +1,2 @@"],
-        ["del", 'const APP = () => "hello";'],
-        ["add", 'const APP = () => "hello atlas";'],
-        ["add", "const version = 2;"],
-      ]
-    : [
-        ["hunk", "@@ -1,1 +1,2 @@"],
-        ["del", "restart_all(sessions);"],
-        ["add", "attach_running(sessions); // never restart"],
-        ["add", "focus_existing_tab();"],
-      ];
-
 /* --------------------------- agents --------------------------- */
 export type AgentCard = {
   id: string;
@@ -383,15 +355,15 @@ export const agentCards: AgentCard[] = [
   {
     id: "a1",
     brand: "AgentClaude",
-    title: "Dev server",
-    body: "Wants to edit crates/app/src/workspace.rs",
+    title: "Claude — api review",
+    body: "Wants to edit src/app.ts",
     state: "needs permission",
   },
   {
     id: "a2",
     brand: "AgentCodex",
-    title: "Tests",
-    body: "Finished the review pass; scrollback saved.",
+    title: "Codex — tests",
+    body: "Finished the test pass: 42 passed, 0 failed.",
     state: "completed",
   },
   {

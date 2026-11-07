@@ -135,7 +135,7 @@ impl App {
             self.open_ssh_properties(project.clone());
         }
         ui.separator();
-        if appearance::menu_action(ui, managed, "Remove…", "Trash").clicked() {
+        if appearance::menu_danger_action(ui, managed, "Remove…", "Trash").clicked() {
             self.remote_ui.hosts.confirm_remove = Some(project.id.clone());
         }
     }

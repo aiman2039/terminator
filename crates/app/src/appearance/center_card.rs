@@ -46,9 +46,13 @@ impl CenterCardStyle {
             .inner_margin(egui::Margin::same(CENTER_CARD_PADDING))
     }
 
-    /// Dim layer over panes that stay visible behind a card (pane zoom).
-    pub fn scrim(self) -> egui::Color32 {
-        self.window.gamma_multiply(0.7)
+    /// This style with a dim backdrop in place of the window color, for a
+    /// card over panes that stay visible behind it (pane zoom).
+    pub fn scrim(self) -> Self {
+        Self {
+            window: self.window.gamma_multiply(0.7),
+            ..self
+        }
     }
 }
 
@@ -60,6 +64,17 @@ pub fn center_card<R>(
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (R, bool) {
     let outer = ui.available_rect_before_wrap();
+    center_card_over(ui, outer, style, add)
+}
+
+/// [`center_card`] over `outer`: a page paints the window color there, a
+/// card over visible panes uses [`CenterCardStyle::scrim`].
+pub fn center_card_over<R>(
+    ui: &mut egui::Ui,
+    outer: egui::Rect,
+    style: CenterCardStyle,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> (R, bool) {
     let card = center_card_rect(outer);
     ui.painter()
         .rect_filled(outer, egui::CornerRadius::ZERO, style.window);

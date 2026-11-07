@@ -18,23 +18,17 @@ impl App {
         let first_frame = !std::mem::replace(&mut self.palette.shown, true);
         let colors = PaletteColors::new(&self.theme);
         let rect = palette_rect(ctx.content_rect());
-        let shadow = ctx.global_style().visuals.popup_shadow;
         let area = egui::Area::new(egui::Id::unique("search-everywhere"))
             .order(egui::Order::Foreground)
             .fixed_pos(rect.min)
             .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(colors.surface)
-                    .stroke(egui::Stroke::new(1.0, colors.border))
-                    .corner_radius(appearance::PANEL_RADIUS)
-                    .shadow(shadow)
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
-                        let inner = rect.shrink(8.0).size();
-                        ui.set_min_size(inner);
-                        ui.set_max_size(inner);
-                        self.palette_body(ui, colors);
-                    });
+                let frame = appearance::popup_frame(ui.style());
+                frame.show(ui, |ui| {
+                    let inner = rect.shrink(frame.total_margin().left).size();
+                    ui.set_min_size(inner);
+                    ui.set_max_size(inner);
+                    self.palette_body(ui, colors);
+                });
             });
         if !first_frame && self.palette.open && pressed_outside(ctx, area.response.rect) {
             self.close_palette();
@@ -54,7 +48,7 @@ impl App {
             .selected_project()
             .map(|project| project.name.clone())
             .unwrap_or_default();
-        self.palette_tabs(ui, colors);
+        self.palette_tabs(ui);
         ui.add_space(6.0);
         self.palette_search_field(ui, &project_name, colors);
         ui.add_space(6.0);
@@ -109,34 +103,14 @@ impl App {
         }
     }
 
-    /// One tab per kind plus All; the selected tab fills with the accent.
-    fn palette_tabs(&mut self, ui: &mut egui::Ui, colors: PaletteColors) {
+    /// One tab per kind plus All.
+    fn palette_tabs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let tabs = std::iter::once(("All", 0)).chain(PALETTE_FILTERS.iter().copied());
             for (name, bit) in tabs {
                 let on = self.palette.filters == bit;
-                let (fill, stroke) = if on {
-                    (
-                        colors.accent.gamma_multiply(0.3),
-                        egui::Stroke::new(1.0, colors.accent),
-                    )
-                } else {
-                    (egui::Color32::TRANSPARENT, egui::Stroke::NONE)
-                };
-                let response = ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(name)
-                                .size(appearance::FONT_BODY)
-                                .color(colors.text),
-                        )
-                        .fill(fill)
-                        .stroke(stroke)
-                        .corner_radius(egui::CornerRadius::same(appearance::WIDGET_RADIUS))
-                        .min_size(egui::vec2(0.0, ROW_HEIGHT)),
-                    )
-                    .on_hover_text(format!("Show {name}"));
+                let response = appearance::text_tab(ui, name, on);
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), &format!("palette-filter:{name}"), response.rect);
                 if response.clicked() {

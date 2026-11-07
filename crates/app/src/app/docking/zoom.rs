@@ -13,12 +13,9 @@ pub(crate) struct PaneOps {
     /// Zoom asked for by a header button or menu: the pane (`None`: the
     /// leaf's active one) and its leaf. Applied before the next dock paint.
     pub(crate) zoom_request: Option<(Option<Tab>, Option<egui_dock::NodePath>)>,
-    /// The workspace painted this frame. A center page (Settings, SSH,
-    /// VNC, …) painted instead ends the zoom.
-    pub(crate) workspace_painted: bool,
-    /// Floating dock-back asked for from a window: one pane, or `None`
-    /// for the whole window (the same path as the OS close button).
-    pub(crate) dock_back: Option<(egui::ViewportId, Option<Tab>)>,
+    /// A floating window's pane (or, with `None`, the whole window) going
+    /// back to the main window: the same path as the OS close button.
+    pub(crate) float_return: Option<(egui::ViewportId, Option<Tab>)>,
 }
 
 /// The zoomed view: where it lives in the main dock, and what it shows.
@@ -91,21 +88,22 @@ impl App {
     }
 
     fn open_zoom(&mut self, zoomed: Zoomed) {
-        self.follow_focus_tab(Some(zoomed.tab.clone()));
-        if matches!(zoomed.tab, Tab::NativeEditor { .. }) {
-            self.native_focus_pending = Some(zoomed.source.clone());
-        }
+        self.focus_zoomed(&zoomed);
         self.pane_ops.zoomed = Some(zoomed);
     }
 
     /// Return the zoomed pane to its place; the keyboard stays with it.
     pub(crate) fn unzoom(&mut self) {
-        let Some(zoomed) = self.pane_ops.zoomed.take() else {
-            return;
-        };
+        if let Some(zoomed) = self.pane_ops.zoomed.take() {
+            self.focus_zoomed(&zoomed);
+        }
+    }
+
+    /// Give the keyboard to the zoomed view (zoom in or out).
+    fn focus_zoomed(&mut self, zoomed: &Zoomed) {
         self.follow_focus_tab(Some(zoomed.tab.clone()));
         if matches!(zoomed.tab, Tab::NativeEditor { .. }) {
-            self.native_focus_pending = Some(zoomed.source);
+            self.native_focus_pending = Some(zoomed.source.clone());
         }
     }
 
@@ -113,7 +111,6 @@ impl App {
     /// pane closed, moved away, ended, or whose tab or project is no
     /// longer the one on screen.
     pub(crate) fn settle_zoom(&mut self, project: &str, dock: &mut Workspace) {
-        self.pane_ops.workspace_painted = true;
         if let Some((tab, node)) = self.pane_ops.zoom_request.take()
             && let Some((path, tab)) = zoom_path(dock, tab, node)
         {

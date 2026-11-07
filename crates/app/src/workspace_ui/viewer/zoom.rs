@@ -15,21 +15,26 @@ pub(crate) fn pane_scope_id(
     node: Option<egui_dock::NodePath>,
 ) -> egui::Id {
     match tab {
-        Tab::Terminal(_) => egui::Id::unique(("pane-scope", tab.key())),
-        _ => egui::Id::unique(("pane-scope", project, group, tab.key(), node)),
+        Tab::Terminal(_) => egui::Id::unique(("pane-scope", tab)),
+        _ => egui::Id::unique(("pane-scope", project, group, tab, node)),
     }
 }
 
 impl Viewer<'_> {
+    /// Main-dock panes can zoom; strip and floating panes cannot.
+    fn zoomable_here(&self) -> bool {
+        !self.strip && self.window.is_none()
+    }
+
     /// Paint a main-dock pane body in its view scope (see [`pane_scope_id`]).
     /// Strip and floating panes cannot zoom and keep their dock scope.
-    pub(super) fn pane_scope<R>(
+    fn pane_scope<R>(
         &mut self,
         ui: &mut egui::Ui,
         tab: &Tab,
         add: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
     ) -> R {
-        if self.strip || self.window.is_some() {
+        if !self.zoomable_here() {
             return add(self, ui);
         }
         let id = pane_scope_id(
@@ -45,7 +50,7 @@ impl Viewer<'_> {
     /// The dock is rendering the zoomed view: it paints a placeholder,
     /// and the overlay paints the view, once.
     pub(super) fn zoomed_here(&self, tab: &Tab) -> bool {
-        if self.strip || self.window.is_some() {
+        if !self.zoomable_here() {
             return false;
         }
         let Some(zoomed) = &self.app.pane_ops.zoomed else {
@@ -73,7 +78,7 @@ impl Viewer<'_> {
     /// no caption row; terminals zoom from theirs). It zooms the leaf's
     /// active pane.
     pub(super) fn editor_zoom_button(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
-        if self.strip || self.window.is_some() {
+        if !self.zoomable_here() {
             return;
         }
         let editor = self.app.pane_tabs.get(&path).is_some_and(|tabs| {
@@ -99,7 +104,7 @@ impl Viewer<'_> {
         tab: &Tab,
         pane: egui_dock::NodePath,
     ) {
-        if self.strip || self.window.is_some() || !crate::App::zoomable(tab) {
+        if !self.zoomable_here() || !crate::App::zoomable(tab) {
             return;
         }
         let zoomed = self
@@ -131,7 +136,6 @@ impl Viewer<'_> {
         outer: egui::Rect,
         zoomed: &Zoomed,
     ) -> bool {
-        let card = appearance::center_card_rect(outer);
         let style = appearance::CenterCardStyle::new(&self.app.theme);
         egui::Area::new(egui::Id::unique("pane-zoom"))
             .order(egui::Order::Middle)
@@ -141,33 +145,29 @@ impl Viewer<'_> {
             .show(ctx, |ui| {
                 ui.set_clip_rect(outer);
                 ui.set_min_size(outer.size());
-                let backdrop = ui.allocate_rect(outer, egui::Sense::click());
-                ui.painter()
-                    .rect_filled(outer, egui::CornerRadius::ZERO, style.scrim());
-                let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card));
-                let inner = card.shrink(f32::from(appearance::CENTER_CARD_PADDING));
-                let restore = style
-                    .frame()
-                    .show(&mut card_ui, |ui| {
-                        ui.set_min_size(inner.size());
-                        ui.set_max_size(inner.size());
-                        let restore = self.zoom_title_row(ui, &zoomed.tab);
-                        self.zoom_body(ui, zoomed);
-                        restore
-                    })
-                    .inner;
+                // Swallow clicks on the backdrop so the panes behind it
+                // do not take them.
+                ui.allocate_rect(outer, egui::Sense::click());
                 #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "pane-zoom-card", card);
-                let outside = backdrop.clicked()
-                    && backdrop
-                        .interact_pointer_pos()
-                        .is_some_and(|pos| !card.contains(pos));
+                diagnostics::record(
+                    ui.ctx(),
+                    "pane-zoom-card",
+                    appearance::center_card_rect(outer),
+                );
+                let (restore, outside) =
+                    appearance::center_card_over(ui, outer, style.scrim(), |ui| {
+                        ui.set_min_size(ui.available_size());
+                        let restore = self.zoom_title_row(ui, &zoomed.tab);
+                        self.zoom_body(ui, &zoomed.tab);
+                        restore
+                    });
                 restore || outside
             })
             .inner
     }
 
     fn zoom_title_row(&mut self, ui: &mut egui::Ui, tab: &Tab) -> bool {
+        // `tab_title` takes `&mut Tab` for the dock; this copy is the title only.
         let title = self.tab_title(&mut tab.clone());
         let tip = self.app.action_tip("Restore pane", Action::ZoomPane);
         ui.horizontal(|ui| {
@@ -183,10 +183,10 @@ impl Viewer<'_> {
         .inner
     }
 
-    fn zoom_body(&mut self, ui: &mut egui::Ui, zoomed: &Zoomed) {
-        let tab = zoomed.tab.clone();
-        match &tab {
+    fn zoom_body(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        match tab {
             Tab::Terminal(sid) => {
+                // `self` paints mutably, so the session is copied out first.
                 let Some(session) = self
                     .app
                     .state
@@ -197,22 +197,37 @@ impl Viewer<'_> {
                 else {
                     return;
                 };
-                if !self.app.connected {
-                    ui.weak("Reconnecting to session daemon…");
-                    return;
-                }
-                self.pane_scope(ui, &tab, |viewer, ui| viewer.terminal_body(ui, &session));
+                self.live_terminal_body(ui, tab, &session);
             }
-            Tab::NativeEditor { path } => self.pane_scope(ui, &tab, |viewer, ui| {
-                viewer.app.native_editor_view(NativeEditorViewInput {
-                    ui,
-                    path,
-                    project: viewer.project.as_deref(),
-                    tab: viewer.tab.as_deref(),
-                    node: viewer.render_path,
-                });
-            }),
+            Tab::NativeEditor { .. } => self.editor_body(ui, tab),
             _ => {}
         }
+    }
+
+    /// A live terminal's body in its view scope, for the dock and the zoom
+    /// overlay: a reconnect notice while the daemon is away.
+    pub(super) fn live_terminal_body(&mut self, ui: &mut egui::Ui, tab: &Tab, session: &Session) {
+        if !self.app.connected {
+            ui.weak("Reconnecting to session daemon…");
+            return;
+        }
+        self.pane_scope(ui, tab, |viewer, ui| viewer.terminal_body(ui, session));
+    }
+
+    /// A native editor's body in its view scope, for the dock and the zoom
+    /// overlay.
+    pub(super) fn editor_body(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        let Tab::NativeEditor { path } = tab else {
+            return;
+        };
+        self.pane_scope(ui, tab, |viewer, ui| {
+            viewer.app.native_editor_view(NativeEditorViewInput {
+                ui,
+                path,
+                project: viewer.project.as_deref(),
+                tab: viewer.tab.as_deref(),
+                node: viewer.render_path,
+            });
+        });
     }
 }

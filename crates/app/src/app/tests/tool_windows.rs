@@ -477,7 +477,7 @@ fn a_shared_chord_in_a_focused_tool_window_is_not_the_terminals() {
 fn git_log_fixture() -> (App, egui::Context, tempfile::TempDir) {
     let (mut app, ctx, dir) = git_fixture();
     app.git.list_root = Some(PathBuf::from("/a"));
-    app.git.history = true;
+    app.git.tab = sidebar_ui::GitTab::History;
     app.git.log = (0..200)
         .map(|i| (format!("{i:07x}"), format!("Commit {i}")))
         .collect();

@@ -78,9 +78,8 @@ pub struct GitPanelInput<'a> {
     pub review_mode: ReviewMode,
     pub neovim_review: bool,
     pub theme: &'a AppearanceConfig,
-    pub history: bool,
-    /// The Stash tab is open (`history` wins when both are set).
-    pub stash: bool,
+    /// The open header tab.
+    pub tab: GitTab,
     pub view_list: bool,
     pub commits: &'a [(String, String)],
     pub shelves: &'a [(String, String)],
@@ -90,7 +89,10 @@ pub struct GitPanelInput<'a> {
     pub recent_messages: &'a [String],
     pub amend: &'a mut bool,
     pub signoff: &'a mut bool,
+    /// Bumped by Expand all / Collapse all: a new generation resets every
+    /// section and folder to `tree_open`.
     pub collapse_generation: u64,
+    pub tree_open: bool,
     pub open_shortcut: &'a str,
     /// Branch comparison for the current root, when available.
     pub compare: Option<&'a workspace_ops::CompareData>,
@@ -107,26 +109,15 @@ pub struct GitPanelInput<'a> {
 }
 
 /// The Git panel's header tabs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GitTab {
     /// Changes and the commit area.
+    #[default]
     Commit,
     /// Shelved changes (`git stash`).
     Stash,
     /// The commit log.
     History,
-}
-
-impl GitPanelInput<'_> {
-    pub(crate) fn tab(&self) -> GitTab {
-        if self.history {
-            GitTab::History
-        } else if self.stash {
-            GitTab::Stash
-        } else {
-            GitTab::Commit
-        }
-    }
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -151,8 +142,8 @@ pub struct GitPanelOutcome {
     pub show_changes: Option<bool>,
     /// A header tab was picked.
     pub tab: Option<GitTab>,
-    pub collapse: bool,
-    pub expand: bool,
+    /// Expand all (`true`) or Collapse all (`false`) was picked.
+    pub expand_all: Option<bool>,
     pub commit: bool,
     pub commit_push: bool,
     /// Stop the commit or push in flight.
@@ -282,7 +273,7 @@ impl GitPanelPass<'_, '_> {
             outcome: self.outcome,
         });
         ui.separator();
-        match self.input.tab() {
+        match self.input.tab {
             GitTab::History => self.history(ui),
             GitTab::Stash => self.stash_tab(ui),
             GitTab::Commit => {
@@ -334,6 +325,7 @@ impl GitPanelPass<'_, '_> {
             stats: &input.context.stats,
             lock: input.commit_lock,
             generation: input.collapse_generation,
+            open: input.tree_open,
         };
         if input.view_list {
             self.flat_list(ui, &row_ctx);
@@ -346,7 +338,6 @@ impl GitPanelPass<'_, '_> {
                 outcome: self.outcome,
                 root,
                 prepared: group,
-                collapse_generation: input.collapse_generation,
             });
         }
         if let Some(compare) = input.compare
@@ -358,7 +349,6 @@ impl GitPanelPass<'_, '_> {
                 outcome: self.outcome,
                 root,
                 files: &compare.files,
-                collapse_generation: input.collapse_generation,
             });
         }
     }
@@ -397,8 +387,10 @@ struct GitRowCtx<'a> {
     open_shortcut: &'a str,
     stats: &'a std::collections::HashMap<PathBuf, (u32, u32)>,
     lock: CommitLock,
-    /// Expand/collapse-all generation; see [`tree::expanded_by_default`].
+    /// Expand/collapse-all generation: a new one resets every section and
+    /// folder to `open`.
     generation: u64,
+    open: bool,
 }
 
 fn git_group_label(group: terminator_git::GitGroup) -> &'static str {

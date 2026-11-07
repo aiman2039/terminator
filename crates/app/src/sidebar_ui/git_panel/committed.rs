@@ -8,7 +8,6 @@ pub(super) struct GitCommittedSectionInput<'a, 'b> {
     pub(super) outcome: &'a mut GitPanelOutcome,
     pub(super) root: Option<&'a Path>,
     pub(super) files: &'a [workspace_ops::CommittedFile],
-    pub(super) collapse_generation: u64,
 }
 
 pub(super) fn git_committed_section(input: GitCommittedSectionInput<'_, '_>) {
@@ -18,20 +17,15 @@ pub(super) fn git_committed_section(input: GitCommittedSectionInput<'_, '_>) {
         outcome,
         root,
         files,
-        collapse_generation,
     } = input;
     let total = files.len();
-    let id = ui.make_persistent_id(("git-committed", root, total, collapse_generation));
-    let view_all_id =
-        ui.make_persistent_id(("git-committed-all", root, total, collapse_generation));
+    let id = ui.make_persistent_id(("git-committed", root, total, ctx.generation));
+    let view_all_id = ui.make_persistent_id(("git-committed-all", root, total, ctx.generation));
     let mut expanded = ui
         .ctx()
         .data_mut(|data| data.get_temp::<bool>(view_all_id).unwrap_or(false));
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        id,
-        expanded_by_default(collapse_generation),
-    );
+    let state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, ctx.open);
     let _ = state
         .show_header(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;

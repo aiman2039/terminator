@@ -123,7 +123,7 @@ impl App {
                     // The cards below must not also see this Enter.
                     ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
                 }
-                enter || form::primary_button(ui, "Connect").clicked()
+                enter || appearance::primary_button(ui, "Connect").clicked()
             })
             .inner;
         if let Some(error) = &self.remote_ui.hosts.page_error {

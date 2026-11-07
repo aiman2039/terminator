@@ -272,7 +272,7 @@ impl App {
         viewport: egui::ViewportId,
         dock: &mut egui_dock::DockState<Tab>,
     ) -> (bool, Option<Tab>) {
-        let Some((_, pane)) = self.pane_ops.dock_back.take_if(|(v, _)| *v == viewport) else {
+        let Some((_, pane)) = self.pane_ops.float_return.take_if(|(v, _)| *v == viewport) else {
             return (false, None);
         };
         let Some(tab) = pane else {

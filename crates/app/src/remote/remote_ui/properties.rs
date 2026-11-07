@@ -230,7 +230,7 @@ impl App {
         appearance::footer_row(ui, |ui| {
             ui.add_enabled_ui(supported && !remote.busy, |ui| {
                 let save = if editing { "Save" } else { "Add host" };
-                actions.save = form::primary_button(ui, save).clicked();
+                actions.save = appearance::primary_button(ui, save).clicked();
                 actions.test = ui.button("Test connection").clicked();
             });
             actions.cancel |= ui.button("Cancel").clicked();

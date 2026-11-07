@@ -132,14 +132,48 @@ pub struct MenuItemInput<'a> {
 /// A [`menu_item`] with no shortcut that can be disabled; a click closes
 /// the menu.
 pub fn menu_action(ui: &mut egui::Ui, enabled: bool, label: &str, icon: &str) -> egui::Response {
+    let input = MenuItemInput {
+        ui,
+        label,
+        icon,
+        shortcut: "",
+    };
+    let destructive = destructive_label(label);
+    closing_action(input, enabled, destructive)
+}
+
+/// A [`menu_action`] painted red: it removes or ends something.
+pub fn menu_danger_action(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    icon: &str,
+) -> egui::Response {
+    let input = MenuItemInput {
+        ui,
+        label,
+        icon,
+        shortcut: "",
+    };
+    closing_action(input, enabled, true)
+}
+
+fn closing_action(input: MenuItemInput<'_>, enabled: bool, destructive: bool) -> egui::Response {
+    let MenuItemInput {
+        ui,
+        label,
+        icon,
+        shortcut,
+    } = input;
     let response = ui
         .add_enabled_ui(enabled, |ui| {
-            menu_item(MenuItemInput {
+            let input = MenuItemInput {
                 ui,
                 label,
                 icon,
-                shortcut: "",
-            })
+                shortcut,
+            };
+            menu_row(input, destructive)
         })
         .inner;
     if response.clicked() {
@@ -148,8 +182,21 @@ pub fn menu_action(ui: &mut egui::Ui, enabled: bool, label: &str, icon: &str) ->
     response
 }
 
+/// Labels that read as destructive paint red in [`menu_item`].
+fn destructive_label(label: &str) -> bool {
+    label.starts_with("Close ")
+        || label.starts_with("Remove ")
+        || label.starts_with("Clear ")
+        || label.starts_with("Delete")
+}
+
 /// Flat full-width action row with a fixed icon column and optional shortcut.
 pub fn menu_item(input: MenuItemInput<'_>) -> egui::Response {
+    let destructive = destructive_label(input.label);
+    menu_row(input, destructive)
+}
+
+fn menu_row(input: MenuItemInput<'_>, destructive: bool) -> egui::Response {
     let MenuItemInput {
         ui,
         label,
@@ -158,10 +205,6 @@ pub fn menu_item(input: MenuItemInput<'_>) -> egui::Response {
     } = input;
     ui.set_min_width(220.0);
     ui.spacing_mut().item_spacing.y = 2.0;
-    let destructive = matches!(
-        label.split([' ', '…']).next(),
-        Some("Close" | "Remove" | "Clear" | "Delete")
-    );
     let previous = ui.visuals().override_text_color;
     let tint = if destructive {
         ui.visuals().error_fg_color

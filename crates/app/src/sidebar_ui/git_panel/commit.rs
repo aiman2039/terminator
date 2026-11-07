@@ -142,8 +142,9 @@ impl GitPanelPass<'_, '_> {
         let can_commit = input.commit_run.is_none()
             && staged
             && (*input.amend || !input.commit_draft.trim().is_empty());
-        let accent = appearance::color(&input.theme.accent);
-        let commit = ui.add_enabled(can_commit, appearance::primary_button("Commit", accent));
+        let commit = ui
+            .add_enabled_ui(can_commit, |ui| appearance::primary_button(ui, "Commit"))
+            .inner;
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-commit", commit.rect);
         if commit.clicked() {

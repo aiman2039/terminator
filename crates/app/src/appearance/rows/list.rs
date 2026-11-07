@@ -18,6 +18,8 @@ pub(super) struct RowSpec<'a> {
     /// stays in one column across rows. Session rows reserve it; plain rows
     /// (project folders, settings, headers) stay compact.
     pub(super) reserve_brand: bool,
+    /// A small dim icon right after the label (Explorer File Nesting).
+    pub(super) after_label: Option<&'a str>,
 }
 
 /// Consistent full-width native sidebar row with fixed icon and status columns.
@@ -55,9 +57,14 @@ pub fn row(input: RowInput<'_>) -> egui::Response {
             subtitle: None,
             brand: None,
             reserve_brand: false,
+            after_label: None,
         },
     )
 }
+
+/// Size of the [`RowSpec::after_label`] icon and its gap after the label.
+const AFTER_LABEL_SIZE: f32 = 12.0;
+const AFTER_LABEL_GAP: f32 = 4.0;
 
 pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     let RowSpec {
@@ -72,6 +79,7 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         subtitle,
         brand,
         reserve_brand,
+        after_label,
     } = spec;
     // A reserved brand slot keeps the status icon and the label in one column
     // whether or not this row paints a brand glyph.
@@ -96,13 +104,7 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     crate::appearance::paint_focus(ui, &response);
     let trailing = fitted_trailing(ui, label, trailing, response.rect.width() - label_left);
     let right = response.rect.right() - trailing_width(ui, trailing, tint);
-    let rect = egui::Rect::from_min_max(
-        egui::pos2(response.rect.left() + label_left, response.rect.top()),
-        egui::pos2(
-            right.max(response.rect.left() + label_left),
-            response.rect.bottom(),
-        ),
-    );
+    let rect = label_rect(response.rect, label_left, right, after_label.is_some());
     let text = RowText::layout(LayoutInput {
         ui,
         rect,
@@ -110,6 +112,10 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         subtitle,
     });
     let label_center = text.top + text.label.size().y * 0.5;
+    if let Some(icon) = after_label {
+        let left = rect.left() + text.label.size().x + AFTER_LABEL_GAP;
+        paint_after_label(ui, icon, egui::pos2(left, label_center));
+    }
     paint_row_icons(
         ui,
         RowIcons {
@@ -131,6 +137,33 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     });
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
+}
+
+/// The label's rect in `row`, from `label_left` to `right`. It leaves room
+/// for an after-label mark, so a long label truncates before it.
+fn label_rect(row: egui::Rect, label_left: f32, right: f32, mark: bool) -> egui::Rect {
+    let mark = if mark {
+        AFTER_LABEL_SIZE + AFTER_LABEL_GAP
+    } else {
+        0.0
+    };
+    let left = row.left() + label_left;
+    egui::Rect::from_min_max(
+        egui::pos2(left, row.top()),
+        egui::pos2((right - mark).max(left), row.bottom()),
+    )
+}
+
+/// The dim [`RowSpec::after_label`] icon, its left edge at `left_center`.
+fn paint_after_label(ui: &egui::Ui, icon: &str, left_center: egui::Pos2) {
+    let size = egui::Vec2::splat(AFTER_LABEL_SIZE);
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(left_center.x, left_center.y - AFTER_LABEL_SIZE * 0.5),
+        size,
+    );
+    egui::Image::new(crate::icons::source(icon))
+        .tint(ui.visuals().weak_text_color())
+        .paint_at(ui, rect);
 }
 
 fn paint_row_fill(ui: &egui::Ui, response: &egui::Response, selected: bool) {
