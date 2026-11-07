@@ -72,8 +72,10 @@ fn zoomed_terminal_paints_once_per_frame() {
 
 #[test]
 fn zoomed_editor_paints_once_per_frame() {
-    let (mut app, ctx, _dir) = fixture();
-    let path = PathBuf::from("/a/zoom-once.md");
+    let (mut app, ctx, dir) = fixture();
+    // Absolute on every platform: the trust bar needs a file URI, and
+    // Windows rejects `/a/...` as one.
+    let path = dir.path().join("zoom-once.md");
     app.native_docs.insert(
         path.clone(),
         crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
