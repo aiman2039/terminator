@@ -1,7 +1,7 @@
 //! Files committed on the branch since the base ref.
 use super::*;
 
-/// Files changed since the base ref, grouped under "COMMITTED ON BRANCH".
+/// Files changed since the base ref, grouped under "Committed on branch".
 pub(super) struct GitCommittedSectionInput<'a, 'b> {
     pub(super) ui: &'a mut egui::Ui,
     pub(super) ctx: &'a GitRowCtx<'b>,
@@ -30,18 +30,16 @@ pub(super) fn git_committed_section(input: GitCommittedSectionInput<'_, '_>) {
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         id,
-        collapse_generation == 0,
+        expanded_by_default(collapse_generation),
     );
     let _ = state
         .show_header(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
             ui.add(
-                egui::Label::new(
-                    RichText::new(format!("COMMITTED ON BRANCH {total}"))
-                        .small()
-                        .strong(),
-                )
-                .selectable(false),
+                egui::Label::new(RichText::new("Committed on branch").strong()).selectable(false),
             );
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(files_hint(total)).weak()).selectable(false));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if total > GIT_SECTION_LIMIT {
                     let text = if expanded { "Show less" } else { "View all" };
@@ -89,25 +87,26 @@ pub(super) fn git_committed_row(input: GitCommittedRowInput<'_>) {
     if skip_clipped_git_row(ui) {
         return;
     }
-    let name = file
+    let relative = file
         .path
         .strip_prefix(ctx.root.unwrap_or(&file.path))
         .unwrap_or(&file.path)
         .display()
         .to_string();
+    let (folder, name) = split_label(&relative);
     let trailing = if file.deleted > 0 {
         format!("+{} -{} {}", file.added, file.deleted, file.letter)
     } else {
         format!("+{} {}", file.added, file.letter)
     };
-    let response = appearance::file_row(appearance::FileRowInput {
+    let response = name_row(NameRowInput {
         ui,
-        label: &name,
         icon: icons::file_icon(&file.path),
-        selected: false,
-        height: 24.0,
+        icon_tint: appearance::icon_color(),
+        name,
+        color: git_color(ctx.theme, file.letter),
+        hint: folder,
         trailing: &trailing,
-        tint: git_color(ctx.theme, file.letter),
     })
     .on_hover_text(file.path.display().to_string());
     #[cfg(feature = "test-support")]

@@ -587,13 +587,16 @@ fn git_panel_controls_that_could_change_the_commit_are_disabled_while_it_runs() 
     run.app.git.list_root = Some("/a".into());
     let mut pane = GitPane { time: 1.0 };
     let primary = egui::PointerButton::Primary;
+    // Shelves are on the Stash tab.
+    run.app.git.stash = true;
     pane.paint(&mut run, vec![]);
-    for name in [
-        "git-stage-all",
-        "git-shelve",
-        "git-shelf-unshelve-stash@{0}",
-        "git-shelf-drop-stash@{0}",
-    ] {
+    for name in ["git-shelf-unshelve-stash@{0}", "git-shelf-drop-stash@{0}"] {
+        let at = GitPane::target(&run, name).center();
+        pane.click(&mut run, at, primary);
+    }
+    run.app.git.stash = false;
+    pane.paint(&mut run, vec![]);
+    for name in ["git-stage-all", "git-shelve"] {
         let at = GitPane::target(&run, name).center();
         pane.click(&mut run, at, primary);
     }
@@ -602,7 +605,7 @@ fn git_panel_controls_that_could_change_the_commit_are_disabled_while_it_runs() 
     let row = GitPane::target(&run, "git-file-edited.rs");
     let checkbox = egui::pos2(row.left() - 9.0, row.center().y);
     pane.click(&mut run, checkbox, primary);
-    let group = pane.group_checkbox(&mut run, "CHANGES 1");
+    let group = pane.group_checkbox(&mut run, "Changes");
     pane.click(&mut run, group, primary);
     let stage_group = GitPane::target(&run, "git-group-Stage all").center();
     pane.click(&mut run, stage_group, primary);
@@ -634,7 +637,7 @@ fn git_panel_controls_that_could_change_the_commit_are_disabled_while_it_runs() 
     let row = GitPane::target(&run, "git-file-edited.rs");
     let checkbox = egui::pos2(row.left() - 9.0, row.center().y);
     pane.click(&mut run, checkbox, primary);
-    let group = pane.group_checkbox(&mut run, "CHANGES 1");
+    let group = pane.group_checkbox(&mut run, "Changes");
     pane.click(&mut run, group, primary);
     let stage_group = GitPane::target(&run, "git-group-Stage all").center();
     pane.click(&mut run, stage_group, primary);

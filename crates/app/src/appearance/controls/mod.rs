@@ -4,8 +4,10 @@ use eframe::egui::{self, Color32, FontId};
 
 mod menus;
 mod popup_list;
+mod tabs;
 pub use menus::*;
 pub use popup_list::*;
+pub use tabs::*;
 
 /// Glyph size of every icon-only toolbar control. The window header keeps it
 /// in its larger square, so every toolbar row shows one icon size.

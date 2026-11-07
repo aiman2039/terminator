@@ -218,6 +218,7 @@ fn git_panel_clicks_reuse_an_open_diff_instead_of_duplicating() {
                         neovim_review: false,
                         theme: &app.theme,
                         history: false,
+                        stash: false,
                         view_list: false,
                         commits: &[],
                         shelves: &[],
