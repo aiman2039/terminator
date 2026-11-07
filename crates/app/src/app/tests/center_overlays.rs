@@ -348,6 +348,39 @@ fn every_center_page_covers_workspace_browsers_and_terminal_input() {
 }
 
 #[test]
+fn reopening_hidden_settings_does_not_revert_newer_settings() {
+    let (mut app, _, _dir) = fixture();
+    app.open_settings();
+    app.open_player();
+    assert!(app.settings_session, "the hidden session stays");
+    let mut newer = app.state.clone();
+    newer.settings.spell_check = !newer.settings.spell_check;
+    app.apply_state(newer.clone());
+    app.open_settings();
+    assert_eq!(app.settings_draft.spell_check, newer.settings.spell_check);
+    assert!(!app.settings_dirty(), "Apply would write nothing back");
+}
+
+#[test]
+fn hidden_settings_edits_survive_a_newer_settings_change() {
+    let (mut app, _, _dir) = fixture();
+    app.open_settings();
+    app.settings_draft.shell = "/tmp/custom".into();
+    app.open_player();
+    assert!(
+        app.settings_pending.is_some(),
+        "hiding asks about the edits"
+    );
+    let mut newer = app.state.clone();
+    newer.settings.spell_check = !newer.settings.spell_check;
+    app.apply_state(newer.clone());
+    app.open_settings();
+    assert!(app.settings_pending.is_none(), "back on the page");
+    assert_eq!(app.settings_draft.shell, "/tmp/custom");
+    assert_eq!(app.settings_draft.spell_check, newer.settings.spell_check);
+}
+
+#[test]
 fn closing_a_page_that_is_not_shown_keeps_the_shown_page() {
     let (mut app, _, _dir) = fixture();
     app.open_player();

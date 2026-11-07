@@ -120,6 +120,10 @@ impl App {
         if !self.settings_session {
             self.begin_settings_session();
         }
+        // Back on the page: a Close question from hiding it is moot.
+        if matches!(self.settings_pending, Some(SettingsPending::Close)) {
+            self.settings_pending = None;
+        }
         self.show_center(CenterPage::Settings);
     }
 

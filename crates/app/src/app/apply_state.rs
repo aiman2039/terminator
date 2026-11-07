@@ -112,6 +112,7 @@ impl App {
         self.sidebar_projects
             .get_mut()
             .retain(|id, _| state.projects.iter().any(|p| &p.id == id));
+        self.rebase_settings_draft(&state.settings);
         self.state = state;
         self.prune_terminal_folders();
         self.reconcile_presentations();
