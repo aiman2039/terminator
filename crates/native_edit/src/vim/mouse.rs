@@ -10,6 +10,7 @@ impl VimEngine {
     /// Start a drag selection at a buffer position: the press point is both
     /// anchor and cursor, replacing any earlier selection.
     pub fn begin_mouse_selection<B: Buffer>(&mut self, doc: &mut B, line: usize, col: usize) {
+        self.end_insert_for_mouse(doc);
         doc.end_run();
         self.clear_pending();
         self.rec_discard();
@@ -40,6 +41,7 @@ impl VimEngine {
         if class == WordClass::Blank {
             // Parking is not a selection: a double-click in the margin or
             // past the line end drops whatever was selected before.
+            self.end_insert_for_mouse(doc);
             doc.end_run();
             self.clear_pending();
             self.rec_discard();
@@ -75,6 +77,16 @@ impl VimEngine {
         self.preferred_col = self.cursor.col;
     }
 
+    /// A mouse selection leaves Insert (vim Insert, `R`, block `I`) the way
+    /// Escape does, so the session's undo unit closes and its block,
+    /// replace, and count state cannot leak into the next insert.
+    /// Modeless editing opens no session.
+    fn end_insert_for_mouse<B: Buffer>(&mut self, doc: &mut B) {
+        if self.mode == Mode::Insert && !self.modeless {
+            self.enter_normal(doc);
+        }
+    }
+
     /// Drop a mouse selection without moving the cursor: a plain click
     /// collapses the drag selection instead of extending it like `v` does.
     pub fn clear_mouse_selection<B: Buffer>(&mut self, doc: &mut B) {
@@ -106,6 +118,34 @@ mod tests {
 
         engine.clear_mouse_selection(&mut doc);
         assert!(engine.selection().is_none());
+        assert_eq!(engine.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn mouse_selection_ends_an_insert_session() {
+        let mut doc = Doc::new("alpha beta\n");
+        let mut engine = VimEngine::new();
+        crate::vim::vim_tests::tests::keys(&mut engine, &mut doc, "R");
+        engine.type_text(&mut doc, "XY");
+        assert!(doc.undo_group_open());
+        engine.begin_mouse_selection(&mut doc, 0, 6);
+        assert!(!doc.undo_group_open(), "the R session's undo unit closed");
+        assert_eq!(engine.mode(), Mode::Visual);
+        engine.clear_mouse_selection(&mut doc);
+        // A later plain insert inserts; it does not overwrite like `R`.
+        crate::vim::vim_tests::tests::keys(&mut engine, &mut doc, "i");
+        engine.type_text(&mut doc, "Z");
+        assert_eq!(doc.text().as_str(), "XYpha Zbeta\n");
+    }
+
+    #[test]
+    fn double_click_on_blank_ends_an_insert_session() {
+        let mut doc = Doc::new("ab  cd\n");
+        let mut engine = VimEngine::new();
+        crate::vim::vim_tests::tests::keys(&mut engine, &mut doc, "i");
+        engine.type_text(&mut doc, "Q");
+        engine.select_word_at(&mut doc, 0, 3);
+        assert!(!doc.undo_group_open());
         assert_eq!(engine.mode(), Mode::Normal);
     }
 
