@@ -95,6 +95,9 @@ impl HostImport {
 
 impl App {
     pub(crate) fn open_ssh_import(&mut self) {
+        if self.keep_changed_ssh_form() {
+            return;
+        }
         self.show_ssh_page();
         self.remote_ui.import = Some(HostImport::new());
         self.load_config_hosts();

@@ -1,5 +1,5 @@
 //! Job routing: scheduling context, editor serialization keys, and busy replies.
-use crate::{After, Job, Tab, Update, editor_close};
+use crate::{After, Job, Tab, editor_close};
 use terminator_core::async_service::{OperationContext, Policy};
 use terminator_core::{Request, async_client};
 
@@ -43,102 +43,14 @@ impl JobRouting {
         ids
     }
 
-    pub(in crate::gui_services) fn rejection(job: &Job) -> Vec<Update> {
-        Self::remote_rejection(job).unwrap_or_else(|| Self::local_rejection(job))
+    /// What a job refused at submit answers its view; see [`super::replies`].
+    #[cfg(test)]
+    pub(in crate::gui_services) fn rejection(job: &Job) -> Vec<crate::Update> {
+        super::replies::owed(job).map_or_else(Vec::new, |reply| reply(Self::busy()))
     }
 
-    fn busy() -> String {
+    pub(in crate::gui_services) fn busy() -> String {
         "Services are busy; the action was not accepted. Retry it.".to_string()
-    }
-
-    fn remote_rejection(job: &Job) -> Option<Vec<Update>> {
-        let busy = Self::busy;
-        let updates = match job {
-            Job::RemoteAdd {
-                project,
-                generation,
-                ..
-            } => vec![Update::RemoteAdded(
-                project.clone(),
-                *generation,
-                Err(busy().into()),
-            )],
-            Job::RemoteRead { project, operation } => vec![Update::RemoteReply(
-                project.clone(),
-                operation.clone(),
-                Err(busy().into()),
-            )],
-            Job::RemoteTransfer { project, .. } => vec![Update::RemoteTransfer(
-                project.clone(),
-                None,
-                Err(busy().into()),
-            )],
-            Job::HostKey { ssh, keys: None } => {
-                vec![Update::HostKeyScanned(ssh.clone(), Err(busy()))]
-            }
-            Job::HostKey { ssh, keys: Some(_) } => {
-                vec![Update::HostKeyTrusted(ssh.clone(), Err(busy()))]
-            }
-            Job::SshConfigHosts(generation) => {
-                vec![Update::SshConfigHosts(*generation, Vec::new())]
-            }
-            Job::SshControlStatus(_) => vec![Update::SshControlStatus(Vec::new())],
-            Job::Forwards(request) => vec![Update::Forwards(
-                crate::forwards_ui::forward_key(request),
-                Err(busy().into()),
-            )],
-            _ => return None,
-        };
-        Some(updates)
-    }
-
-    fn local_rejection(job: &Job) -> Vec<Update> {
-        let busy = Self::busy;
-        match job {
-            Job::SaveLayout(project, _, text) => vec![Update::LayoutSaved(
-                project.clone(),
-                text.clone(),
-                Err(busy()),
-            )],
-            Job::CloseEditors(target, ids, _, _) => vec![Update::EditorsClosed(
-                target.clone(),
-                ids.clone(),
-                Err(busy()),
-            )],
-            Job::CloseIdle(target, _, ids) => {
-                vec![Update::IdleClosed(target.clone(), ids.clone(), Err(busy()))]
-            }
-            Job::Preferences(_) => vec![Update::PreferencesSaved(Box::new(Err(busy())))],
-            Job::RepairInstallation(..) => vec![Update::InstallationRepaired(Err(busy()))],
-            Job::RestartSessionService(_) => vec![Update::RestartFinished(busy())],
-            Job::StartSessionService => vec![Update::ServiceStarted(Err(busy()))],
-            Job::Diff(tab) | Job::DiffContext(tab, _) | Job::DiffExpand(tab, ..) => {
-                vec![Update::Diff(tab.key(), Err(busy()))]
-            }
-            Job::DiffAction(tab, _) => vec![Update::DiffActionFailed(tab.key(), busy())],
-            Job::StageGutterBlock { path, .. } => {
-                vec![Update::GutterStaged(path.clone(), Err(busy()))]
-            }
-            Job::ResolveTarget(key, _, _) => vec![Update::ResolvedTarget(key.clone(), None)],
-            Job::ExitSave(id, _) => vec![Update::ExitSaved(*id, Err(busy()))],
-            Job::GitView(tab) => vec![Update::GitView(
-                tab.key(),
-                crate::GitView::failed(tab, busy()),
-            )],
-            Job::GitLog(tab, query) => vec![Update::GitView(
-                tab.key(),
-                crate::GitView::Log(query.failed(busy())),
-            )],
-            Job::LocalHistory(op) => vec![Update::LocalHistory(op.failed(busy()))],
-            Job::Workspace(root, op @ crate::workspace_ops::Op::Commit { .. }) => {
-                vec![Update::Workspace(root.clone(), op.clone(), Err(busy()))]
-            }
-            // The Compare popup waits for its answer, too.
-            Job::Workspace(root, op) if crate::revision_compare::answers(op) => {
-                vec![Update::Workspace(root.clone(), op.clone(), Err(busy()))]
-            }
-            _ => Vec::new(),
-        }
     }
 
     pub(in crate::gui_services) fn context(job: &Job) -> OperationContext {
@@ -375,7 +287,8 @@ impl JobRouting {
             Job::StageGutterBlock { path, .. } => {
                 context.tab = Some(format!("gutter:{}", path.display()));
             }
-            _ => {}
+            // A failed service job still ends its operation in the GUI.
+            _ => context.tab = crate::service_op::job_tag(job),
         }
     }
 
@@ -408,6 +321,7 @@ impl JobRouting {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Update;
     use std::path::PathBuf;
 
     fn key(job: &Job) -> (&'static str, String) {

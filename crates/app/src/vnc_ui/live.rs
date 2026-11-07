@@ -62,8 +62,7 @@ impl App {
             });
         }
         if outcome.activated {
-            self.active_session = None;
-            self.non_terminal_selected = true;
+            self.focus_non_terminal();
         }
         if !outcome.events.is_empty() {
             self.send(Request::VncInput {

@@ -32,14 +32,14 @@ impl App {
         }
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selected = Some(project.clone());
-        self.active_session = self
+        // Focus is the new project's own: a selection left in the previous
+        // project must not block recovery here.
+        let focused = self
             .layouts
             .get_mut(&project)
             .and_then(|d| d.main_surface_mut().find_active_focused())
-            .and_then(|(_, tab)| match tab {
-                Tab::Terminal(id) => Some(id.clone()),
-                _ => None,
-            });
+            .map(|(_, tab)| tab.clone());
+        self.focus_pane(focused.as_ref());
         if !self.state.remote_projects.iter().any(|p| p.id == project) || self.remote_supported() {
             self.send(Request::SelectProject { project });
         }
@@ -60,7 +60,7 @@ impl App {
         if self.selected.as_deref() == Some(project) {
             self.finish_rename(true);
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
             if let Some(next) = self
                 .visible_projects()
                 .into_iter()
@@ -225,7 +225,7 @@ impl App {
         {
             self.selection_generation = self.selection_generation.wrapping_add(1);
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
             if let Some(next) = self.visible_projects().first().map(|p| p.id.clone()) {
                 self.select_project(next);
             }
@@ -285,39 +285,13 @@ impl App {
             let _ = self.resource_tx.send(next);
         }
     }
+    /// A background report: honors the dismiss latch and missing-path budget.
     pub(crate) fn report_status_error(&mut self, error: String) {
-        if is_session_auth_error(&error) && self.dismissed_auth_errors.contains(&error) {
-            return;
-        }
         let cwd = self.cwd();
-        if self.error_cwd.as_deref() != cwd.as_deref() {
-            self.error_cwd = cwd;
-            self.dismissed_error = None;
-            self.missing_path_reports = 0;
-        }
-        if self.dismissed_error.as_deref() == Some(error.as_str()) {
-            return;
-        }
-        if is_missing_path_error(&error) {
-            if self.error.as_deref() != Some(error.as_str()) {
-                if self.missing_path_reports >= retry_budget::MISSING_PATH_RETRY_LIMIT {
-                    return;
-                }
-                self.missing_path_reports = self.missing_path_reports.saturating_add(1);
-            }
-        } else if self.error.as_deref() != Some(error.as_str()) {
-            self.dismissed_error = None;
-            self.missing_path_reports = 0;
-        }
-        self.error = Some(error);
+        self.error.report(cwd, error);
     }
     pub(crate) fn dismiss_status_error(&mut self) {
-        self.dismissed_error = self.error.take();
-        if let Some(error) = &self.dismissed_error
-            && is_session_auth_error(error)
-        {
-            self.dismissed_auth_errors.insert(error.clone());
-        }
+        self.error.dismiss();
     }
     pub(crate) fn dialog_directory(&self) -> PathBuf {
         self.cwd()
@@ -355,7 +329,7 @@ impl App {
                 }
                 self.insert(&s.project_id, pane, None);
             }
-            self.active_session = Some(s.id.clone());
+            self.focus_terminal(s.id.clone());
             self.send(Request::SelectProject {
                 project: s.project_id,
             });
@@ -418,7 +392,7 @@ impl App {
             .is_some_and(|id| !known.contains(id.as_str()))
         {
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
         }
     }
     pub(crate) fn layout_save_failed(&mut self, error: String) {
@@ -445,13 +419,18 @@ impl App {
         if self.layout_signature.as_ref() == Some(&signature) {
             return;
         }
-        self.layout_signature = Some(signature);
         self.prune_closed_tab_expanded();
         let layouts = self.persistable_layouts();
         self.layout_generation = self.layout_generation.wrapping_add(1);
-        let _ = self
-            .jobs
-            .send(Job::PrepareLayouts(self.layout_generation, layouts));
+        // The signature means "sent": a refused prepare is tried again on
+        // the next pass. A prepare that is sent but never saved resets it
+        // (`layout_prepare_failed`, `handle_layouts_prepared`, exit cancel).
+        if (self.jobs)
+            .send(Job::PrepareLayouts(self.layout_generation, layouts))
+            .is_ok()
+        {
+            self.layout_signature = Some(signature);
+        }
     }
 }
 

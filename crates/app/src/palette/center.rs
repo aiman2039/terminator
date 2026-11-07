@@ -370,7 +370,9 @@ impl App {
                 self.open_settings();
                 self.request_settings_section(section);
             }
-            PaletteItem::AddProject => self.add_project = true,
+            PaletteItem::AddProject => {
+                self.request_pick(PickKind::Project);
+            }
             PaletteItem::Action(action) => self.run_shortcut(ctx, action),
             PaletteItem::Editor(command) => self.run_editor_command(ctx, command),
             PaletteItem::VncProfile(id, _) => {

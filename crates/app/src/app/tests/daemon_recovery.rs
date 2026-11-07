@@ -93,11 +93,11 @@ fn legacy_helper_error_opens_recovery_and_survives_unreported_health() {
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert!(app.installation_problem());
-    app.error = None; // Dismissing a general error must not hide recovery.
+    app.error.clear(); // Dismissing a general error must not hide recovery.
     app.apply_state(app.state.clone());
     assert!(app.installation_problem());
     app.open_installation_settings();
-    assert!(app.settings_open);
+    assert!(app.settings_open());
     assert_eq!(app.settings_section, SettingsSection::Updates);
     let mut repaired = app.state.clone();
     repaired.generation = "new-daemon".into();
@@ -121,7 +121,7 @@ fn reconnect_clears_transport_errors_but_preserves_failed_operations() {
             .unwrap();
         drain_updates(&mut app, &ctx);
         assert!(app.connected);
-        assert!(app.error.is_none());
+        assert!(app.error.text().is_none());
     }
     for message in [
         "Settings rejected",
@@ -130,7 +130,7 @@ fn reconnect_clears_transport_errors_but_preserves_failed_operations() {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
         app.apply_state(app.state.clone());
-        assert_eq!(app.error.as_deref(), Some(message));
+        assert_eq!(app.error.text(), Some(message));
     }
 }
 
@@ -141,21 +141,21 @@ fn dismissed_missing_directory_error_does_not_return() {
     for _ in 0..2 {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
-        assert_eq!(app.error.as_deref(), Some(message));
+        assert_eq!(app.error.text(), Some(message));
     }
     app.dismiss_status_error();
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
     assert!(
-        app.error.is_none(),
+        app.error.text().is_none(),
         "dismissed missing-path error must stay dismissed"
     );
     app.update_tx
         .send(Update::Error("Settings rejected".into()))
         .unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some("Settings rejected"));
+    assert_eq!(app.error.text(), Some("Settings rejected"));
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn dismissed_auth_error_stays_hidden_across_session_navigation() {
     let message = "Cannot read session service authentication file /tmp/old/auth: No such file or directory (os error 2)";
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some(message));
+    assert_eq!(app.error.text(), Some(message));
     app.dismiss_status_error();
 
     let mut session = session_fixture("shell", SessionKind::Shell);
@@ -174,7 +174,7 @@ fn dismissed_auth_error_stays_hidden_across_session_navigation() {
     app.active_session = Some("shell".into());
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 
     app.update_tx
         .send(Update::Error("Settings rejected".into()))
@@ -183,12 +183,12 @@ fn dismissed_auth_error_stays_hidden_across_session_navigation() {
     app.dismiss_status_error();
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 
     let new_owner = "Cannot read session service authentication file /tmp/new/auth: No such file or directory (os error 2)";
     app.update_tx.send(Update::Error(new_owner.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some(new_owner));
+    assert_eq!(app.error.text(), Some(new_owner));
 }
 
 #[test]
@@ -198,12 +198,12 @@ fn missing_directory_error_stops_after_three_reports() {
     for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
-        assert_eq!(app.error.as_deref(), Some(message));
-        app.error = None;
+        assert_eq!(app.error.text(), Some(message));
+        app.error.clear();
     }
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 }
 
 #[test]
@@ -213,11 +213,11 @@ fn missing_directory_error_retries_after_the_working_directory_changes() {
     for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
-        app.error = None;
+        app.error.clear();
     }
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
     let mut session = session_fixture("shell", SessionKind::Shell);
     session.cwd = "/gone".into();
     app.state.sessions.push(session);
@@ -225,7 +225,7 @@ fn missing_directory_error_retries_after_the_working_directory_changes() {
     app.active_session = Some("shell".into());
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some(message));
+    assert_eq!(app.error.text(), Some(message));
 }
 
 #[test]
@@ -276,7 +276,7 @@ fn expired_gui_request_cannot_change_the_workspace_after_timeout() {
     drain_updates(&mut app, &ctx);
     assert!(result.recv().unwrap().unwrap_err().contains("expired"));
     assert_eq!(app.selected.as_deref(), Some("a"));
-    assert!(!app.open_path);
+    assert!(!app.picker.busy());
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn repair_never_queues_shutdown_with_live_or_unsupported_sessions() {
         .push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
     app.begin_installation_repair();
     app.begin_installation_repair();
-    assert!(app.repair_pending);
+    assert_eq!(app.service_op, ServiceOp::Repairing);
     assert!(matches!(
         requests.try_recv().unwrap(),
         Job::RepairInstallation(_, _)
@@ -331,7 +331,7 @@ fn automatic_upgrade_waits_for_idle_and_does_not_retry_failed_generation() {
         requests.try_recv().unwrap(),
         Job::RepairInstallation(_, _)
     ));
-    app.repair_pending = false;
+    app.service_op = ServiceOp::Idle;
     app.maybe_upgrade_idle_daemon();
     assert!(requests.try_recv().is_err());
     app.begin_installation_repair();
@@ -347,11 +347,11 @@ fn finished_restart_helper_restores_retry() {
     let (tx, rx) = mpsc::channel();
     app.updates = rx;
     app.update_tx = tx.clone();
-    app.restart_pending = true;
+    app.service_op = ServiceOp::Restarting;
     tx.send(Update::RestartFinished(String::new())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(!app.restart_pending);
-    assert!(app.error.as_deref().unwrap().contains("restart.log"));
+    assert_eq!(app.service_op, ServiceOp::Idle);
+    assert!(app.error.text().unwrap().contains("restart.log"));
 }
 
 #[test]
@@ -375,16 +375,16 @@ fn service_start_queues_one_launch_and_reports() {
     app.connected = false;
     app.begin_service_start();
     app.begin_service_start();
-    assert!(app.service_start_pending);
+    assert_eq!(app.service_op, ServiceOp::Starting);
     assert!(matches!(
         requests.try_recv().unwrap(),
         Job::StartSessionService
     ));
     assert!(requests.try_recv().is_err());
     app.connected = true;
-    app.service_start_pending = false;
+    app.service_op = ServiceOp::Idle;
     app.begin_service_start();
-    assert!(!app.service_start_pending);
+    assert_eq!(app.service_op, ServiceOp::Idle);
     assert!(requests.try_recv().is_err());
     app.connected = false;
     let (tx, rx) = mpsc::channel();
@@ -392,15 +392,15 @@ fn service_start_queues_one_launch_and_reports() {
     app.update_tx = tx.clone();
     tx.send(Update::ServiceStarted(Ok(()))).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(!app.service_start_pending);
+    assert_eq!(app.service_op, ServiceOp::Idle);
     assert!(app.info.as_deref().unwrap().contains("Reconnecting"));
-    app.service_start_pending = true;
+    app.service_op = ServiceOp::Starting;
     tx.send(Update::ServiceStarted(Err("gone".into()))).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(!app.service_start_pending);
+    assert_eq!(app.service_op, ServiceOp::Idle);
     assert!(
         app.error
-            .as_deref()
+            .text()
             .unwrap()
             .contains("Could not start session service")
     );
@@ -529,7 +529,7 @@ fn restart_is_hidden_for_newer_daemons_and_idle_services() {
         .push(session_fixture("shell", SessionKind::Shell));
     app.begin_session_restart();
     app.begin_session_restart();
-    assert!(app.restart_pending);
+    assert_eq!(app.service_op, ServiceOp::Restarting);
     assert!(matches!(
         requests.try_recv().unwrap(),
         Job::RestartSessionService(_)
@@ -546,10 +546,11 @@ fn restart_confirm_cancel_does_not_spawn() {
     app.state
         .sessions
         .push(session_fixture("shell", SessionKind::Shell));
-    app.restart_confirm = true;
-    app.restart_confirm = false;
+    app.ask_session_restart();
+    assert_eq!(app.service_op, ServiceOp::ConfirmingRestart);
+    app.cancel_session_restart();
     assert!(requests.try_recv().is_err());
-    assert!(!app.restart_pending);
+    assert_eq!(app.service_op, ServiceOp::Idle);
 }
 
 #[test]
@@ -987,4 +988,122 @@ fn failed_history_and_commands_requests_stop_loading() {
     // A stored result stops the pane from re-requesting every frame.
     assert!(app.texts["history:s1"].contains("boom"));
     assert!(app.command_blocks["s1"].is_empty());
+}
+
+#[test]
+fn repair_is_refused_while_a_restart_runs() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.daemon_version = Some("0.0.1".into());
+    app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+    app.state
+        .sessions
+        .push(session_fixture("shell", SessionKind::Shell));
+    app.ask_session_restart();
+    app.begin_session_restart();
+    assert!(matches!(
+        requests.try_recv().unwrap(),
+        Job::RestartSessionService(_)
+    ));
+    // The restart stops every session: the service now looks idle.
+    app.state.sessions.clear();
+    app.maybe_upgrade_idle_daemon();
+    app.begin_installation_repair();
+    app.connected = false;
+    app.begin_service_start();
+    assert!(requests.try_recv().is_err());
+    assert_eq!(app.service_op, ServiceOp::Restarting);
+    assert!(
+        app.automatic_repair_attempt.is_none(),
+        "a refused automatic repair keeps its one attempt"
+    );
+}
+
+#[test]
+fn restart_confirmation_is_refused_and_closed_around_a_repair() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.state.daemon_version = Some("0.0.1".into());
+    app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+    app.begin_installation_repair();
+    assert_eq!(app.service_op, ServiceOp::Repairing);
+    assert!(requests.try_recv().is_ok());
+    app.state
+        .sessions
+        .push(session_fixture("shell", SessionKind::Shell));
+    app.ask_session_restart();
+    app.begin_session_restart();
+    assert_eq!(app.service_op, ServiceOp::Repairing);
+    assert!(requests.try_recv().is_err());
+
+    // A confirmation that can no longer run closes instead of staying up.
+    app.service_op = ServiceOp::Idle;
+    app.ask_session_restart();
+    app.exit = exit::Exit::Waiting(Instant::now());
+    app.begin_session_restart();
+    assert_eq!(app.service_op, ServiceOp::Idle);
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
+fn failed_service_jobs_end_their_operation() {
+    let (mut app, ctx, _dir) = fixture();
+    let (tx, rx) = mpsc::channel();
+    app.updates = rx;
+    app.update_tx = tx.clone();
+    for op in [
+        ServiceOp::Restarting,
+        ServiceOp::Repairing,
+        ServiceOp::Starting,
+    ] {
+        app.service_op = op;
+        let mut context = async_service::OperationContext::new(
+            "daemon",
+            "workspace".into(),
+            async_service::Policy::OrderedMutation,
+        );
+        context.tab = op.job_tag().map(Into::into);
+        let update = service_op::failure_update(&context, &async_service::Failure::Timeout);
+        assert!(!matches!(update, Some(Update::Error(_)) | None), "{op:?}");
+        tx.send(update.unwrap()).unwrap();
+        drain_updates(&mut app, &ctx);
+        assert_eq!(app.service_op, ServiceOp::Idle, "{op:?}");
+    }
+}
+
+#[test]
+fn failed_repair_keeps_its_retry_after_a_later_error() {
+    let (mut app, ctx, _dir) = fixture();
+    let (tx, rx) = mpsc::channel();
+    app.updates = rx;
+    app.update_tx = tx.clone();
+    app.service_op = ServiceOp::Repairing;
+    tx.send(Update::InstallationRepaired(Err("busy".into())))
+        .unwrap();
+    tx.send(Update::Error("Settings rejected".into())).unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.service_op, ServiceOp::Idle);
+    assert!(
+        app.service_failure
+            .as_ref()
+            .is_some_and(ServiceFailure::retries_update)
+    );
+}
+
+#[test]
+fn launch_upgrade_failure_stays_retryable_beside_a_preferences_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ui-preferences.json"), "{").unwrap();
+    std::fs::write(
+        dir.path().join("service-upgrade-error.txt"),
+        "Service upgrade pending: fixture",
+    )
+    .unwrap();
+    let ctx = egui::Context::default();
+    let app = App::with_context(&ctx, Paths::at(dir.path().into()));
+    let failure = app.service_failure.as_ref().unwrap();
+    assert_eq!(failure.task, ServiceTask::Upgrade);
+    assert!(failure.message.contains("fixture"));
 }

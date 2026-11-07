@@ -27,7 +27,7 @@ fn attention_migration_retries_without_ack_and_preserves_later_choices() {
     drain_updates(&mut app, &ctx);
     assert!(!app.preferences.attention_migrated);
     assert!(!app.attention_pending);
-    assert!(app.error.as_deref().unwrap().contains("rejected"));
+    assert!(app.error.text().unwrap().contains("rejected"));
     app.attention_requested = Some(
         Instant::now()
             .checked_sub(Duration::from_secs(6))
@@ -75,16 +75,15 @@ fn failed_migration_does_not_set_marker() {
 fn bell_opens_agents_over_an_open_left_tool() {
     let (mut app, _ctx, _dir) = fixture();
     app.preferences.left_visible = true;
-    app.preferences.left_tool = Some(SidebarTool::Git);
-    // A stale flag hidden behind the tool must not make the bell close.
-    app.preferences.left_agents = true;
+    app.preferences
+        .set_left_content(LeftContent::Tool(SidebarTool::Git));
     assert!(!app.left_agents_shown());
     app.toggle_left_agents();
     assert!(app.left_agents_shown());
-    assert_eq!(app.preferences.left_tool, None);
+    assert_eq!(app.preferences.left_content(), LeftContent::Agents);
     app.toggle_left_agents();
     assert!(!app.left_agents_shown());
-    assert!(!app.preferences.left_agents);
+    assert_eq!(app.preferences.left_content(), LeftContent::Projects);
 }
 
 #[test]
@@ -102,7 +101,7 @@ fn opening_the_inbox_replaces_projects_on_the_right() {
 fn bell_shows_a_hidden_left_sidebar() {
     let (mut app, _ctx, _dir) = fixture();
     app.preferences.left_visible = false;
-    app.preferences.left_agents = false;
+    app.preferences.set_left_content(LeftContent::Projects);
     app.toggle_left_agents();
     assert!(app.preferences.left_visible);
     assert!(app.left_agents_shown());
@@ -149,7 +148,7 @@ fn hidden_agent_terminal_keeps_owner_and_directory_context() {
 #[cfg(feature = "test-support")]
 fn inline_attention_preserves_input_but_missing_session_details_remain_modal() {
     let (mut app, _, _dir) = fixture();
-    app.preferences.left_agents = true;
+    app.preferences.set_left_content(LeftContent::Agents);
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
     app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
         id: "wait",
@@ -159,10 +158,15 @@ fn inline_attention_preserves_input_but_missing_session_details_remain_modal() {
     })];
     app.detail = Some("wait".into());
     assert!(!app.notice_detail_modal_open());
-    app.preferences.left_agents = false;
+    app.preferences.set_left_content(LeftContent::Projects);
     app.preferences.visible = false;
     assert!(app.notice_detail_modal_open());
-    app.preferences.left_agents = true;
+    // Agents stays the left content while that sidebar is hidden: the
+    // inbox is not on screen, so the detail is a modal.
+    app.preferences.set_left_content(LeftContent::Agents);
+    app.preferences.left_visible = false;
+    assert!(app.notice_detail_modal_open());
+    app.preferences.left_visible = true;
     app.selected = Some("different-project".into());
     // The inbox spans all projects, so switching projects keeps inline detail.
     assert!(!app.notice_detail_modal_open());

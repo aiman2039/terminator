@@ -50,7 +50,7 @@ impl App {
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "worktree-add", worktree.rect);
             if worktree.clicked() {
-                self.worktree_open = true;
+                self.show_center(crate::CenterPage::Worktrees);
             }
         }
         if appearance::sidebar_action(ui, "Monitor", "New SSH host").clicked() {
@@ -60,7 +60,7 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "project-add", add.rect);
         if add.clicked() {
-            self.add_project = true;
+            self.request_pick(crate::PickKind::Project);
         }
         // A standard TextEdit owns its keys natively (typing,
         // arrows, Cmd/Ctrl+A/C/X/V), and the global select-all

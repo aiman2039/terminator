@@ -160,6 +160,34 @@ fn a_large_first_live_diff_builds_off_the_gui_thread() {
     assert!(!buffer.live_loading(), "the worker build is shown");
 }
 
+#[test]
+fn a_live_build_that_ends_without_a_result_is_built_again_after_a_pause() {
+    let left = "line\n".repeat(8192);
+    let right = format!("{left}tail\n");
+    let document = std::sync::Arc::new(build_with_context(BuildWithContextInput {
+        path: Path::new("file.rs"),
+        left: &left,
+        right: &right,
+        staged: false,
+        context: 3,
+    }));
+    let (pool, _owner) = pool();
+    let mut buffer = review::Edit::new(document);
+    let _ = buffer.live_document(Path::new("file.rs"), 0.0, &pool);
+    assert!(buffer.live.building());
+    // The pool job timed out or panicked: its sender is gone.
+    buffer.live.drop_build_result();
+    let (_, waiting) = buffer.live_document(Path::new("file.rs"), 0.5, &pool);
+    assert!(
+        waiting && !buffer.live.building(),
+        "no spinner on a dead build"
+    );
+    let _ = buffer.live_document(Path::new("file.rs"), 1.0, &pool);
+    assert!(!buffer.live.building(), "the retry waits for its pause");
+    settle(&mut buffer, &pool, 2.0);
+    assert!(!buffer.live_loading(), "the retried build is shown");
+}
+
 fn pool() -> (crate::gui_services::Submit, crate::gui_services::Owner) {
     let dir = std::env::temp_dir().join(terminator_core::id());
     let (updates, _) = std::sync::mpsc::channel();

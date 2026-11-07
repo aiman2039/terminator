@@ -62,7 +62,11 @@ fn staged_diff_switches_to_working_tree_after_dock_returns() {
     assert_eq!(workspace.tabs[0].primary, Some(working.clone()));
     assert!(workspace.iter_all_tabs().any(|(_, tab)| tab == &working));
     assert!(app.loading.contains(&working.key()));
-    assert_eq!(app.focus_tab, Some(working.clone()));
+    assert!(app.dock_ops.iter().any(|op| *op
+        == DockOp::FocusTab {
+            target: DockTarget::Main,
+            tab: working.clone(),
+        }));
     let Job::Diff(requested) = requests.try_recv().unwrap() else {
         panic!("working-tree diff job was not queued");
     };
@@ -299,4 +303,21 @@ fn perforce_working_diff_is_read_only() {
     let painted = paint_doc(doc, false);
     assert!(painted.iter().any(|(_, text)| text == "Read-only"));
     assert!(!painted.iter().any(|(_, text)| text == "Editable"));
+}
+
+#[test]
+fn quit_blocked_by_unsaved_diff_edits_asks_about_vnc_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+    let mut edit = diff::review::Edit::new(std::sync::Arc::new(sample_doc()));
+    edit.text = "unsaved".into();
+    app.diff_reviews.entry("diff".into()).or_default().buffer = Some(edit);
+    // The VNC question was answered for this quit, then the diff stops it.
+    app.pending_app_quit = true;
+    app.vnc_quit_confirmed = true;
+    app.begin_exit();
+    assert!(!app.exit.active());
+    assert!(!app.pending_app_quit);
+    assert!(!app.vnc_quit_confirmed, "the next quit asks again");
 }

@@ -45,8 +45,8 @@ pub(super) fn panel(input: PanelInput<'_>) {
             .get(sid)
             .map_or_else(String::new, |v| v.transfer_remote.clone());
         if !remote.starts_with('/') {
-            app.error =
-                Some("Enter an absolute remote file path before starting a transfer".into());
+            app.error
+                .set("Enter an absolute remote file path before starting a transfer");
             return;
         }
         let _ = app.jobs.send(Job::VncPickTransfer {
@@ -111,7 +111,8 @@ pub(super) fn drop_upload(input: DropInput<'_>) {
     match remote_for_drop(&view.upload_dir, local) {
         Ok(remote) => {
             if dropped.len() > 1 {
-                app.error = Some("Uploading the first file; drop one file at a time".into());
+                app.error
+                    .set("Uploading the first file; drop one file at a time");
             }
             let _ = app.jobs.send(Job::VncPickTransfer {
                 session: sid.into(),
@@ -120,7 +121,7 @@ pub(super) fn drop_upload(input: DropInput<'_>) {
                 local: Some(local.clone()),
             });
         }
-        Err(error) => app.error = Some(error.into()),
+        Err(error) => app.error.set(error),
     }
 }
 

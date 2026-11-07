@@ -1,8 +1,6 @@
-use eframe::egui::{self};
+use super::super::*;
 use std::collections::HashSet;
 use terminator_core::*;
-
-use super::super::*;
 
 impl Tab {
     /// Tab title for revision diffs, file history and merges.
@@ -46,7 +44,8 @@ pub(crate) struct HistorySessionRowCanShowInput<'a> {
 impl App {
     pub(crate) fn create(&mut self, split: Option<&str>) {
         if self.selected_remote_project().is_some() && !self.remote_supported() {
-            self.error = Some("Restart the session service to create SSH terminals".into());
+            self.error
+                .set("Restart the session service to create SSH terminals");
             return;
         }
         if self
@@ -101,39 +100,26 @@ impl App {
         if self.selected_project().is_none() || self.missing_projects.contains(&project) {
             return;
         }
-        let tab_id = id();
-        if let Some(index) = index {
-            self.workspace_insert.insert(tab_id.clone(), index);
-        }
-        if let Some(post) = post.filter(|post| !post.input.is_empty()) {
-            self.post_create.by_tab.insert(tab_id.clone(), post);
-        }
-        let _ = self.jobs.send(Job::rpc(
-            Request::Create {
-                project,
-                cwd,
-                file: None,
-                line: None,
-                column: None,
-                editor: false,
-            },
-            After::Workspace(tab_id, Vec::new()),
-        ));
+        self.create_terminal_tab((project, cwd), (index, post));
     }
     pub(crate) fn begin_workspace_close_tabs(&mut self, project: &str, ids: Vec<String>) {
-        self.rename_session = None;
+        self.clear_session_rename();
         let mut ids = ids.into_iter();
         let Some(first) = ids.next() else {
             return;
         };
         self.close_workspace_queue = ids.collect();
-        self.close_workspace_prompted = None;
         self.close_workspace = Some((project.to_owned(), first));
     }
+    /// Stop the current workspace close and drop its native prompts, so a
+    /// late answer cannot close the tab after all.
     pub(crate) fn abort_workspace_close(&mut self) {
-        self.close_workspace = None;
+        if let Some((project, tab)) = self.close_workspace.take() {
+            let owner = crate::native_editor::CloseOwner::Workspace(project, tab);
+            self.native_close_prompts.retain(|r| r.owner != owner);
+            self.native_close_after_save.retain(|r| r.owner != owner);
+        }
         self.close_workspace_queue.clear();
-        self.close_workspace_prompted = None;
     }
     pub(crate) fn close_workspace_tab_now(&mut self, project: &str, tab_id: &str) {
         let keys: Vec<_> = self
@@ -155,28 +141,20 @@ impl App {
         // GUI stayed usable, so a native buffer may have become dirty since
         // `poll_workspace_close` checked it.
         if let Some(path) = self.dirty_native_in_tab(project, tab_id).into_iter().next() {
-            // Another close requested meanwhile keeps its place; this tab
-            // only gets the prompt.
-            if self
-                .close_workspace
-                .as_ref()
-                .is_none_or(|(p, t)| p == project && t == tab_id)
-            {
-                self.prompt_workspace_close(project, tab_id, path);
-            } else {
-                self.native_close_prompt = Some((path, None));
-            }
+            // Another close requested meanwhile keeps its place; the
+            // prompt still names this tab, so its answer finishes it.
+            self.prompt_workspace_close(project, tab_id, path);
             return;
         }
         if let Some(workspace) = self.layouts.get_mut(project) {
             let previous = workspace.active.clone();
             workspace.close(tab_id);
             if self.selected.as_deref() == Some(project) && workspace.active != previous {
-                self.active_session = match workspace.active_pane() {
-                    Some(Tab::Terminal(sid)) => Some(sid.clone()),
-                    _ => None,
-                };
-                self.non_terminal_selected = self.active_session.is_none();
+                if let Some(Tab::Terminal(sid)) = workspace.active_pane().cloned() {
+                    self.focus_terminal(sid);
+                } else {
+                    self.focus_non_terminal();
+                }
             }
         }
         self.forget_tab_expanded(project, tab_id);
@@ -306,40 +284,6 @@ impl App {
             After::Workspace(id(), anchors)
         }
     }
-    pub(crate) fn begin_rename(&mut self, sid: &str, surface: RenameSurface) {
-        if let Some(session) = self.state.sessions.iter().find(|s| s.id == sid) {
-            self.rename_session = Some((sid.into(), session.label.clone()));
-            self.rename_focus = true;
-            self.rename_surface = surface;
-            self.rename_seen = false;
-            self.rename_painted = false;
-            self.rename_missed = false;
-            self.rename_field_id = None;
-        }
-    }
-    /// Terminals, shortcuts, and browser panes stay live unless the rename
-    /// field is actually going to paint. The field strips keys only once it
-    /// paints, and the IDE strip paints first, so a visible field still has
-    /// to block input up front.
-    pub(crate) fn rename_blocks_input(&self) -> bool {
-        self.project_names.draft.is_some()
-            || (self.rename_session.is_some()
-                && self.rename_field_can_show()
-                && !self.rename_missed)
-    }
-    pub(crate) fn rename_field_can_show(&self) -> bool {
-        let Some((sid, _)) = &self.rename_session else {
-            return false;
-        };
-        let sid = sid.clone();
-        match self.rename_surface {
-            // The workspace tab strip stays up over center panes. A tab that
-            // scrolls out of view is caught by `rename_missed`.
-            RenameSurface::Workspace => true,
-            RenameSurface::Pane => self.pane_rename_can_show(&sid),
-            RenameSurface::Sidebar => self.sidebar_rename_can_show(&sid),
-        }
-    }
     pub(crate) fn pane_rename_can_show(&self, sid: &str) -> bool {
         let Some(project_id) = self
             .state
@@ -354,16 +298,6 @@ impl App {
             return self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed;
         }
         !self.center_covers_workspace()
-    }
-    /// A center page replaces the workspace (the Search popup floats over it).
-    pub(crate) fn center_covers_workspace(&self) -> bool {
-        self.settings_open
-            || self.player_open
-            || self.worktree_open
-            || self.worktree_draft.is_some()
-            || self.search_open
-            || self.commands_session.is_some()
-            || self.local_history.is_some()
     }
     pub(crate) fn sidebar_rename_can_show(&self, sid: &str) -> bool {
         let Some((project_id, label, live, kind)) = self
@@ -394,7 +328,7 @@ impl App {
     }
     pub(crate) fn live_session_row_can_show(&self, project_id: &str) -> bool {
         self.preferences.left_visible
-            && !self.preferences.left_agents
+            && self.preferences.left_content() != LeftContent::Agents
             && self.preferences.expanded.get(project_id) != Some(&false)
             && !self.preferences.hidden_projects.contains(project_id)
     }
@@ -430,71 +364,5 @@ impl App {
             .map(|project| project.name.to_lowercase())
             .unwrap_or_default();
         project_name.contains(&query) || label.to_lowercase().contains(&query)
-    }
-    /// A hidden field must not keep egui focus, or the terminal will not take
-    /// keys. The draft stays; the next paint focuses the field instead of
-    /// treating the gap as a blur commit.
-    pub(crate) fn suspend_hidden_rename(&mut self, ctx: &egui::Context) {
-        if self.rename_session.is_none() {
-            self.rename_seen = false;
-            self.rename_painted = false;
-            self.rename_missed = false;
-            self.rename_field_id = None;
-            return;
-        }
-        if self.rename_field_can_show() {
-            return;
-        }
-        self.rename_missed = false;
-        if let Some(id) = self.rename_field_id.take() {
-            ctx.memory_mut(|memory| memory.surrender_focus(id));
-        }
-        self.rename_focus = true;
-    }
-    pub(crate) fn note_rename_frame(&mut self, ctx: &egui::Context) {
-        // A project rename field that did not paint (sidebar hidden or
-        // scrolled away) commits, so it never blocks input.
-        match self.project_names.draft.as_mut() {
-            Some(draft) if draft.painted => draft.painted = false,
-            Some(_) => self.finish_project_rename(true),
-            None => {}
-        }
-        if self.rename_session.is_none() {
-            return;
-        }
-        if !self.rename_seen {
-            self.rename_seen = true;
-            self.rename_painted = false;
-            return;
-        }
-        if self.rename_painted {
-            self.rename_missed = false;
-        } else if self.rename_field_can_show() {
-            self.rename_missed = true;
-            if let Some(id) = self.rename_field_id.take() {
-                ctx.memory_mut(|memory| memory.surrender_focus(id));
-            }
-            self.rename_focus = true;
-        }
-        self.rename_painted = false;
-    }
-    pub(crate) fn finish_rename(&mut self, save: bool) {
-        if let Some((sid, title)) = self.rename_session.take()
-            && save
-            && !title.trim().is_empty()
-            && title.trim().len() <= 256
-        {
-            self.send(Request::Rename {
-                session: sid,
-                label: title.trim().into(),
-            });
-        }
-    }
-    pub(crate) fn renaming(&self, sid: &str, surface: RenameSurface) -> bool {
-        self.rename_surface == surface
-            && self
-                .rename_session
-                .as_ref()
-                .is_some_and(|(target, _)| target == sid)
     }
 }

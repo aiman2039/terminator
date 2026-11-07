@@ -247,11 +247,12 @@ impl App {
             text,
         } = input;
         if !self.remote_supported() {
-            self.error = Some("Restart the session service to open SSH project files".into());
+            self.error
+                .set("Restart the session service to open SSH project files");
             return;
         }
         if let Err(error) = terminator_core::remote::validate_relative(&path) {
-            self.error = Some(error.to_string());
+            self.error.set(error.to_string());
             return;
         }
         let after = self.editor_target(&project.id, None, split);

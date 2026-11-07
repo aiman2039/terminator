@@ -10,10 +10,10 @@ fn explorer_prompts_do_not_suspend_terminal_input() {
     app.pending_delete = vec![PathBuf::from("/a/old")];
     assert!(app.terminal_input_enabled("shell"));
     assert!(app.strip_terminal_input_enabled("shell"));
-    app.settings_open = true;
+    app.center = CenterPage::Settings;
     assert!(!app.terminal_input_enabled("shell"));
     assert!(app.strip_terminal_input_enabled("shell"));
-    app.settings_open = false;
+    app.center = CenterPage::Workspace;
     app.state
         .sessions
         .push(session_fixture("shell", SessionKind::Shell));
@@ -82,8 +82,8 @@ fn sidebar_hiding_releases_rename(app: &mut App, ctx: &egui::Context) {
     assert_rename_blocks(app);
     assert_hiding_releases(
         app,
-        |app| app.preferences.left_agents = true,
-        |app| app.preferences.left_agents = false,
+        |app| app.preferences.set_left_content(LeftContent::Agents),
+        |app| app.preferences.set_left_content(LeftContent::Projects),
     );
     assert_hiding_releases(
         app,
@@ -120,10 +120,10 @@ fn painted_rename_releases_focus_when_hidden(app: &mut App, ctx: &egui::Context)
 fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
     // The Search popup floats over the panes, so it is not a cover.
     let covers: [fn(&mut App); 4] = [
-        |app| app.settings_open = true,
-        |app| app.player_open = true,
-        |app| app.worktree_open = true,
-        |app| app.search_open = true,
+        |app| app.center = CenterPage::Settings,
+        |app| app.center = CenterPage::Player,
+        |app| app.center = CenterPage::Worktrees,
+        |app| app.center = CenterPage::Search("live".into()),
     ];
     for cover in covers {
         cover(app);
@@ -133,10 +133,7 @@ fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
             Some("Draft")
         );
         assert!(app.strip_terminal_input_enabled("named"));
-        app.settings_open = false;
-        app.player_open = false;
-        app.worktree_open = false;
-        app.search_open = false;
+        app.center = CenterPage::Workspace;
         assert_rename_blocks(app);
     }
     app.worktree_draft = Some(worktree_ui::WorktreeDraft {
@@ -147,8 +144,9 @@ fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
         open_terminal: true,
         ..Default::default()
     });
+    app.center = CenterPage::WorktreeDraft;
     assert!(app.strip_terminal_input_enabled("named"));
-    app.worktree_draft = None;
+    app.hide_center_overlay();
     assert_rename_blocks(app);
 }
 
@@ -158,11 +156,11 @@ fn strip_input_follows_the_strip(app: &mut App) {
         "a".into(),
         egui_dock::DockState::new(vec![Tab::Terminal("named".into())]),
     );
-    app.settings_open = true;
+    app.center = CenterPage::Settings;
     assert!(!app.strip_terminal_input_enabled("named"));
     app.preferences.ide_terminal_collapsed = true;
     assert!(app.strip_terminal_input_enabled("named"));
-    app.settings_open = false;
+    app.center = CenterPage::Workspace;
     app.preferences.ide_mode = false;
     app.preferences.ide_terminal_collapsed = false;
     app.preferences.ide_strip_docks.0.clear();
@@ -584,4 +582,80 @@ fn rename_targets_the_requested_session() {
     app.begin_rename("named", RenameSurface::Sidebar);
     assert_eq!(app.rename_session, Some(("named".into(), "named".into())));
     assert!(app.rename_focus);
+}
+
+/// Project "a" with one workspace tab; returns that tab's id.
+fn one_tab_project(app: &mut App) -> String {
+    let workspace = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+        "named".into(),
+    )]));
+    let tab = workspace.tabs[0].id.clone();
+    app.layouts.insert("a".into(), workspace);
+    tab
+}
+
+#[test]
+fn starting_one_inline_rename_commits_the_others() {
+    let (mut app, _, _dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("named", SessionKind::Shell));
+    let tab = one_tab_project(&mut app);
+    app.begin_group_rename("a", &tab, "Team".into());
+    app.begin_rename("named", RenameSurface::Pane);
+    assert!(app.rename_group.is_none());
+    assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Team"));
+    app.begin_group_rename("a", &tab, "Other".into());
+    assert!(app.rename_session.is_none());
+    assert!(!app.rename_focus);
+    app.project_names.draft = Some(crate::sidebar_ui::RenameDraft {
+        id: "a".into(),
+        text: "a".into(),
+        painted: true,
+    });
+    app.begin_rename("named", RenameSurface::Pane);
+    assert!(app.project_names.draft.is_none());
+    assert!(app.rename_group.is_none());
+    assert!(app.rename_session.is_some());
+}
+
+#[test]
+fn group_rename_blocks_terminal_input_and_ends_when_its_field_stops_painting() {
+    let (mut app, ctx, _dir) = fixture();
+    let tab = one_tab_project(&mut app);
+    assert!(app.terminal_input_enabled("shell"));
+    app.begin_group_rename("a", &tab, "Team".into());
+    assert!(app.rename_blocks_input());
+    assert!(!app.terminal_input_enabled("shell"));
+    // The first frame has no field yet (the menu paints after its slot).
+    app.note_rename_frame(&ctx);
+    assert!(app.rename_group.is_some());
+    // The tab node is gone or hidden: the next frame without a field commits.
+    app.note_rename_frame(&ctx);
+    assert!(app.rename_group.is_none());
+    assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Team"));
+    assert!(app.terminal_input_enabled("shell"));
+    // A rename whose tab was closed ends without writing anything.
+    app.begin_group_rename("a", "closed-tab", "Gone".into());
+    app.note_rename_frame(&ctx);
+    app.note_rename_frame(&ctx);
+    assert!(app.rename_group.is_none());
+}
+
+#[test]
+fn ending_a_session_rename_resets_its_field_state() {
+    let (mut app, _, _dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("named", SessionKind::Shell));
+    app.begin_rename("named", RenameSurface::Workspace);
+    app.rename_missed = true;
+    app.rename_seen = true;
+    app.rename_field_id = Some(egui::Id::unique("old-field"));
+    app.begin_workspace_close_tabs("a", Vec::new());
+    assert!(app.rename_session.is_none());
+    assert!(!app.rename_focus);
+    assert!(!app.rename_missed);
+    assert!(!app.rename_seen);
+    assert!(app.rename_field_id.is_none());
 }

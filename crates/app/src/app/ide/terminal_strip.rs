@@ -159,15 +159,13 @@ impl App {
         if keep {
             return;
         }
-        self.active_session = self
+        let focused = self
             .selected
             .as_ref()
             .and_then(|project| self.layouts.get(project))
             .and_then(|dock| dock.active_pane())
-            .and_then(|tab| match tab {
-                Tab::Terminal(sid) => Some(sid.clone()),
-                _ => None,
-            });
+            .cloned();
+        self.focus_pane(focused.as_ref());
     }
 
     /// Heal an `active_session` cleared by a tab close: prefer the strip's
@@ -190,7 +188,7 @@ impl App {
             return;
         }
         if let Some(Tab::Terminal(sid)) = dock.active_pane() {
-            self.active_session = Some(sid.clone());
+            self.focus_terminal(sid.clone());
         }
     }
 
@@ -301,7 +299,6 @@ impl App {
                     render_tab: None,
                 },
             );
-        self.apply_add_strip_tab(project, strip);
-        self.apply_focus_strip_tab(strip);
+        self.apply_strip_dock_ops(project, strip);
     }
 }

@@ -7,7 +7,7 @@ impl Viewer<'_> {
     /// shell button, and its saved scrollback with a filter.
     pub(super) fn dead_session_view(&mut self, ui: &mut egui::Ui, session: &Session) {
         let sid = &session.id;
-        self.app.backends.remove(sid);
+        self.app.detach_backend(sid);
         ui.colored_label(
             appearance::color(&self.app.theme.status_waiting),
             format!(
@@ -72,7 +72,7 @@ impl Viewer<'_> {
         if let (Some(viewport), Some(pane)) = (self.window, pane) {
             // A fresh shell for a dead floated session stays in its
             // window instead of the main dock.
-            self.app.add_float_tab = Some((viewport, pane, None));
+            self.app.queue_add(DockTarget::Float(viewport), pane, None);
             return;
         }
         let _ = self.app.jobs.send(Job::rpc(
@@ -109,7 +109,7 @@ impl Viewer<'_> {
                     .desired_width(220.0),
             );
             if appearance::sidebar_action(ui, "ArrowLeft", "Back").clicked() {
-                self.app.search_session = None;
+                self.app.close_scrollback_search();
                 self.app.history_filter.remove(sid);
             }
         });

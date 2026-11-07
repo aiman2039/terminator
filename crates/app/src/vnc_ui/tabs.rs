@@ -54,7 +54,7 @@ impl App {
         if let Some(error) =
             self.vnc_options_unsupported(&profile.options, self.vnc_features_supported())
         {
-            self.error = Some(error.into());
+            self.error.set(error);
             return;
         }
         if profile.password.is_empty() && !profile.credential_saved {
@@ -175,9 +175,8 @@ impl App {
                     workspace.set_focused_node_and_surface(path.node_path());
                 }
                 self.select_project(project);
-                self.active_session = None;
-                self.non_terminal_selected = true;
-                self.focus_tab = Some(tab);
+                self.focus_non_terminal();
+                self.queue_main_focus(tab);
                 return;
             }
         }

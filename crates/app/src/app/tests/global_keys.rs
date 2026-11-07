@@ -156,12 +156,12 @@ fn keymap_chords_show_the_palette_over_settings_and_the_player() {
     let chord = keymap_chord(JetBrainsCommand::FindAction);
     assert_eq!(dispatch(&mut app, &ctx, true, chord), 0);
     assert!(app.palette.open);
-    assert!(!app.settings_open, "the palette takes the center pane");
+    assert!(!app.settings_open(), "the palette takes the center pane");
     assert!(app.settings_session, "Settings keeps its draft");
     app.close_palette();
     app.open_player();
     assert_eq!(dispatch(&mut app, &ctx, true, "command+E"), 0);
-    assert!(app.palette.open && !app.player_open);
+    assert!(app.palette.open && !app.player_open());
     assert_eq!(app.palette.filters, crate::palette::FILTER_FILES);
 }
 

@@ -57,10 +57,8 @@ pub struct App {
     pub(crate) service_ready: std::collections::VecDeque<Update>,
     pub(crate) ui_service_peak_ms: f64,
     pub(crate) installation_error: Option<String>,
-    pub(crate) repair_pending: bool,
-    pub(crate) restart_pending: bool,
-    pub(crate) service_start_pending: bool,
-    pub(crate) restart_confirm: bool,
+    pub(crate) service_op: ServiceOp,
+    pub(crate) service_failure: Option<ServiceFailure>,
     pub(crate) automatic_repair_attempt: Option<String>,
     pub(crate) exit: exit::Exit,
     pub(crate) exit_attempt: u64,
@@ -98,8 +96,6 @@ pub struct App {
     pub(crate) layout_readonly: HashSet<String>,
     pub(crate) close_workspace: Option<(String, String)>,
     pub(crate) close_workspace_queue: Vec<String>,
-    /// Dirty native buffer the current workspace close already asked about.
-    pub(crate) close_workspace_prompted: Option<PathBuf>,
     pub(crate) workspace_insert: HashMap<String, usize>,
     pub(crate) post_create: PostCreateQueue,
     pub(crate) workspace_visible: Option<(String, String)>,
@@ -153,42 +149,17 @@ pub struct App {
     pub(crate) jobs: exit::JobQueue,
     pub(crate) updates: Receiver<Update>,
     pub(crate) update_tx: Sender<Update>,
-    pub(crate) picker_active: bool,
-    pub(crate) add_tab: Option<(egui_dock::NodePath, Option<String>)>,
-    /// Queued strip-dock tab creation (the strip's `on_add`/menu counterpart
-    /// to [`Self::add_tab`]); consumed right after the strip renders.
-    pub(crate) add_strip_tab: Option<(egui_dock::NodePath, Option<String>)>,
-    /// Strip-dock tab to focus after the strip renders.
-    pub(crate) focus_strip_tab: Option<Tab>,
-    /// Strip shell to move into the main pane once the strip dock is back in
-    /// `ide_strip_docks`. The menu runs while that dock is checked out for
-    /// paint, so the removal has to wait until it is inserted again.
-    pub(crate) move_strip_to_main: Option<String>,
-    /// Main-pane shell to move into the strip once the workspace dock is
-    /// checked back in. The caption menu runs while that dock is checked out.
-    pub(crate) move_main_to_strip: Option<String>,
-    /// Main-dock pane queued for detach into a fresh top-level tab. The
-    /// pane menu runs while the workspace dock is checked out for paint,
-    /// so the move waits until it is checked back in.
-    pub(crate) detach_pane: Option<Tab>,
-    /// Main-dock pane plus destination top-level tab id, queued by the
-    /// pane menu to dock a detached pane back. Same checkout reason as
-    /// [`Self::detach_pane`].
-    pub(crate) dock_back_pane: Option<(Tab, String)>,
+    /// The one native file picker: requested, open, or idle.
+    pub(crate) picker: Picker,
+    /// Tab creation, focus, and pane moves asked for while their dock is
+    /// checked out for paint, applied in order once it is checked back in.
+    pub(crate) dock_ops: super::docking::DockOps,
     /// Sibling top-level tabs as (id, label, icon), snapshotted by the
     /// workspace strip before the main dock paints so the pane menu can
     /// offer dock-back targets while the workspace is checked out.
     /// Excludes the active tab.
     pub(crate) dock_back_targets: Vec<(String, String, &'static str)>,
-    /// Main-dock pane queued to float in its own window (see `detach_pane`).
-    pub(crate) float_pane: Option<Tab>,
     pub(crate) pane_ops: super::docking::PaneOps,
-    /// Floating tab creation queued by a floating window's own `+`/split
-    /// controls: the issuing window plus the leaf path inside its dock.
-    /// Consumed after that window's dock is checked back in.
-    pub(crate) add_float_tab: Option<(egui::ViewportId, egui_dock::NodePath, Option<String>)>,
-    /// Floating-dock tab to focus after its window renders.
-    pub(crate) focus_float_tab: Option<(egui::ViewportId, Tab)>,
     /// Docks detached into their own OS windows, rendered every frame by
     /// [`Self::paint_floating`]. Closing a window docks its layout back.
     pub(crate) floating: Vec<FloatingWindow>,
@@ -204,13 +175,11 @@ pub struct App {
     pub(crate) pane_by_tab: HashMap<String, egui_dock::NodePath>,
     pub(crate) pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pub(crate) pane_index: Option<PaneIndex>,
-    pub(crate) pane_action_source: Option<PaneSource>,
     pub(crate) native_focus_pending: Option<PaneSource>,
     /// A cross-dock move changed a dock that was checked out for paint.
     /// Baselines and layout save run after that dock is inserted again.
     pub(crate) pending_layout_save: bool,
     pub(crate) drag: super::drag_state::DragState,
-    pub(crate) focus_tab: Option<Tab>,
     /// Diff navigation requested while its dock is checked out for painting.
     pub(crate) diff_replacement: Option<(Tab, Tab)>,
     pub(crate) terminal_context: HashMap<String, String>,
@@ -240,26 +209,16 @@ pub struct App {
     pub(crate) resource_tx: std::sync::mpsc::Sender<Option<resource_sample::Request>>,
     pub(crate) resource_request: Option<resource_sample::Request>,
     pub(crate) context_path: Option<PathBuf>,
-    pub(crate) error: Option<String>,
-    /// Same status text the user dismissed. Identical reports stay hidden.
-    pub(crate) dismissed_error: Option<String>,
-    /// Authentication errors belong to a service, not the selected directory.
-    pub(crate) dismissed_auth_errors: HashSet<String>,
-    /// Working directory the dismiss latch and missing-path budget belong to.
-    pub(crate) error_cwd: Option<PathBuf>,
-    pub(crate) missing_path_reports: u8,
+    /// Status-bar error with its kind and dismiss state.
+    pub(crate) error: StatusLine,
     pub(crate) info: Option<String>,
     /// The info text on screen and when it appeared: it clears after a while.
     pub(crate) info_since: Option<(String, std::time::Instant)>,
-    pub(crate) add_project: bool,
-    pub(crate) settings_open: bool,
+    /// The page in the main pane; written only by `show_center`.
+    pub(crate) center: crate::CenterPage,
     pub(crate) settings_session: bool,
     pub(crate) settings_pending: Option<settings_ui::SettingsPending>,
-    pub(crate) player_open: bool,
-    /// The VNC address book fills the main pane (same pattern as Player).
-    pub(crate) vnc_page_open: bool,
     pub(crate) editor_preset: usize,
-    pub(crate) test_editor: bool,
     pub(crate) settings_draft: Settings,
     pub(crate) settings_section: SettingsSection,
     pub(crate) settings_search: String,
@@ -269,11 +228,11 @@ pub struct App {
     pub(crate) settings_probes: std::cell::RefCell<settings_ui::Probes>,
     pub(crate) custom_editor: bool,
     pub(crate) shortcut_capture: Option<String>,
-    pub(crate) browse_target: Option<BrowseTarget>,
     pub(crate) palette: super::palette_state::PaletteState,
     /// Open Ctrl+Tab recent-tab switcher, if any.
     pub(crate) switcher: Option<crate::chrome::switcher::Switcher>,
     pub(crate) structure: crate::sidebar_ui::StructureState,
+    /// The new-worktree form; kept only on the worktree center pages.
     pub(crate) worktree_draft: Option<worktree_ui::WorktreeDraft>,
     pub(crate) worktree_remove: Option<String>,
     pub(crate) theme: AppearanceConfig,
@@ -304,25 +263,17 @@ pub struct App {
     pub(crate) rename_missed: bool,
     /// Last painted rename field, so a hidden field can drop keyboard focus.
     pub(crate) rename_field_id: Option<egui::Id>,
-    /// Sidebar group rename in progress: (project, workspace tab id) plus
-    /// the draft text. GUI-local; the name lives on the workspace tab.
-    pub(crate) rename_group: Option<(String, String)>,
-    pub(crate) rename_group_text: String,
-    pub(crate) rename_group_focus: bool,
+    /// Sidebar tab group rename in progress.
+    pub(crate) rename_group: Option<super::inline_rename::GroupRename>,
     pub(crate) editor_origins: HashMap<String, Vec<Tab>>,
     pub(crate) search: String,
     pub(crate) scrollback_hits: crate::app::ScrollbackHits,
     /// Commands page filter; separate from the scrollback query (#201).
     pub(crate) commands_filter: String,
-    pub(crate) search_session: Option<String>,
-    pub(crate) search_open: bool,
-    /// Terminal whose shell integration commands fill the main pane.
-    pub(crate) commands_session: Option<String>,
     /// Shared so the Commands page borrows them without a per-frame clone.
     pub(crate) command_blocks:
         HashMap<String, std::sync::Arc<[terminator_core::command_blocks::CommandBlock]>>,
-    pub(crate) worktree_open: bool,
-    /// The Local History page fills the main pane (same pattern as Player).
+    /// Data of `CenterPage::LocalHistory`.
     pub(crate) local_history: Option<crate::local_history::Page>,
     pub(crate) terminal_find: HashMap<String, TerminalFind>,
     pub(crate) history_filter: HashMap<String, String>,
@@ -333,15 +284,12 @@ pub struct App {
     /// line so the GUI thread never reads the target file itself.
     pub(crate) native_pending_col: HashMap<PathBuf, u32>,
     pub(crate) lsp: lsp_manager::LspManager,
-    /// Dirty-editor close prompt: the file plus the issuing pane, if the
-    /// prompt came from a view (dock X). Flow-issued prompts (quit,
-    /// workspace close) carry no issuer and keep legacy removal.
-    pub(crate) native_close_prompt: Option<(PathBuf, Option<native_editor::CloseIssuer>)>,
+    /// Dirty-editor close prompts, oldest first, each with the flow that
+    /// asked (pane, quit, workspace close) and the issuing view, if any.
+    pub(crate) native_close_prompts: Vec<native_editor::NativeCloseRequest>,
     /// Save-then-close requests (`:wq`, Save and close) waiting on their
-    /// save, each with the view that issued it (captured when the save
-    /// starts, since it settles frames later under whichever view
-    /// renders first). Several files can wait at once.
-    pub(crate) native_close_after_save: HashMap<PathBuf, Option<native_editor::CloseIssuer>>,
+    /// save, with owner and issuing view (captured when the save starts).
+    pub(crate) native_close_after_save: Vec<native_editor::NativeCloseRequest>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pub(crate) pending_app_quit: bool,
     /// Quit is waiting on "VNC sessions stay connected"; and whether that
@@ -411,14 +359,9 @@ pub struct App {
     pub(crate) pending_quit_all: Option<bool>,
     /// Vim navigation from native editors, run after check-in.
     pub(crate) native_nav: native_editor::NavPending,
-    pub(crate) open_path: bool,
     /// A diff navigation shortcut or palette command for the active diff
     /// tab, applied when that tab paints next.
     pub(crate) diff_nav: Option<Action>,
-    pub(crate) pick_audio: bool,
-    /// Open the picker for RealVNC `.vnc` files to import.
-    pub(crate) pick_vnc_files: bool,
-    pub(crate) pick_audio_dir: bool,
     pub(crate) path_text: String,
     pub(crate) last_save: Instant,
     pub(crate) refresh: tokio::sync::watch::Sender<Option<refresh::Request>>,
@@ -449,19 +392,6 @@ pub struct App {
     pub(crate) control_server: Option<ui_control::Server>,
 }
 
-pub(crate) fn is_missing_path_error(error: &str) -> bool {
-    if daemon_connection::is_connection_error(error) {
-        return false;
-    }
-    error
-        .lines()
-        .any(|line| line.trim() == "No such file or directory (os error 2)")
-}
-
-pub(crate) fn is_session_auth_error(error: &str) -> bool {
-    error.starts_with("Cannot read session service authentication file ")
-}
-
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {
     incoming.client_observation != 0
         && current.client_observation > incoming.client_observation
@@ -472,30 +402,6 @@ pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {
 pub(crate) fn inventory_is_stale(current: &State, incoming: &State) -> bool {
     incoming.catalog_revision < current.catalog_revision
         || (incoming.generation == current.generation && incoming.revision < current.revision)
-}
-
-pub(crate) fn service_failure_update(
-    context: &async_service::OperationContext,
-    error: &async_service::Failure,
-) -> Option<Update> {
-    match context.subsystem {
-        // A diff or gutter write; one in a known repository ran on its queue.
-        "diff-action" | "workspace-op" if let Some(key) = &context.tab => {
-            Some(Update::DiffActionFailed(key.clone(), error.to_string()))
-        }
-        "diff" => Some(Update::Diff(
-            context.resource.clone(),
-            Err(error.to_string()),
-        )),
-        "files" => Some(Update::ResolvedTarget(context.resource.clone(), None)),
-        "images" => Some(Update::Image(
-            PathBuf::from(&context.resource),
-            context.generation,
-            Err(error.to_string()),
-        )),
-        "audio-spectrum" => None,
-        _ => Some(Update::Error(error.to_string())),
-    }
 }
 
 /// A commit's changed files: `(status letter, path)`, or the error.

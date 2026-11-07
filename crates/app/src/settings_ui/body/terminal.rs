@@ -456,12 +456,12 @@ impl App {
             add_control: |ui| {
                 if ui
                     .add_enabled(
-                        !self.picker_active,
+                        !self.picker.busy(),
                         egui::Button::new("Choose file and test…"),
                     )
                     .clicked()
                 {
-                    self.test_editor = true;
+                    self.request_pick(PickKind::TestEditor);
                 }
             },
         });

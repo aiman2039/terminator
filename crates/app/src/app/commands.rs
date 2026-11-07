@@ -39,7 +39,7 @@ impl App {
         if self.command_dialog_open()
             || self.shortcut_capture.is_some()
             || self.rename_blocks_input()
-            || self.picker_active
+            || self.picker.busy()
         {
             return false;
         }
@@ -47,7 +47,7 @@ impl App {
         if self.switcher.is_some() {
             return switcher;
         }
-        if self.settings_open || self.player_open {
+        if self.center_above_palette() {
             return switcher
                 || matches!(
                     action,
@@ -168,7 +168,9 @@ impl App {
 
     pub(crate) fn run_shortcut(&mut self, ctx: &egui::Context, action: Action) {
         match action {
-            Action::OpenFile => self.open_path = true,
+            Action::OpenFile => {
+                self.request_pick(PickKind::OpenFile);
+            }
             Action::NewTerminal => self.create(None),
             Action::SplitUp => self.create(Some("up")),
             Action::SplitDown => self.create(Some("down")),
@@ -259,8 +261,7 @@ impl App {
     }
 
     pub(crate) fn open_command_palette(&mut self) {
-        // Settings and the Player draw above the palette in the center pane.
-        if self.settings_open || self.player_open {
+        if self.center_above_palette() {
             self.hide_center_overlay();
         }
         self.palette.open = true;
@@ -344,8 +345,7 @@ impl App {
     }
 
     pub(crate) fn open_scrollback_search(&mut self, ctx: &egui::Context, sid: &str) {
-        self.search_session = Some(sid.to_string());
-        self.search_open = true;
+        self.show_center(CenterPage::Search(sid.to_owned()));
         self.scrollback_hits = crate::app::ScrollbackHits::default();
         self.texts.remove(&format!("history:{sid}"));
         ctx.memory_mut(|memory| {

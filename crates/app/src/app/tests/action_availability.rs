@@ -77,7 +77,7 @@ fn cmd_shift_r_renames_a_focused_terminal_and_replaces_in_files_elsewhere() {
     let renaming = app.rename_session.as_ref().map(|(id, _)| id.as_str());
     assert_eq!(renaming, Some("live"));
     assert!(!replacing(&app));
-    app.rename_session = None;
+    app.clear_session_rename();
     // The Explorer tree holds the keyboard, not the terminal.
     let tree = egui::Id::unique("explorer-tree-under-test");
     ctx.memory_mut(|memory| memory.request_focus(tree));
@@ -96,7 +96,7 @@ fn cmd_shift_r_renames_a_focused_terminal_and_replaces_in_files_elsewhere() {
     let renaming = app.rename_session.as_ref().map(|(id, _)| id.as_str());
     assert_eq!(renaming, Some("live"));
     assert!(!replacing(&app));
-    app.rename_session = None;
+    app.clear_session_rename();
     ctx.memory_mut(|memory| memory.surrender_focus(find_bar));
     // A text field over the terminal pane: Replace in Files takes it.
     let field = egui::Id::unique("text-field-under-test");

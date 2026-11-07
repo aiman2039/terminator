@@ -1,7 +1,7 @@
 //! Disk sync for native buffers: background loads (with retry and
 //! undo-preserving reloads), modification-time probes, and saves.
 use super::doc::{LoadResult, MTIME_TTL, NativeDoc, SaveResult, vimrc_options};
-use super::file_io::{Fingerprint, LineEnding, LoadedFile, NativeFileIo, SaveRequest};
+use super::file_io::{Fingerprint, LineEnding, LoadedFile, NativeFileIo, SaveError, SaveRequest};
 use crate::gui_services;
 use std::ops::Range;
 use std::path::Path;
@@ -402,7 +402,7 @@ impl NativeDoc {
                 self.lsp_saved = true;
             }
             Err(error) => {
-                self.save_error = Some(format!("{error:#}"));
+                self.save_error = Some(SaveError::of(&error));
             }
         }
     }
@@ -449,7 +449,7 @@ impl NativeDoc {
                 self.save_rx = Some(rx);
                 self.saving = true;
             }
-            None => self.save_error = Some("Could not start the file write".into()),
+            None => self.save_error = Some(SaveError::Failed("Could not start the write".into())),
         }
     }
 

@@ -65,6 +65,7 @@ struct Inner {
     snapshot_received: std::sync::Mutex<Option<Instant>>,
     editors: std::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     snapshot: Arc<std::sync::Mutex<Option<Box<State>>>>,
+    owed: super::jobs::replies::SharedOwed,
 }
 pub struct Owner {
     pub supervisor: Supervisor<Vec<Update>, anyhow::Error>,
@@ -123,6 +124,7 @@ impl Services {
             snapshot_received: std::sync::Mutex::default(),
             editors: std::sync::Mutex::default(),
             snapshot: Arc::clone(&snapshot),
+            owed: super::jobs::replies::SharedOwed::default(),
         }));
         let cpu = service.cpu().clone();
         supervisor.handle.submit(
@@ -310,22 +312,41 @@ impl Services {
             self.0.ctx.request_repaint();
         }
     }
+    /// The replies a finished operation still owes its view (see
+    /// [`super::jobs::replies::Owed::settle`]).
+    pub(crate) fn settle(
+        &self,
+        id: terminator_core::async_service::OperationId,
+        result: Result<(), &terminator_core::async_service::Failure>,
+    ) -> Vec<Update> {
+        self.0.owed.lock().settle(id, result)
+    }
     pub fn idle(&self) -> bool {
         self.0.handle.diagnostics().required == 0
     }
     pub fn send(&self, job: Job) -> Result<(), ()> {
         let context = JobRouting::context(&job);
-        let rejected = JobRouting::rejection(&job);
+        let owed = super::jobs::replies::owed(&job);
         let banner = context.policy != Policy::ReplaceableRead;
         let service = self.clone();
         let cancel = CancellationToken::new();
         let work_cancel = cancel.clone();
+        // Held across the submit, so the completion cannot be settled
+        // before its reply is recorded.
+        let mut registry = self.0.owed.lock();
+        let key = context.clone();
         match self.0.handle.submit(context, cancel, async move {
             service.execute(job, work_cancel).await
         }) {
-            Ok(_) => Ok(()),
+            Ok(id) => {
+                if let Some(reply) = owed {
+                    registry.record(id, &key, reply);
+                }
+                Ok(())
+            }
             Err(error) => {
-                for update in rejected {
+                drop(registry);
+                for update in owed.map_or_else(Vec::new, |reply| reply(JobRouting::busy())) {
                     let _ = self.0.legacy_updates.send(update);
                 }
                 if banner {

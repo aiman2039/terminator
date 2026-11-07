@@ -9,28 +9,34 @@ use crate::*;
 impl App {
     /// Remember a strip shell to move once its dock is not checked out.
     pub(crate) fn queue_strip_move(&mut self, sid: &str) {
-        self.move_strip_to_main = Some(sid.to_owned());
+        self.queue_dock_op(DockOp::StripToMain(sid.to_owned()));
     }
 
-    /// Apply a queued strip move. No-op while the selected project's strip
-    /// dock is checked out for paint; the caller retries after inserting it.
+    /// Apply queued strip moves. A move stays queued while the selected
+    /// project's strip dock is checked out for paint; the caller retries
+    /// after inserting it.
     pub(crate) fn drain_strip_move(&mut self) {
-        let Some(sid) = self.move_strip_to_main.clone() else {
-            return;
-        };
-        let checked_out = self.selected.as_ref().is_some_and(|project| {
-            !self.preferences.ide_strip_docks.0.contains_key(project)
-                && self
-                    .state
-                    .sessions
-                    .iter()
-                    .any(|session| session.id == sid && session.project_id == *project)
-        });
-        if checked_out {
-            return;
+        for op in self
+            .dock_ops
+            .take(|_, op| matches!(op, DockOp::StripToMain(_)))
+        {
+            let DockOp::StripToMain(sid) = &op else {
+                continue;
+            };
+            let checked_out = self.selected.as_ref().is_some_and(|project| {
+                !self.preferences.ide_strip_docks.0.contains_key(project)
+                    && self
+                        .state
+                        .sessions
+                        .iter()
+                        .any(|session| &session.id == sid && session.project_id == *project)
+            });
+            if checked_out {
+                self.queue_dock_op(op);
+            } else {
+                self.move_strip_session_to_main(sid);
+            }
         }
-        self.move_strip_to_main = None;
-        self.move_strip_session_to_main(&sid);
     }
 
     /// Move one strip shell into its own main-pane workspace tab. IDE mode
@@ -67,9 +73,8 @@ impl App {
         if self.selected.as_deref() != Some(project.as_str()) {
             self.select_project(project);
         }
-        self.active_session = Some(sid.to_owned());
-        self.non_terminal_selected = false;
-        self.focus_tab = Some(pane);
+        self.focus_terminal(sid.to_owned());
+        self.queue_main_focus(pane);
         self.note_focus_baselines();
         self.save_layouts();
         self.send(Request::Focus {
@@ -80,14 +85,18 @@ impl App {
 
     /// Remember a main-pane shell to move once its workspace is checked in.
     pub(crate) fn queue_main_to_strip(&mut self, sid: &str) {
-        self.move_main_to_strip = Some(sid.to_owned());
+        self.queue_dock_op(DockOp::MainToStrip(sid.to_owned()));
     }
 
     pub(crate) fn drain_main_to_strip(&mut self) {
-        let Some(sid) = self.move_main_to_strip.take() else {
-            return;
-        };
-        self.move_main_session_to_strip(&sid);
+        for op in self
+            .dock_ops
+            .take(|_, op| matches!(op, DockOp::MainToStrip(_)))
+        {
+            if let DockOp::MainToStrip(sid) = op {
+                self.move_main_session_to_strip(&sid);
+            }
+        }
     }
 
     /// Move one main-pane shell into the IDE strip. IDE mode stays on and the
@@ -123,9 +132,8 @@ impl App {
         if self.selected.as_deref() != Some(project.as_str()) {
             self.select_project(project);
         }
-        self.active_session = Some(sid.to_owned());
-        self.non_terminal_selected = false;
-        self.focus_strip_tab = Some(pane);
+        self.focus_terminal(sid.to_owned());
+        self.queue_focus(DockTarget::Strip, pane);
         self.note_focus_baselines();
         self.save_layouts();
         self.send(Request::Focus {
@@ -154,9 +162,8 @@ impl App {
         } else {
             dock.add(id(), pane.clone());
         }
-        self.active_session = Some(sid.to_owned());
-        self.non_terminal_selected = false;
-        self.focus_tab = Some(pane);
+        self.focus_terminal(sid.to_owned());
+        self.queue_main_focus(pane);
         self.hide_center_overlay();
         self.pending_layout_save = true;
         self.send(Request::Focus {
@@ -209,7 +216,7 @@ impl App {
         let outside = ui
             .input(|input| input.pointer.interact_pos().or(input.pointer.latest_pos()))
             .is_some_and(|pos| !strip_rect.contains(pos));
-        if outside && self.drag.pane.is_none() {
+        if outside && self.drag.idle() {
             self.drag.pane = Some(Tab::Terminal(sid));
             self.drag.pane_from_strip = true;
         }
@@ -234,7 +241,7 @@ impl App {
         let down = ui.input(|input| input.pointer.any_down());
         if self.drag.pane_from_strip {
             if released {
-                self.end_pane_drag();
+                self.end_pane_drag(None, false);
             }
             return;
         }
@@ -250,7 +257,8 @@ impl App {
         }
         if released {
             self.move_main_session_to_strip(&sid);
-            self.end_pane_drag();
+            // The pane left the main dock; the previewed tab did not get it.
+            self.end_pane_drag(None, false);
         }
     }
 }

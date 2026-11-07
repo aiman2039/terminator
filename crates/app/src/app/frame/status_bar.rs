@@ -83,7 +83,7 @@ impl App {
             self.installation_repair_banner(ui);
         } else if self.service_disconnected() {
             ui.horizontal_wrapped(|ui| self.service_unreachable_banner(ui));
-        } else if let Some(error) = self.error.clone() {
+        } else if let Some(error) = self.error.text().map(str::to_owned) {
             ui.horizontal_wrapped(|ui| {
                 if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
                     self.dismiss_status_error();
@@ -168,10 +168,10 @@ impl App {
         );
         if let Some(detail) = self
             .error
-            .clone()
-            .filter(|error| !daemon_connection::is_connection_error(error))
+            .get()
+            .filter(|error| error.kind != StatusKind::Connection)
         {
-            ui.colored_label(appearance::color(&self.theme.status_failed), detail);
+            ui.colored_label(appearance::color(&self.theme.status_failed), &detail.text);
         } else {
             ui.weak("Start it to show and close sessions. Ended sessions remain in History.");
         }

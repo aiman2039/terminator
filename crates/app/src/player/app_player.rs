@@ -82,8 +82,7 @@ impl App {
         self.seed_sample_playlist();
         self.dismiss_player_tabs();
         self.player.radio_mode = self.preferences.player_radio_mode;
-        self.hide_center_overlay();
-        self.player_open = true;
+        self.show_center(crate::CenterPage::Player);
     }
 
     pub(super) fn seed_sample_playlist(&mut self) {
@@ -93,7 +92,7 @@ impl App {
         self.preferences.ensure_default_playlist();
         let samples = install_samples(&self.paths.data.join("player-samples"));
         if samples.is_empty() {
-            self.error = Some("Could not install sample tracks".into());
+            self.error.set("Could not install sample tracks");
             return;
         }
         self.preferences.player_samples_seeded = true;
@@ -441,7 +440,7 @@ impl App {
         } else if let Some(station) = self.radio_visible().first().cloned() {
             self.play_radio(project, station);
         } else {
-            self.pick_audio = true;
+            self.request_pick(PickKind::AudioFiles);
         }
     }
 

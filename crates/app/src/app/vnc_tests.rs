@@ -385,14 +385,17 @@ fn quitting_with_live_vnc_sessions_asks_and_can_disconnect_them() {
         vnc_session("live", VncSessionStatus::Connected),
         vnc_session("gone", VncSessionStatus::Disconnected),
     ];
-    assert!(!app.vnc_quit_allowed(), "live sessions ask first");
+    assert!(app.vnc_quit_needs_prompt(), "live sessions ask first");
+    assert!(!app.vnc_quit_prompt, "asking is a pure check");
+    app.accept_app_quit(&ctx);
     assert!(app.vnc_quit_prompt);
 
     app.answer_vnc_quit(&ctx, crate::vnc_ui::QuitChoice::Cancel);
     assert!(!app.vnc_quit_prompt && !app.vnc_quit_confirmed);
     assert!(requests.try_recv().is_err(), "cancel sends nothing");
 
-    assert!(!app.vnc_quit_allowed());
+    app.accept_app_quit(&ctx);
+    assert!(app.vnc_quit_prompt);
     app.answer_vnc_quit(&ctx, crate::vnc_ui::QuitChoice::Disconnect);
     match requests.try_recv() {
         Ok(Job::Control(request, _)) => assert!(
@@ -401,16 +404,18 @@ fn quitting_with_live_vnc_sessions_asks_and_can_disconnect_them() {
         ),
         _ => panic!("expected one VNC disconnect"),
     }
-    assert!(app.vnc_quit_allowed(), "answered once per quit");
+    assert!(!app.vnc_quit_needs_prompt(), "answered once per quit");
 }
 
 #[test]
 fn an_app_restart_does_not_ask_about_live_vnc_sessions() {
     let (mut app, _ctx, _dir) = fixture();
     app.state.vnc_sessions = vec![vnc_session("live", VncSessionStatus::Connected)];
-    app.restart_pending = true;
-    assert!(app.vnc_quit_allowed(), "the restarted GUI reattaches them");
-    assert!(!app.vnc_quit_prompt);
+    app.service_op = crate::ServiceOp::Restarting;
+    assert!(
+        !app.vnc_quit_needs_prompt(),
+        "the restarted GUI reattaches them"
+    );
 }
 
 #[test]

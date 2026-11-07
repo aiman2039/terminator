@@ -137,10 +137,10 @@ impl App {
             grant_folder,
         } = frame;
         if grant_folder {
-            self.add_project = true;
+            self.request_pick(PickKind::Project);
         }
         if let Some(target) = browse {
-            self.browse_target = Some(target);
+            self.request_pick(PickKind::Browse(target));
         }
         if apply {
             self.apply_settings();

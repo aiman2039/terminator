@@ -119,7 +119,7 @@ impl App {
     /// Dragging a strip tab reorders the top-level tabs; pane drags keep
     /// their own payload.
     fn start_strip_tab_drag(&mut self, paint: &TabPaint<'_>) {
-        if paint.response.drag_started() && self.drag.pane.is_none() && self.drag.tab.is_none() {
+        if paint.response.drag_started() && self.drag.idle() {
             self.drag.tab = Some(paint.group.id.clone());
         }
     }

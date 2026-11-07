@@ -62,11 +62,15 @@ fn sidebar_group_is_abstract_and_renames_without_touching_sessions() {
     paint(&mut app, &[press(true)], &mut time);
     paint(&mut app, &[press(false)], &mut time);
     paint(&mut app, &[], &mut time);
-    assert_eq!(app.rename_group, Some(("a".to_string(), "g1".to_string())));
+    assert!(
+        app.rename_group
+            .as_ref()
+            .is_some_and(|rename| rename.project == "a" && rename.tab == "g1")
+    );
     assert!(header_target(&ctx)("sidebar-tab-rename:g1").is_some());
     paint(&mut app, &[egui::Event::Text("Agents".into())], &mut time);
     paint(&mut app, &[key_press(egui::Key::Enter)], &mut time);
-    assert_eq!(app.rename_group, None);
+    assert!(app.rename_group.is_none());
     assert_eq!(
         app.layouts["a"].tabs[0].name.as_deref(),
         Some("Agents"),
@@ -74,14 +78,16 @@ fn sidebar_group_is_abstract_and_renames_without_touching_sessions() {
     );
     // Member terminal labels are untouched by the group rename.
     assert_eq!(app.state.sessions[0].label, "s1");
-    // Renaming again starts from the custom name.
+    // Renaming again starts from the custom name. Wait past the first
+    // double-click so these clicks are not counted as a triple click.
+    time += 1.0;
     paint(&mut app, &[press(true)], &mut time);
     paint(&mut app, &[press(false)], &mut time);
     paint(&mut app, &[press(true)], &mut time);
     paint(&mut app, &[press(false)], &mut time);
-    assert_eq!(app.rename_group_text, "Agents");
+    assert_eq!(app.rename_group.as_ref().unwrap().text, "Agents");
     paint(&mut app, &[key_press(egui::Key::Escape)], &mut time);
-    assert_eq!(app.rename_group, None);
+    assert!(app.rename_group.is_none());
     assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Agents"));
 }
 

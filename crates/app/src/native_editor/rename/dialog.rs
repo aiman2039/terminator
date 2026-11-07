@@ -143,9 +143,9 @@ impl App {
             return false;
         };
         if doc.dirty() {
-            doc.save_error = Some(format!(
+            doc.save_error = Some(crate::native_editor::file_io::SaveError::Failed(format!(
                 "{change} changed the file on disk while this buffer had edits. Review it before saving."
-            ));
+            )));
             return true;
         }
         // Applied as one undoable edit, keeping the undo history.

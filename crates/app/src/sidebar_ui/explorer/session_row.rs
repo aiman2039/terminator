@@ -168,9 +168,7 @@ impl App {
             })
             .clicked()
         {
-            self.rename_group = Some((project_id.to_string(), tab_id.to_string()));
-            self.rename_group_text.clear();
-            self.rename_group_focus = true;
+            self.begin_group_rename(project_id, tab_id, String::new());
             ui.close();
         }
         ui.separator();

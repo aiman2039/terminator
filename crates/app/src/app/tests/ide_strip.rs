@@ -87,9 +87,11 @@ fn ide_stripes_switch_views_and_toggle_tools() {
         );
     };
     click(&mut app, agents);
-    assert!(app.preferences.left_visible && app.preferences.left_agents);
+    assert!(app.left_agents_shown());
     click(&mut app, projects);
-    assert!(app.preferences.left_visible && !app.preferences.left_agents);
+    assert!(
+        app.preferences.left_visible && app.preferences.left_content() == LeftContent::Projects
+    );
     click(&mut app, git);
     assert_eq!(app.preferences.tool, SidebarTool::Git);
     assert!(app.preferences.visible);
@@ -118,7 +120,10 @@ fn ide_stripes_switch_views_and_toggle_tools() {
         header_target(&ctx)("stripe-right-Projects").expect("right projects stripe");
     let right_search = header_target(&ctx)("stripe-right-Search").expect("right search");
     click(&mut app, left_git);
-    assert_eq!(app.preferences.left_tool, Some(SidebarTool::Git));
+    assert_eq!(
+        app.preferences.left_content(),
+        LeftContent::Tool(SidebarTool::Git)
+    );
     assert!(app.preferences.left_visible);
     assert_eq!(app.preferences.tool, SidebarTool::Explorer);
     click(&mut app, left_git);
@@ -134,8 +139,7 @@ fn ide_stripes_switch_views_and_toggle_tools() {
     // Same view on both sides at once (Projects left + right) must not
     // clash widget IDs: the right copy's filter takes focus and text.
     app.palette.open = false;
-    app.preferences.left_tool = None;
-    app.preferences.left_agents = false;
+    app.preferences.set_left_content(LeftContent::Projects);
     app.preferences.left_visible = true;
     app.preferences.right_projects = true;
     app.preferences.visible = true;
@@ -298,8 +302,8 @@ fn strip_plus_adds_the_tab_to_the_clicked_pane() {
     };
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
-    app.add_strip_tab = Some((right_path, None));
-    app.apply_add_strip_tab("a", &mut dock);
+    app.queue_add(DockTarget::Strip, right_path, None);
+    app.apply_strip_dock_ops("a", &mut dock);
     app.preferences.ide_strip_docks.0.insert("a".into(), dock);
     let Job::Control(_, After::StripAt(anchors, None)) = requests.try_recv().unwrap() else {
         panic!("Plain strip + anchors on the clicked pane");
@@ -814,7 +818,11 @@ fn queued_strip_move_waits_until_the_dock_is_checked_in() {
     app.queue_strip_move("left");
     let checked_out = app.preferences.ide_strip_docks.0.remove("a").unwrap();
     app.drain_strip_move();
-    assert_eq!(app.move_strip_to_main.as_deref(), Some("left"));
+    assert!(
+        app.dock_ops
+            .iter()
+            .any(|op| *op == DockOp::StripToMain("left".into()))
+    );
     assert!(
         checked_out
             .find_tab(&Tab::Terminal("left".into()))
@@ -825,7 +833,11 @@ fn queued_strip_move_waits_until_the_dock_is_checked_in() {
         .0
         .insert("a".into(), checked_out);
     app.drain_strip_move();
-    assert!(app.move_strip_to_main.is_none());
+    assert!(
+        !app.dock_ops
+            .iter()
+            .any(|op| matches!(op, DockOp::StripToMain(_)))
+    );
     assert!(!app.is_strip_session("a", "left"));
     assert!(app.is_strip_session("a", "right"));
     assert!(app.layouts["a"].contains(&Tab::Terminal("left".into())));

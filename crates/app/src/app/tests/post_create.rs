@@ -116,3 +116,55 @@ fn ask_agent_without_a_live_agent_only_says_why() {
     assert_eq!(app.info.as_deref(), Some("No open agent terminal to ask."));
     assert!(received.try_recv().is_err());
 }
+
+/// #268: input for a create that was refused or failed is not kept.
+#[test]
+fn post_create_input_is_dropped_when_the_create_fails() {
+    let (mut app, ctx, _dir) = fixture();
+    let post = PostCreate {
+        input: "claude".into(),
+        enter: false,
+    };
+    let (jobs, received) = mpsc::channel();
+    drop(received);
+    app.jobs = jobs.into();
+    app.selected = Some("a".into());
+    app.create_workspace_tab_with(Some(0), None, Some(post.clone()));
+    assert!(app.post_create.by_tab.is_empty() && app.workspace_insert.is_empty());
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.create_workspace_tab_with(Some(0), None, Some(post));
+    let Job::Control(_, After::Workspace(id, _)) = received.try_recv().unwrap() else {
+        panic!("Expected workspace create")
+    };
+    app.update_tx
+        .send(Update::CreateFailed(id, "daemon refused".into()))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert!(app.post_create.by_tab.is_empty() && app.workspace_insert.is_empty());
+    assert!(
+        app.error
+            .text()
+            .is_some_and(|e| e.contains("daemon refused"))
+    );
+}
+
+/// #268: a refused editor close does not leave the editors busy, and a
+/// refused Explorer search does not stay "Searching…".
+#[test]
+fn refused_close_and_search_leave_no_pending_flag() {
+    let (mut app, _ctx, dir) = fixture();
+    let (jobs, received) = mpsc::channel();
+    drop(received);
+    app.jobs = jobs.into();
+    app.close_editors(
+        editor_close::Target::Pane("e1".into()),
+        vec!["e1".into()],
+        editor_close::Mode::Save,
+    );
+    assert!(app.editor_close_sessions.is_empty());
+    app.preferences.explorer_search_mode = crate::preferences::ExplorerSearchMode::Contents;
+    app.explorer_query = "needle".into();
+    app.refresh_explorer_search(dir.path());
+    assert!(!app.explorer_search_pending);
+}

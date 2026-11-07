@@ -29,6 +29,7 @@ fn describe(entry: &Entry) -> String {
 impl App {
     pub(crate) fn local_history_center(&mut self, ui: &mut egui::Ui) {
         let Some(path) = self.local_history.as_ref().map(|page| page.path.clone()) else {
+            self.hide_center_overlay();
             return;
         };
         ui.set_min_size(ui.available_size());
@@ -39,7 +40,7 @@ impl App {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if appearance::sidebar_action(ui, "X", "Close").clicked() {
-                    self.local_history = None;
+                    self.hide_center_overlay();
                 }
                 if appearance::sidebar_action(ui, "RefreshCw", "Reload").clicked() {
                     let _ = self

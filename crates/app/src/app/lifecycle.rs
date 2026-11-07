@@ -12,10 +12,7 @@ use super::super::*;
 impl App {
     pub(crate) fn command_dialog_open(&self) -> bool {
         self.palette.open
-            || self.search_open
-            || self.commands_session.is_some()
-            || self.worktree_open
-            || self.worktree_draft.is_some()
+            || self.center_is_dialog()
             || self.worktree_remove.is_some()
             || self.git.picker.is_some()
     }
@@ -23,14 +20,14 @@ impl App {
         let mut app = Self::with_context(&cc.egui_ctx, paths.clone());
         match ui_control::spawn(paths, app.services.clone()) {
             Ok(server) => app.control_server = Some(server),
-            Err(error) => app.error = Some(format!("GUI control server: {error:#}")),
+            Err(error) => app.error.set(format!("GUI control server: {error:#}")),
         }
         #[cfg(feature = "test-support")]
         if std::env::var_os("TERMINATOR_TEST_RESPONSIVENESS").is_some()
             && let Some(socket) = std::env::var_os("TERMINATOR_TEST_STALL_NVIM")
             && let Err(error) = app.services.fixture_stalls(socket.into())
         {
-            app.error = Some(format!("Fixture stalls: {error:#}"));
+            app.error.set(format!("Fixture stalls: {error:#}"));
         }
         app
     }
@@ -112,10 +109,11 @@ impl App {
             #[cfg(any(test, target_os = "macos"))]
             status_menu_index: None,
             installation_error: None,
-            repair_pending: false,
-            restart_pending: false,
-            service_start_pending: false,
-            restart_confirm: false,
+            service_op: ServiceOp::Idle,
+            service_failure: upgrade_error.clone().map(|message| ServiceFailure {
+                task: ServiceTask::Upgrade,
+                message,
+            }),
             automatic_repair_attempt: None,
             #[cfg(feature = "test-support")]
             diagnostics: diagnostics::Diagnostics::default(),
@@ -140,7 +138,6 @@ impl App {
             layout_readonly: HashSet::new(),
             close_workspace: None,
             close_workspace_queue: Vec::new(),
-            close_workspace_prompted: None,
             workspace_insert: HashMap::new(),
             post_create: PostCreateQueue::default(),
             workspace_visible: None,
@@ -182,19 +179,10 @@ impl App {
             jobs,
             updates,
             update_tx,
-            picker_active: false,
-            add_tab: None,
-            add_strip_tab: None,
-            focus_strip_tab: None,
-            move_strip_to_main: None,
-            move_main_to_strip: None,
-            detach_pane: None,
-            dock_back_pane: None,
+            picker: Picker::Idle,
+            dock_ops: Default::default(),
             dock_back_targets: Vec::new(),
-            float_pane: None,
             pane_ops: Default::default(),
-            add_float_tab: None,
-            focus_float_tab: None,
             floating: Vec::new(),
             float_pane_by_tab: HashMap::new(),
             float_pane_tabs: HashMap::new(),
@@ -204,11 +192,9 @@ impl App {
 
             pane_tabs: HashMap::new(),
             pane_index: None,
-            pane_action_source: None,
             native_focus_pending: None,
             pending_layout_save: false,
             drag: super::drag_state::DragState::default(),
-            focus_tab: None,
             diff_replacement: None,
             terminal_context: HashMap::new(),
             missing_projects: HashSet::new(),
@@ -235,21 +221,13 @@ impl App {
             resource_tx,
             resource_request: None,
             context_path: None,
-            error: preference_error.or(upgrade_error),
-            dismissed_error: None,
-            dismissed_auth_errors: HashSet::new(),
-            error_cwd: None,
-            missing_path_reports: 0,
+            error: StatusLine::new(preference_error.or(upgrade_error)),
             info: None,
             info_since: None,
-            add_project: false,
-            settings_open: false,
+            center: crate::CenterPage::Workspace,
             settings_session: false,
             settings_pending: None,
-            player_open: false,
-            vnc_page_open: false,
             editor_preset: external_editor::CUSTOM,
-            test_editor: false,
             settings_draft: Settings::default(),
             settings_section: SettingsSection::Appearance,
             settings_search: String::new(),
@@ -257,7 +235,6 @@ impl App {
             settings_probes: std::cell::RefCell::default(),
             custom_editor: false,
             shortcut_capture: None,
-            browse_target: None,
             palette: super::palette_state::PaletteState::new(),
             switcher: None,
             structure: crate::sidebar_ui::StructureState::default(),
@@ -284,17 +261,11 @@ impl App {
             rename_missed: false,
             rename_field_id: None,
             rename_group: None,
-            rename_group_text: String::new(),
-            rename_group_focus: false,
             editor_origins: HashMap::new(),
             search: String::new(),
             scrollback_hits: crate::app::ScrollbackHits::default(),
             commands_filter: String::new(),
-            search_session: None,
-            search_open: false,
-            commands_session: None,
             command_blocks: HashMap::new(),
-            worktree_open: false,
             local_history: None,
             terminal_find: HashMap::new(),
             history_filter: HashMap::new(),
@@ -303,8 +274,8 @@ impl App {
             native_pending_line: HashMap::new(),
             native_pending_col: HashMap::new(),
             lsp,
-            native_close_prompt: None,
-            native_close_after_save: HashMap::new(),
+            native_close_prompts: Vec::new(),
+            native_close_after_save: Vec::new(),
             pending_app_quit: false,
             vnc_quit_prompt: false,
             vnc_quit_confirmed: false,
@@ -341,11 +312,7 @@ impl App {
             pending_unavailable_close: Vec::new(),
             pending_quit_all: None,
             native_nav: native_editor::NavPending::default(),
-            open_path: false,
             diff_nav: None,
-            pick_audio: false,
-            pick_vnc_files: false,
-            pick_audio_dir: false,
             path_text: String::new(),
             last_save: Instant::now(),
             refresh,

@@ -217,9 +217,14 @@ fn exact_editor_moves_reject_stale_sources_and_keep_stack_order() {
 fn detach_and_float_use_the_selected_editor_copy_and_unique_windows() {
     let (mut app, _ctx, _dir, pane, source) = fixture_with_copies();
     let mut dock = app.layouts.remove("a").unwrap();
-    app.detach_pane = Some(pane.clone());
-    app.pane_action_source = Some(source.clone());
-    app.apply_detach_pane(&mut dock);
+    app.dock_ops.push(
+        Some("a".into()),
+        DockOp::Detach {
+            pane: pane.clone(),
+            source: Some(source.clone()),
+        },
+    );
+    app.apply_main_dock_ops("a", &mut dock);
     assert_eq!(
         dock.tabs
             .iter()
@@ -242,9 +247,14 @@ fn detach_and_float_use_the_selected_editor_copy_and_unique_windows() {
             group: group.id.clone(),
             path: group.layout.find_tab(&pane).unwrap(),
         };
-        app.float_pane = Some(pane.clone());
-        app.pane_action_source = Some(source);
-        app.apply_float_pane("a", &mut dock);
+        app.dock_ops.push(
+            Some("a".into()),
+            DockOp::Float {
+                pane: pane.clone(),
+                source: Some(source),
+            },
+        );
+        app.apply_main_dock_ops("a", &mut dock);
     }
     assert_eq!(app.floating.len(), 2);
     assert_ne!(app.floating[0].viewport, app.floating[1].viewport);

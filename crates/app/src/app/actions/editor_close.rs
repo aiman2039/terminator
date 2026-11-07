@@ -120,6 +120,8 @@ impl App {
             return;
         }
         match &self.close_workspace {
+            // Still the current close: `poll_workspace_close` asks again.
+            Some(current) if *current == (project.clone(), tab_id.clone()) => {}
             None => self.close_workspace = Some((project, tab_id)),
             Some((busy, _)) if *busy == project => self.close_workspace_queue.insert(0, tab_id),
             // Another project's close is running; the user closes this tab again.
@@ -136,10 +138,15 @@ impl App {
         if self.editor_close_busy(&ids) {
             return;
         }
-        self.editor_close_sessions.extend(ids.iter().cloned());
         let timeout = Duration::from_secs(self.state.settings.editor_close_timeout_secs);
-        let _ = self
-            .jobs
-            .send(Job::CloseEditors(target, ids, mode, timeout));
+        let busy = ids.clone();
+        // Busy only while a close is really running: a refused one
+        // answers with its error and leaves the editors usable.
+        if (self.jobs)
+            .send(Job::CloseEditors(target, ids, mode, timeout))
+            .is_ok()
+        {
+            self.editor_close_sessions.extend(busy);
+        }
     }
 }

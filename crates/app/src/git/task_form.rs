@@ -8,11 +8,14 @@ pub(crate) struct TaskStart {
     pub open_terminal: bool,
     pub agent_command: String,
     pub browser_url: String,
+    /// The [`WorktreeDraft::id`] that was submitted.
+    pub draft: u64,
 }
 
 impl WorktreeDraft {
     pub(crate) fn task_start(&self) -> TaskStart {
         TaskStart {
+            draft: self.id,
             open_terminal: self.open_terminal,
             agent_command: self.agent_command.trim().to_owned(),
             browser_url: self.browser_url.trim().to_owned(),
@@ -83,7 +86,7 @@ impl App {
         if !start.browser_url.is_empty()
             && let Err(error) = BrowserTarget::from_http_url(&start.browser_url)
         {
-            self.error = Some(format!("Browser URL: {error:#}"));
+            self.error.set(format!("Browser URL: {error:#}"));
             return false;
         }
         if draft.open_terminal {
@@ -101,7 +104,8 @@ impl App {
         if !start.browser_url.is_empty()
             && let Err(error) = self.open_browser_url(project, &start.browser_url, None)
         {
-            self.error = Some(format!("Could not open {}: {error:#}", start.browser_url));
+            self.error
+                .set(format!("Could not open {}: {error:#}", start.browser_url));
         }
         if start.open_terminal {
             let post = PostCreate {

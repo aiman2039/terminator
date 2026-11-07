@@ -155,10 +155,10 @@ fn opening_player_seeds_sample_tracks_once() {
 fn player_icon_opens_a_global_window_not_a_tab() {
     let (mut app, _, _dir) = fixture();
     app.open_player();
-    assert!(app.player_open);
+    assert!(app.player_open());
     assert!(!app.layouts["a"].contains(&Tab::Player));
     app.open_player();
-    assert!(app.player_open);
+    assert!(app.player_open());
     assert_eq!(
         app.layouts["a"]
             .iter_all_tabs()
@@ -189,8 +189,8 @@ fn opening_the_player_closes_a_leftover_player_tab() {
         .unwrap()
         .add("player-a".into(), Tab::Player);
     app.open_player();
-    assert!(app.player_open);
+    assert!(app.player_open());
     assert!(!app.layouts["a"].contains(&Tab::Player));
     app.open_player();
-    assert!(app.player_open);
+    assert!(app.player_open());
 }

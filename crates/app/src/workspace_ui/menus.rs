@@ -172,17 +172,15 @@ impl App {
             })
             .clicked()
             {
-                if strip {
-                    if let Some(pane) = pane {
-                        self.add_strip_tab = Some((pane, split.map(str::to_owned)));
-                    } else {
-                        self.create_strip_split(split);
-                    }
-                } else if let (Some(viewport), Some(pane)) = (window, pane) {
-                    // Floating splits land in the issuing window's dock.
-                    self.add_float_tab = Some((viewport, pane, split.map(str::to_owned)));
-                } else if let Some(pane) = pane {
-                    self.add_tab = Some((pane, split.map(str::to_owned)));
+                // Floating splits land in the issuing window's dock.
+                if let Some(pane) = pane {
+                    self.queue_add(
+                        DockTarget::of(strip, window),
+                        pane,
+                        split.map(str::to_owned),
+                    );
+                } else if strip {
+                    self.create_strip_split(split);
                 } else {
                     self.create(split);
                 }
@@ -220,13 +218,7 @@ impl App {
                 })
                 .clicked()
                 {
-                    if strip {
-                        self.focus_strip_tab = Some(tab);
-                    } else if let Some(viewport) = window {
-                        self.focus_float_tab = Some((viewport, tab));
-                    } else {
-                        self.focus_tab = Some(tab);
-                    }
+                    self.queue_focus(DockTarget::of(strip, window), tab);
                     ui.close();
                 }
             }
@@ -306,14 +298,14 @@ impl App {
             });
         });
         if escape || (!starting && response.lost_focus() && !valid) {
-            self.rename_session = None;
+            self.clear_session_rename();
             response.surrender_focus();
         } else if valid && (enter || (!starting && response.lost_focus())) {
             self.send(Request::Rename {
                 session: sid.into(),
                 label: title.trim().into(),
             });
-            self.rename_session = None;
+            self.clear_session_rename();
             response.surrender_focus();
         } else {
             self.rename_session = Some((sid.into(), title));

@@ -10,7 +10,21 @@ use terminator_core::async_service::{CancellationToken, OperationContext, Policy
 /// Merge tabs by tab key.
 pub(crate) type MergeTabs = HashMap<String, MergeTab>;
 
-type Done<T> = tokio::sync::mpsc::UnboundedReceiver<Result<T, String>>;
+pub(crate) type Done<T> = tokio::sync::mpsc::UnboundedReceiver<Result<T, String>>;
+
+/// The result of a [`App::file_pool_job`], once there is one. A job that
+/// ended without sending (timed out, panicked, cancelled) is an error, so
+/// the view waiting for it stops waiting.
+pub(crate) fn take_done<T>(rx: &mut Done<T>) -> Option<Result<T, String>> {
+    use tokio::sync::mpsc::error::TryRecvError;
+    match rx.try_recv() {
+        Ok(result) => Some(result),
+        Err(TryRecvError::Empty) => None,
+        Err(TryRecvError::Disconnected) => {
+            Some(Err("The file operation stopped before it finished".into()))
+        }
+    }
+}
 
 enum Pending {
     Load(Done<MergeDoc>),
@@ -92,7 +106,7 @@ impl App {
     /// opens of a tab that is not showing start from a fresh read.
     pub(crate) fn open_merge(&mut self, path: PathBuf) {
         let Some(root) = self.context.as_ref().and_then(|c| c.root.clone()) else {
-            self.error = Some("Open the merge tool from a Git project".into());
+            self.error.set("Open the merge tool from a Git project");
             return;
         };
         let tab = super::tab(root, path);
@@ -113,12 +127,15 @@ impl App {
     }
 
     /// Run blocking `work` on the file pool; the receiver gets its result.
+    /// A refused job answers at once with the error, so its view never
+    /// waits for a job that was not sent (read it with [`take_done`]).
     pub(crate) fn file_pool_job<T: Send + 'static>(
         &mut self,
         label: String,
         work: impl FnOnce() -> Result<T, String> + Send + 'static,
-    ) -> Option<Done<T>> {
+    ) -> Done<T> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let refused = tx.clone();
         let service = self.services.clone();
         let submitted = self.services.handle().submit(
             OperationContext::new("merge-file", label, Policy::OrderedMutation),
@@ -134,13 +151,10 @@ impl App {
                 Ok(Vec::new())
             },
         );
-        match submitted {
-            Ok(_) => Some(rx),
-            Err(error) => {
-                self.error = Some(format!("Could not start the file operation: {error}"));
-                None
-            }
+        if let Err(error) = submitted {
+            let _ = refused.send(Err(format!("Could not start the file operation: {error}")));
         }
+        rx
     }
 
     /// Start the first read of a merge tab, then take finished I/O.
@@ -157,7 +171,7 @@ impl App {
         };
         match state.pending.as_mut() {
             Some(Pending::Load(rx)) => {
-                if let Ok(result) = rx.try_recv() {
+                if let Some(result) = take_done(rx) {
                     state.pending = None;
                     match result {
                         Ok(doc) => {
@@ -182,12 +196,8 @@ impl App {
         let mut done = Vec::new();
         for (key, state) in &mut self.merge {
             if let Some(Pending::Save(rx, stage, path)) = state.pending.as_mut() {
-                let result = match rx.try_recv() {
-                    Ok(result) => result,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => continue,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                        Err("The file operation stopped before it finished".into())
-                    }
+                let Some(result) = take_done(rx) else {
+                    continue;
                 };
                 done.push((key.clone(), path.clone(), *stage, result));
                 state.pending = None;
@@ -195,7 +205,7 @@ impl App {
         }
         for (key, path, stage, result) in done {
             if let Err(error) = &result {
-                self.error = Some(error.clone());
+                self.error.set(error.clone());
             }
             self.merge_saved(&key, &path, (stage, result));
         }
@@ -214,7 +224,7 @@ impl App {
         self.merge.insert(
             key.to_owned(),
             MergeTab {
-                pending: rx.map(Pending::Load),
+                pending: Some(Pending::Load(rx)),
                 ..MergeTab::default()
             },
         );
@@ -242,7 +252,7 @@ impl App {
             std::fs::write(&writing, text)
                 .map_err(|error| format!("Write {}: {error}", writing.display()))
         });
-        if let (Some(state), Some(rx)) = (self.merge.get_mut(key), rx) {
+        if let Some(state) = self.merge.get_mut(key) {
             state.pending = Some(Pending::Save(rx, stage, path.to_path_buf()));
             state.message = None;
         }

@@ -28,8 +28,6 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 pub(crate) struct HostsState {
-    /// The SSH page fills the main pane.
-    pub page_open: bool,
     /// The page's address bar: filters cards, or names a new host.
     pub address: String,
     pub page_error: Option<String>,

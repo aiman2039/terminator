@@ -438,6 +438,14 @@ pub(crate) enum Update {
     Favicon(String, Option<Vec<u8>>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),
     GitBase(PathBuf, u64, Option<String>, Option<PathBuf>),
+    /// The `HEAD` read of `(path, generation)` ended without a reply.
+    GitBaseFailed(PathBuf, u64),
+    /// The create for this new top-level tab ID failed or was refused.
+    CreateFailed(String, String),
+    /// The worktree wizard submission of this draft ID failed.
+    WorktreeFailed(u64, String),
+    /// `PrepareLayouts` of this generation ended without its layouts.
+    LayoutPrepareFailed(u64),
     /// A gutter block staged `(path, message or error)`.
     GutterStaged(PathBuf, Result<String, String>),
     EditorBlame(PathBuf, u64, Result<git_log::BlameData, String>),

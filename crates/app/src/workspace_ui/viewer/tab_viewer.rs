@@ -11,13 +11,7 @@ impl TabViewer for Viewer<'_> {
         self.set_render_path(path.node_path());
     }
     fn on_add(&mut self, path: egui_dock::NodePath) {
-        if self.strip {
-            self.app.add_strip_tab = Some((path, None));
-        } else if let Some(viewport) = self.window {
-            self.app.add_float_tab = Some((viewport, path, None));
-        } else {
-            self.app.add_tab = Some((path, None));
-        }
+        self.app.queue_add(self.dock_target(), path, None);
     }
     type Tab = Tab;
     fn show_tab_bar(&self, path: egui_dock::NodePath) -> bool {
@@ -100,22 +94,10 @@ impl TabViewer for Viewer<'_> {
         self.tab_button_at(tab, path, response)
     }
     fn context_menu_at(&mut self, ui: &mut egui::Ui, tab: &mut Tab, path: egui_dock::TabPath) {
-        self.context_menu(ui, tab, path.node_path());
-        if matches!(tab, Tab::NativeEditor { .. })
-            && (self.app.detach_pane.is_some()
-                || self.app.float_pane.is_some()
-                || self.app.dock_back_pane.is_some())
-            && let (Some(project), Some(group)) = (&self.project, &self.tab)
-        {
-            self.app.pane_action_source = Some(PaneSource {
-                project: project.clone(),
-                group: group.clone(),
-                path,
-            });
-        }
+        self.pane_context_menu(ui, tab, (path.node_path(), Some(path)));
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Tab, pane: egui_dock::NodePath) {
-        self.pane_context_menu(ui, tab, pane);
+        self.pane_context_menu(ui, tab, (pane, None));
     }
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {

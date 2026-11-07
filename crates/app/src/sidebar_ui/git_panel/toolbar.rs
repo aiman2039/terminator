@@ -93,8 +93,15 @@ pub(super) struct GitHeaderInput<'a> {
     pub(super) outcome: &'a mut GitPanelOutcome,
 }
 
-/// Tabs on the left; the ⋮ menu and the branch switcher on the right. A
-/// commit or push running in this worktree disables the branch switch.
+/// Narrowest the branch switcher may truncate to beside the tabs; below
+/// this the branch side wraps to its own row.
+const MIN_BRANCH_WIDTH: f32 = 64.0;
+
+/// Tabs on the left; `↑N ↓N`, the branch switcher and the ⋮ menu on the
+/// right. The tabs are laid out first and the branch side gets only the
+/// width left: the branch name truncates, and when even a short name does
+/// not fit, the branch side moves to its own row under the tabs. A commit
+/// or push running in this worktree disables the branch switch.
 pub(super) fn git_header(header: GitHeaderInput<'_>) {
     let GitHeaderInput {
         ui,
@@ -102,43 +109,140 @@ pub(super) fn git_header(header: GitHeaderInput<'_>) {
         branch_name,
         outcome,
     } = header;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let current = input.tab;
-        for (tab, label, target) in [
-            (GitTab::Commit, "Commit", "git-changes"),
-            (GitTab::Stash, "Stash", "git-stash"),
-            (GitTab::History, "History", "git-history"),
-        ] {
-            let response = appearance::text_tab(ui, label, current == tab);
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), target, response.rect);
-            let _ = target;
-            if response.clicked() && current != tab {
-                outcome.tab = Some(tab);
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            git_more_menu(ui, input, outcome);
-            let tip = branch_tip(input, branch_name);
-            let branch = appearance::enabled_unless(ui, input.commit_lock.head, |ui| {
-                appearance::text_menu_button(ui, branch_name, |ui| {
-                    git_branch_items(ui, input, branch_name, &mut *outcome);
-                })
-                .response
-                .on_hover_text(tip)
+    let wrapped = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            git_tabs(ui, input, outcome);
+            let fits = branch_beside_tabs(BranchBudget {
+                free: ui.available_width(),
+                trailing: trailing_width(ui, input),
+                branch: branch_width(ui, branch_name),
             });
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "git-branch", branch.rect);
-            let _ = branch;
-            if let Some(compare) = input.compare {
-                ahead_behind(ui, input.theme, compare);
+            if fits {
+                git_branch_side(ui, input, branch_name, outcome);
             }
+            !fits
+        })
+        .inner;
+    if wrapped {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            git_branch_side(ui, input, branch_name, outcome);
         });
+    }
+}
+
+/// Commit | Stash | History.
+fn git_tabs(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut GitPanelOutcome) {
+    let current = input.tab;
+    for (tab, label, target) in [
+        (GitTab::Commit, "Commit", "git-changes"),
+        (GitTab::Stash, "Stash", "git-stash"),
+        (GitTab::History, "History", "git-history"),
+    ] {
+        let response = appearance::text_tab(ui, label, current == tab);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), target, response.rect);
+        let _ = target;
+        if response.clicked() && current != tab {
+            outcome.tab = Some(tab);
+        }
+    }
+}
+
+/// Widths that decide whether the branch side shares the tab row.
+#[derive(Clone, Copy)]
+pub(super) struct BranchBudget {
+    /// Width left on the row after the tabs.
+    pub(super) free: f32,
+    /// The ⋮ menu, `↑N ↓N`, and the item spacing around them.
+    pub(super) trailing: f32,
+    /// The branch switcher at its full width.
+    pub(super) branch: f32,
+}
+
+/// True when the branch side fits beside the tabs with the branch name at
+/// its full width or truncated to no less than [`MIN_BRANCH_WIDTH`].
+pub(super) fn branch_beside_tabs(budget: BranchBudget) -> bool {
+    budget.free >= budget.trailing + budget.branch.min(MIN_BRANCH_WIDTH)
+}
+
+/// The branch switcher's full width: its text plus button padding.
+fn branch_width(ui: &egui::Ui, branch_name: &str) -> f32 {
+    text_width(ui, branch_name, egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
+}
+
+/// `↑N ↓N` with the item spacing after each label.
+fn ahead_behind_width(ui: &egui::Ui, input: &GitPanelInput<'_>) -> f32 {
+    let spacing = ui.spacing().item_spacing.x;
+    input.compare.map_or(0.0, |compare| {
+        ahead_behind_labels(input.theme, compare)
+            .iter()
+            .map(|(text, ..)| text_width(ui, text, egui::TextStyle::Body) + spacing)
+            .sum()
+    })
+}
+
+/// Everything on the branch side except the branch switcher itself.
+fn trailing_width(ui: &egui::Ui, input: &GitPanelInput<'_>) -> f32 {
+    let spacing = ui.spacing().item_spacing.x;
+    appearance::TOOLBAR_BUTTON + 2.0 * spacing + ahead_behind_width(ui, input)
+}
+
+fn text_width(ui: &egui::Ui, text: &str, style: egui::TextStyle) -> f32 {
+    egui::WidgetText::from(text)
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
+        .size()
+        .x
+}
+
+/// The ⋮ menu, the branch switcher and `↑N ↓N`, right to left. The branch
+/// name truncates to the width that `↑N ↓N` leaves; its hover text keeps
+/// the full name.
+fn git_branch_side(
+    ui: &mut egui::Ui,
+    input: &GitPanelInput<'_>,
+    branch_name: &str,
+    outcome: &mut GitPanelOutcome,
+) {
+    let reserved = ahead_behind_width(ui, input);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        git_more_menu(ui, input, outcome);
+        let room = egui::vec2(
+            (ui.available_width() - reserved).max(0.0),
+            ui.available_height(),
+        );
+        ui.allocate_ui(room, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            git_branch_button(ui, input, branch_name, outcome);
+        });
+        if let Some(compare) = input.compare {
+            ahead_behind(ui, input.theme, compare);
+        }
     });
 }
 
-/// `branch → base` for the branch switcher's hover text.
+fn git_branch_button(
+    ui: &mut egui::Ui,
+    input: &GitPanelInput<'_>,
+    branch_name: &str,
+    outcome: &mut GitPanelOutcome,
+) {
+    let tip = branch_tip(input, branch_name);
+    let branch = appearance::enabled_unless(ui, input.commit_lock.head, |ui| {
+        appearance::text_menu_button(ui, branch_name, |ui| {
+            git_branch_items(ui, input, branch_name, &mut *outcome);
+        })
+        .response
+        .on_hover_text(tip)
+    });
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "git-branch", branch.rect);
+    let _ = branch;
+}
+
+/// `branch → base` for the branch switcher's hover text. It always names
+/// the branch in full, since the switcher may truncate it.
 fn branch_tip(input: &GitPanelInput<'_>, branch: &str) -> String {
     let target = input.compare.and_then(|compare| {
         input
@@ -148,22 +252,42 @@ fn branch_tip(input: &GitPanelInput<'_>, branch: &str) -> String {
     });
     match target {
         Some(target) => format!("{branch} → {target}\nSwitch branch"),
-        None => "Switch branch".to_owned(),
+        None => format!("{branch}\nSwitch branch"),
     }
 }
 
-/// `↑N ↓N` commits ahead of and behind the base ref, beside the branch.
-/// The parent lays out right to left, so `↓` comes first.
-fn ahead_behind(ui: &mut egui::Ui, theme: &AppearanceConfig, compare: &workspace_ops::CompareData) {
+/// `↓N` then `↑N` as (text, color, hover text): the parent lays out right
+/// to left, so `↓` comes first.
+fn ahead_behind_labels(
+    theme: &AppearanceConfig,
+    compare: &workspace_ops::CompareData,
+) -> Vec<(String, Option<Color32>, &'static str)> {
+    let mut labels = Vec::new();
     if compare.behind > 0 {
-        ui.label(RichText::new(format!("↓{}", compare.behind)).weak())
-            .on_hover_text("Commits behind the base ref");
+        labels.push((
+            format!("↓{}", compare.behind),
+            None,
+            "Commits behind the base ref",
+        ));
     }
     if compare.ahead > 0 {
-        ui.label(
-            RichText::new(format!("↑{}", compare.ahead)).color(appearance::color(&theme.git_added)),
-        )
-        .on_hover_text("Commits ahead of the base ref");
+        labels.push((
+            format!("↑{}", compare.ahead),
+            Some(appearance::color(&theme.git_added)),
+            "Commits ahead of the base ref",
+        ));
+    }
+    labels
+}
+
+/// `↑N ↓N` commits ahead of and behind the base ref, beside the branch.
+fn ahead_behind(ui: &mut egui::Ui, theme: &AppearanceConfig, compare: &workspace_ops::CompareData) {
+    for (text, color, tip) in ahead_behind_labels(theme, compare) {
+        let text = match color {
+            Some(color) => RichText::new(text).color(color),
+            None => RichText::new(text).weak(),
+        };
+        ui.label(text).on_hover_text(tip);
     }
 }
 

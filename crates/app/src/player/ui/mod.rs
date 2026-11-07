@@ -254,7 +254,7 @@ fn controls_row(app: &mut App, ui: &mut Ui) {
             app.player_skip(1);
         }
         if App::player_tool_button(ui, "FolderOpen", "Add files").clicked() {
-            app.pick_audio = true;
+            app.request_pick(PickKind::AudioFiles);
         }
         ui.add_space(8.0);
         if App::player_icon_button(PlayerIconButtonInput {

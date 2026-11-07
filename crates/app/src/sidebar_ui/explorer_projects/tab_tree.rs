@@ -181,7 +181,7 @@ impl App {
         let renaming_group = self
             .rename_group
             .as_ref()
-            .is_some_and(|(p, t)| p == project_id && t == tab_id);
+            .is_some_and(|rename| rename.project == *project_id && rename.tab == *tab_id);
         // One live terminal and no custom name: the node would only repeat
         // the terminal it holds, so the terminal itself takes its place.
         // A tab that is being named keeps its node to host the field.
@@ -281,15 +281,20 @@ impl App {
         ui: &mut egui::Ui,
         header: &TabGroupHeader<'_>,
     ) -> (f32, GroupRenameAction) {
+        let height = self.theme.row_height();
+        let Some(rename) = self.rename_group.as_mut() else {
+            return (ui.next_widget_position().x, GroupRenameAction::None);
+        };
+        rename.painted = true;
+        let focus = std::mem::take(&mut rename.focus);
         let field = ui.add_sized(
-            [160.0, self.theme.row_height()],
-            appearance::singleline(&mut self.rename_group_text)
+            [160.0, height],
+            appearance::singleline(&mut rename.text)
                 .id(ui.scope_id().with(("rename-group", header.tab_id.as_str())))
                 .hint_text(header.label),
         );
-        if self.rename_group_focus {
+        if focus {
             field.request_focus();
-            self.rename_group_focus = false;
         }
         #[cfg(feature = "test-support")]
         diagnostics::record(
@@ -396,23 +401,10 @@ impl App {
     ) {
         match action {
             GroupRenameAction::Begin => {
-                self.rename_group = Some((project_id.to_string(), tab_id.to_owned()));
-                self.rename_group_text = group_name.unwrap_or_default();
-                self.rename_group_focus = true;
+                self.begin_group_rename(project_id, tab_id, group_name.unwrap_or_default());
             }
-            GroupRenameAction::Commit => {
-                let name = self.rename_group_text.trim().to_string();
-                self.set_tab_group_name(
-                    project_id,
-                    tab_id,
-                    (!name.is_empty()).then(|| name.chars().take(64).collect()),
-                );
-                self.rename_group = None;
-                self.save_layouts();
-            }
-            GroupRenameAction::Cancel => {
-                self.rename_group = None;
-            }
+            GroupRenameAction::Commit => self.finish_group_rename(true),
+            GroupRenameAction::Cancel => self.finish_group_rename(false),
             GroupRenameAction::Clear => {
                 self.set_tab_group_name(project_id, tab_id, None);
                 self.save_layouts();
@@ -421,7 +413,12 @@ impl App {
         }
     }
 
-    fn set_tab_group_name(&mut self, project_id: &str, tab_id: &str, name: Option<String>) {
+    pub(crate) fn set_tab_group_name(
+        &mut self,
+        project_id: &str,
+        tab_id: &str,
+        name: Option<String>,
+    ) {
         if let Some(group) = self
             .layouts
             .get_mut(project_id)

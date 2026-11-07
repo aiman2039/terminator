@@ -10,6 +10,7 @@ mod frame_sync;
 mod input;
 mod menu;
 mod status_bar;
+pub(crate) mod status_line;
 
 /// Env-gated idle-CPU probe. Set `TERMINATOR_REPAINT_LOG=1` and watch stderr:
 /// one line per second with the frame count plus egui's own repaint causes
@@ -87,6 +88,9 @@ impl eframe::App for App {
         // The status item must follow agents while the window is hidden or
         // minimized, when eframe calls only `logic`.
         self.sync_menu_bar(ctx);
+        // Save-then-close requests settle here too, so a file no view
+        // renders cannot hold a quit or a workspace close forever.
+        self.settle_native_closes();
         self.continue_app_quit(ctx);
         self.advance_exit(ctx);
         if !self.exit.active() && self.last_heartbeat.elapsed() > Duration::from_secs(1) {
@@ -151,6 +155,8 @@ impl eframe::App for App {
         }
         self.paint_switcher(&ctx);
         self.paint_windows(&ctx, frame);
+        // Every dock painted; ops whose project or window is gone are dead.
+        self.prune_dock_ops();
         self.popups.end_frame();
         self.dismiss_stale_hover_popup(&ctx);
         appearance::click_cursor(&ctx);

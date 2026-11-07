@@ -292,7 +292,7 @@ impl App {
             return;
         }
         self.diff_replacement = None;
-        self.focus_tab = Some(next.clone());
+        self.queue_main_focus(next.clone());
         self.loading.insert(next.key());
         if self.state.settings.diff_split_default {
             self.diff_split.insert(next.key());

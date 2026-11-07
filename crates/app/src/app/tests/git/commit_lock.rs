@@ -361,9 +361,12 @@ fn find_action_lists_stage_all_only_when_no_commit_locks_it() {
 fn a_refusal_shows_in_place_of_an_older_status_error() {
     let mut run = committing(false);
     // The status bar shows an error before a notice.
-    run.app.error = Some("Commit failed (exit status: 1)".into());
+    run.app.error.set("Commit failed (exit status: 1)");
     run.assert_refused(|run| run.outcome(stage("/a/edited.rs")));
-    assert!(run.app.error.is_none(), "the refusal is what the bar shows");
+    assert!(
+        run.app.error.text().is_none(),
+        "the refusal is what the bar shows"
+    );
 }
 
 /// Real Git and a `pre-commit` hook (a shell script).

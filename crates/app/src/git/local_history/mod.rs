@@ -90,10 +90,11 @@ impl App {
     /// nothing visible but an error when the daemon lacks the capability.
     pub(crate) fn open_local_history(&mut self, path: PathBuf) {
         if !self.local_history_supported() {
-            self.error = Some("Local History needs an updated session service.".into());
+            self.error
+                .set("Local History needs an updated session service.");
             return;
         }
-        self.hide_center_overlay();
+        self.show_center(crate::CenterPage::LocalHistory);
         let _ = self.jobs.send(Job::LocalHistory(Op::List(path.clone())));
         self.local_history = Some(Page {
             path,
@@ -132,7 +133,7 @@ impl App {
                         self.info = Some(format!("Reverted {}", path.display()));
                         let _ = self.jobs.send(Job::LocalHistory(Op::List(path)));
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => self.error.set(error),
                 }
             }
             _ => {}

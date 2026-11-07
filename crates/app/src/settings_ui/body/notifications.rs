@@ -103,7 +103,7 @@ impl App {
         if test.clicked()
             && let Err(error) = self.send_ntfy_test(channel.clone(), machine.clone())
         {
-            self.error = Some(error);
+            self.error.set(error);
         }
         let copy = ui.add_enabled(ready, egui::Button::new("Copy test command"));
         #[cfg(feature = "test-support")]

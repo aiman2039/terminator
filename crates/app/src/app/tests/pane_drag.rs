@@ -609,7 +609,12 @@ fn caption_stack_button_queues_in_split_tab() {
         .find_tab(&Tab::Terminal("one".into()))
         .expect("pane placed")
         .node_path();
-    assert_eq!(app.add_tab, Some((path, None)));
+    assert!(app.dock_ops.iter().any(|op| *op
+        == DockOp::AddTab {
+            target: DockTarget::Main,
+            path,
+            split: None,
+        }));
 }
 
 /// A tab reorder drag paints a tab-sized ghost that tracks the pointer.
@@ -835,8 +840,11 @@ fn pane_caption_drag_swaps_split_terminals() {
         Some(Tab::Terminal("left".into())),
         "caption drag did not start"
     );
+    assert!(!app.pending_layout_save);
     dock_frame(&mut app, &ctx, vec![press(middle, false)]);
     assert!(app.drag.pane.is_none());
+    // A caption drag has no view source; its landing still saves at once.
+    assert!(app.pending_layout_save, "landed caption drop not saved");
     // A middle drop swaps the two single panes in place: same leaves,
     // exchanged terminals.
     let dock = app.layouts.get("a").unwrap();
@@ -939,4 +947,54 @@ fn pane_caption_drop_on_strip_tab_moves_across_groups() {
     assert_eq!(dock.active, "tB");
     assert!(dock.contains(&Tab::Terminal("one".into())));
     assert!(dock.contains(&Tab::Terminal("two".into())));
+}
+
+/// Two top-level tabs in project `a`: the drag starts on the first and its
+/// preview shows the second.
+fn previewed_workspace(app: &mut App) -> (String, String) {
+    let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+    workspace.add(id(), Tab::Terminal("two".into()));
+    let origin = workspace.tabs[0].id.clone();
+    let previewed = workspace.tabs[1].id.clone();
+    workspace.active.clone_from(&previewed);
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+    app.drag.pane = Some(Tab::Terminal("one".into()));
+    app.drag.preview_origin = Some(("a".into(), origin.clone()));
+    (origin, previewed)
+}
+
+#[test]
+fn pane_drag_ended_outside_the_dock_returns_to_its_origin_tab() {
+    let (mut app, _ctx, _dir) = fixture();
+    let (origin, _) = previewed_workspace(&mut app);
+    // A release over the IDE strip ends the drag while the workspace is
+    // checked in.
+    app.end_pane_drag(None, false);
+    assert_eq!(app.layouts["a"].active, origin);
+    assert!(app.drag.preview_origin.is_none());
+    assert!(app.drag.pane.is_none());
+    assert!(!app.pending_layout_save);
+}
+
+#[test]
+fn landed_pane_drag_keeps_the_previewed_tab_and_saves_the_layout() {
+    let (mut app, _ctx, _dir) = fixture();
+    let (_, previewed) = previewed_workspace(&mut app);
+    let mut dock = app.layouts.remove("a").unwrap();
+    app.end_pane_drag(Some(&mut dock), true);
+    assert_eq!(dock.active, previewed);
+    assert!(app.drag.preview_origin.is_none());
+    assert!(app.pending_layout_save);
+}
+
+#[test]
+fn a_new_drag_cannot_start_while_another_runs() {
+    let mut drag = crate::app::drag_state::DragState::default();
+    assert!(drag.idle());
+    drag.tab = Some("group".into());
+    assert!(!drag.idle());
+    drag.tab = None;
+    drag.pane = Some(Tab::Terminal("one".into()));
+    assert!(!drag.idle());
 }

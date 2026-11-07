@@ -244,7 +244,7 @@ impl App {
             });
         }
         if pick_files {
-            self.pick_vnc_files = true;
+            self.request_pick(crate::PickKind::VncFiles);
         }
         if close {
             self.vnc_sidebar.import = None;
@@ -293,7 +293,7 @@ fn import_list(ui: &mut egui::Ui, import: &mut ImportState) {
 impl App {
     /// Picked RealVNC files: read them into the open import panel.
     pub(crate) fn vnc_import_files(&mut self, paths: Vec<PathBuf>) {
-        self.picker_active = false;
+        self.picker.close();
         if paths.is_empty() {
             return;
         }

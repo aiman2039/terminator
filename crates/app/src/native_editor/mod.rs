@@ -13,6 +13,7 @@ mod autosave;
 mod blame;
 mod close;
 mod close_copies;
+mod close_requests;
 mod commands;
 mod complete;
 mod disk;
@@ -36,6 +37,7 @@ pub(crate) use blame::{EditorBlame, ymd};
 use close::CloseIssuerInput;
 pub(super) use close::{CloseIssuer, NativeCloseChoice};
 use close_copies::{RemoveCopyFromFloatDockInput, RemoveCopyFromTabInput};
+pub(crate) use close_requests::{CloseOwner, NativeCloseRequest};
 pub(crate) use complete::{CompletionPopup, SignaturePopup};
 pub(crate) use doc::NativeDoc;
 use doc::*;
@@ -178,15 +180,10 @@ impl App {
         self.native_pending_col
             .retain(|path, _| live.contains(path));
         self.lsp.prune(&live);
-        if self
-            .native_close_prompt
-            .as_ref()
-            .is_some_and(|(path, _)| !live.contains(path))
-        {
-            self.native_close_prompt = None;
-        }
+        self.native_close_prompts
+            .retain(|request| live.contains(&request.path));
         self.native_close_after_save
-            .retain(|path, _| live.contains(path));
+            .retain(|request| live.contains(&request.path));
     }
 
     /// Every path with a live native editor tab, de-duplicated. Floating
@@ -278,6 +275,9 @@ mod view_buffer_tests;
 
 #[cfg(test)]
 mod disk_tests;
+
+#[cfg(test)]
+mod close_requests_tests;
 
 #[cfg(test)]
 mod gutter_tests;

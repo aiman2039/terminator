@@ -52,13 +52,67 @@ impl App {
         }
     }
 
+    /// Creates a terminal in a new top-level tab of `project`, placed at
+    /// `index` and typing `post` once its prompt shows. Only a sent create
+    /// waits for its tab; a failed one answers `CreateFailed`.
+    pub(crate) fn create_terminal_tab(
+        &mut self,
+        (project, cwd): (String, Option<PathBuf>),
+        (index, post): (Option<usize>, Option<PostCreate>),
+    ) {
+        let tab_id = terminator_core::id();
+        let request = terminator_core::Request::Create {
+            project,
+            cwd,
+            file: None,
+            line: None,
+            column: None,
+            editor: false,
+        };
+        let after = After::Workspace(tab_id.clone(), Vec::new());
+        if self.jobs.send(Job::rpc(request, after)).is_err() {
+            return;
+        }
+        if let Some(index) = index {
+            self.workspace_insert.insert(tab_id.clone(), index);
+        }
+        if let Some(post) = post.filter(|post| !post.input.is_empty()) {
+            self.post_create.by_tab.insert(tab_id, post);
+        }
+    }
+
+    /// A new top-level tab's create failed: nothing will place it, so its
+    /// insert index and post-create input are dropped.
+    pub(super) fn handle_create_failed(&mut self, tab: &str, error: String) {
+        self.workspace_insert.remove(tab);
+        self.post_create.by_tab.remove(tab);
+        self.handle_error(error);
+    }
+
+    /// The worktree wizard's submission failed: its form (if still the
+    /// same draft) can be corrected and submitted again.
+    pub(super) fn handle_worktree_failed(&mut self, draft: u64, error: String) {
+        if let Some(open) = self.worktree_draft.as_mut().filter(|open| open.id == draft) {
+            open.submitting = false;
+        }
+        self.handle_error(format!("Could not create the worktree: {error}"));
+    }
+
     pub(in crate::app) fn handle_worktree_created(
         &mut self,
         state: State,
         project: String,
         start: worktree_ui::TaskStart,
     ) {
-        self.worktree_draft = None;
+        // Only the submitted draft closes; a newer one stays open.
+        if self
+            .worktree_draft
+            .as_ref()
+            .is_some_and(|open| open.id == start.draft)
+        {
+            self.worktree_draft = None;
+            self.close_center_page(&crate::CenterPage::WorktreeDraft);
+        }
         self.missing_projects.remove(&project);
         self.apply_state(state);
         self.reveal_project(project.clone());
@@ -95,7 +149,7 @@ impl App {
                 anchors: &anchors,
             });
         if self.selected.as_ref() == Some(&project) {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         }
         if !self.state.sessions.iter().any(|s| s.id == session.id) {
             self.state.sessions.push(session);
@@ -133,7 +187,7 @@ impl App {
                 .get(&session.project_id)
                 .map(|workspace| &workspace.active);
         if same_workspace && self.selected.as_ref() == Some(&session.project_id) {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         }
         self.track_session(&session);
         self.insert(
@@ -205,7 +259,7 @@ impl App {
             && self.preferences.ide_mode
             && !self.preferences.ide_terminal_collapsed
         {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         }
     }
 
@@ -230,7 +284,7 @@ impl App {
             split: split.as_deref(),
             anchors: &anchors,
         }) {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         } else {
             self.insert(
                 &session.project_id,

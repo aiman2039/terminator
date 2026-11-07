@@ -33,7 +33,7 @@ fn legacy_daemon_diff_never_sends_an_unsupported_creation_request() {
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
     app.selected = Some("a".into());
-    app.error = Some("failed to fill whole buffer".into());
+    app.error.set("failed to fill whole buffer");
     for staged in [false, true] {
         let action = sidebar_ui::git_click_action(sidebar_ui::GitClickActionInput {
             deleted: false,
@@ -58,7 +58,7 @@ fn legacy_daemon_diff_never_sends_an_unsupported_creation_request() {
         assert_eq!(actual, staged);
     }
     assert!(requests.try_recv().is_err());
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
     assert!(app.info.as_ref().unwrap().contains("updated daemon"));
     assert!(app.state.sessions.is_empty());
     assert_eq!(app.layouts["a"].tabs.len(), 2);
@@ -550,7 +550,7 @@ fn failed_commit_restores_the_draft_but_failed_push_does_not() {
         assert!(app.git.run.is_none());
         // The panel keeps the output; the status bar names the failure.
         assert_eq!(app.git.commit_failure.as_deref(), Some(error));
-        assert_eq!(app.error.as_deref(), error.lines().next());
+        assert_eq!(app.error.text(), error.lines().next());
     }
     app.git.commit = "msg".into();
     click_commit(&mut app, &ctx, false);

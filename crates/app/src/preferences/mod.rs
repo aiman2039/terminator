@@ -6,8 +6,8 @@ mod type_ahead;
 
 pub use editor_state::{EditorState, EditorStates};
 pub use persistence::{
-    AgentsTab, ExplorerSearchMode, ExplorerView, ProjectStyle, RadioStation, SidebarTool,
-    UiPreferences, VncPasteShortcut, clamp_left_width,
+    AgentsTab, ExplorerSearchMode, ExplorerView, LeftContent, ProjectStyle, RadioStation,
+    SidebarTool, UiPreferences, VncPasteShortcut, clamp_left_width,
 };
 pub use type_ahead::TypeAhead;
 // `Playlist` is only named by `lib.rs` tests; keep its old path for them

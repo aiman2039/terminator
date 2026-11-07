@@ -28,7 +28,8 @@ impl App {
     }
 
     pub(super) fn handle_error(&mut self, e: String) {
-        if installation::is_helper_error(&e) {
+        let kind = StatusKind::of_report(&e);
+        if kind == StatusKind::Helper {
             self.installation_error = Some(e.clone());
         }
         if self.exit.active() {
@@ -38,7 +39,7 @@ impl App {
         if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
             crate::console::Console::err(format_args!("Fixture error {e}"));
         }
-        if daemon_connection::is_connection_error(&e) {
+        if kind == StatusKind::Connection {
             self.connected = false;
         }
         self.report_status_error(e);

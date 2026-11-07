@@ -39,15 +39,14 @@ impl App {
                 shortcuts::begin_sidebar(ui, Side::Left);
                 self.agent_bar(ui);
                 ui.push_id("left-sidebar-content", |ui| {
-                    if let Some(tool) = self.preferences.left_tool {
-                        self.sidebar_tool(tool, ui);
-                    } else if self.preferences.left_agents {
-                        self.agents_view(ui);
-                    } else {
-                        self.projects(ui);
+                    match self.preferences.left_content() {
+                        LeftContent::Tool(tool) => self.sidebar_tool(tool, ui),
+                        LeftContent::Agents => self.agents_view(ui),
+                        LeftContent::Projects => self.projects(ui),
                     }
                 });
-                shortcuts::end_sidebar(ui, Side::Left, self.preferences.left_tool.is_some());
+                let tool = matches!(self.preferences.left_content(), LeftContent::Tool(_));
+                shortcuts::end_sidebar(ui, Side::Left, tool);
             });
             self.project_width = projects_response.response.rect.width();
             #[cfg(feature = "test-support")]

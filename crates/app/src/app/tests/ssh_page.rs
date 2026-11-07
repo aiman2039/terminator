@@ -97,7 +97,7 @@ fn paint_ssh_page(app: &mut App, ctx: &egui::Context) -> Vec<String> {
             )),
             ..Default::default()
         },
-        |ui| app.ssh_page_or_vnc_center(ui),
+        |ui| app.center_pane(ui),
     );
     output.textures_delta.clear();
     painted_text(&output.shapes)
@@ -236,7 +236,7 @@ fn click_ssh_margin(app: &mut App, ctx: &egui::Context) {
                 events,
                 ..Default::default()
             },
-            |ui| app.ssh_page_or_vnc_center(ui),
+            |ui| app.center_pane(ui),
         );
         output.textures_delta.clear();
     }
@@ -258,4 +258,50 @@ fn margin_click_closes_an_unchanged_host_form() {
     app.new_ssh_host();
     click_ssh_margin(&mut app, &ctx);
     assert!(!app.ssh_page_visible());
+}
+
+#[test]
+fn switching_pages_keeps_a_changed_host_form_for_the_ssh_page() {
+    let (mut app, _, _dir) = fixture();
+    app.new_ssh_host();
+    app.remote_ui.draft.as_mut().unwrap().ssh.host = "build.example.com".into();
+    app.show_vnc_page();
+    assert!(!app.ssh_page_visible());
+    app.hide_center_overlay();
+    assert!(app.remote_ui.draft_changed(), "navigation keeps the edits");
+    app.show_ssh_page();
+    assert!(app.ssh_page_visible());
+    assert_eq!(
+        app.remote_ui.draft.as_ref().unwrap().ssh.host,
+        "build.example.com"
+    );
+}
+
+#[test]
+fn opening_another_host_asks_before_replacing_a_changed_form() {
+    let (mut app, _, _dir) = fixture();
+    app.new_ssh_host();
+    app.remote_ui.draft.as_mut().unwrap().ssh.host = "build.example.com".into();
+    app.open_player();
+    let mut other = crate::remote_ui::blank_project();
+    other.ssh.host = "other.example.com".into();
+    app.open_ssh_properties(other);
+    assert!(app.ssh_page_visible());
+    assert!(app.remote_ui.confirm_discard);
+    assert_eq!(
+        app.remote_ui.draft.as_ref().unwrap().ssh.host,
+        "build.example.com"
+    );
+    app.open_ssh_import();
+    assert!(app.remote_ui.import.is_none());
+}
+
+#[test]
+fn switching_pages_closes_an_unchanged_host_form() {
+    let (mut app, _, _dir) = fixture();
+    app.new_ssh_host();
+    app.show_vnc_page();
+    assert!(!app.remote_ui.open);
+    app.show_ssh_page();
+    assert!(!app.remote_ui.open, "the address book shows");
 }

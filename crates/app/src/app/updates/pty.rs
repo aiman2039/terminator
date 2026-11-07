@@ -55,18 +55,37 @@ impl App {
     }
 
     fn record_attach_child_failure(&mut self, id: u64, status: &std::process::ExitStatus) {
+        // A backend that was detached on purpose is forgotten: its late
+        // exit must not leave an id behind.
+        let Some(session) = self.backend_ids.get(&id) else {
+            return;
+        };
         self.attach_failed.insert(id);
-        if let Some(session) = self.backend_ids.get(&id)
-            && self
-                .backends
-                .get(session)
-                .is_some_and(|backend| backend.id() == id)
+        if self
+            .backends
+            .get(session)
+            .is_some_and(|backend| backend.id() == id)
         {
             self.attach_error.insert(
                 session.clone(),
                 format!("Terminal attachment failed ({status})."),
             );
         }
+    }
+
+    /// Drops the session's backend on purpose (hidden, closed, or its
+    /// service failed) together with that backend's attach bookkeeping, so
+    /// its later exit events match nothing. The retry budget stays: it
+    /// paces the next attach of the session.
+    pub(crate) fn detach_backend(&mut self, session: &str) {
+        let Some(backend) = self.backends.remove(session) else {
+            return;
+        };
+        let id = backend.id();
+        self.backend_ids.remove(&id);
+        self.attach_failed.remove(&id);
+        self.attach_started.remove(session);
+        self.attach_error.remove(session);
     }
 
     fn backend_exited(&mut self, session: String, failed: bool) {

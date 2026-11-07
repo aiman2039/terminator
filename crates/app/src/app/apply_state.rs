@@ -74,25 +74,14 @@ impl App {
                 self.attach_error.remove(&session.id);
             }
         }
-        if connected
-            && self
-                .error
-                .as_deref()
-                .is_some_and(daemon_connection::is_connection_error)
-        {
-            self.error = None;
+        if connected {
+            self.error.clear_kind(StatusKind::Connection);
         }
         if state.generation != self.state.generation
             || state.attachment_helper_available == Some(true)
         {
             self.installation_error = None;
-            if self
-                .error
-                .as_deref()
-                .is_some_and(installation::is_helper_error)
-            {
-                self.error = None;
-            }
+            self.error.clear_kind(StatusKind::Helper);
         }
         self.connected = connected;
         let initial = !self.state_loaded;
@@ -112,6 +101,7 @@ impl App {
         self.sidebar_projects
             .get_mut()
             .retain(|id, _| state.projects.iter().any(|p| &p.id == id));
+        self.rebase_settings_draft(&state.settings);
         self.state = state;
         self.prune_terminal_folders();
         self.reconcile_presentations();
@@ -176,7 +166,7 @@ impl App {
                 let dock = match Workspace::load(p.layout.clone()) {
                     Ok(workspace) => workspace,
                     Err(error) => {
-                        self.error = Some(format!(
+                        self.error.set(format!(
                             "{}: {error:#}. Layout will not be overwritten.",
                             p.name
                         ));
@@ -197,7 +187,7 @@ impl App {
                     .any(|session| &session.project_id == project && session.lifecycle.live())
         }) {
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
         }
         ended_sessions
     }
@@ -250,7 +240,7 @@ impl App {
             .as_ref()
             .is_some_and(|(sid, _)| sid == &ended.id)
         {
-            self.rename_session = None;
+            self.clear_session_rename();
         }
 
         #[cfg(feature = "test-support")]
@@ -415,14 +405,12 @@ impl App {
         if let Some(path) = target {
             let _ = dock.set_active_tab(path);
             dock.set_focused_node_and_surface(path.node_path());
-            self.active_session = dock
+            let focused = dock
                 .leaf(path.node_path())
                 .ok()
                 .and_then(|leaf| leaf.tabs.get(leaf.active.0))
-                .and_then(|tab| match tab {
-                    Tab::Terminal(sid) => Some(sid.clone()),
-                    _ => None,
-                });
+                .cloned();
+            self.focus_pane(focused.as_ref());
         }
     }
 }

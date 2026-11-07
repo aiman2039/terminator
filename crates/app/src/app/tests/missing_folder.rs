@@ -386,7 +386,7 @@ fn picking_the_open_projects_folder_says_it_is_already_open() {
     explorer_frame(&mut app, &ctx, Vec::new());
     refresh_root(&mut app, &ctx, false);
     assert_eq!(app.cwd(), Some(PathBuf::from("/a")));
-    let (generation, _) = app.begin_project_pick();
+    let (generation, _) = app.begin_project_pick(None);
     app.update_tx
         .send(Update::PickedProject(Some("/a".into()), generation))
         .unwrap();
@@ -410,8 +410,8 @@ fn locate_folder_opens_and_selects_the_pick_then_offers_to_remove_the_missing_pr
     let (mut app, ctx, dir, requests) = missing_root_fixture();
     assert_eq!(app.selected.as_deref(), Some("a"));
     app.locate_missing_folder("a");
-    assert!(app.add_project);
-    let (generation, title) = app.begin_project_pick();
+    assert!(app.picker.requested(&PickKind::Locate("a".into())));
+    let (generation, title) = app.begin_project_pick(Some("a".into()));
     assert_eq!(title, "Locate folder");
     let moved = dir.path().join("moved");
     fs::create_dir(&moved).unwrap();
@@ -433,7 +433,7 @@ fn locate_folder_opens_and_selects_the_pick_then_offers_to_remove_the_missing_pr
     assert_eq!(app.missing_folder.offer.as_deref(), Some("a"));
     assert!(app.missing_folder.locate.is_none());
     // A later ordinary pick neither locates nor offers anything.
-    let (_, title) = app.begin_project_pick();
+    let (_, title) = app.begin_project_pick(None);
     assert_eq!(title, "Open project");
 }
 
@@ -500,7 +500,7 @@ fn offered_removal_hides_the_missing_project_and_keeps_its_terminal() {
 fn cancelled_or_stale_locate_picks_offer_nothing() {
     let (mut app, ctx, dir, requests) = missing_root_fixture();
     app.locate_missing_folder("a");
-    let (generation, _) = app.begin_project_pick();
+    let (generation, _) = app.begin_project_pick(Some("a".into()));
     app.update_tx
         .send(Update::PickedProject(None, generation))
         .unwrap();
@@ -509,7 +509,7 @@ fn cancelled_or_stale_locate_picks_offer_nothing() {
     assert!(app.info.is_none());
     // The selection changes while the picker is open: say why nothing opened.
     app.locate_missing_folder("a");
-    let (generation, _) = app.begin_project_pick();
+    let (generation, _) = app.begin_project_pick(Some("a".into()));
     app.select_project("b".into());
     app.update_tx
         .send(Update::PickedProject(Some(dir.path().into()), generation))
@@ -623,13 +623,59 @@ fn unreadable_folder_keeps_choose_again_and_the_access_hint() {
 fn locate_folder_button_starts_a_locate_pick() {
     let (mut app, ctx, _dir, _requests) = missing_root_fixture();
     click_tree_target(&mut app, &ctx, Path::new("/a"), "directory-locate");
-    assert!(app.add_project);
+    assert!(app.picker.requested(&PickKind::Locate("a".into())));
+    // Nothing is armed until the Locate picker itself opens.
+    assert!(app.missing_folder.locate.is_none());
+}
+
+/// Add Project after Locate Folder… replaces the request; its pick opens a
+/// project and is never taken as the missing project's new folder.
+#[test]
+fn an_add_project_pick_after_locate_is_not_taken_as_the_locate() {
+    let (mut app, ctx, dir, requests) = missing_root_fixture();
+    app.locate_missing_folder("a");
+    assert!(app.request_pick(PickKind::Project));
+    assert_eq!(app.picker.begin(), Some(PickKind::Project));
+    let (generation, title) = app.begin_project_pick(None);
+    assert_eq!(title, "Open project");
+    assert!(app.missing_folder.locate.is_none());
+    let other = dir.path().join("other");
+    fs::create_dir(&other).unwrap();
+    app.update_tx
+        .send(Update::PickedProject(Some(other.clone()), generation))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(opened_job(&requests), Some((other.clone(), generation)));
+    app.update_tx
+        .send(Update::OpenedProject(
+            with_project(&app, "c", &other),
+            "c".into(),
+            generation,
+        ))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(app.selected.as_deref(), Some("c"));
+    assert!(app.missing_folder.offer.is_none());
+}
+
+/// Locate Folder… while another picker is open is refused with a note, and
+/// the open picker's pick does not locate the missing project.
+#[test]
+fn locate_while_a_picker_is_open_is_refused_and_arms_nothing() {
+    let (mut app, _ctx, _dir, _requests) = missing_root_fixture();
+    assert!(app.request_pick(PickKind::Project));
+    app.picker.begin();
+    let (generation, _) = app.begin_project_pick(None);
+    app.locate_missing_folder("a");
+    assert_eq!(app.picker, Picker::Open(PickKind::Project));
+    assert!(app.missing_folder.locate.is_none());
     assert!(
-        app.missing_folder
-            .locate
-            .as_ref()
-            .is_some_and(|locate| locate.project == "a")
+        app.info
+            .as_deref()
+            .is_some_and(|info| info.contains("Open project"))
     );
+    app.finish_folder_pick("a", generation, false);
+    assert!(app.missing_folder.offer.is_none());
 }
 
 #[test]

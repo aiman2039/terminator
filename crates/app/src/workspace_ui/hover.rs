@@ -172,19 +172,13 @@ impl App {
     }
 
     pub(crate) fn terminal_copy_enabled(&self, sid: &str) -> bool {
-        !self.picker_active
-            && !self.settings_open
-            && !self.player_open
+        !self.picker.busy()
+            && !self.center_covers_workspace()
             && !self.command_dialog_open()
-            && !self.add_project
             && !self.notice_detail_modal_open()
-            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
-            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && !self.rename_blocks_input()
-            && !self.open_path
-            && !self.search_open
-            && self.commands_session.is_none()
     }
 
     /// Terminals docked in the IDE strip stay interactive while a center-only
@@ -197,14 +191,11 @@ impl App {
     }
 
     pub(crate) fn strip_terminal_copy_enabled(&self, sid: &str) -> bool {
-        !self.picker_active
-            && !self.add_project
+        !self.picker.busy()
             && !self.notice_detail_modal_open()
-            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
-            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && !self.rename_blocks_input()
-            && !self.open_path
             && self.worktree_remove.is_none()
     }
 
@@ -218,14 +209,11 @@ impl App {
     }
 
     pub(crate) fn float_terminal_copy_enabled(&self, sid: &str) -> bool {
-        !self.picker_active
-            && !self.add_project
+        !self.picker.busy()
             && !self.notice_detail_modal_open()
-            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
-            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && !self.rename_blocks_input()
-            && !self.open_path
             && self.worktree_remove.is_none()
     }
 
@@ -263,7 +251,7 @@ impl App {
         if let Some(preview) = self.markdown.entries.get_mut(sid) {
             preview.editor_focused = true;
         }
-        self.active_session = Some(sid.to_owned());
+        self.focus_terminal(sid.to_owned());
         self.send(Request::Focus {
             session: sid.to_owned(),
         });

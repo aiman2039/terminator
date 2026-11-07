@@ -38,13 +38,18 @@ impl App {
     }
 
     fn service_owners(&mut self, ui: &mut egui::Ui) {
-        if let Some(error) = self.error.as_ref().filter(|e| {
-            e.starts_with("Service upgrade") || e.starts_with("Could not repair installation")
-        }) {
-            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+        if let Some(failure) = self
+            .service_failure
+            .clone()
+            .filter(ServiceFailure::retries_update)
+        {
+            ui.colored_label(
+                appearance::color(&self.theme.status_failed),
+                &failure.message,
+            );
             if ui
                 .add_enabled(
-                    !self.repair_pending,
+                    !self.service_op.running(),
                     egui::Button::new("Retry service update"),
                 )
                 .clicked()
@@ -161,8 +166,8 @@ impl App {
         }
         self.restart_session_button(ui, false);
         let repair = ui.add_enabled(
-            !self.repair_pending && can_retire_daemon(&self.state),
-            egui::Button::new(if self.repair_pending {
+            !self.service_op.running() && can_retire_daemon(&self.state),
+            egui::Button::new(if self.service_op == ServiceOp::Repairing {
                 "Repairing…"
             } else {
                 "Repair installation"
@@ -175,10 +180,10 @@ impl App {
         }
         if let Some(error) = self
             .error
-            .as_deref()
-            .filter(|e| !installation::is_helper_error(e))
+            .get()
+            .filter(|error| error.kind != StatusKind::Helper)
         {
-            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+            ui.colored_label(appearance::color(&self.theme.status_failed), &error.text);
         }
     }
 

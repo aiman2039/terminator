@@ -39,23 +39,15 @@ impl Viewer<'_> {
     /// Queue tab creation in the dock under render: strip, floating
     /// window, or main dock. Floating splits land in the issuing window.
     fn queue_add_tab(&mut self, pane: egui_dock::NodePath, split: Option<String>) {
-        if self.strip {
-            self.app.add_strip_tab = Some((pane, split));
-        } else if let Some(viewport) = self.window {
-            self.app.add_float_tab = Some((viewport, pane, split));
-        } else {
-            self.app.add_tab = Some((pane, split));
-        }
+        self.app.queue_add(self.dock_target(), pane, split);
     }
     /// Focus a tab in the dock under render.
     fn queue_focus_tab(&mut self, tab: Tab) {
-        if self.strip {
-            self.app.focus_strip_tab = Some(tab);
-        } else if let Some(viewport) = self.window {
-            self.app.focus_float_tab = Some((viewport, tab));
-        } else {
-            self.app.focus_tab = Some(tab);
-        }
+        self.app.queue_focus(self.dock_target(), tab);
+    }
+    /// The dock under render.
+    pub(crate) const fn dock_target(&self) -> DockTarget {
+        DockTarget::of(self.strip, self.window)
     }
     /// Whether the terminal under render accepts input: floating windows
     /// use their own gate so center-only overlays never suspend them.

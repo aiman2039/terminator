@@ -90,9 +90,8 @@ impl App {
             }
             if self.selected.as_deref() == Some(project) {
                 self.hide_center_overlay();
-                self.active_session = None;
-                self.non_terminal_selected = true;
-                self.focus_tab = Some(tab);
+                self.focus_non_terminal();
+                self.queue_main_focus(tab);
             }
             return true;
         }
@@ -110,9 +109,8 @@ impl App {
         if let Some((viewport, tab)) = floated {
             if self.selected.as_deref() == Some(project) {
                 self.hide_center_overlay();
-                self.active_session = None;
-                self.non_terminal_selected = true;
-                self.focus_float_tab = Some((viewport, tab));
+                self.focus_non_terminal();
+                self.queue_focus(DockTarget::Float(viewport), tab);
                 let _ = self.update_tx.send(Update::FocusViewport(viewport));
             }
             return true;
@@ -183,7 +181,7 @@ impl App {
                     text: text || external,
                 });
             } else {
-                self.error = Some("Remote file paths must be UTF-8".into());
+                self.error.set("Remote file paths must be UTF-8");
             }
             return;
         }
@@ -288,16 +286,12 @@ impl App {
             .send(Update::OpenBrowser(project.into(), target, after));
     }
     pub(crate) fn browser_covered(&self) -> bool {
-        self.settings_open
-            || self.player_open
-            || self.local_history.is_some()
+        self.center_covers_workspace()
             || self.command_dialog_open()
-            || self.picker_active
+            || self.picker.busy()
             || self.close_session.is_some()
             || self.close_workspace.is_some()
             || self.notice_detail_modal_open()
-            || self.open_path
-            || self.add_project
             || self.rename_blocks_input()
     }
 
@@ -338,7 +332,7 @@ impl App {
             if let Some(project) = project
                 && let Err(error) = self.open_browser_url(&project, &url, None)
             {
-                self.error = Some(format!("Could not open {url}: {error:#}"));
+                self.error.set(format!("Could not open {url}: {error:#}"));
             }
         }
     }
@@ -389,7 +383,7 @@ impl App {
                 dock.active = previous;
             }
             if same && self.selected.as_deref() == Some(&project) {
-                self.active_session = None;
+                self.focus_non_terminal();
             }
         } else {
             let anchors = match after {
@@ -401,7 +395,7 @@ impl App {
                 .or_insert_with(Workspace::empty)
                 .add_from(id(), tab, &anchors);
             if self.selected.as_deref() == Some(&project) {
-                self.active_session = None;
+                self.focus_non_terminal();
             }
         }
     }
@@ -461,32 +455,10 @@ impl App {
             workspace.strip_player();
         }
     }
-    pub(crate) fn hide_center_overlay(&mut self) {
-        if self.settings_open && self.settings_dirty() {
-            self.settings_pending = Some(settings_ui::SettingsPending::Close);
-        }
-        self.settings_open = false;
-        self.player_open = false;
-        self.vnc_page_open = false;
-        self.remote_ui.hosts.page_open = false;
-        self.remote_ui.close();
-        self.remote_ui.import = None;
-        self.close_scrollback_search();
-        self.close_command_blocks();
-        self.worktree_open = false;
-        self.worktree_draft = None;
-        self.local_history = None;
-        self.shortcut_capture = None;
-        if self.palette.open {
-            self.close_palette();
-        }
-    }
-
-    /// Drop the scrollback-search pane. `search_session` only names the query;
-    /// leaving it set used to keep every main terminal disabled after the pane
-    /// was gone.
+    /// Drop the scrollback-search page; another page stays.
     pub(crate) fn close_scrollback_search(&mut self) {
-        self.search_open = false;
-        self.search_session = None;
+        if self.search_session().is_some() {
+            self.hide_center_overlay();
+        }
     }
 }

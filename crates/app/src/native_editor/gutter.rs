@@ -286,10 +286,14 @@ impl App {
     pub(crate) fn git_base(&mut self, path: &Path) -> Option<Arc<str>> {
         let entry = self.git_bases.get(path);
         let fresh = entry.is_some_and(|(generation, ..)| *generation == self.git_base_generation);
-        if !fresh && self.git_base_pending.insert(path.to_owned()) {
-            let _ = self
-                .jobs
-                .send(Job::GitBase(path.to_owned(), self.git_base_generation));
+        // Pending only once sent: a refused read answers `GitBaseFailed`.
+        if !fresh
+            && !self.git_base_pending.contains(path)
+            && (self.jobs)
+                .send(Job::GitBase(path.to_owned(), self.git_base_generation))
+                .is_ok()
+        {
+            self.git_base_pending.insert(path.to_owned());
         }
         entry.and_then(|(_, base, _)| base.clone())
     }
@@ -352,6 +356,17 @@ impl App {
         self.git_base_pending.remove(&path);
         self.git_bases
             .insert(path, (generation, base.map(Arc::from), root));
+    }
+
+    /// The read failed: keep the markers shown and wait for the next Git
+    /// refresh, so a failing read is not sent again every frame.
+    pub(crate) fn git_base_failed(&mut self, path: PathBuf, generation: u64) {
+        self.git_base_pending.remove(&path);
+        let entry = self
+            .git_bases
+            .entry(path)
+            .or_insert((generation, None, None));
+        entry.0 = generation;
     }
 }
 

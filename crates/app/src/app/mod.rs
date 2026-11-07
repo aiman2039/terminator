@@ -6,11 +6,13 @@ pub(crate) mod app_state;
 mod apply_state;
 mod attention;
 mod center;
+mod center_page;
+pub(crate) use center_page::CenterPage;
 mod client;
 mod command_blocks;
 mod commands;
 mod docking;
-pub(crate) use docking::Zoomed;
+pub(crate) use docking::{DockOp, DockTarget, Zoomed};
 pub(crate) mod drag_state;
 mod drop_zone;
 #[cfg(test)]
@@ -18,6 +20,7 @@ mod editor_drag_tests;
 #[cfg(test)]
 mod file_reuse_tests;
 mod files;
+pub(crate) mod inline_rename;
 mod pane_focus;
 pub(crate) use files::OpenFileInput;
 pub(crate) use files::OpenFileModeInput;
@@ -29,6 +32,7 @@ mod layout_tests;
 mod lifecycle;
 pub(crate) mod missing_folder;
 pub(crate) mod palette_state;
+pub(crate) mod picker;
 mod projects;
 pub(crate) use projects::InsertFloatInput;
 #[cfg(test)]
@@ -46,6 +50,8 @@ mod tests;
 pub(crate) use tests::support::{drain_updates, painted_text};
 pub(crate) mod types;
 mod updates;
+#[cfg(test)]
+pub(crate) use updates::service_failure_update;
 pub(crate) use updates::{PostCreate, PostCreateQueue};
 #[cfg(test)]
 mod vnc_tests;

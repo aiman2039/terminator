@@ -52,7 +52,7 @@ pub(crate) fn matching_lines(text: &str, query: &str) -> Vec<(usize, Range<usize
 
 impl App {
     pub(crate) fn search_history_center(&mut self, ui: &mut egui::Ui) {
-        let Some(sid) = self.search_session.clone() else {
+        let Some(sid) = self.search_session().map(str::to_owned) else {
             self.close_scrollback_search();
             return;
         };

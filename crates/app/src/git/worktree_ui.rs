@@ -31,9 +31,14 @@ fn destination(ui: &mut egui::Ui, draft: &mut WorktreeDraft) -> bool {
 
 /// Returns `(create, cancel)` clicks.
 fn form_buttons(ui: &mut egui::Ui, draft: &WorktreeDraft) -> (bool, bool) {
+    // One submission at a time: Create stays off until it answers.
     let create = ui.add_enabled(
-        !draft.branch.trim().is_empty() && !draft.start.trim().is_empty(),
-        egui::Button::new("Create worktree"),
+        !draft.submitting && !draft.branch.trim().is_empty() && !draft.start.trim().is_empty(),
+        egui::Button::new(if draft.submitting {
+            "Creating…"
+        } else {
+            "Create worktree"
+        }),
     );
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), "worktree-create", create.rect);
@@ -65,6 +70,17 @@ pub(crate) struct WorktreeDraft {
     pub agent_command: String,
     /// Optional http(s) URL opened in a Browser tab.
     pub browser_url: String,
+    /// Identifies this opening of the wizard; a submission's reply only
+    /// closes or unlocks the draft it came from.
+    pub id: u64,
+    /// A Create of this draft is running.
+    pub submitting: bool,
+}
+
+/// A new draft ID; never 0, the ID of a default draft.
+fn next_draft_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 pub(crate) fn default_branch(name: &str) -> String {
@@ -171,6 +187,8 @@ impl App {
             task: String::new(),
             agent_command: self.preferences.task_agent_command.clone(),
             browser_url: String::new(),
+            id: next_draft_id(),
+            submitting: false,
         };
         // `git rev-parse` runs on a worker; the form opens when it answers.
         let _ = self
@@ -183,12 +201,17 @@ impl App {
         if !git {
             self.info = Some("This folder is not a git checkout.".into());
         } else if self.worktree_draft.is_none() {
+            // The list page shows the form above it; else the form page.
+            if self.center != crate::CenterPage::Worktrees {
+                self.show_center(crate::CenterPage::WorktreeDraft);
+            }
             self.worktree_draft = Some(draft);
         }
     }
 
     pub(crate) fn worktree_center(&mut self, ui: &mut egui::Ui) {
         let Some(mut draft) = self.worktree_draft.clone() else {
+            self.hide_center_overlay();
             return;
         };
         let mut submit = false;
@@ -221,14 +244,18 @@ impl App {
         });
         cancel |= dismissed;
         if browse {
-            self.browse_target = Some(BrowseTarget::WorktreeDest);
+            self.request_pick(PickKind::Browse(BrowseTarget::WorktreeDest));
         }
         if submit {
-            self.submit_worktree(&draft);
+            self.submit_worktree(&mut draft);
         }
         // Keep the form after Create until the worker reports success, so a
         // failed creation can be corrected and retried.
-        self.worktree_draft = (!cancel).then_some(draft);
+        if cancel {
+            self.hide_center_overlay();
+        } else {
+            self.worktree_draft = Some(draft);
+        }
     }
 
     pub(crate) fn worktree_form(&self, input: WorktreeFormInput<'_>) {
@@ -300,11 +327,14 @@ impl App {
         });
     }
 
-    pub(crate) fn submit_worktree(&mut self, draft: &WorktreeDraft) {
-        if !self.accept_task(draft) {
+    /// Sends the draft once; it stays `submitting` until its reply
+    /// (`WorktreeCreated` or `WorktreeFailed`). A refused send answers
+    /// `WorktreeFailed` at once.
+    pub(crate) fn submit_worktree(&mut self, draft: &mut WorktreeDraft) {
+        if draft.submitting || !self.accept_task(draft) {
             return;
         }
-        let _ = self.jobs.send(Job::CreateWorktree(draft.clone()));
+        draft.submitting = self.jobs.send(Job::CreateWorktree(draft.clone())).is_ok();
     }
 
     pub(crate) fn confirm_remove_worktree(&mut self, project_id: &str) {

@@ -26,38 +26,23 @@ impl App {
     /// Paints a center page, else the workspace. True for the workspace.
     fn center_page_or_workspace(&mut self, ui: &mut egui::Ui) -> bool {
         self.settings_unsaved_dialog(ui.ctx());
-        if self.settings_open {
-            self.settings_center(ui);
-            return false;
-        }
-        if self.player_open {
-            self.player_center(ui);
-            return false;
-        }
         // Search Everywhere floats above this pane (`show_palette`).
-        if self.worktree_open {
-            self.worktree_management_center(ui);
-            return false;
+        match self.center {
+            CenterPage::Workspace => {
+                self.workspace_center(ui);
+                return true;
+            }
+            CenterPage::Settings => self.settings_center(ui),
+            CenterPage::Player => self.player_center(ui),
+            CenterPage::Worktrees => self.worktree_management_center(ui),
+            CenterPage::WorktreeDraft => self.worktree_center(ui),
+            CenterPage::Search(_) => self.search_history_center(ui),
+            CenterPage::Commands(_) => self.command_blocks_center(ui),
+            CenterPage::LocalHistory => self.local_history_center(ui),
+            CenterPage::Ssh => self.ssh_page_center(ui),
+            CenterPage::Vnc => self.vnc_page_center(ui),
         }
-        if self.worktree_draft.is_some() {
-            self.worktree_center(ui);
-            return false;
-        }
-        if self.search_open {
-            self.search_history_center(ui);
-            return false;
-        }
-        if self.commands_session.is_some() {
-            self.command_blocks_center(ui);
-            return false;
-        }
-        if self.local_history.is_some() {
-            self.local_history_center(ui);
-            return false;
-        }
-        let workspace = !self.ssh_page_visible() && !self.vnc_page_open;
-        self.ssh_page_or_vnc_center(ui);
-        workspace
+        false
     }
 
     pub(crate) fn worktree_management_center(&mut self, ui: &mut egui::Ui) {
@@ -66,7 +51,7 @@ impl App {
             ui.strong("Worktrees");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if appearance::sidebar_action(ui, "X", "Close").clicked() {
-                    self.worktree_open = false;
+                    self.hide_center_overlay();
                 }
             });
         });
@@ -111,10 +96,10 @@ impl App {
             cancel: &mut cancel,
         });
         if browse {
-            self.browse_target = Some(BrowseTarget::WorktreeDest);
+            self.request_pick(PickKind::Browse(BrowseTarget::WorktreeDest));
         }
         if submit {
-            self.submit_worktree(&clone);
+            self.submit_worktree(&mut clone);
         }
         // Keep the form after Create until the worker reports success, so a
         // failed creation can be corrected and retried.
@@ -179,7 +164,7 @@ impl App {
         .on_hover_text(format!("{}\n{}", path, worktree.path.display()));
         if response.clicked() {
             self.select_project(project_id.clone());
-            self.worktree_open = false;
+            self.close_center_page(&CenterPage::Worktrees);
         }
         appearance::context_menu(&response, |ui| self.worktree_row_menu(ui, &project_id));
     }
@@ -194,7 +179,7 @@ impl App {
         .clicked()
         {
             self.select_project(project_id.to_owned());
-            self.worktree_open = false;
+            self.close_center_page(&CenterPage::Worktrees);
             ui.close();
         }
         if appearance::menu_item(appearance::MenuItemInput {
@@ -207,7 +192,7 @@ impl App {
         {
             self.select_project(project_id.to_owned());
             self.create(None);
-            self.worktree_open = false;
+            self.close_center_page(&CenterPage::Worktrees);
             ui.close();
         }
         if appearance::menu_item(appearance::MenuItemInput {
@@ -261,7 +246,7 @@ impl App {
                     })
                     .clicked()
                 {
-                    self.add_project = true;
+                    self.request_pick(PickKind::Project);
                 }
             });
         });
@@ -289,11 +274,7 @@ impl App {
         } else {
             self.paint_dock(ui, &project, &mut dock);
         }
-        self.apply_focus_tab(&mut dock);
-        self.apply_add_tab(&project, &mut dock);
-        self.apply_detach_pane(&mut dock);
-        self.apply_dock_back(&mut dock);
-        self.apply_float_pane(&project, &mut dock);
+        self.apply_main_dock_ops(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
         self.check_zoom(&project, &dock);
         self.paint_zoom(ui.ctx(), outer, &project);
@@ -309,24 +290,16 @@ impl App {
         self.paint_tab_ghost(ui);
         // A release the docks did not accept cancels so the payload cannot stick.
         if self.drag.pane.is_some() && ui.input(|i| i.pointer.any_released()) {
-            self.drag.preview_origin = None;
-            self.end_pane_drag();
+            self.end_pane_drag(None, false);
         }
         // Pane "Close tab" is queued while this workspace is checked out.
         self.drain_pending_unavailable_close();
     }
 
     pub(crate) fn follow_focus_tab(&mut self, tab: Option<Tab>) {
-        match tab {
-            Some(Tab::Terminal(sid)) => {
-                self.active_session = Some(sid);
-                self.non_terminal_selected = false;
-            }
-            Some(_) => {
-                self.active_session = None;
-                self.non_terminal_selected = true;
-            }
-            None => {}
+        // No focused tab is no observation: focus stays where it was.
+        if tab.is_some() {
+            self.focus_pane(tab.as_ref());
         }
     }
 
@@ -393,7 +366,11 @@ impl App {
     /// and pane controls. Cross-window drag-drop is unsupported, so no
     /// drop landing runs here; a main-dock drag released over a float is
     /// cancelled by the main window's own release handling.
-    pub(crate) fn paint_float_dock(&mut self, input: PaintFloatDockInput<'_>) {
+    /// Returns the window's dock-back requests for the caller to apply.
+    pub(crate) fn paint_float_dock(
+        &mut self,
+        input: PaintFloatDockInput<'_>,
+    ) -> Vec<super::docking::DockOp> {
         let PaintFloatDockInput {
             ui,
             viewport,
@@ -420,8 +397,7 @@ impl App {
                     render_tab: None,
                 },
             );
-        self.apply_add_float_tab(viewport, project, dock);
-        self.apply_focus_float_tab(viewport, dock);
+        self.apply_float_dock_ops(viewport, project, dock)
     }
 
     pub(crate) fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {

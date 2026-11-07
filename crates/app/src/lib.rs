@@ -30,6 +30,9 @@ pub(crate) use git::revision_compare;
 pub(crate) use git::worktree_ui;
 pub(crate) use install::daemon_upgrade;
 pub use install::installation;
+pub(crate) use install::installation_ui::service_op::{
+    self, ServiceFailure, ServiceOp, ServiceTask,
+};
 #[cfg(any(not(target_os = "macos"), test))]
 pub(crate) use install::windows_updates;
 #[cfg(feature = "test-support")]
@@ -62,7 +65,7 @@ mod vnc_ui;
 use file_actions::FileAction;
 mod preferences;
 mod workspace;
-use preferences::{AgentsTab, SidebarTool, UiPreferences};
+use preferences::{AgentsTab, LeftContent, SidebarTool, UiPreferences};
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile};
 use workspace::Workspace;
 pub mod app;
@@ -72,11 +75,12 @@ pub(crate) mod diff;
 mod gui_services;
 mod perforce;
 pub use app::app_state::App;
-pub(crate) use app::app_state::{
-    inventory_is_stale, is_missing_path_error, is_session_auth_error, observation_is_stale,
-    service_failure_update,
-};
+pub(crate) use app::app_state::{inventory_is_stale, observation_is_stale};
 pub(crate) use app::frame::RepaintProbe;
+pub(crate) use app::frame::status_line::{StatusKind, StatusLine};
+pub(crate) use app::picker::{PickKind, Picker};
+#[cfg(test)]
+pub(crate) use app::service_failure_update;
 pub(crate) use app::types::{
     After, FileActivation, GitView, HoverPopup, Job, PaneDropZone, PaneSource, RenameSurface,
     SpawnDiff, Tab, Update,
@@ -85,7 +89,7 @@ pub(crate) use app::window::{
     FloatingWindow, PaneIndex, TerminalFind, begin_native_window_gesture, header_drag_space,
     window_resize_edges,
 };
-pub(crate) use app::{PostCreate, PostCreateQueue};
+pub(crate) use app::{CenterPage, DockOp, DockTarget, PostCreate, PostCreateQueue};
 pub(crate) use eframe::egui::{self, Color32, RichText};
 #[cfg(test)]
 pub(crate) use egui_dock::DockState;

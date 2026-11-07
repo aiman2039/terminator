@@ -25,11 +25,7 @@ impl App {
         target: editor_close::Target,
         sessions: Vec<String>,
     ) -> bool {
-        let owners = self.session_owners(&sessions);
-        if !self.idle_close_supported(&sessions, &owners) {
-            return false;
-        }
-        if self.idle_close_fallback.as_ref() == Some(&target) {
+        if !self.idle_close_applies(&target, &sessions) {
             return false;
         }
         // One preflight at a time. A different target waits: its caller
@@ -38,6 +34,7 @@ impl App {
         if self.idle_close_pending.is_some() {
             return true;
         }
+        let owners = self.session_owners(&sessions);
         self.idle_close_snapshot = self.idle_target_tabs(&target);
         self.idle_close_pending = Some(target.clone());
         if self
@@ -55,10 +52,40 @@ impl App {
             self.idle_close_pending = None;
             self.idle_close_snapshot.clear();
             self.idle_close_fallback = Some(target);
-            self.error = Some("Close worker is unavailable; sessions have been preserved.".into());
+            self.error
+                .set("Close worker is unavailable; sessions have been preserved.");
             return false;
         }
         true
+    }
+
+    /// Whether `target` goes through the daemon idle close rather than a
+    /// confirmation: supported, and not already fallen back.
+    fn idle_close_applies(&self, target: &editor_close::Target, sessions: &[String]) -> bool {
+        self.idle_close_fallback.as_ref() != Some(target)
+            && self.idle_close_supported(sessions, &self.session_owners(sessions))
+    }
+
+    /// Whether a pane or workspace close shows its confirmation now. A
+    /// close in its idle preflight (or queued behind another one), in its
+    /// editor check, or with nothing live left shows none and leaves
+    /// terminal input alone. Each close answers for itself, so one close's
+    /// preflight never opens the gate for the other's confirmation.
+    pub(crate) fn close_confirm_blocks_input(&self) -> bool {
+        let confirming = |target: editor_close::Target, live: Vec<String>| {
+            !live.is_empty()
+                && !self.editors_only(&live)
+                && !(self.idle_close_pending.is_some() && self.idle_close_applies(&target, &live))
+        };
+        let pane = self.close_session.as_ref().is_some_and(|sid| {
+            confirming(editor_close::Target::Pane(sid.clone()), vec![sid.clone()])
+        });
+        pane || self.close_workspace.as_ref().is_some_and(|(project, tab)| {
+            confirming(
+                editor_close::Target::Workspace(project.clone(), tab.clone()),
+                self.live_workspace_sessions(project, tab),
+            )
+        })
     }
 
     fn session_owners(&self, sessions: &[String]) -> std::collections::BTreeSet<String> {
@@ -141,7 +168,7 @@ impl App {
         }
         self.idle_close_fallback = Some(target);
         if let Some(error) = idle_close_failure_message(changed, result) {
-            self.error = Some(error);
+            self.error.set(error);
         }
     }
 

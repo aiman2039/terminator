@@ -287,7 +287,7 @@ impl App {
             }
             Err(error) => {
                 self.editor_blame.remove(path);
-                self.error = Some(format!("Git blame unavailable: {error}"));
+                self.error.set(format!("Git blame unavailable: {error}"));
             }
         }
     }
@@ -311,7 +311,7 @@ impl App {
         {
             let url = format!("{base}{}", entry.hash);
             if let Err(error) = self.open_browser_url(&project, &url, None) {
-                self.error = Some(format!("{error:#}"));
+                self.error.set(format!("{error:#}"));
             }
             return;
         }

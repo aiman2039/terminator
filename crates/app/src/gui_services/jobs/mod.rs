@@ -25,6 +25,9 @@ mod settings;
 pub(crate) use settings::InstallInput;
 pub(crate) use settings::SaveAppearanceInput;
 pub(crate) use settings::TestNtfyInput;
+pub(crate) mod replies;
+#[cfg(test)]
+mod replies_tests;
 mod routing;
 pub(super) use routing::JobRouting;
 #[cfg(test)]

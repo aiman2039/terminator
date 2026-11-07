@@ -254,7 +254,14 @@ fn modal_choice_carries_issuing_float_pane() {
     };
     // Discard closes only the issuing copy: the left split keeps
     // the file and its buffer.
-    app.apply_native_close_choice(&path, NativeCloseChoice::Discard, Some(issuer));
+    app.apply_native_close_choice(
+        crate::native_editor::NativeCloseRequest::new(
+            path.clone(),
+            Some(issuer),
+            crate::native_editor::CloseOwner::Pane,
+        ),
+        NativeCloseChoice::Discard,
+    );
     let dock = app.floating[0].dock.as_ref().expect("window kept");
     assert_eq!(dock.iter_all_tabs().count(), 1);
     assert!(app.native_docs.contains_key(&path));
@@ -276,10 +283,20 @@ fn modal_save_close_stores_float_issuer_deferred() {
         node: None,
         delayed: false,
     };
-    app.apply_native_close_choice(&path, NativeCloseChoice::SaveClose, Some(issuer));
+    app.apply_native_close_choice(
+        crate::native_editor::NativeCloseRequest::new(
+            path.clone(),
+            Some(issuer),
+            crate::native_editor::CloseOwner::Pane,
+        ),
+        NativeCloseChoice::SaveClose,
+    );
     assert!(matches!(
-        app.native_close_after_save.get(&path),
-        Some(Some(CloseIssuer::Floating { delayed: true, .. }))
+        app.native_close_after_save.first(),
+        Some(crate::native_editor::NativeCloseRequest {
+            issuer: Some(CloseIssuer::Floating { delayed: true, .. }),
+            ..
+        })
     ));
 }
 
@@ -327,8 +344,7 @@ fn float_terminal_ignores_center_overlays() {
         .sessions
         .push(session_fixture("float-gated", SessionKind::Shell));
     // Settings and Player cover the main window, never a float.
-    app.settings_open = true;
-    app.player_open = true;
+    app.center = CenterPage::Settings;
     let viewport = egui::ViewportId::from_hash_of("float-gated");
     let float_input = {
         let viewer = crate::workspace_ui::Viewer {
@@ -390,6 +406,45 @@ fn go_session_keeps_floated_terminal() {
 }
 
 #[test]
+fn pane_moves_queued_in_one_frame_all_apply() {
+    let (mut app, _, _dir) = fixture();
+    app.selected = Some("a".into());
+    let workspace = Workspace::from_layout(DockState::new(vec![
+        Tab::Terminal("one".into()),
+        Tab::Terminal("two".into()),
+        Tab::Terminal("three".into()),
+    ]));
+    app.layouts.insert("a".into(), workspace);
+    app.queue_dock_op(DockOp::Detach {
+        pane: Tab::Terminal("two".into()),
+        source: None,
+    });
+    app.queue_dock_op(DockOp::Float {
+        pane: Tab::Terminal("one".into()),
+        source: None,
+    });
+    let mut dock = app.layouts.remove("a").unwrap();
+    app.apply_main_dock_ops("a", &mut dock);
+    // The second request did not replace the first: both panes moved.
+    assert_eq!(dock.tabs.len(), 2);
+    assert!(dock.find_tab(&Tab::Terminal("one".into())).is_none());
+    assert_eq!(app.floating.len(), 1);
+    // The detached terminal's focus ran in the same pass.
+    assert!(app.dock_ops.is_empty());
+    assert_eq!(app.active_session.as_deref(), Some("two"));
+}
+
+#[test]
+fn queued_ops_of_a_deselected_project_are_dropped() {
+    let (mut app, _, _dir) = fixture();
+    app.selected = Some("a".into());
+    app.queue_main_focus(Tab::Terminal("one".into()));
+    app.selected = None;
+    app.prune_dock_ops();
+    assert!(app.dock_ops.is_empty());
+}
+
+#[test]
 fn float_pane_applies_to_window_and_docks_back() {
     let (mut app, _, _dir) = fixture();
     app.selected = Some("a".into());
@@ -398,9 +453,12 @@ fn float_pane_applies_to_window_and_docks_back() {
         Tab::Terminal("two".into()),
     ]));
     app.layouts.insert("a".into(), workspace);
-    app.float_pane = Some(Tab::Terminal("one".into()));
+    app.queue_dock_op(DockOp::Float {
+        pane: Tab::Terminal("one".into()),
+        source: None,
+    });
     let mut dock = app.layouts.remove("a").unwrap();
-    app.apply_float_pane("a", &mut dock);
+    app.apply_main_dock_ops("a", &mut dock);
     app.layouts.insert("a".into(), dock);
     // The dock loses the pane; the window gains it with its home.
     assert!(
@@ -649,7 +707,11 @@ fn caption_menu_floats_pane() {
     let item = frame_center(&app, &ctx, "Float window");
     combined_frame(&mut app, &ctx, vec![frame_press(item, true)]);
     combined_frame(&mut app, &ctx, vec![frame_press(item, false)]);
-    assert_eq!(app.float_pane, Some(Tab::Terminal("one".into())));
+    assert!(app.dock_ops.iter().any(|op| *op
+        == DockOp::Float {
+            pane: Tab::Terminal("one".into()),
+            source: None,
+        }));
 }
 
 #[test]

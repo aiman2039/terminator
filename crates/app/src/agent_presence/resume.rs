@@ -18,24 +18,11 @@ impl App {
         if self.missing_projects.contains(&session.project_id) {
             return;
         }
-        let tab_id = id();
-        self.post_create.by_tab.insert(
-            tab_id.clone(),
-            PostCreate {
-                input: command,
-                enter: true,
-            },
-        );
-        let _ = self.jobs.send(Job::rpc(
-            Request::Create {
-                project: session.project_id.clone(),
-                cwd: Some(session.cwd.clone()),
-                file: None,
-                line: None,
-                column: None,
-                editor: false,
-            },
-            After::Workspace(tab_id, Vec::new()),
-        ));
+        let post = PostCreate {
+            input: command,
+            enter: true,
+        };
+        let (project, cwd) = (session.project_id.clone(), Some(session.cwd.clone()));
+        self.create_terminal_tab((project, cwd), (None, Some(post)));
     }
 }

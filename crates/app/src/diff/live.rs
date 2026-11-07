@@ -18,6 +18,8 @@ const SYNC_BYTES: usize = 16 * 1024;
 const SMALL_DEBOUNCE: f64 = 0.03;
 /// Typing pause before a large buffer re-diffs, in seconds.
 const DEBOUNCE: f64 = 0.15;
+/// Pause before a build that ended without a result runs again, in seconds.
+const RETRY_PAUSE: f64 = 1.0;
 
 /// The native editor state behind the diff's right pane.
 pub(crate) struct LiveEditor {
@@ -63,6 +65,9 @@ pub(crate) struct LiveDiff {
     pending: Option<Pending>,
     /// Editor marks for `(document generation, palette)`.
     marks: Option<(DiffGeneration, MarkColors, Arc<EditorMarks>)>,
+    /// UI time before which a build that ended without a result is not
+    /// started again.
+    retry_at: f64,
 }
 
 impl review::Edit {
@@ -89,11 +94,20 @@ impl review::Edit {
     ) -> (Arc<DiffDocument>, bool) {
         let revision = self.editor.synced;
         let live = &mut self.live;
-        if let Some(pending) = &live.pending
-            && let Ok(doc) = pending.receiver.try_recv()
-        {
-            live.shown = Some((pending.revision, Arc::new(doc)));
-            live.pending = None;
+        if let Some(pending) = &live.pending {
+            match pending.receiver.try_recv() {
+                Ok(doc) => {
+                    live.shown = Some((pending.revision, Arc::new(doc)));
+                    live.pending = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                // The build ended without a document (timed out, panicked,
+                // replaced): build again after a pause.
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    live.pending = None;
+                    live.retry_at = now + RETRY_PAUSE;
+                }
+            }
         }
         let current = live.shown.as_ref().is_some_and(|(at, _)| *at == revision);
         let small = self
@@ -110,7 +124,8 @@ impl review::Edit {
         } else if !current {
             // Nothing shown yet: build at once, without the typing pause.
             let pause = if small { SMALL_DEBOUNCE } else { DEBOUNCE };
-            let idle = live.shown.is_none() || now - self.editor.edited_at >= pause;
+            let idle = (live.shown.is_none() || now - self.editor.edited_at >= pause)
+                && now >= live.retry_at;
             let building = live
                 .pending
                 .as_ref()
@@ -151,6 +166,22 @@ impl review::Edit {
         let marks = Arc::new(editor_marks(doc, colors));
         self.live.marks = Some((doc.generation, colors, Arc::clone(&marks)));
         marks
+    }
+}
+
+#[cfg(test)]
+impl LiveDiff {
+    /// A build is in flight.
+    pub(crate) fn building(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Make the build in flight end without a document, as a timed-out
+    /// or panicked pool job does.
+    pub(crate) fn drop_build_result(&mut self) {
+        if let Some(pending) = &mut self.pending {
+            pending.receiver = mpsc::channel().1;
+        }
     }
 }
 

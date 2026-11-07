@@ -14,7 +14,7 @@ fn invalid_saved_focus_reports_error_and_preserves_layout() {
     app.apply_state(state);
     // Loading persisted input must not allow an invalid index to reach the GUI.
     app.layouts["a"].active_pane();
-    assert!(app.error.as_ref().is_some_and(|e| e.contains("focus")));
+    assert!(app.error.text().is_some_and(|e| e.contains("focus")));
     assert!(app.layout_readonly.contains("a"));
     app.save_layouts();
     assert_eq!(app.state.projects[0].layout, saved);
@@ -227,4 +227,66 @@ fn failed_preferences_save_waits_before_retrying() {
     app.preferences_retry_at = Some(Instant::now());
     app.save_changed_preferences();
     assert_eq!(requests.try_iter().count(), 1);
+}
+
+fn prepares(requests: &mpsc::Receiver<Job>) -> usize {
+    requests
+        .try_iter()
+        .filter(|job| matches!(job, Job::PrepareLayouts(..)))
+        .count()
+}
+
+/// #278: a prepare that was refused is sent again on the next pass.
+#[test]
+fn refused_layout_prepare_is_sent_again() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    drop(requests);
+    app.jobs = jobs.into();
+    app.save_layouts();
+    assert!(app.layout_signature.is_none(), "nothing was sent");
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.save_layouts();
+    assert_eq!(prepares(&requests), 1);
+}
+
+/// #278: layouts prepared during an exit that was then cancelled, or a
+/// prepare job that ended without its layouts, are sent again.
+#[test]
+fn dropped_layout_prepare_is_sent_again() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.save_layouts();
+    assert_eq!(prepares(&requests), 1);
+    app.exit = exit::Exit::Waiting(Instant::now());
+    let generation = app.layout_generation;
+    app.update_tx
+        .send(Update::LayoutsPrepared(generation, Vec::new()))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    app.cancel_exit("closing failed".into());
+    app.save_layouts();
+    assert_eq!(prepares(&requests), 1, "a cancelled exit resends");
+    let generation = app.layout_generation;
+    app.update_tx
+        .send(Update::LayoutPrepareFailed(generation))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    app.save_layouts();
+    assert_eq!(prepares(&requests), 1, "a failed prepare resends");
+}
+
+/// #268: a refused preferences save is not left pending.
+#[test]
+fn refused_preferences_save_is_not_pending() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    drop(requests);
+    app.jobs = jobs.into();
+    app.preferences_writable = true;
+    app.preferences.ide_mode = !app.preferences_saved.ide_mode;
+    app.save_changed_preferences();
+    assert!(!app.preferences_pending);
 }

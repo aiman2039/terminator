@@ -102,7 +102,7 @@ impl App {
     /// One commit or push runs at a time; a second request is ignored.
     pub(super) fn commit_draft(&mut self, push: bool) {
         let Some(root) = self.op_root() else {
-            self.error = Some("Open a project folder first.".into());
+            self.error.set("Open a project folder first.");
             return;
         };
         // Its worktrees share the stash, which the run locks too.

@@ -12,7 +12,7 @@ impl App {
             && self
                 .preferences
                 .needs_setup(self.state_loaded, self.state.projects.len())
-            && !self.picker_active)
+            && !self.picker.busy())
         {
             return;
         }
@@ -29,7 +29,7 @@ impl App {
                     .add_sized([width, 28.0], egui::Button::new("Choose project folder"))
                     .clicked()
                 {
-                    self.add_project = true;
+                    self.request_pick(PickKind::Project);
                 }
                 if ui
                     .add_sized([width, 28.0], egui::Button::new("Skip"))
@@ -46,7 +46,7 @@ impl App {
         self.layout_save_dialog(ctx);
         self.host_key_dialog(ctx);
         self.restart_confirm_dialog(ctx);
-        self.add_project_picker(frame);
+        self.open_requested_picker(frame);
         if self.close_workspace.is_none() && self.close_session.is_none() {
             self.idle_close_fallback = None;
         }
@@ -54,20 +54,14 @@ impl App {
         self.close_session_modal(ctx);
         self.open_terminal_notice_detail();
         self.notice_detail_modal(ctx);
-        self.test_editor_picker(frame);
-        self.audio_files_picker(frame);
-        self.vnc_files_picker(frame);
-        self.audio_directory_picker(frame);
-        self.open_file_picker(frame);
         self.worktree_remove_dialog(ctx);
         self.ask_agent_dialog(ctx);
         self.init_command_dialog(ctx);
         self.missing_offer_dialog(ctx);
-        self.browse_target_picker(frame);
     }
 
     fn restart_confirm_dialog(&mut self, ctx: &egui::Context) {
-        if !self.restart_confirm {
+        if self.service_op != ServiceOp::ConfirmingRestart {
             return;
         }
         let live = self
@@ -98,7 +92,7 @@ impl App {
                 ui.horizontal(|ui| self.restart_confirm_buttons(ui));
             });
         if !open {
-            self.restart_confirm = false;
+            self.cancel_session_restart();
         }
     }
 
@@ -113,7 +107,7 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "cancel-restart-session", cancel.rect);
         if cancel.clicked() {
-            self.restart_confirm = false;
+            self.cancel_session_restart();
         }
     }
 

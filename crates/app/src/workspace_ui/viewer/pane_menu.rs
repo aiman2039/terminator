@@ -6,7 +6,7 @@ impl Viewer<'_> {
         &mut self,
         ui: &mut egui::Ui,
         tab: &mut Tab,
-        pane: egui_dock::NodePath,
+        (pane, at): (egui_dock::NodePath, Option<egui_dock::TabPath>),
     ) {
         if let Tab::Terminal(sid) = tab {
             self.app.rename_action(ui, sid, RenameSurface::Pane);
@@ -29,7 +29,7 @@ impl Viewer<'_> {
         // so they stay hidden there.
         if !self.strip && self.window.is_none() {
             self.zoom_menu_item(ui, tab, pane);
-            self.pane_layout_items(ui, tab, pane);
+            self.pane_layout_items(ui, tab, (pane, at));
         } else if let Some(viewport) = self.window {
             self.float_dock_back_items(ui, tab, viewport);
         }
@@ -41,7 +41,13 @@ impl Viewer<'_> {
     /// Detach tears this pane off into a fresh top-level tab; dock-back
     /// returns it to a sibling tab. Both queue while the workspace is
     /// checked out and apply once it is back.
-    fn pane_layout_items(&mut self, ui: &mut egui::Ui, tab: &Tab, pane: egui_dock::NodePath) {
+    fn pane_layout_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab: &Tab,
+        (pane, at): (egui_dock::NodePath, Option<egui_dock::TabPath>),
+    ) {
+        let source = self.view_source(tab, at);
         let stacked = self
             .app
             .pane_tabs
@@ -50,7 +56,7 @@ impl Viewer<'_> {
         let detachable = stacked || !self.app.dock_back_targets.is_empty();
         let floatable = crate::App::floatable(tab);
         if detachable {
-            self.pane_detach_items(ui, tab);
+            self.pane_detach_items(ui, tab, source.clone());
         }
         if floatable
             && appearance::menu_item(appearance::MenuItemInput {
@@ -61,7 +67,10 @@ impl Viewer<'_> {
             })
             .clicked()
         {
-            self.app.float_pane = Some(tab.clone());
+            self.app.queue_dock_op(DockOp::Float {
+                pane: tab.clone(),
+                source,
+            });
             ui.close();
         }
         if detachable || floatable {
@@ -74,7 +83,10 @@ impl Viewer<'_> {
     fn float_dock_back_items(&mut self, ui: &mut egui::Ui, tab: &Tab, viewport: egui::ViewportId) {
         let back = "Dock back to main window";
         if appearance::menu_action(ui, true, back, "ArrowDownToLine").clicked() {
-            self.app.pane_ops.float_return = Some((viewport, Some(tab.clone())));
+            self.app.queue_dock_op(DockOp::FloatReturn {
+                viewport,
+                pane: Some(tab.clone()),
+            });
         }
         // The pane maps hold only the window under render.
         let panes = self
@@ -86,12 +98,29 @@ impl Viewer<'_> {
         if panes > 1
             && appearance::menu_action(ui, true, "Dock back all", "PanelsTopLeft").clicked()
         {
-            self.app.pane_ops.float_return = Some((viewport, None));
+            self.app.queue_dock_op(DockOp::FloatReturn {
+                viewport,
+                pane: None,
+            });
         }
         ui.separator();
     }
 
-    fn pane_detach_items(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+    /// The exact native editor view a pane menu acts on. Same-file views
+    /// share a tab identity, so moves need the view's address; other panes
+    /// move by identity.
+    fn view_source(&self, tab: &Tab, at: Option<egui_dock::TabPath>) -> Option<PaneSource> {
+        let (Some(project), Some(group), Some(path)) = (&self.project, &self.tab, at) else {
+            return None;
+        };
+        matches!(tab, Tab::NativeEditor { .. }).then(|| PaneSource {
+            project: project.clone(),
+            group: group.clone(),
+            path,
+        })
+    }
+
+    fn pane_detach_items(&mut self, ui: &mut egui::Ui, tab: &Tab, source: Option<PaneSource>) {
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
             label: "Detach to new tab",
@@ -100,7 +129,10 @@ impl Viewer<'_> {
         })
         .clicked()
         {
-            self.app.detach_pane = Some(tab.clone());
+            self.app.queue_dock_op(DockOp::Detach {
+                pane: tab.clone(),
+                source: source.clone(),
+            });
             ui.close();
         }
         let targets = self.app.dock_back_targets.clone();
@@ -117,7 +149,11 @@ impl Viewer<'_> {
                 })
                 .clicked()
                 {
-                    self.app.dock_back_pane = Some((tab.clone(), id));
+                    self.app.queue_dock_op(DockOp::DockBack {
+                        pane: tab.clone(),
+                        dest: id,
+                        source: source.clone(),
+                    });
                     ui.close();
                 }
             }

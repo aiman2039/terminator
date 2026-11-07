@@ -13,9 +13,6 @@ pub(crate) struct PaneOps {
     /// Zoom asked for by a header button or menu: the pane (`None`: the
     /// leaf's active one) and its leaf. Applied before the next dock paint.
     pub(crate) zoom_request: Option<(Option<Tab>, Option<egui_dock::NodePath>)>,
-    /// A floating window's pane (or, with `None`, the whole window) going
-    /// back to the main window: the same path as the OS close button.
-    pub(crate) float_return: Option<(egui::ViewportId, Option<Tab>)>,
 }
 
 /// The zoomed view: where it lives in the main dock, and what it shows.

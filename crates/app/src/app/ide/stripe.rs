@@ -232,10 +232,11 @@ impl App {
             self.preferences.left_visible
                 && match tool {
                     StripeTool::Projects => {
-                        self.preferences.left_tool.is_none() && !self.preferences.left_agents
+                        self.preferences.left_content() == LeftContent::Projects
                     }
-                    StripeTool::Tool(SidebarTool::Agents) => self.left_agents_shown(),
-                    StripeTool::Tool(tool) => self.preferences.left_tool == Some(tool),
+                    StripeTool::Tool(tool) => {
+                        self.preferences.left_content() == LeftContent::of_tool(tool)
+                    }
                 }
         }
     }
@@ -266,18 +267,11 @@ impl App {
             self.preferences.visible = true;
         } else {
             match tool {
-                StripeTool::Projects => {
-                    self.preferences.left_tool = None;
-                    self.preferences.left_agents = false;
+                StripeTool::Projects => self.preferences.set_left_content(LeftContent::Projects),
+                StripeTool::Tool(SidebarTool::Agents) => self.show_left_agents(),
+                StripeTool::Tool(tool) => {
+                    self.preferences.set_left_content(LeftContent::Tool(tool))
                 }
-                StripeTool::Tool(SidebarTool::Agents) => {
-                    self.preferences.left_tool = None;
-                    if !self.preferences.left_agents {
-                        self.preferences.agents_tab = AgentsTab::NeedsAttention;
-                    }
-                    self.preferences.left_agents = true;
-                }
-                StripeTool::Tool(tool) => self.preferences.left_tool = Some(tool),
             }
             self.preferences.left_visible = true;
         }

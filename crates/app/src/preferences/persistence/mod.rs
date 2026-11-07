@@ -1,8 +1,10 @@
 mod expanded;
 mod explorer;
+mod left_content;
 mod playlists;
 mod styles;
 pub use explorer::{ExplorerSearchMode, ExplorerView};
+pub use left_content::LeftContent;
 pub use styles::{ProjectStyle, TerminalStyle};
 #[cfg(test)]
 mod tests;
@@ -112,10 +114,11 @@ pub struct LayoutPreset {
     pub left_visible: bool,
     #[serde(deserialize_with = "lenient_tool")]
     pub tool: SidebarTool,
-    pub left_agents: bool,
+    /// Saved form of [`LeftContent`]; read it through `left_content`.
+    left_agents: bool,
     /// Tool hosted by the left sidebar instead of Projects/Agents.
     #[serde(default, deserialize_with = "lenient_side_tool")]
-    pub left_tool: Option<SidebarTool>,
+    left_tool: Option<SidebarTool>,
     /// Projects list hosted by the right sidebar.
     #[serde(default)]
     pub right_projects: bool,
@@ -160,11 +163,13 @@ pub struct UiPreferences {
     /// Projects column. Missing files stay open; `bool`'s serde default is false.
     #[serde(default = "default_true")]
     pub left_visible: bool,
-    pub left_agents: bool,
+    /// Saved form of [`LeftContent`] (with `left_tool`). Code reads and
+    /// writes it only through `left_content` and `set_left_content`.
+    left_agents: bool,
     /// Tool hosted by the left sidebar instead of its native Projects/Agents
     /// views. `None` keeps the native views; stripes set this per side.
     #[serde(default, deserialize_with = "lenient_side_tool")]
-    pub left_tool: Option<SidebarTool>,
+    left_tool: Option<SidebarTool>,
     /// Projects list hosted by the right sidebar instead of `tool`.
     #[serde(default)]
     pub right_projects: bool,
@@ -395,6 +400,7 @@ impl UiPreferences {
             0.8
         };
         prefs.migrate_playlists();
+        prefs.normalize_left();
         prefs.prune_expanded_tabs();
         prefs
             .ide_strip_docks
@@ -410,19 +416,20 @@ impl UiPreferences {
         if name.is_empty() {
             return;
         }
-        let preset = LayoutPreset {
+        let mut preset = LayoutPreset {
             ide_mode: self.ide_mode,
             ide_terminal_collapsed: self.ide_terminal_collapsed,
             ide_sidebars_full_height: self.ide_sidebars_full_height,
             visible: self.visible,
             left_visible: self.left_visible,
             tool: self.tool,
-            left_agents: self.left_agents,
-            left_tool: self.left_tool,
+            left_agents: false,
+            left_tool: None,
             right_projects: self.right_projects,
             sidebar_width: self.width,
             left_width: clamp_left_width(left_width),
         };
+        preset.set_left_content(self.left_content());
         self.named_layouts.insert(name.clone(), preset);
         self.active_layout = Some(name);
     }
@@ -436,12 +443,12 @@ impl UiPreferences {
         self.visible = preset.visible;
         self.left_visible = preset.left_visible;
         self.tool = preset.tool;
-        self.left_agents = preset.left_agents;
-        self.left_tool = preset.left_tool;
+        let left = preset.left_content();
         self.right_projects = preset.right_projects;
         self.width = clamp_sidebar_width(preset.sidebar_width);
         self.active_layout = Some(name.to_string());
-        Some(preset)
+        self.set_left_content(left);
+        self.named_layouts.get(name)
     }
 
     pub fn save(&self, data: &Path) -> Result<()> {

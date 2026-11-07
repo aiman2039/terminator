@@ -349,3 +349,52 @@ fn layout_preset_keeps_left_width_and_clamps_widths() {
     prefs.apply_layout("wide-left").unwrap();
     assert!(prefs.width.is_finite());
 }
+
+#[test]
+fn both_old_agents_encodings_load_as_one_left_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let preset = r#""ide_mode":true,"ide_terminal_collapsed":false,"visible":true,"left_visible":true,"tool":"Git","sidebar_width":300.0,"left_width":200.0"#;
+    for (fields, content) in [
+        (
+            r#""left_tool":"Agents","left_agents":false"#,
+            LeftContent::Agents,
+        ),
+        (r#""left_agents":true"#, LeftContent::Agents),
+        // A tool wins over a stale flag left under it.
+        (
+            r#""left_tool":"Git","left_agents":true"#,
+            LeftContent::Tool(SidebarTool::Git),
+        ),
+        (r#""left_agents":false"#, LeftContent::Projects),
+    ] {
+        let json = format!(
+            r#"{{"version":2,{fields},"named_layouts":{{"saved":{{{preset},{fields}}}}}}}"#
+        );
+        fs::write(dir.path().join("ui-preferences.json"), json).unwrap();
+        let mut prefs = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(prefs.left_content(), content, "{fields}");
+        assert_eq!(prefs.named_layouts["saved"].left_content(), content);
+        // Saved again in the one form every earlier GUI reads the same way.
+        let agents = content == LeftContent::Agents;
+        assert_eq!(prefs.left_agents, agents, "{fields}");
+        assert_eq!(
+            prefs.left_tool.is_some(),
+            !agents && content != LeftContent::Projects
+        );
+        prefs.set_left_content(LeftContent::Projects);
+        prefs.apply_layout("saved").unwrap();
+        assert_eq!(prefs.left_content(), content);
+    }
+}
+
+#[test]
+fn hosting_a_tool_on_the_left_clears_agents() {
+    let mut prefs = UiPreferences::default();
+    prefs.set_left_content(LeftContent::Agents);
+    prefs.set_left_content(LeftContent::Tool(SidebarTool::Git));
+    assert!(!prefs.left_agents);
+    prefs.set_left_content(LeftContent::of_tool(SidebarTool::Agents));
+    assert_eq!((prefs.left_tool, prefs.left_agents), (None, true));
+    assert!(prefs.left_shows(SidebarTool::Agents));
+    assert!(!prefs.left_shows(SidebarTool::Git));
+}

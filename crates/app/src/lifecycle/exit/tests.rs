@@ -455,7 +455,7 @@ fn failed_checkpoint_restores_interaction_and_old_ack_cannot_exit_retry() {
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert!(!app.exit.active());
-    assert!(app.error.as_ref().unwrap().contains("disk full"));
+    assert!(app.error.text().unwrap().contains("disk full"));
     app.begin_exit();
     app.update_tx.send(Update::ExitSaved(1, Ok(()))).unwrap();
     drain_updates(&mut app, &ctx);
@@ -465,11 +465,11 @@ fn failed_checkpoint_restores_interaction_and_old_ack_cannot_exit_retry() {
 #[test]
 fn a_pending_picker_finishes_before_the_worker_is_drained() {
     let (mut app, ctx, _dir, requests) = fixture();
-    app.picker_active = true;
+    app.picker = Picker::Open(PickKind::OpenFile);
     app.begin_exit();
     app.advance_exit(&ctx);
     assert!(requests.try_recv().is_err());
-    app.picker_active = false;
+    app.picker.close();
     app.advance_exit(&ctx);
     assert!(matches!(requests.try_recv(), Ok(Job::ExitDrain(..))));
 }
@@ -520,7 +520,7 @@ fn quit_during_a_commit_says_to_cancel_it_first() {
     assert!(!app.exit.active());
     assert!(
         app.error
-            .as_deref()
+            .text()
             .is_some_and(|error| error.contains("cancel it in the Git panel")),
         "{:?}",
         app.error
@@ -541,7 +541,7 @@ fn unknown_project_layout_save_does_not_abort_exit() {
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert!(app.exit.active());
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 }
 #[test]
 fn exit_checkpoint_omits_unknown_projects() {
@@ -701,13 +701,14 @@ fn dirty_native_buffer_holds_quit_until_the_buffer_is_gone() {
     app.accept_app_quit(&ctx);
     assert!(app.pending_app_quit);
     assert_eq!(
-        app.native_close_prompt
-            .as_ref()
-            .map(|(prompt, _)| prompt.as_path()),
-        Some(path.as_path())
+        app.native_close_prompts
+            .iter()
+            .map(|prompt| prompt.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![path.as_path()]
     );
     assert!(!app.exit.active());
-    app.native_close_prompt = None;
+    app.native_close_prompts.clear();
     app.native_docs.clear();
     app.continue_app_quit(&ctx);
     assert!(!app.pending_app_quit);
@@ -722,8 +723,9 @@ fn dismissing_the_unsaved_prompt_cancels_the_quit() {
         crate::native_editor::NativeDoc::dirty_for_test(path),
     );
     app.accept_app_quit(&ctx);
-    app.cancel_app_quit();
-    app.native_close_prompt = None;
+    let prompt = app.native_close_prompts[0].clone();
+    app.answer_native_close(prompt, None);
+    assert!(app.native_close_prompts.is_empty());
     app.continue_app_quit(&ctx);
     assert!(!app.pending_app_quit);
     assert!(!app.exit.active());

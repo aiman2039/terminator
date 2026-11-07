@@ -218,10 +218,17 @@ impl WindowsUpdateCheck {
     }
 
     fn poll_with(&mut self, enabled: bool, eligible: bool) -> bool {
-        if let Some(worker) = &self.worker
-            && let Ok(result) = worker.try_recv()
-        {
-            return self.finish(result);
+        if let Some(worker) = &self.worker {
+            match worker.try_recv() {
+                Ok(result) => return self.finish(result),
+                // The check thread ended without a result (it panicked).
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let stopped =
+                        FetchError::other("update check stopped before it finished".into());
+                    return self.finish(Err(stopped));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
         }
         if !eligible || self.probing {
             return false;

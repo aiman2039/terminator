@@ -173,7 +173,11 @@ fn opening_a_floated_file_reveals_its_window_without_a_docked_copy() {
     drain_updates(&mut app, &ctx);
     assert_eq!(panes(&app, "a"), 0);
     assert_eq!(app.floating.len(), 1);
-    assert_eq!(app.focus_float_tab, Some((viewport, tab)));
+    assert!(app.dock_ops.iter().any(|op| *op
+        == DockOp::FocusTab {
+            target: DockTarget::Float(viewport),
+            tab: tab.clone(),
+        }));
     assert_eq!(
         app.floating[0]
             .dock

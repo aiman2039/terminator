@@ -2,6 +2,7 @@
 //! dock in its own viewport, and docking layouts back when they close.
 
 use super::super::center::PaintFloatDockInput;
+use super::DockOp;
 use crate::*;
 
 impl App {
@@ -15,14 +16,16 @@ impl App {
     /// Float the queued pane into its own OS window with a dock holding
     /// just that pane. Runs after the workspace dock is checked back in;
     /// panes that left the dock or cannot float are a silent no-op.
-    pub(crate) fn apply_float_pane(&mut self, project: &str, dock: &mut Workspace) {
-        let Some(pane) = self.float_pane.take() else {
-            return;
-        };
+    pub(crate) fn apply_float_pane(
+        &mut self,
+        project: &str,
+        dock: &mut Workspace,
+        (pane, source): (Tab, Option<PaneSource>),
+    ) {
         if !Self::floatable(&pane) {
             return;
         }
-        let home = if let Some(source) = self.pane_action_source.take() {
+        let home = if let Some(source) = source {
             (source.project == project)
                 .then(|| dock.take_view(&source, &pane))
                 .flatten()
@@ -191,6 +194,7 @@ impl App {
             let project = window.home.0.clone();
             let title = self.floating_title_for_dock(&mut dock);
             let mut close = false;
+            let mut returns = Vec::new();
             ctx.show_viewport_immediate(
                 viewport,
                 egui::ViewportBuilder::default()
@@ -209,7 +213,7 @@ impl App {
                         close = true;
                     }
                     close |= Self::float_dock_back_bar(ui);
-                    self.paint_float_dock(PaintFloatDockInput {
+                    returns = self.paint_float_dock(PaintFloatDockInput {
                         ui,
                         viewport,
                         project: &project,
@@ -217,8 +221,8 @@ impl App {
                     });
                 },
             );
-            let (all, pane) = self.take_dock_back(viewport, &mut dock);
-            if let Some(pane) = pane {
+            let (all, panes) = Self::take_dock_back(returns, &mut dock);
+            for pane in panes {
                 let home = window.home.clone();
                 closed.push((home.0, home.1, egui_dock::DockState::new(vec![pane])));
             }
@@ -235,18 +239,8 @@ impl App {
         for (project, home, dock) in closed {
             self.dock_back_window(project, home, dock);
         }
-        // Queues for windows that closed without rendering are dead;
-        // dropping them keeps one stuck request from blocking later ones.
-        if let Some((viewport, _, _)) = &self.add_float_tab
-            && !self.floating.iter().any(|w| &w.viewport == viewport)
-        {
-            self.add_float_tab = None;
-        }
-        if let Some((viewport, _)) = &self.focus_float_tab
-            && !self.floating.iter().any(|w| &w.viewport == viewport)
-        {
-            self.focus_float_tab = None;
-        }
+        // Ops of windows that closed without rendering are dead.
+        self.prune_dock_ops();
     }
 
     /// The floating window's top row: Dock back, right-aligned. True when
@@ -264,28 +258,31 @@ impl App {
         response.clicked()
     }
 
-    /// A dock-back asked from this window's pane menu. Returns whether the
-    /// whole window goes back, and the one pane that left its dock to go
-    /// back alone (the window stays for the others).
+    /// Dock-backs asked from this window's pane menu, in order. Returns
+    /// whether the whole window goes back, and the panes that left its dock
+    /// to go back alone (the window stays for the others).
     fn take_dock_back(
-        &mut self,
-        viewport: egui::ViewportId,
+        returns: Vec<DockOp>,
         dock: &mut egui_dock::DockState<Tab>,
-    ) -> (bool, Option<Tab>) {
-        let Some((_, pane)) = self.pane_ops.float_return.take_if(|(v, _)| *v == viewport) else {
-            return (false, None);
-        };
-        let Some(tab) = pane else {
-            return (true, None);
-        };
-        match dock.find_tab(&tab) {
-            Some(path) if dock.iter_all_tabs().count() > 1 => {
-                let _ = dock.remove_tab(path);
-                (false, Some(tab))
+    ) -> (bool, Vec<Tab>) {
+        let mut panes = Vec::new();
+        for op in returns {
+            let DockOp::FloatReturn { pane, .. } = op else {
+                continue;
+            };
+            let Some(tab) = pane else {
+                return (true, panes);
+            };
+            match dock.find_tab(&tab) {
+                Some(path) if dock.iter_all_tabs().count() > 1 => {
+                    let _ = dock.remove_tab(path);
+                    panes.push(tab);
+                }
+                Some(_) => return (true, panes),
+                None => {}
             }
-            Some(_) => (true, None),
-            None => (false, None),
         }
+        (false, panes)
     }
 
     /// Live window title for a floating dock, mirroring the tab captions.
