@@ -276,11 +276,19 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
         tint: color,
     })
     .interact(egui::Sense::drag());
+    if let Some(open) = marks.nested {
+        nested_chevron(ui, &r, label, open);
+    }
     // Tooltip text is only needed for the hovered row; formatting it for
     // every row on every scroll frame allocates heavily.
     let r = if r.hovered() {
+        let nested = match marks.nested {
+            Some(false) => "\nClick to show nested files",
+            Some(true) => "\nClick to hide nested files",
+            None => "",
+        };
         r.on_hover_text(format!(
-            "{}\n{}",
+            "{}\n{}{nested}",
             path.display(),
             if ignored {
                 "Ignored"
@@ -305,6 +313,32 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
     appearance::context_menu(&r, |ui| menu.show(ui, &mut outcome));
     outcome.response = Some(r);
     outcome
+}
+
+/// A small chevron after a nesting parent's name, like JetBrains File
+/// Nesting: right when its nested files are hidden, down when shown.
+fn nested_chevron(ui: &egui::Ui, row: &egui::Response, label: &str, open: bool) {
+    if !ui.is_rect_visible(row.rect) {
+        return;
+    }
+    // `row_ext` starts the label 26 px in, in the body font.
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER)
+        .size()
+        .x;
+    let size = egui::vec2(12.0, 12.0);
+    let left = (row.rect.left() + 26.0 + text + 4.0).min(row.rect.right() - size.x);
+    let rect =
+        egui::Rect::from_min_size(egui::pos2(left, row.rect.center().y - size.y * 0.5), size);
+    egui::Image::new(icons::source(if open {
+        "ChevronDown"
+    } else {
+        "ChevronRight"
+    }))
+    .tint(ui.visuals().weak_text_color())
+    .paint_at(ui, rect);
 }
 
 pub(super) fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {
