@@ -263,6 +263,7 @@ impl App {
         }
         self.palette.open = true;
         self.palette.focus_pending = true;
+        self.palette.shown = false;
         self.palette.file_scope = None;
         self.palette.query.clear();
         self.palette.index = 0;

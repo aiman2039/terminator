@@ -17,6 +17,9 @@ pub(crate) struct PaletteState {
     /// The search field takes focus once when this is set (on open or after
     /// a filter chip), not every frame, so other fields keep their focus.
     pub(crate) focus_pending: bool,
+    /// The popup was painted since it opened; the click that opened it
+    /// does not count as a click outside.
+    pub(crate) shown: bool,
     /// The open Ask agent prompt.
     pub(crate) ask: Option<palette::AskAgent>,
 }
@@ -32,6 +35,7 @@ impl PaletteState {
             query_changed_at: Instant::now(),
             file_scope: None,
             focus_pending: false,
+            shown: false,
             ask: None,
         }
     }
