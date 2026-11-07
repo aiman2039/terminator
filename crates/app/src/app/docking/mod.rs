@@ -10,6 +10,9 @@ use crate::*;
 
 mod floating;
 mod pane_drop;
+mod zoom;
+
+pub(crate) use zoom::{PaneOps, Zoomed};
 
 impl App {
     pub(crate) fn focus_moved_view(&mut self, pane: &Tab, project: &str, dock: &Workspace) {

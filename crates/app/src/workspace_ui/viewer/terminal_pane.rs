@@ -29,15 +29,26 @@ impl Viewer<'_> {
             self.dead_session_view(ui, &session);
             return;
         }
+        let tab = Tab::Terminal(session.id.clone());
+        if self.zoomed_here(&tab) {
+            Self::zoom_placeholder(ui);
+            return;
+        }
         if !self.app.connected {
             ui.weak("Reconnecting to session daemon…");
             return;
         }
-        self.app.draw_unsaved_close_bar(ui, sid);
-        if markdown::available(&session) {
-            self.markdown_view(ui, &session);
+        self.pane_scope(ui, &tab, |viewer, ui| viewer.terminal_body(ui, &session));
+    }
+
+    /// The live terminal (or its markdown view) under the caption; the
+    /// zoom overlay paints the same body.
+    pub(super) fn terminal_body(&mut self, ui: &mut egui::Ui, session: &Session) {
+        self.app.draw_unsaved_close_bar(ui, &session.id);
+        if markdown::available(session) {
+            self.markdown_view(ui, session);
         } else {
-            self.terminal_view(ui, &session);
+            self.terminal_view(ui, session);
         }
     }
 

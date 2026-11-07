@@ -37,12 +37,18 @@ struct CaptionClicks {
     stack: bool,
     split_vertical: bool,
     split_horizontal: bool,
+    zoom: bool,
     on_control: bool,
 }
 
 impl CaptionClicks {
-    fn read(close: Option<&egui::Response>, actions: Option<&CaptionActions>) -> Self {
+    fn read(
+        close: Option<&egui::Response>,
+        zoom: Option<&egui::Response>,
+        actions: Option<&CaptionActions>,
+    ) -> Self {
         Self {
+            zoom: zoom.is_some_and(eframe::egui::Response::clicked),
             closing: close.is_some_and(eframe::egui::Response::clicked),
             git: actions.is_some_and(|(git, _, _, _)| git.clicked()),
             stack: actions.is_some_and(|(_, stack, _, _)| {
@@ -51,6 +57,7 @@ impl CaptionClicks {
             split_vertical: actions.is_some_and(|(_, _, split, _)| split.clicked()),
             split_horizontal: actions.is_some_and(|(_, _, _, split)| split.clicked()),
             on_control: close.is_some_and(eframe::egui::Response::hovered)
+                || zoom.is_some_and(eframe::egui::Response::hovered)
                 || actions.is_some_and(|(git, stack, vertical, horizontal)| {
                     git.hovered()
                         || stack.as_ref().is_some_and(eframe::egui::Response::hovered)
@@ -107,18 +114,24 @@ impl Viewer<'_> {
     }
 
     fn paint_caption(&mut self, ui: &mut egui::Ui, frame: &CaptionFrame<'_>) -> Caption {
-        let (response, close, actions) = if frame.is_markdown {
+        let (response, close, zoom, actions) = if frame.is_markdown {
             let header = self.markdown_header(ui, frame.session, frame.editing);
-            (header.0, header.1, None)
+            (header.0, header.1, None, None)
         } else {
             let bar = self.terminal_caption_bar(ui, frame);
             (
                 bar.bar,
                 Some(bar.close),
+                bar.zoom,
                 Some((bar.git, bar.stack, bar.split_vertical, bar.split_horizontal)),
             )
         };
-        let clicks = CaptionClicks::read(close.as_ref(), actions.as_ref());
+        let clicks = CaptionClicks::read(close.as_ref(), zoom.as_ref(), actions.as_ref());
+        #[cfg(feature = "test-support")]
+        if let Some(zoom) = &zoom {
+            let sid = &frame.session.id;
+            diagnostics::record(ui.ctx(), &format!("pane-zoom:{sid}"), zoom.rect);
+        }
         Caption {
             response,
             close,
@@ -141,6 +154,9 @@ impl Viewer<'_> {
         };
         let vertical_tip = self.app.action_tip("Split vertically", Action::SplitRight);
         let horizontal_tip = self.app.action_tip("Split horizontally", Action::SplitDown);
+        // Floating windows cannot zoom; their pane already has a window.
+        let zoom_tip = (self.window.is_none() && frame.pane.is_some())
+            .then(|| self.app.action_tip("Zoom pane", Action::ZoomPane));
         let leading = self.app.tab_leading(sid);
         appearance::terminal_bar(
             ui,
@@ -158,6 +174,7 @@ impl Viewer<'_> {
                 // No leaf tab bar on a lone pane, so its `+` lives here
                 // instead. Hidden without a leaf to avoid dead clicks.
                 stack_tip: frame.pane.is_some().then_some("New tab in this split"),
+                zoom_tip: zoom_tip.as_deref(),
                 vertical_tip: &vertical_tip,
                 horizontal_tip: &horizontal_tip,
                 brand: leading.brand,
@@ -295,6 +312,10 @@ impl Viewer<'_> {
             self.app.active_session = Some(sid.clone());
             self.queue_focus_tab(Tab::Terminal(sid.clone()));
             self.app.show_git_sidebar();
+        }
+        if clicks.zoom {
+            self.app
+                .queue_zoom(Some(Tab::Terminal(sid.clone())), frame.pane);
         }
         if clicks.split_vertical || clicks.split_horizontal || clicks.stack {
             self.app.active_session = Some(sid.clone());

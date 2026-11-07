@@ -12,6 +12,7 @@ impl Viewer<'_> {
         if self.strip {
             self.strip_terminal_actions(ui, path);
         }
+        self.editor_zoom_button(ui, path);
         #[cfg(feature = "test-support")]
         {
             let rect = ui.max_rect();

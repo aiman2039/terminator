@@ -10,6 +10,7 @@ mod client;
 mod command_blocks;
 mod commands;
 mod docking;
+pub(crate) use docking::Zoomed;
 pub(crate) mod drag_state;
 mod drop_zone;
 #[cfg(test)]

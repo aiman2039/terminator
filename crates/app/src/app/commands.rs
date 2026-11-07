@@ -73,6 +73,7 @@ impl App {
                 self.active_session_record()
                     .is_some_and(|session| self.session_action_applies(action, session))
             }
+            Action::ZoomPane => self.pane_ops.zoomed.is_some() || self.zoom_target().is_some(),
             action if SESSION_ACTIONS.contains(&action) => self.active_session.is_some(),
             action if super::actions::GIT_ACTIONS.contains(&action) => {
                 self.git_action_applies(action)
@@ -208,6 +209,7 @@ impl App {
                     self.move_main_session_to_strip(&sid);
                 }
             }
+            Action::ZoomPane => self.toggle_zoom(),
             Action::NextAttention => self.next_attention(),
             Action::AskAgent => self.open_ask_agent(),
             Action::NewBrowser => self.open_new_browser_tab(None),

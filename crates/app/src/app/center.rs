@@ -15,6 +15,15 @@ pub(crate) struct PaintFloatDockInput<'a> {
 
 impl App {
     pub(crate) fn center_pane(&mut self, ui: &mut egui::Ui) {
+        self.pane_ops.workspace_painted = false;
+        self.center_page_or_workspace(ui);
+        if !self.pane_ops.workspace_painted {
+            self.pane_ops.zoomed = None;
+            self.pane_ops.zoom_request = None;
+        }
+    }
+
+    fn center_page_or_workspace(&mut self, ui: &mut egui::Ui) {
         self.settings_unsaved_dialog(ui.ctx());
         if self.settings_open {
             self.settings_center(ui);
@@ -262,6 +271,8 @@ impl App {
             .unwrap_or_else(Workspace::empty);
         self.sync_active_session(&mut dock);
         self.restore_cleared_focus(&dock);
+        let outer = ui.available_rect_before_wrap();
+        self.settle_zoom(&project, &mut dock);
         if dock.iter_all_tabs().next().is_none() {
             self.workspace_blank(ui);
             // No leaf to drop on. A strip shell released here still becomes
@@ -281,6 +292,8 @@ impl App {
         self.apply_dock_back(&mut dock);
         self.apply_float_pane(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
+        self.check_zoom(&project, &dock);
+        self.paint_zoom(ui.ctx(), outer, &project);
         self.layouts.insert(project.clone(), dock);
         self.apply_diff_replacement();
         if self.pending_layout_save {
