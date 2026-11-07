@@ -326,3 +326,16 @@ fn explorer_file_menu_opens_the_compare_popup() {
     assert!(matches!(&op, Op::FileHistory(path) if *path == root.join("a.rs")));
     assert!(app.git.picker.is_some());
 }
+
+#[test]
+fn merge_reload_waits_for_a_running_save() {
+    let (mut app, _ctx, _dir) = fixture();
+    let (tab, _sender) = crate::git::merge::MergeTab::saving_for_test();
+    app.merge.insert("merge".into(), tab);
+    app.reload_merge(
+        "merge",
+        std::path::Path::new("/a"),
+        std::path::Path::new("/a/conflict.rs"),
+    );
+    assert!(app.merge["merge"].saving(), "the save's result still lands");
+}

@@ -78,9 +78,10 @@ fn merge_toolbar(ui: &mut egui::Ui, tab: &Tab, state: &mut MergeTab, clicks: &mu
             title.on_hover_text(path.display().to_string());
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if appearance::sidebar_action(ui, "RefreshCw", "Reload from Git (drops edits)")
-                .clicked()
-            {
+            let reload = ui.add_enabled_ui(!state.saving(), |ui| {
+                appearance::sidebar_action(ui, "RefreshCw", "Reload from Git (drops edits)")
+            });
+            if reload.inner.clicked() {
                 clicks.reload = true;
             }
             if appearance::sidebar_action(ui, "ArrowDown", "Next change (F7)").clicked() {
