@@ -4,6 +4,8 @@ mod style;
 mod tab_tree;
 mod tree_dnd;
 
+#[cfg(test)]
+pub(crate) use style::RenameDraft;
 pub(crate) use style::{ProjectNames, apply_project_names};
 
 use super::super::agent_presence::attention_status_icon;

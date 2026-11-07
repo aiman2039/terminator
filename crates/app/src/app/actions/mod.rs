@@ -57,7 +57,7 @@ impl App {
                 .as_ref()
                 .is_none_or(|dock| dock.iter_all_tabs().next().is_some())
         });
-        self.backends.remove(sid);
+        self.detach_backend(sid);
         self.drop_strip_session(sid);
         if self.active_session.as_deref() == Some(sid) {
             self.active_session = None;

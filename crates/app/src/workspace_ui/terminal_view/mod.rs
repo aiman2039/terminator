@@ -70,7 +70,7 @@ impl Viewer<'_> {
             return false;
         };
         let message = owner.error.clone().unwrap_or_default();
-        self.app.backends.remove(&session.id);
+        self.app.detach_backend(&session.id);
         ui.colored_label(appearance::color(&self.app.theme.status_failed), message);
         self.app.start_service_button(ui, true);
         true

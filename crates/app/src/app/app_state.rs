@@ -151,7 +151,8 @@ pub struct App {
     pub(crate) jobs: exit::JobQueue,
     pub(crate) updates: Receiver<Update>,
     pub(crate) update_tx: Sender<Update>,
-    pub(crate) picker_active: bool,
+    /// The one native file picker: requested, open, or idle.
+    pub(crate) picker: Picker,
     pub(crate) add_tab: Option<(egui_dock::NodePath, Option<String>)>,
     /// Queued strip-dock tab creation (the strip's `on_add`/menu counterpart
     /// to [`Self::add_tab`]); consumed right after the strip renders.
@@ -249,13 +250,11 @@ pub struct App {
     pub(crate) info: Option<String>,
     /// The info text on screen and when it appeared: it clears after a while.
     pub(crate) info_since: Option<(String, std::time::Instant)>,
-    pub(crate) add_project: bool,
     /// The page in the main pane; written only by `show_center`.
     pub(crate) center: crate::CenterPage,
     pub(crate) settings_session: bool,
     pub(crate) settings_pending: Option<settings_ui::SettingsPending>,
     pub(crate) editor_preset: usize,
-    pub(crate) test_editor: bool,
     pub(crate) settings_draft: Settings,
     pub(crate) settings_section: SettingsSection,
     pub(crate) settings_search: String,
@@ -265,7 +264,6 @@ pub struct App {
     pub(crate) settings_probes: std::cell::RefCell<settings_ui::Probes>,
     pub(crate) custom_editor: bool,
     pub(crate) shortcut_capture: Option<String>,
-    pub(crate) browse_target: Option<BrowseTarget>,
     pub(crate) palette: super::palette_state::PaletteState,
     /// Open Ctrl+Tab recent-tab switcher, if any.
     pub(crate) switcher: Option<crate::chrome::switcher::Switcher>,
@@ -301,11 +299,8 @@ pub struct App {
     pub(crate) rename_missed: bool,
     /// Last painted rename field, so a hidden field can drop keyboard focus.
     pub(crate) rename_field_id: Option<egui::Id>,
-    /// Sidebar group rename in progress: (project, workspace tab id) plus
-    /// the draft text. GUI-local; the name lives on the workspace tab.
-    pub(crate) rename_group: Option<(String, String)>,
-    pub(crate) rename_group_text: String,
-    pub(crate) rename_group_focus: bool,
+    /// Sidebar tab group rename in progress.
+    pub(crate) rename_group: Option<super::inline_rename::GroupRename>,
     pub(crate) editor_origins: HashMap<String, Vec<Tab>>,
     pub(crate) search: String,
     pub(crate) scrollback_hits: crate::app::ScrollbackHits,
@@ -400,14 +395,9 @@ pub struct App {
     pub(crate) pending_quit_all: Option<bool>,
     /// Vim navigation from native editors, run after check-in.
     pub(crate) native_nav: native_editor::NavPending,
-    pub(crate) open_path: bool,
     /// A diff navigation shortcut or palette command for the active diff
     /// tab, applied when that tab paints next.
     pub(crate) diff_nav: Option<Action>,
-    pub(crate) pick_audio: bool,
-    /// Open the picker for RealVNC `.vnc` files to import.
-    pub(crate) pick_vnc_files: bool,
-    pub(crate) pick_audio_dir: bool,
     pub(crate) path_text: String,
     pub(crate) last_save: Instant,
     pub(crate) refresh: tokio::sync::watch::Sender<Option<refresh::Request>>,

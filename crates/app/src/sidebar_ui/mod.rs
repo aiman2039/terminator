@@ -7,6 +7,8 @@ mod explorer;
 pub(crate) use explorer::SessionRowInTabInput;
 mod explorer_file_menu;
 mod explorer_projects;
+#[cfg(test)]
+pub(crate) use explorer_projects::RenameDraft;
 pub(crate) use explorer_projects::{ProjectNames, apply_project_names};
 mod explorer_prompts;
 mod explorer_rows;

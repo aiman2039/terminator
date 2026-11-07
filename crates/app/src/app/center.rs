@@ -96,7 +96,7 @@ impl App {
             cancel: &mut cancel,
         });
         if browse {
-            self.browse_target = Some(BrowseTarget::WorktreeDest);
+            self.request_pick(PickKind::Browse(BrowseTarget::WorktreeDest));
         }
         if submit {
             self.submit_worktree(&mut clone);
@@ -246,7 +246,7 @@ impl App {
                     })
                     .clicked()
                 {
-                    self.add_project = true;
+                    self.request_pick(PickKind::Project);
                 }
             });
         });

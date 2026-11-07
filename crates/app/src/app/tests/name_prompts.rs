@@ -583,3 +583,79 @@ fn rename_targets_the_requested_session() {
     assert_eq!(app.rename_session, Some(("named".into(), "named".into())));
     assert!(app.rename_focus);
 }
+
+/// Project "a" with one workspace tab; returns that tab's id.
+fn one_tab_project(app: &mut App) -> String {
+    let workspace = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+        "named".into(),
+    )]));
+    let tab = workspace.tabs[0].id.clone();
+    app.layouts.insert("a".into(), workspace);
+    tab
+}
+
+#[test]
+fn starting_one_inline_rename_commits_the_others() {
+    let (mut app, _, _dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("named", SessionKind::Shell));
+    let tab = one_tab_project(&mut app);
+    app.begin_group_rename("a", &tab, "Team".into());
+    app.begin_rename("named", RenameSurface::Pane);
+    assert!(app.rename_group.is_none());
+    assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Team"));
+    app.begin_group_rename("a", &tab, "Other".into());
+    assert!(app.rename_session.is_none());
+    assert!(!app.rename_focus);
+    app.project_names.draft = Some(crate::sidebar_ui::RenameDraft {
+        id: "a".into(),
+        text: "a".into(),
+        painted: true,
+    });
+    app.begin_rename("named", RenameSurface::Pane);
+    assert!(app.project_names.draft.is_none());
+    assert!(app.rename_group.is_none());
+    assert!(app.rename_session.is_some());
+}
+
+#[test]
+fn group_rename_blocks_terminal_input_and_ends_when_its_field_stops_painting() {
+    let (mut app, ctx, _dir) = fixture();
+    let tab = one_tab_project(&mut app);
+    assert!(app.terminal_input_enabled("shell"));
+    app.begin_group_rename("a", &tab, "Team".into());
+    assert!(app.rename_blocks_input());
+    assert!(!app.terminal_input_enabled("shell"));
+    // The first frame has no field yet (the menu paints after its slot).
+    app.note_rename_frame(&ctx);
+    assert!(app.rename_group.is_some());
+    // The tab node is gone or hidden: the next frame without a field commits.
+    app.note_rename_frame(&ctx);
+    assert!(app.rename_group.is_none());
+    assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Team"));
+    assert!(app.terminal_input_enabled("shell"));
+    // A rename whose tab was closed ends without writing anything.
+    app.begin_group_rename("a", "closed-tab", "Gone".into());
+    app.note_rename_frame(&ctx);
+    app.note_rename_frame(&ctx);
+    assert!(app.rename_group.is_none());
+}
+
+#[test]
+fn ending_a_session_rename_resets_its_field_state() {
+    let (mut app, _, _dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("named", SessionKind::Shell));
+    app.begin_rename("named", RenameSurface::Workspace);
+    app.rename_missed = true;
+    app.rename_seen = true;
+    app.rename_field_id = Some(egui::Id::unique("old-field"));
+    app.begin_workspace_close_tabs("a", Vec::new());
+    assert!(app.rename_session.is_none());
+    assert!(!app.rename_focus);
+    assert!(!app.rename_missed);
+    assert!(!app.rename_seen);
+    assert!(app.rename_field_id.is_none());
+}

@@ -19,7 +19,7 @@ fn sidebar_and_menu_shortcuts_run_their_actions() {
         app.rename_session.as_ref().map(|(id, _)| id.as_str()),
         Some("live")
     );
-    app.rename_session = None;
+    app.clear_session_rename();
     app.run_shortcut(&ctx, Action::CloseSession);
     assert_eq!(app.close_session.as_deref(), Some("live"));
     assert!(app.active_editor_id().is_none());
@@ -119,7 +119,7 @@ fn strip_input_stays_enabled_under_center_views() {
     app.palette.open = false;
     app.center = CenterPage::Workspace;
     // True modals still suspend the strip.
-    app.add_project = true;
+    app.request_pick(PickKind::Project);
     assert!(!app.strip_terminal_input_enabled("shell"));
 }
 
@@ -152,11 +152,11 @@ fn hover_popup_blocks_terminal_input_through_its_closing_frame() {
 #[test]
 fn copy_still_respects_modal_and_editor_close_gates() {
     let (mut app, _ctx, _dir) = fixture();
-    app.picker_active = true;
+    app.picker = Picker::Open(PickKind::OpenFile);
     assert!(!app.terminal_copy_enabled("shell"));
     assert!(!app.strip_terminal_copy_enabled("shell"));
     assert!(!app.float_terminal_copy_enabled("shell"));
-    app.picker_active = false;
+    app.picker.close();
     app.editor_close_sessions.insert("shell".into());
     assert!(!app.terminal_copy_enabled("shell"));
     assert!(!app.strip_terminal_copy_enabled("shell"));
@@ -555,4 +555,43 @@ fn raw_input_hook_preserves_renderer_texture_limit() {
     let mut missing = egui::RawInput::default();
     eframe::App::raw_input_hook(&mut app, &ctx, &mut missing);
     assert_eq!(missing.max_texture_side, None);
+}
+
+#[test]
+fn a_pick_request_while_a_picker_is_open_is_refused_and_does_not_hold_input() {
+    let (mut app, ctx, _dir) = fixture();
+    assert!(app.request_pick(PickKind::Project));
+    assert_eq!(app.picker.begin(), Some(PickKind::Project));
+    assert!(!app.terminal_copy_enabled("shell"));
+    assert!(!app.request_pick(PickKind::OpenFile));
+    assert!(!app.request_pick(PickKind::AudioFiles));
+    assert_eq!(app.picker, Picker::Open(PickKind::Project));
+    assert!(
+        app.info
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Open project"),
+        "{:?}",
+        app.info
+    );
+    app.update_tx
+        .send(Update::PickedProject(None, app.selection_generation))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    // Nothing waits behind the closed picker, so terminals take input again.
+    assert_eq!(app.picker, Picker::Idle);
+    assert!(app.terminal_copy_enabled("shell"));
+    assert!(app.strip_terminal_copy_enabled("shell"));
+}
+
+#[test]
+fn a_failed_picker_closes_and_frees_terminal_input() {
+    let (mut app, ctx, _dir) = fixture();
+    assert!(app.request_pick(PickKind::VncFiles));
+    app.picker.begin();
+    assert!(!app.terminal_copy_enabled("shell"));
+    app.update_tx.send(Update::TestPickerClosed).unwrap();
+    drain_updates(&mut app, &ctx);
+    assert!(app.terminal_copy_enabled("shell"));
+    assert!(app.request_pick(PickKind::OpenFile));
 }

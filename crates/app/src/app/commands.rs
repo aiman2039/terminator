@@ -39,7 +39,7 @@ impl App {
         if self.command_dialog_open()
             || self.shortcut_capture.is_some()
             || self.rename_blocks_input()
-            || self.picker_active
+            || self.picker.busy()
         {
             return false;
         }
@@ -168,7 +168,9 @@ impl App {
 
     pub(crate) fn run_shortcut(&mut self, ctx: &egui::Context, action: Action) {
         match action {
-            Action::OpenFile => self.open_path = true,
+            Action::OpenFile => {
+                self.request_pick(PickKind::OpenFile);
+            }
             Action::NewTerminal => self.create(None),
             Action::SplitUp => self.create(Some("up")),
             Action::SplitDown => self.create(Some("down")),

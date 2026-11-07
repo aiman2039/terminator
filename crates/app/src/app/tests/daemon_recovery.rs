@@ -276,7 +276,7 @@ fn expired_gui_request_cannot_change_the_workspace_after_timeout() {
     drain_updates(&mut app, &ctx);
     assert!(result.recv().unwrap().unwrap_err().contains("expired"));
     assert_eq!(app.selected.as_deref(), Some("a"));
-    assert!(!app.open_path);
+    assert!(!app.picker.busy());
 }
 
 #[test]

@@ -101,6 +101,7 @@ impl App {
 
     pub(super) fn begin_project_rename(&mut self, p: &Project) {
         self.finish_rename(true);
+        self.finish_group_rename(true);
         self.project_names.draft = Some(RenameDraft {
             id: p.id.clone(),
             text: p.name.clone(),

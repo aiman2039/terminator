@@ -53,7 +53,7 @@ impl App {
             .map(|(sid, backend)| (backend.last_painted(), sid.clone()))
             .collect();
         for sid in hidden_backends_to_drop(hidden, KEEP_HIDDEN_BACKENDS) {
-            self.backends.remove(&sid);
+            self.detach_backend(&sid);
         }
     }
 }
@@ -185,5 +185,57 @@ mod hidden_backend_tests {
         ];
         assert_eq!(hidden_backends_to_drop(hidden.clone(), 2), ["old", "never"]);
         assert!(hidden_backends_to_drop(hidden, 4).is_empty());
+    }
+
+    /// A pruned hidden terminal leaves no attach bookkeeping, and the late
+    /// exit of its helper changes nothing.
+    #[cfg(unix)]
+    #[test]
+    fn pruned_hidden_terminal_drops_its_attach_bookkeeping() {
+        use std::os::unix::process::ExitStatusExt;
+        let (mut app, ctx, _dir) = crate::app::tests::support::fixture();
+        let sessions: Vec<String> = (0..=super::KEEP_HIDDEN_BACKENDS)
+            .map(|n| format!("hidden-{n}"))
+            .collect();
+        for (id, sid) in (100_u64..).zip(&sessions) {
+            let backend = egui_term::TerminalBackend::new(
+                id,
+                ctx.clone(),
+                app.pty_tx.clone(),
+                egui_term::BackendSettings {
+                    shell: "/bin/sh".into(),
+                    args: vec!["-c".into(), "sleep 30".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            app.backends.insert(sid.clone(), backend);
+            app.backend_ids.insert(id, sid.clone());
+            app.attach_started.insert(sid.clone(), Instant::now());
+            app.attach_error.insert(sid.clone(), "old failure".into());
+        }
+        app.prune_hidden_backends();
+        let pruned: Vec<&String> = sessions
+            .iter()
+            .filter(|sid| !app.backends.contains_key(*sid))
+            .collect();
+        assert_eq!(pruned.len(), 1);
+        let pruned = pruned[0].clone();
+        let id = 100 + sessions.iter().position(|sid| *sid == pruned).unwrap() as u64;
+        assert!(!app.backend_ids.contains_key(&id));
+        assert!(!app.attach_started.contains_key(&pruned));
+        assert!(!app.attach_error.contains_key(&pruned));
+        app.pty_tx
+            .send((
+                id,
+                egui_term::PtyEvent::ChildExit(ExitStatusExt::from_raw(256)),
+            ))
+            .unwrap();
+        app.pty_tx.send((id, egui_term::PtyEvent::Exit)).unwrap();
+        app.process_updates(&ctx);
+        assert!(app.attach_failed.is_empty());
+        assert!(!app.attach_budget.contains_key(&pruned));
+        assert!(!app.attach_error.contains_key(&pruned));
+        assert_eq!(app.backends.len(), super::KEEP_HIDDEN_BACKENDS);
     }
 }

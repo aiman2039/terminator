@@ -20,6 +20,7 @@ mod editor_drag_tests;
 #[cfg(test)]
 mod file_reuse_tests;
 mod files;
+pub(crate) mod inline_rename;
 mod pane_focus;
 pub(crate) use files::OpenFileInput;
 pub(crate) use files::OpenFileModeInput;
@@ -31,6 +32,7 @@ mod layout_tests;
 mod lifecycle;
 pub(crate) mod missing_folder;
 pub(crate) mod palette_state;
+pub(crate) mod picker;
 mod projects;
 pub(crate) use projects::InsertFloatInput;
 #[cfg(test)]

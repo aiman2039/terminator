@@ -290,12 +290,10 @@ impl App {
     pub(crate) fn browser_covered(&self) -> bool {
         self.center_covers_workspace()
             || self.command_dialog_open()
-            || self.picker_active
+            || self.picker.busy()
             || self.close_session.is_some()
             || self.close_workspace.is_some()
             || self.notice_detail_modal_open()
-            || self.open_path
-            || self.add_project
             || self.rename_blocks_input()
     }
 

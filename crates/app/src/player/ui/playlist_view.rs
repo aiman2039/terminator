@@ -18,10 +18,10 @@ fn empty_playlist(app: &mut App, ui: &mut Ui) {
     ui.weak("No tracks yet.");
     ui.horizontal_wrapped(|ui| {
         if ui.button("Add files…").clicked() {
-            app.pick_audio = true;
+            app.request_pick(PickKind::AudioFiles);
         }
         if ui.button("Add folder…").clicked() {
-            app.pick_audio_dir = true;
+            app.request_pick(PickKind::AudioDir);
         }
     });
 }
@@ -245,11 +245,11 @@ pub(super) fn stack_menu(app: &mut App, ui: &mut Ui, project: &str) {
 pub(super) fn add_menu(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         if ui.button("File").clicked() {
-            app.pick_audio = true;
+            app.request_pick(PickKind::AudioFiles);
             app.player.stack = None;
         }
         if ui.button("Directory").clicked() {
-            app.pick_audio_dir = true;
+            app.request_pick(PickKind::AudioDir);
             app.player.stack = None;
         }
         if ui.button("URL").clicked() {

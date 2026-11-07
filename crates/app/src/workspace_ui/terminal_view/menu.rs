@@ -122,8 +122,9 @@ impl Viewer<'_> {
         })
         .clicked()
         {
-            selected.clone_into(&mut self.app.path_text);
-            self.app.open_path = true;
+            if self.app.request_pick(PickKind::OpenFile) {
+                selected.clone_into(&mut self.app.path_text);
+            }
             ui.close();
         }
     }

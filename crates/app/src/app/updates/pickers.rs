@@ -14,7 +14,7 @@ impl App {
                 path.is_some()
             ));
         }
-        self.picker_active = false;
+        self.picker.close();
         match path {
             Some(path) if generation == self.selection_generation => {
                 let _ = self.jobs.send(Job::OpenProject(path, generation));
@@ -24,7 +24,7 @@ impl App {
     }
 
     pub(super) fn handle_picked_path(&mut self, path: Option<PathBuf>, target: BrowseTarget) {
-        self.picker_active = false;
+        self.picker.close();
         let Some(path) = path else {
             return;
         };
@@ -55,7 +55,7 @@ impl App {
     }
 
     pub(super) fn handle_picked_audio(&mut self, paths: Vec<PathBuf>) {
-        self.picker_active = false;
+        self.picker.close();
         self.add_audio_files(paths);
     }
 
@@ -72,7 +72,7 @@ impl App {
                 path.is_some()
             ));
         }
-        self.picker_active = false;
+        self.picker.close();
         let Some(path) = path else {
             return;
         };

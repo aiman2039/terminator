@@ -7,7 +7,7 @@ impl Viewer<'_> {
     /// shell button, and its saved scrollback with a filter.
     pub(super) fn dead_session_view(&mut self, ui: &mut egui::Ui, session: &Session) {
         let sid = &session.id;
-        self.app.backends.remove(sid);
+        self.app.detach_backend(sid);
         ui.colored_label(
             appearance::color(&self.app.theme.status_waiting),
             format!(

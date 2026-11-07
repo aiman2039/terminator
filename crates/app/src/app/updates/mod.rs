@@ -147,7 +147,7 @@ impl App {
                     result,
                 },
             ),
-            Update::TestPickerClosed => self.picker_active = false,
+            Update::TestPickerClosed => self.picker.close(),
             Update::HookStatus(status) => self.hook_status = status,
             Update::Appearance(file) => self.handle_appearance(ctx, *file),
             Update::Activation(notice) => self.handle_activation(ctx, notice),

@@ -66,7 +66,7 @@ impl App {
         ui.horizontal(|ui| {
             self.explorer_retry(ui);
             if ui.button("Choose folder again").clicked() {
-                self.add_project = true;
+                self.request_pick(crate::PickKind::Project);
             }
         });
         if cfg!(target_os = "macos") {

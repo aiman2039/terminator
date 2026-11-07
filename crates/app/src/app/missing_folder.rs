@@ -13,7 +13,7 @@ use std::collections::HashMap;
 /// follows it, and terminal folders that are gone.
 #[derive(Default)]
 pub(crate) struct MissingFolder {
-    /// The missing project the next project pick locates.
+    /// The missing project that the open Locate picker locates.
     pub(crate) locate: Option<Locate>,
     /// A missing project to offer for removal after Locate opened another
     /// folder in its place.
@@ -26,8 +26,9 @@ pub(crate) struct MissingFolder {
 
 pub(crate) struct Locate {
     pub(crate) project: String,
-    /// Selection generation of the picker, once it opened.
-    pub(crate) generation: Option<u64>,
+    /// Selection generation of the Locate picker. Only the pick of that
+    /// picker locates the project.
+    pub(crate) generation: u64,
 }
 
 /// Sidebar icon of a project whose folder is missing.
@@ -127,33 +128,27 @@ impl App {
             .then(|| project.id.clone())
     }
 
-    /// Locate Folder…: the next project pick opens the new location.
+    /// Locate Folder…: asks for a Locate picker. Its pick, and only its
+    /// pick, opens the new location.
     pub(crate) fn locate_missing_folder(&mut self, project: &str) {
-        self.missing_folder.locate = Some(Locate {
-            project: project.to_owned(),
-            generation: None,
-        });
-        self.add_project = true;
+        self.request_pick(PickKind::Locate(project.to_owned()));
     }
 
-    /// The Add Project picker opens: returns its selection generation and
-    /// dialog title. An older result for another selection is then stale.
-    pub(crate) fn begin_project_pick(&mut self) -> (u64, &'static str) {
-        self.add_project = false;
-        self.picker_active = true;
+    /// The Add Project picker opens, for Locate when `locate` names the
+    /// missing project: returns its selection generation and dialog title.
+    /// An older result for another selection is then stale.
+    pub(crate) fn begin_project_pick(&mut self, locate: Option<String>) -> (u64, &'static str) {
         self.selection_generation = self.selection_generation.wrapping_add(1);
         let generation = self.selection_generation;
-        let title = match self.missing_folder.locate.as_mut() {
-            Some(locate) if locate.generation.is_none() => {
-                locate.generation = Some(generation);
-                "Locate folder"
-            }
-            _ => {
-                self.missing_folder.locate = None;
-                "Open project"
-            }
+        let kind = match &locate {
+            Some(project) => PickKind::Locate(project.clone()),
+            None => PickKind::Project,
         };
-        (generation, title)
+        self.missing_folder.locate = locate.map(|project| Locate {
+            project,
+            generation,
+        });
+        (generation, kind.title())
     }
 
     /// A pick that cannot open: the picker was cancelled or the selection
@@ -176,7 +171,7 @@ impl App {
         let located = self
             .missing_folder
             .locate
-            .take_if(|locate| locate.generation == Some(generation))
+            .take_if(|locate| locate.generation == generation)
             .map(|locate| locate.project);
         if self.selected.as_deref() != Some(project) {
             return;

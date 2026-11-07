@@ -9,7 +9,7 @@ fn first_project_dialog_renders_only_before_setup_is_skipped() {
     app.preferences_writable = false;
     app.preferences.setup_completed = false;
     app.state_loaded = true;
-    app.picker_active = false;
+    app.picker.close();
     // macOS shows the chooser; other platforms treat it as a no-op. Neither may panic.
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         app.first_project_dialog(ui.ctx());
@@ -17,7 +17,7 @@ fn first_project_dialog_renders_only_before_setup_is_skipped() {
     output.textures_delta.clear();
 
     app.preferences.setup_completed = true;
-    app.picker_active = false;
+    app.picker.close();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         app.first_project_dialog(ui.ctx());
     });

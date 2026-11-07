@@ -197,7 +197,7 @@ impl Viewer<'_> {
                 self.app.close_session = Some(sid.clone());
                 return OnCloseResponse::Ignore;
             }
-            self.app.backends.remove(sid);
+            self.app.detach_backend(sid);
         }
         if let Tab::NativeEditor { path } = tab
             && self.app.native_dirty(path)

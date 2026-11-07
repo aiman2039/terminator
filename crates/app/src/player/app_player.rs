@@ -440,7 +440,7 @@ impl App {
         } else if let Some(station) = self.radio_visible().first().cloned() {
             self.play_radio(project, station);
         } else {
-            self.pick_audio = true;
+            self.request_pick(PickKind::AudioFiles);
         }
     }
 

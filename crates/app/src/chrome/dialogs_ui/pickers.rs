@@ -1,16 +1,31 @@
-//! Native file and folder pickers opened from modal flags.
+//! Native file and folder pickers, opened one at a time from
+//! [`App::picker`].
 use crate::*;
 
 impl App {
-    pub(super) fn add_project_picker(&mut self, frame: &eframe::Frame) {
-        if !self.add_project || self.picker_active {
+    /// Opens the requested picker, if any.
+    pub(super) fn open_requested_picker(&mut self, frame: &eframe::Frame) {
+        let Some(kind) = self.picker.begin() else {
             return;
+        };
+        match kind {
+            PickKind::Project => self.add_project_picker(frame, None),
+            PickKind::Locate(project) => self.add_project_picker(frame, Some(project)),
+            PickKind::TestEditor => self.test_editor_picker(frame),
+            PickKind::Browse(target) => self.browse_target_picker(frame, target),
+            PickKind::OpenFile => self.open_file_picker(frame),
+            PickKind::AudioFiles => self.audio_files_picker(frame),
+            PickKind::VncFiles => self.vnc_files_picker(frame),
+            PickKind::AudioDir => self.audio_directory_picker(frame),
         }
+    }
+
+    fn add_project_picker(&mut self, frame: &eframe::Frame, locate: Option<String>) {
         #[cfg(feature = "test-support")]
         if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
             crate::console::Console::err(format_args!("Fixture native project picker opened"));
         }
-        let (generation, title) = self.begin_project_pick();
+        let (generation, title) = self.begin_project_pick(locate);
         let dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
             .set_title(title);
@@ -32,15 +47,10 @@ impl App {
         });
     }
 
-    pub(super) fn test_editor_picker(&mut self, frame: &eframe::Frame) {
-        if !self.test_editor || self.picker_active {
-            return;
-        }
-        self.test_editor = false;
-        self.picker_active = true;
+    fn test_editor_picker(&mut self, frame: &eframe::Frame) {
         let dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
-            .set_title("Test external editor");
+            .set_title(PickKind::TestEditor.title());
         let cwd = self.dialog_directory();
         let settings = self.settings_draft.clone();
         let jobs = self.jobs.clone();
@@ -65,16 +75,11 @@ impl App {
         });
     }
 
-    pub(super) fn audio_files_picker(&mut self, frame: &eframe::Frame) {
-        if !self.pick_audio || self.picker_active {
-            return;
-        }
-        self.pick_audio = false;
-        self.picker_active = true;
+    fn audio_files_picker(&mut self, frame: &eframe::Frame) {
         let cwd = self.dialog_directory();
         let dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
-            .set_title("Add audio files")
+            .set_title(PickKind::AudioFiles.title())
             .add_filter("Audio", player::AUDIO_EXTENSIONS);
         let service = self.services.clone();
         self.services.dialog(async move {
@@ -98,16 +103,11 @@ impl App {
     }
 
     /// RealVNC Viewer `.vnc` files for the VNC "Import hosts" panel.
-    pub(super) fn vnc_files_picker(&mut self, frame: &eframe::Frame) {
-        if !self.pick_vnc_files || self.picker_active {
-            return;
-        }
-        self.pick_vnc_files = false;
-        self.picker_active = true;
+    fn vnc_files_picker(&mut self, frame: &eframe::Frame) {
         let cwd = self.dialog_directory();
         let dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
-            .set_title("Import RealVNC connections")
+            .set_title(PickKind::VncFiles.title())
             .add_filter("VNC connection", &["vnc"]);
         let service = self.services.clone();
         self.services.dialog(async move {
@@ -130,16 +130,11 @@ impl App {
         });
     }
 
-    pub(super) fn audio_directory_picker(&mut self, frame: &eframe::Frame) {
-        if !self.pick_audio_dir || self.picker_active {
-            return;
-        }
-        self.pick_audio_dir = false;
-        self.picker_active = true;
+    fn audio_directory_picker(&mut self, frame: &eframe::Frame) {
         let cwd = self.dialog_directory();
         let dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
-            .set_title("Add audio directory");
+            .set_title(PickKind::AudioDir.title());
         let service = self.services.clone();
         self.services.dialog(async move {
             let cwd = service
@@ -165,21 +160,16 @@ impl App {
         });
     }
 
-    pub(super) fn open_file_picker(&mut self, frame: &eframe::Frame) {
-        if !self.open_path || self.picker_active {
-            return;
-        }
+    fn open_file_picker(&mut self, frame: &eframe::Frame) {
         #[cfg(feature = "test-support")]
         if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
             crate::console::Console::err(format_args!("Fixture native file picker opened"));
         }
-        self.open_path = false;
-        self.picker_active = true;
         let cwd = self.dialog_directory();
         let project = self.selected.clone();
         let mut dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
-            .set_title("Open file");
+            .set_title(PickKind::OpenFile.title());
         if !self.path_text.is_empty() {
             if let Some(name) = std::path::Path::new(&self.path_text).file_name() {
                 dialog = dialog.set_file_name(name.to_string_lossy());
@@ -204,25 +194,11 @@ impl App {
         });
     }
 
-    pub(super) fn browse_target_picker(&mut self, frame: &eframe::Frame) {
-        let Some(target) = self.browse_target.take() else {
-            return;
-        };
-        if self.picker_active {
-            self.browse_target = Some(target);
-            return;
-        }
-        self.picker_active = true;
+    fn browse_target_picker(&mut self, frame: &eframe::Frame, target: BrowseTarget) {
         let folder = matches!(target, BrowseTarget::WorktreeDest);
         let dialog = rfd::AsyncFileDialog::new()
             .set_parent(frame)
-            .set_title(match target {
-                BrowseTarget::Shell => "Choose shell",
-                BrowseTarget::Editor => "Choose editor",
-                BrowseTarget::External => "Choose external editor",
-                BrowseTarget::WorktreeDest => "Choose parent folder",
-                BrowseTarget::Lsp(_) => "Choose language server",
-            });
+            .set_title(PickKind::Browse(target).title());
         let cwd = self.dialog_directory();
         let service = self.services.clone();
         self.services.dialog(async move {

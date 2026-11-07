@@ -251,7 +251,7 @@ impl App {
             .as_ref()
             .is_some_and(|(sid, _)| sid == &ended.id)
         {
-            self.rename_session = None;
+            self.clear_session_rename();
         }
 
         #[cfg(feature = "test-support")]

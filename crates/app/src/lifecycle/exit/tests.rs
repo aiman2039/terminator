@@ -465,11 +465,11 @@ fn failed_checkpoint_restores_interaction_and_old_ack_cannot_exit_retry() {
 #[test]
 fn a_pending_picker_finishes_before_the_worker_is_drained() {
     let (mut app, ctx, _dir, requests) = fixture();
-    app.picker_active = true;
+    app.picker = Picker::Open(PickKind::OpenFile);
     app.begin_exit();
     app.advance_exit(&ctx);
     assert!(requests.try_recv().is_err());
-    app.picker_active = false;
+    app.picker.close();
     app.advance_exit(&ctx);
     assert!(matches!(requests.try_recv(), Ok(Job::ExitDrain(..))));
 }

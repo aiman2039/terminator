@@ -76,6 +76,7 @@ pub(crate) use app::app_state::{
     inventory_is_stale, is_missing_path_error, is_session_auth_error, observation_is_stale,
 };
 pub(crate) use app::frame::RepaintProbe;
+pub(crate) use app::picker::{PickKind, Picker};
 #[cfg(test)]
 pub(crate) use app::service_failure_update;
 pub(crate) use app::types::{

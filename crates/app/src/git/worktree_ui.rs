@@ -244,7 +244,7 @@ impl App {
         });
         cancel |= dismissed;
         if browse {
-            self.browse_target = Some(BrowseTarget::WorktreeDest);
+            self.request_pick(PickKind::Browse(BrowseTarget::WorktreeDest));
         }
         if submit {
             self.submit_worktree(&mut draft);

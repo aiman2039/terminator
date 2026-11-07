@@ -60,7 +60,7 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "project-add", add.rect);
         if add.clicked() {
-            self.add_project = true;
+            self.request_pick(crate::PickKind::Project);
         }
         // A standard TextEdit owns its keys natively (typing,
         // arrows, Cmd/Ctrl+A/C/X/V), and the global select-all

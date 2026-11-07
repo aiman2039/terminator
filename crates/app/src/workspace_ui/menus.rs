@@ -306,14 +306,14 @@ impl App {
             });
         });
         if escape || (!starting && response.lost_focus() && !valid) {
-            self.rename_session = None;
+            self.clear_session_rename();
             response.surrender_focus();
         } else if valid && (enter || (!starting && response.lost_focus())) {
             self.send(Request::Rename {
                 session: sid.into(),
                 label: title.trim().into(),
             });
-            self.rename_session = None;
+            self.clear_session_rename();
             response.surrender_focus();
         } else {
             self.rename_session = Some((sid.into(), title));

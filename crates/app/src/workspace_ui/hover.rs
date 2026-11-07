@@ -172,15 +172,13 @@ impl App {
     }
 
     pub(crate) fn terminal_copy_enabled(&self, sid: &str) -> bool {
-        !self.picker_active
+        !self.picker.busy()
             && !self.center_covers_workspace()
             && !self.command_dialog_open()
-            && !self.add_project
             && !self.notice_detail_modal_open()
             && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
             && !self.rename_blocks_input()
-            && !self.open_path
     }
 
     /// Terminals docked in the IDE strip stay interactive while a center-only
@@ -193,13 +191,11 @@ impl App {
     }
 
     pub(crate) fn strip_terminal_copy_enabled(&self, sid: &str) -> bool {
-        !self.picker_active
-            && !self.add_project
+        !self.picker.busy()
             && !self.notice_detail_modal_open()
             && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
             && !self.rename_blocks_input()
-            && !self.open_path
             && self.worktree_remove.is_none()
     }
 
@@ -213,13 +209,11 @@ impl App {
     }
 
     pub(crate) fn float_terminal_copy_enabled(&self, sid: &str) -> bool {
-        !self.picker_active
-            && !self.add_project
+        !self.picker.busy()
             && !self.notice_detail_modal_open()
             && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
             && !self.rename_blocks_input()
-            && !self.open_path
             && self.worktree_remove.is_none()
     }
 

@@ -266,7 +266,7 @@ impl App {
                     .ok()
                     .is_some_and(|state| state.is_none());
             if matches!(self.exit, Exit::Waiting(_))
-                && !self.picker_active
+                && !self.picker.is_open()
                 && services.idle()
                 && applied
             {
@@ -291,7 +291,7 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(20));
             return;
         }
-        if matches!(self.exit, Exit::Waiting(_)) && !self.picker_active {
+        if matches!(self.exit, Exit::Waiting(_)) && !self.picker.is_open() {
             self.exit = Exit::Draining(started, self.exit_attempt);
             if self
                 .jobs

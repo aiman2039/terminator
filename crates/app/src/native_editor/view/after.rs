@@ -166,7 +166,7 @@ impl App {
             }));
         }
         if requests.open_file_picker {
-            self.open_path = true;
+            self.request_pick(PickKind::OpenFile);
         }
         // The picker opens a tab only later, outside the workspace render.
         if let Some(pick) = requests.git_compare.take() {
