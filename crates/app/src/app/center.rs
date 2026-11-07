@@ -24,10 +24,7 @@ impl App {
             self.player_center(ui);
             return;
         }
-        if self.palette.open {
-            self.palette_center(ui);
-            return;
-        }
+        // Search Everywhere floats above this pane (`show_palette`).
         if self.worktree_open {
             self.worktree_management_center(ui);
             return;

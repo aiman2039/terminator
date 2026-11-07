@@ -22,6 +22,8 @@ const SYMBOL_QUERY_DELAY: Duration = Duration::from_millis(180);
 const STATE_REFRESH: Duration = Duration::from_secs(1);
 
 pub(crate) use ask::AskAgent;
+#[cfg(test)]
+pub(crate) use center::palette_rect;
 
 pub(crate) const FILTER_FILES: u8 = 1 << 0;
 pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
@@ -73,8 +75,17 @@ pub(crate) struct PaletteCache {
     built_at: Instant,
     /// Shared so a frame borrows rows without a per-frame clone (#177).
     items: std::sync::Arc<[PaletteItem]>,
-    /// Row details, computed once per cache build instead of per frame.
-    details: std::sync::Arc<[String]>,
+    /// Row texts, computed once per cache build instead of per frame.
+    details: std::sync::Arc<[RowText]>,
+}
+
+/// One result row's texts: a dim note after the title, a right-aligned
+/// owner (project or shortcut), and the footer line while selected.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RowText {
+    inline: String,
+    right: String,
+    footer: String,
 }
 
 #[derive(Clone, Debug)]
@@ -307,6 +318,57 @@ impl PaletteItem {
                 .find(|p| &p.id == id)
                 .map_or_else(String::new, |p| p.endpoint()),
             _ => String::new(),
+        }
+    }
+
+    /// Splits [`Self::detail`] for the Search Everywhere row: files and
+    /// symbols show their path inline and their project on the right.
+    fn row_text(&self, app: &App) -> RowText {
+        let detail = self.detail(app);
+        match self {
+            Self::File(path) | Self::Symbol { path, .. } => {
+                let project = app
+                    .project_for_palette_path(path)
+                    .map_or("Other files", |project| project.name.as_str())
+                    .to_owned();
+                let inline = detail
+                    .strip_prefix(&format!("{project} · "))
+                    .unwrap_or(&detail)
+                    .to_owned();
+                RowText {
+                    inline,
+                    right: project,
+                    footer: path.display().to_string(),
+                }
+            }
+            Self::Agent(..) => {
+                let (project, summary) = detail.split_once(" · ").unwrap_or(("", &detail));
+                RowText {
+                    inline: summary.to_owned(),
+                    right: project.to_owned(),
+                    footer: summary.to_owned(),
+                }
+            }
+            Self::Session(..) | Self::Action(_) | Self::Editor(_) => RowText {
+                right: detail,
+                ..RowText::default()
+            },
+            Self::Project(..) => RowText {
+                footer: detail,
+                ..RowText::default()
+            },
+            _ => RowText {
+                inline: detail,
+                ..RowText::default()
+            },
+        }
+    }
+
+    /// The row's icon: the file type for files and symbols.
+    fn icon(&self) -> Option<&'static str> {
+        match self {
+            Self::File(path) | Self::Symbol { path, .. } => Some(crate::icons::file_icon(path)),
+            _ => None,
         }
     }
 
