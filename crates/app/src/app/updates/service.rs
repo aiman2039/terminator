@@ -88,10 +88,15 @@ impl App {
             self.log_job_ended(&context.resource, context.generation, Some(error));
             return;
         }
-        let updates = if owed.is_empty() {
-            service_failure_update(context, error).into_iter().collect()
+        // A failed service job still ends its restart, repair or start.
+        let ended = service_op::failure_update(context, error);
+        let updates: Vec<Update> = if !owed.is_empty() {
+            owed.into_iter().chain(ended).collect()
         } else {
-            owed
+            ended
+                .or_else(|| service_failure_update(context, error))
+                .into_iter()
+                .collect()
         };
         for update in updates {
             if let Update::ResolvedTarget(key, _) = &update {
@@ -115,18 +120,32 @@ impl App {
     }
 
     pub(super) fn handle_installation_repaired(&mut self, result: Result<Box<State>, String>) {
-        self.repair_pending = false;
+        self.end_service_op(ServiceOp::Repairing);
         match result {
             Ok(state) => {
                 self.apply_state(*state);
                 self.installation_error = None;
+                self.service_failure = None;
                 self.error = None;
                 self.info = Some("Installation repaired. New terminals can be opened.".into());
             }
             Err(error) => {
-                self.error = Some(format!("Could not repair installation: {error}"));
+                let message = format!("Could not repair installation: {error}");
+                self.fail_service_op(ServiceTask::Repair, message);
             }
         }
+    }
+
+    /// A completion ends only its own operation.
+    fn end_service_op(&mut self, op: ServiceOp) {
+        if self.service_op == op {
+            self.service_op = ServiceOp::Idle;
+        }
+    }
+
+    fn fail_service_op(&mut self, task: ServiceTask, message: String) {
+        self.error = Some(message.clone());
+        self.service_failure = Some(ServiceFailure { task, message });
     }
 
     pub(super) fn handle_exit_drained(&mut self, id: u64, serial: u64) {
@@ -176,22 +195,24 @@ impl App {
     }
 
     pub(super) fn handle_restart_finished(&mut self, message: &str) {
-        self.restart_pending = false;
-        self.error = Some(if message.is_empty() {
+        self.end_service_op(ServiceOp::Restarting);
+        let message = if message.is_empty() {
             "Session service restart did not complete. See restart.log in the data directory for details, then retry.".into()
         } else {
             format!("Session service restart failed: {message}")
-        });
+        };
+        self.fail_service_op(ServiceTask::Restart, message);
     }
 
     pub(super) fn handle_service_started(&mut self, result: Result<(), String>) {
-        self.service_start_pending = false;
+        self.end_service_op(ServiceOp::Starting);
         match result {
             Ok(()) => {
                 self.info = Some("Session service started. Reconnecting…".into());
             }
             Err(error) => {
-                self.error = Some(format!("Could not start session service: {error}"));
+                let message = format!("Could not start session service: {error}");
+                self.fail_service_op(ServiceTask::Start, message);
             }
         }
     }

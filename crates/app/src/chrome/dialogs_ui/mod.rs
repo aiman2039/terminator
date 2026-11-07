@@ -61,7 +61,7 @@ impl App {
     }
 
     fn restart_confirm_dialog(&mut self, ctx: &egui::Context) {
-        if !self.restart_confirm {
+        if self.service_op != ServiceOp::ConfirmingRestart {
             return;
         }
         let live = self
@@ -92,7 +92,7 @@ impl App {
                 ui.horizontal(|ui| self.restart_confirm_buttons(ui));
             });
         if !open {
-            self.restart_confirm = false;
+            self.cancel_session_restart();
         }
     }
 
@@ -107,7 +107,7 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "cancel-restart-session", cancel.rect);
         if cancel.clicked() {
-            self.restart_confirm = false;
+            self.cancel_session_restart();
         }
     }
 

@@ -109,10 +109,11 @@ impl App {
             #[cfg(any(test, target_os = "macos"))]
             status_menu_index: None,
             installation_error: None,
-            repair_pending: false,
-            restart_pending: false,
-            service_start_pending: false,
-            restart_confirm: false,
+            service_op: ServiceOp::Idle,
+            service_failure: upgrade_error.clone().map(|message| ServiceFailure {
+                task: ServiceTask::Upgrade,
+                message,
+            }),
             automatic_repair_attempt: None,
             #[cfg(feature = "test-support")]
             diagnostics: diagnostics::Diagnostics::default(),

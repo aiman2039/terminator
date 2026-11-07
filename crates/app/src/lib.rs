@@ -30,6 +30,9 @@ pub(crate) use git::revision_compare;
 pub(crate) use git::worktree_ui;
 pub(crate) use install::daemon_upgrade;
 pub use install::installation;
+pub(crate) use install::installation_ui::service_op::{
+    self, ServiceFailure, ServiceOp, ServiceTask,
+};
 #[cfg(any(not(target_os = "macos"), test))]
 pub(crate) use install::windows_updates;
 #[cfg(feature = "test-support")]

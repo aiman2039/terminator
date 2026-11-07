@@ -370,7 +370,21 @@ impl Services {
         Ok(())
     }
 
+    /// Every failure answers with `RestartFinished`, so the GUI never
+    /// waits on a restart that did not start.
     pub(in crate::gui_services) async fn restart_session_service(
+        &self,
+        inventory: recovery::RestartInventory,
+        cancel: CancellationToken,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        if let Err(error) = self.watch_restart(inventory, cancel).await {
+            updates.push(Update::RestartFinished(format!("{error:#}")));
+        }
+        Ok(())
+    }
+
+    async fn watch_restart(
         &self,
         inventory: recovery::RestartInventory,
         cancel: CancellationToken,
@@ -397,24 +411,31 @@ impl Services {
         context.deadline = None;
         self.handle().submit(context, cancel, async move {
             use tokio::io::AsyncReadExt;
-            let mut completion = watched.completion.into_tokio()?;
-            let mut bytes = [0; 256];
-            loop {
-                tokio::select! {
-                    () = token.cancelled() => return Ok(Vec::new()),
-                    n = completion.read(&mut bytes) => if n? == 0 { break; }
+            let observed = async {
+                let mut completion = watched.completion.into_tokio()?;
+                let mut bytes = [0; 256];
+                loop {
+                    tokio::select! {
+                        () = token.cancelled() => return Ok(None),
+                        n = completion.read(&mut bytes) => if n? == 0 { break; }
+                    }
                 }
-            }
-            let message = service
-                .fs()
-                .run(&token, move || {
-                    anyhow::Ok(installation::restart_message(
-                        watched.log_path,
-                        watched.log_start,
-                    ))
-                })
-                .await?;
-            Ok(vec![Update::RestartFinished(message)])
+                let message = service
+                    .fs()
+                    .run(&token, move || {
+                        anyhow::Ok(installation::restart_message(
+                            watched.log_path,
+                            watched.log_start,
+                        ))
+                    })
+                    .await?;
+                anyhow::Ok(Some(message))
+            };
+            Ok(match observed.await {
+                Ok(None) => Vec::new(),
+                Ok(Some(message)) => vec![Update::RestartFinished(message)],
+                Err(error) => vec![Update::RestartFinished(format!("{error:#}"))],
+            })
         })?;
         Ok(())
     }

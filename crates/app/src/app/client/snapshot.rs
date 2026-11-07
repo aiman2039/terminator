@@ -98,9 +98,9 @@ impl App {
         serde_json::json!({
             "connected":self.connected,
             "problem":self.installation_problem(),
-            "repair_pending":self.repair_pending,
-            "restart_pending":self.restart_pending,
-            "restart_confirm":self.restart_confirm,
+            "repair_pending":self.service_op == ServiceOp::Repairing,
+            "restart_pending":self.service_op == ServiceOp::Restarting,
+            "restart_confirm":self.service_op == ServiceOp::ConfirmingRestart,
             "can_repair":self.connected && can_retire_daemon(&self.state),
             "can_restart":self.connected && can_restart_service(&self.state),
             "settings_visible":self.settings_open() && self.settings_section == SettingsSection::Updates,

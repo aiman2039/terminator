@@ -1,4 +1,5 @@
 //! Recovery uses the ordinary session navigation and safe idle restart paths.
+pub(crate) mod service_op;
 mod settings;
 #[cfg(test)]
 mod tests;
@@ -44,7 +45,7 @@ impl App {
     pub(crate) fn maybe_upgrade_idle_daemon(&mut self) {
         if self.exit.active()
             || !self.connected
-            || self.repair_pending
+            || self.service_op != ServiceOp::Idle
             || !can_retire_daemon(&self.state)
             || self.automatic_repair_attempt.as_ref() == Some(&self.state.generation)
         {
@@ -59,12 +60,12 @@ impl App {
         if !self.connected || !can_restart_service(&self.state) {
             return;
         }
-        let label = if self.restart_pending {
+        let label = if self.service_op == ServiceOp::Restarting {
             "Restarting…"
         } else {
             "Stop all sessions and restart"
         };
-        let enabled = !self.restart_pending && !self.repair_pending && !self.exit.active();
+        let enabled = self.service_op == ServiceOp::Idle && !self.exit.active();
         let response = if small {
             ui.add_enabled(enabled, egui::Button::new(label).small())
         } else {
@@ -73,23 +74,36 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "restart-session-service", response.rect);
         if response.clicked() {
-            self.restart_confirm = true;
+            self.ask_session_restart();
+        }
+    }
+
+    /// Open the restart confirmation, unless another operation runs.
+    pub(crate) fn ask_session_restart(&mut self) {
+        if self.service_op == ServiceOp::Idle {
+            self.service_op = ServiceOp::ConfirmingRestart;
+        }
+    }
+
+    pub(crate) fn cancel_session_restart(&mut self) {
+        if self.service_op == ServiceOp::ConfirmingRestart {
+            self.service_op = ServiceOp::Idle;
         }
     }
 
     pub(crate) fn begin_session_restart(&mut self) {
-        if self.restart_pending
-            || self.repair_pending
-            || self.exit.active()
-            || !can_restart_service(&self.state)
-        {
+        if self.service_op.running() {
             return;
         }
-        self.restart_confirm = false;
+        // Confirmed or refused, the confirmation closes.
+        self.service_op = ServiceOp::Idle;
+        if self.exit.active() || !can_restart_service(&self.state) {
+            return;
+        }
         match self.jobs.send(Job::RestartSessionService(
             recovery::RestartInventory::capture(&self.state),
         )) {
-            Ok(()) => self.restart_pending = true,
+            Ok(()) => self.service_op = ServiceOp::Restarting,
             Err(()) => {
                 self.error =
                     Some("Restart worker disconnected. Reopen Terminator to retry.".into());
@@ -98,7 +112,7 @@ impl App {
     }
 
     pub(crate) fn begin_installation_repair(&mut self) {
-        if self.repair_pending
+        if self.service_op.running()
             || !self.connected
             || (!can_retire_daemon(&self.state) && self.state.generations.is_empty())
         {
@@ -111,7 +125,7 @@ impl App {
                     self.state.generation.clone(),
                     checkpoint,
                 )) {
-                    Ok(()) => self.repair_pending = true,
+                    Ok(()) => self.service_op = ServiceOp::Repairing,
                     Err(()) => {
                         self.error = Some(
                             "Installation worker disconnected. Reopen Terminator to retry.".into(),
@@ -181,12 +195,12 @@ impl App {
         if !self.service_disconnected() {
             return;
         }
-        let label = if self.service_start_pending {
+        let label = if self.service_op == ServiceOp::Starting {
             "Starting…"
         } else {
             "Start session service"
         };
-        let enabled = !self.service_start_pending && !self.exit.active();
+        let enabled = !self.service_op.running() && !self.exit.active();
         let response = if small {
             ui.add_enabled(enabled, egui::Button::new(label).small())
         } else {
@@ -200,11 +214,11 @@ impl App {
     }
 
     pub(crate) fn begin_service_start(&mut self) {
-        if self.service_start_pending || self.connected {
+        if self.service_op.running() || self.connected {
             return;
         }
         match self.jobs.send(Job::StartSessionService) {
-            Ok(()) => self.service_start_pending = true,
+            Ok(()) => self.service_op = ServiceOp::Starting,
             Err(()) => {
                 self.error =
                     Some("Service worker disconnected. Reopen Terminator to retry.".into());

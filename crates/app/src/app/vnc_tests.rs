@@ -411,7 +411,7 @@ fn quitting_with_live_vnc_sessions_asks_and_can_disconnect_them() {
 fn an_app_restart_does_not_ask_about_live_vnc_sessions() {
     let (mut app, _ctx, _dir) = fixture();
     app.state.vnc_sessions = vec![vnc_session("live", VncSessionStatus::Connected)];
-    app.restart_pending = true;
+    app.service_op = crate::ServiceOp::Restarting;
     assert!(
         !app.vnc_quit_needs_prompt(),
         "the restarted GUI reattaches them"

@@ -79,7 +79,8 @@ impl Services {
                 .await
             }
             Job::RestartSessionService(inventory) => {
-                self.restart_session_service(inventory, cancel).await
+                self.restart_session_service(inventory, cancel, updates)
+                    .await
             }
             Job::StartSessionService => self.start_session_service(cancel, updates).await,
             _ => anyhow::bail!(MISROUTED),

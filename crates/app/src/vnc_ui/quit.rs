@@ -23,7 +23,9 @@ impl App {
         if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
             return false;
         }
-        !self.vnc_quit_confirmed && !self.restart_pending && !self.live_vnc_sessions().is_empty()
+        !self.vnc_quit_confirmed
+            && self.service_op != crate::ServiceOp::Restarting
+            && !self.live_vnc_sessions().is_empty()
     }
 
     /// The in-app question shown while a quit waits on live VNC sessions.

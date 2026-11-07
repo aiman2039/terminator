@@ -287,7 +287,8 @@ impl JobRouting {
             Job::StageGutterBlock { path, .. } => {
                 context.tab = Some(format!("gutter:{}", path.display()));
             }
-            _ => {}
+            // A failed service job still ends its operation in the GUI.
+            _ => context.tab = crate::service_op::job_tag(job),
         }
     }
 
