@@ -127,13 +127,17 @@ impl App {
             return;
         };
         self.close_workspace_queue = ids.collect();
-        self.close_workspace_prompted = None;
         self.close_workspace = Some((project.to_owned(), first));
     }
+    /// Stop the current workspace close and drop its native prompts, so a
+    /// late answer cannot close the tab after all.
     pub(crate) fn abort_workspace_close(&mut self) {
-        self.close_workspace = None;
+        if let Some((project, tab)) = self.close_workspace.take() {
+            let owner = crate::native_editor::CloseOwner::Workspace(project, tab);
+            self.native_close_prompts.retain(|r| r.owner != owner);
+            self.native_close_after_save.retain(|r| r.owner != owner);
+        }
         self.close_workspace_queue.clear();
-        self.close_workspace_prompted = None;
     }
     pub(crate) fn close_workspace_tab_now(&mut self, project: &str, tab_id: &str) {
         let keys: Vec<_> = self
@@ -155,17 +159,9 @@ impl App {
         // GUI stayed usable, so a native buffer may have become dirty since
         // `poll_workspace_close` checked it.
         if let Some(path) = self.dirty_native_in_tab(project, tab_id).into_iter().next() {
-            // Another close requested meanwhile keeps its place; this tab
-            // only gets the prompt.
-            if self
-                .close_workspace
-                .as_ref()
-                .is_none_or(|(p, t)| p == project && t == tab_id)
-            {
-                self.prompt_workspace_close(project, tab_id, path);
-            } else {
-                self.native_close_prompt = Some((path, None));
-            }
+            // Another close requested meanwhile keeps its place; the
+            // prompt still names this tab, so its answer finishes it.
+            self.prompt_workspace_close(project, tab_id, path);
             return;
         }
         if let Some(workspace) = self.layouts.get_mut(project) {

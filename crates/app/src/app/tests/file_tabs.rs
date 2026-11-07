@@ -307,7 +307,9 @@ fn unsaved_pane_tabs_show_a_dot_until_the_close_button_is_hovered() {
     // A click there still closes through the unsaved-changes prompt.
     press(&mut app, &ctx, close.center());
     assert!(
-        matches!(&app.native_close_prompt, Some((prompt, _)) if prompt == &path),
+        app.native_close_prompts
+            .iter()
+            .any(|prompt| prompt.path == path),
         "closing an unsaved tab asks first"
     );
 }

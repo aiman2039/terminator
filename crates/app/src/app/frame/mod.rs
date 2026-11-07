@@ -87,6 +87,9 @@ impl eframe::App for App {
         // The status item must follow agents while the window is hidden or
         // minimized, when eframe calls only `logic`.
         self.sync_menu_bar(ctx);
+        // Save-then-close requests settle here too, so a file no view
+        // renders cannot hold a quit or a workspace close forever.
+        self.settle_native_closes();
         self.continue_app_quit(ctx);
         self.advance_exit(ctx);
         if !self.exit.active() && self.last_heartbeat.elapsed() > Duration::from_secs(1) {

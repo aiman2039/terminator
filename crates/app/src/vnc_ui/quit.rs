@@ -13,21 +13,17 @@ impl App {
             .collect()
     }
 
-    /// Whether the quit may go on now. With live VNC sessions it first asks,
-    /// once per quit. An app restart (for example an update) does not ask:
-    /// the daemon keeps the sessions and the new GUI reattaches them.
-    pub(crate) fn vnc_quit_allowed(&mut self) -> bool {
+    /// Whether the quit must first ask about live VNC sessions: once per
+    /// quit. An app restart (for example an update) does not ask: the
+    /// daemon keeps the sessions and the new GUI reattaches them.
+    pub(crate) fn vnc_quit_needs_prompt(&self) -> bool {
         // A native fixture closes its own window and cannot answer: treat
         // the close as Quit, which keeps the sessions.
         #[cfg(feature = "test-support")]
         if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-            return true;
+            return false;
         }
-        if self.vnc_quit_confirmed || self.restart_pending || self.live_vnc_sessions().is_empty() {
-            return true;
-        }
-        self.vnc_quit_prompt = true;
-        false
+        !self.vnc_quit_confirmed && !self.restart_pending && !self.live_vnc_sessions().is_empty()
     }
 
     /// The in-app question shown while a quit waits on live VNC sessions.

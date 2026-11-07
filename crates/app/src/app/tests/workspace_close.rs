@@ -456,10 +456,10 @@ fn bulk_close_continues_after_the_dirty_file_is_discarded() {
     let (mut app, ctx, dir) = fixture();
     let path = dirty_file_then_shell(&mut app, dir.path());
     app.poll_workspace_close(&ctx);
-    assert!(matches!(&app.native_close_prompt, Some((p, None)) if *p == path));
+    let prompt = app.native_close_prompts[0].clone();
+    assert!(prompt.path == path && prompt.issuer.is_none());
     assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
-    app.native_close_prompt = None;
-    app.apply_native_close_choice(&path, NativeCloseChoice::Discard, None);
+    app.answer_native_close(prompt, Some(NativeCloseChoice::Discard));
     app.poll_workspace_close(&ctx);
     assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t0"));
     assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t1"));
@@ -471,7 +471,8 @@ fn cancelling_the_dirty_file_prompt_stops_bulk_close_with_a_message() {
     let (mut app, ctx, dir) = fixture();
     dirty_file_then_shell(&mut app, dir.path());
     app.poll_workspace_close(&ctx);
-    app.native_close_prompt = None;
+    let prompt = app.native_close_prompts[0].clone();
+    app.answer_native_close(prompt, None);
     app.poll_workspace_close(&ctx);
     assert!(app.close_workspace.is_none());
     assert!(app.close_workspace_queue.is_empty());
@@ -514,5 +515,136 @@ fn collapsed_state_of_a_tab_closed_any_way_is_pruned() {
         ]
         .map(String::from)
         .into()
+    );
+}
+
+#[test]
+fn a_tab_close_prompt_does_not_take_over_a_workspace_close_prompt() {
+    use crate::native_editor::{CloseOwner, NativeCloseChoice, NativeCloseRequest};
+    let (mut app, ctx, dir) = fixture();
+    let path = dirty_file_then_shell(&mut app, dir.path());
+    app.poll_workspace_close(&ctx);
+    // Before answering, the X of another dirty tab asks about that file.
+    let other = dir.path().join("other.rs");
+    app.native_docs.insert(
+        other.clone(),
+        crate::native_editor::NativeDoc::dirty_for_test(other.clone()),
+    );
+    app.ask_native_close(NativeCloseRequest::new(other, None, CloseOwner::Pane));
+    let tab_prompt = app.native_close_prompts[1].clone();
+    app.answer_native_close(tab_prompt, None);
+    app.poll_workspace_close(&ctx);
+    // The workspace close still waits on its own, unanswered prompt.
+    assert!(app.info.is_none());
+    assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+    let prompt = app.native_close_prompts[0].clone();
+    assert_eq!(prompt.path, path);
+    assert_eq!(prompt.owner, CloseOwner::Workspace("a".into(), "t0".into()));
+    app.answer_native_close(prompt, Some(NativeCloseChoice::Discard));
+    app.poll_workspace_close(&ctx);
+    assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t0"));
+    assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t1"));
+}
+
+#[test]
+fn a_late_dirty_prompt_finishes_its_own_tab_close() {
+    use crate::native_editor::{CloseOwner, NativeCloseChoice};
+    let (mut app, _ctx, dir) = fixture();
+    let path = dir.path().join("late.rs");
+    std::fs::write(&path, "source").unwrap();
+    let workspace = app.layouts.get_mut("a").unwrap();
+    workspace.add("late".into(), Tab::NativeEditor { path: path.clone() });
+    workspace.add("keep".into(), Tab::Terminal("s1".into()));
+    app.native_docs.insert(
+        path.clone(),
+        crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+    );
+    // Another close is current when this tab's idle close completes.
+    app.close_workspace = Some(("a".into(), "keep".into()));
+    app.close_workspace_tab_now("a", "late");
+    let prompt = app.native_close_prompts[0].clone();
+    assert_eq!(
+        prompt.owner,
+        CloseOwner::Workspace("a".into(), "late".into())
+    );
+    assert_eq!(app.close_workspace, Some(("a".into(), "keep".into())));
+    app.answer_native_close(prompt, Some(NativeCloseChoice::Discard));
+    assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "late"));
+    assert_eq!(app.close_workspace, Some(("a".into(), "keep".into())));
+}
+
+#[test]
+fn a_pane_preflight_does_not_open_input_under_a_workspace_confirmation() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.state.sessions.extend([
+        session_fixture("pane-shell", SessionKind::Shell),
+        session_fixture("tab-shell", SessionKind::Shell),
+        session_fixture("tab-editor", SessionKind::Editor),
+    ]);
+    app.state
+        .capabilities
+        .push(terminator_core::idle_close::CAPABILITY.into());
+    app.insert("a", Tab::Terminal("tab-shell".into()), None);
+    let tab = app.layouts["a"].active.clone();
+    app.insert("a", Tab::Terminal("tab-editor".into()), Some("right"));
+    // The pane close is in its idle preflight; the workspace close (an
+    // editor beside a shell keeps it off the idle path) shows its
+    // confirmation.
+    app.close_session = Some("pane-shell".into());
+    app.idle_close_pending = Some(editor_close::Target::Pane("pane-shell".into()));
+    assert!(!app.close_confirm_blocks_input());
+    app.close_workspace = Some(("a".into(), tab));
+    assert!(app.close_confirm_blocks_input());
+    assert!(!app.terminal_copy_enabled("other"));
+}
+
+#[test]
+fn the_editor_check_keeps_the_bulk_close_current() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.state
+        .sessions
+        .push(session_fixture("editor", SessionKind::Editor));
+    let workspace = app.layouts.get_mut("a").unwrap();
+    workspace.add("t0".into(), Tab::Terminal("editor".into()));
+    workspace.add(
+        "t1".into(),
+        Tab::Image {
+            path: "/b.png".into(),
+        },
+    );
+    workspace.add(
+        "t2".into(),
+        Tab::Image {
+            path: "/c.png".into(),
+        },
+    );
+    app.begin_workspace_close_tabs("a", vec!["t0".into(), "t1".into()]);
+    app.poll_workspace_close(&ctx);
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        Job::CloseEditors(..)
+    ));
+    assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+    assert_eq!(app.close_workspace_queue, ["t1"]);
+    // Polling again while the check runs sends nothing new.
+    app.poll_workspace_close(&ctx);
+    assert!(received.try_recv().is_err());
+    assert!(!app.close_confirm_blocks_input(), "the GUI stays usable");
+    app.editors_closed(
+        editor_close::Target::Workspace("a".into(), "t0".into()),
+        vec!["editor".into()],
+        Ok(()),
+    );
+    app.poll_workspace_close(&ctx);
+    assert!(app.close_workspace.is_none());
+    assert_eq!(
+        app.layouts["a"]
+            .tabs
+            .iter()
+            .map(|tab| tab.id.as_str())
+            .collect::<Vec<_>>(),
+        ["t2"]
     );
 }

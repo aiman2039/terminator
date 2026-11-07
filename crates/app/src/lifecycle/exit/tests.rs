@@ -701,13 +701,14 @@ fn dirty_native_buffer_holds_quit_until_the_buffer_is_gone() {
     app.accept_app_quit(&ctx);
     assert!(app.pending_app_quit);
     assert_eq!(
-        app.native_close_prompt
-            .as_ref()
-            .map(|(prompt, _)| prompt.as_path()),
-        Some(path.as_path())
+        app.native_close_prompts
+            .iter()
+            .map(|prompt| prompt.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![path.as_path()]
     );
     assert!(!app.exit.active());
-    app.native_close_prompt = None;
+    app.native_close_prompts.clear();
     app.native_docs.clear();
     app.continue_app_quit(&ctx);
     assert!(!app.pending_app_quit);
@@ -722,8 +723,9 @@ fn dismissing_the_unsaved_prompt_cancels_the_quit() {
         crate::native_editor::NativeDoc::dirty_for_test(path),
     );
     app.accept_app_quit(&ctx);
-    app.cancel_app_quit();
-    app.native_close_prompt = None;
+    let prompt = app.native_close_prompts[0].clone();
+    app.answer_native_close(prompt, None);
+    assert!(app.native_close_prompts.is_empty());
     app.continue_app_quit(&ctx);
     assert!(!app.pending_app_quit);
     assert!(!app.exit.active());

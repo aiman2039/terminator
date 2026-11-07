@@ -119,9 +119,12 @@ fn dock_close_button_names_exact_pane() {
         crate::OnCloseResponse::Ignore
     );
     assert!(matches!(
-        &main.app.native_close_prompt,
-        Some((prompt, Some(crate::native_editor::CloseIssuer::Docked { node, .. })))
-            if prompt == &path && *node == Some(left)
+        main.app.native_close_prompts.last(),
+        Some(crate::native_editor::NativeCloseRequest {
+            path: prompt,
+            issuer: Some(crate::native_editor::CloseIssuer::Docked { node, .. }),
+            ..
+        }) if prompt == &path && *node == Some(left)
     ));
     // Floating dock: same, through the window issuer.
     let viewport = egui::ViewportId::from_hash_of("exact-pane-float");
@@ -140,9 +143,12 @@ fn dock_close_button_names_exact_pane() {
         crate::OnCloseResponse::Ignore
     );
     assert!(matches!(
-        &float.app.native_close_prompt,
-        Some((prompt, Some(crate::native_editor::CloseIssuer::Floating { node, .. })))
-            if prompt == &path && *node == Some(right)
+        float.app.native_close_prompts.last(),
+        Some(crate::native_editor::NativeCloseRequest {
+            path: prompt,
+            issuer: Some(crate::native_editor::CloseIssuer::Floating { node, .. }),
+            ..
+        }) if prompt == &path && *node == Some(right)
     ));
 }
 
@@ -530,14 +536,16 @@ fn wq_close_uses_view_issuing_the_save() {
         }])),
     );
     // `:wq` typed in the floating window: the save settles later.
-    app.native_close_after_save.insert(
-        path.clone(),
-        Some(CloseIssuer::Floating {
-            viewport: float,
-            node: None,
-            delayed: true,
-        }),
-    );
+    app.native_close_after_save
+        .push(crate::native_editor::NativeCloseRequest::new(
+            path.clone(),
+            Some(CloseIssuer::Floating {
+                viewport: float,
+                node: None,
+                delayed: true,
+            }),
+            crate::native_editor::CloseOwner::Pane,
+        ));
     // A docked view renders first. The queued close must still target
     // the issuing floating pane — not the rendering docked copy.
     combined_frame(&mut app, &ctx, vec![]);
@@ -656,7 +664,11 @@ fn async_close_completion_keeps_a_buffer_that_became_dirty() {
     app.close_workspace_tab_now("a", &tab_id);
     assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == tab_id));
     assert!(app.native_dirty(&path));
-    assert!(matches!(&app.native_close_prompt, Some((p, None)) if *p == path));
+    assert!(
+        app.native_close_prompts
+            .iter()
+            .any(|p| p.path == path && p.issuer.is_none())
+    );
     // The close waits on the prompt instead of being dropped.
     assert_eq!(app.close_workspace, Some(("a".into(), tab_id)));
 }

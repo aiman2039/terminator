@@ -202,7 +202,13 @@ impl Viewer<'_> {
         if let Tab::NativeEditor { path } = tab
             && self.app.native_dirty(path)
         {
-            self.app.native_close_prompt = Some((path.clone(), self.close_issuer(pane)));
+            let issuer = self.close_issuer(pane);
+            self.app
+                .ask_native_close(crate::native_editor::NativeCloseRequest::new(
+                    path.clone(),
+                    issuer,
+                    crate::native_editor::CloseOwner::Pane,
+                ));
             return OnCloseResponse::Ignore;
         }
         // A closed VNC tab detaches, like a terminal: the daemon keeps the

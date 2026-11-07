@@ -351,10 +351,15 @@ impl App {
         requests: ViewRequests,
     ) {
         if requests.defer_close_after_save {
-            self.native_close_after_save.insert(
+            let request = NativeCloseRequest::new(
                 path.to_owned(),
                 requests.wq_issuer.map(CloseIssuer::deferred),
+                CloseOwner::Pane,
             );
+            // A repeated `:wq` replaces the pane's own earlier request.
+            self.native_close_after_save
+                .retain(|r| !(r.path == path && r.owner == CloseOwner::Pane));
+            self.native_close_after_save.push(request);
         }
         // `:qa` resolves at drain time: the current workspace is checked
         // out of `layouts` here, so its tabs are invisible to the dirty

@@ -105,27 +105,6 @@ impl App {
         }
     }
 
-    /// Queue the deferred close for a settled save-then-close (`:wq` or
-    /// Save and close). Returns true when the view should stop rendering.
-    pub(super) fn native_close_after_save_settled(&mut self, path: &Path) -> bool {
-        if !self.native_close_after_save.contains_key(path) {
-            return false;
-        }
-        let settled =
-            !self.native_dirty(path) && !self.native_docs.get(path).is_some_and(|doc| doc.saving);
-        if !settled {
-            return false;
-        }
-        // Deferred: the workspace is checked out of `layouts` while this
-        // view renders; closing runs after it is checked back in. Consumed
-        // here: every other copy rendering later must not queue its own
-        // close for the same request.
-        let issuer = self.native_close_after_save.remove(path).flatten();
-        self.pending_native_close
-            .push((path.to_owned(), false, issuer));
-        true
-    }
-
     /// In-pane unsaved-changes bar for this view's pending tab close.
     /// Returns true when the view should stop rendering this frame.
     pub(super) fn native_close_prompt_bar(&mut self, input: NativeClosePromptBarInput<'_>) -> bool {
@@ -138,11 +117,8 @@ impl App {
         } = input;
         // Tab-close prompt for this pane: an in-pane bar, not a modal, so
         // the rest of the GUI stays usable while the choice is pending.
-        // Quit-flow prompts carry no issuer and stay modal (`native_close_modal`).
-        if let Some((prompt, issuer)) = self.native_close_prompt.clone()
-            && prompt == path
-            && issuer.is_some()
-        {
+        // Quit and workspace prompts stay modal (`native_close_modal`).
+        if let Some(request) = self.in_pane_close_prompt(path) {
             let name = path
                 .file_name()
                 .unwrap_or_default()
@@ -161,20 +137,16 @@ impl App {
                 },
             );
             if let Some(choice) = bar.choice() {
-                self.native_close_prompt = None;
+                self.forget_close_prompt(&request);
                 match choice {
                     appearance::UnsavedCloseChoice::Save => {
-                        self.apply_native_close_choice(
-                            path,
-                            NativeCloseChoice::SaveClose,
-                            issuer.clone(),
-                        );
+                        self.apply_native_close_choice(request, NativeCloseChoice::SaveClose);
                     }
                     // Deferred: the workspace is checked out while this view
                     // renders, so the close runs after it is checked back in.
                     appearance::UnsavedCloseChoice::Discard => {
                         self.pending_native_close
-                            .push((path.to_owned(), false, issuer.clone()))
+                            .push((path.to_owned(), false, request.issuer))
                     }
                     appearance::UnsavedCloseChoice::Cancel => {
                         if let Some(doc) = self.native_docs.get(path) {

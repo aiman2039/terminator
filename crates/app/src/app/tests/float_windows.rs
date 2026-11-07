@@ -254,7 +254,14 @@ fn modal_choice_carries_issuing_float_pane() {
     };
     // Discard closes only the issuing copy: the left split keeps
     // the file and its buffer.
-    app.apply_native_close_choice(&path, NativeCloseChoice::Discard, Some(issuer));
+    app.apply_native_close_choice(
+        crate::native_editor::NativeCloseRequest::new(
+            path.clone(),
+            Some(issuer),
+            crate::native_editor::CloseOwner::Pane,
+        ),
+        NativeCloseChoice::Discard,
+    );
     let dock = app.floating[0].dock.as_ref().expect("window kept");
     assert_eq!(dock.iter_all_tabs().count(), 1);
     assert!(app.native_docs.contains_key(&path));
@@ -276,10 +283,20 @@ fn modal_save_close_stores_float_issuer_deferred() {
         node: None,
         delayed: false,
     };
-    app.apply_native_close_choice(&path, NativeCloseChoice::SaveClose, Some(issuer));
+    app.apply_native_close_choice(
+        crate::native_editor::NativeCloseRequest::new(
+            path.clone(),
+            Some(issuer),
+            crate::native_editor::CloseOwner::Pane,
+        ),
+        NativeCloseChoice::SaveClose,
+    );
     assert!(matches!(
-        app.native_close_after_save.get(&path),
-        Some(Some(CloseIssuer::Floating { delayed: true, .. }))
+        app.native_close_after_save.first(),
+        Some(crate::native_editor::NativeCloseRequest {
+            issuer: Some(CloseIssuer::Floating { delayed: true, .. }),
+            ..
+        })
     ));
 }
 

@@ -177,9 +177,8 @@ impl App {
             && !self.command_dialog_open()
             && !self.add_project
             && !self.notice_detail_modal_open()
-            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
-            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && !self.rename_blocks_input()
             && !self.open_path
     }
@@ -197,9 +196,8 @@ impl App {
         !self.picker_active
             && !self.add_project
             && !self.notice_detail_modal_open()
-            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
-            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && !self.rename_blocks_input()
             && !self.open_path
             && self.worktree_remove.is_none()
@@ -218,9 +216,8 @@ impl App {
         !self.picker_active
             && !self.add_project
             && !self.notice_detail_modal_open()
-            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.close_confirm_blocks_input()
             && !self.editor_close_sessions.contains(sid)
-            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && !self.rename_blocks_input()
             && !self.open_path
             && self.worktree_remove.is_none()

@@ -98,8 +98,6 @@ pub struct App {
     pub(crate) layout_readonly: HashSet<String>,
     pub(crate) close_workspace: Option<(String, String)>,
     pub(crate) close_workspace_queue: Vec<String>,
-    /// Dirty native buffer the current workspace close already asked about.
-    pub(crate) close_workspace_prompted: Option<PathBuf>,
     pub(crate) workspace_insert: HashMap<String, usize>,
     pub(crate) post_create: PostCreateQueue,
     pub(crate) workspace_visible: Option<(String, String)>,
@@ -327,15 +325,12 @@ pub struct App {
     /// line so the GUI thread never reads the target file itself.
     pub(crate) native_pending_col: HashMap<PathBuf, u32>,
     pub(crate) lsp: lsp_manager::LspManager,
-    /// Dirty-editor close prompt: the file plus the issuing pane, if the
-    /// prompt came from a view (dock X). Flow-issued prompts (quit,
-    /// workspace close) carry no issuer and keep legacy removal.
-    pub(crate) native_close_prompt: Option<(PathBuf, Option<native_editor::CloseIssuer>)>,
+    /// Dirty-editor close prompts, oldest first, each with the flow that
+    /// asked (pane, quit, workspace close) and the issuing view, if any.
+    pub(crate) native_close_prompts: Vec<native_editor::NativeCloseRequest>,
     /// Save-then-close requests (`:wq`, Save and close) waiting on their
-    /// save, each with the view that issued it (captured when the save
-    /// starts, since it settles frames later under whichever view
-    /// renders first). Several files can wait at once.
-    pub(crate) native_close_after_save: HashMap<PathBuf, Option<native_editor::CloseIssuer>>,
+    /// save, with owner and issuing view (captured when the save starts).
+    pub(crate) native_close_after_save: Vec<native_editor::NativeCloseRequest>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pub(crate) pending_app_quit: bool,
     /// Quit is waiting on "VNC sessions stay connected"; and whether that

@@ -445,10 +445,14 @@ fn two_save_and_close_requests_both_wait_for_their_saves() {
     for path in [&first, &second] {
         app.native_docs
             .insert(path.clone(), NativeDoc::dirty_for_test(path.clone()));
-        app.apply_native_close_choice(path, NativeCloseChoice::SaveClose, None);
+        app.apply_native_close_choice(
+            NativeCloseRequest::new(path.clone(), None, CloseOwner::Pane),
+            NativeCloseChoice::SaveClose,
+        );
     }
-    assert!(app.native_close_after_save.contains_key(&first));
-    assert!(app.native_close_after_save.contains_key(&second));
+    for path in [&first, &second] {
+        assert!(app.native_close_after_save.iter().any(|r| r.path == *path));
+    }
 }
 
 #[test]

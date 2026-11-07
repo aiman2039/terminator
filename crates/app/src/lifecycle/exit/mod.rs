@@ -117,8 +117,8 @@ impl Checkpoint {
 impl App {
     pub(crate) fn begin_exit(&mut self) {
         if self.block_unsaved_diff(None) {
-            self.pending_app_quit = false;
-            crate::updater::cancel_termination();
+            // A blocked quit ends this quit: the next one asks again.
+            self.cancel_app_quit();
             return;
         }
         // Player and browsers stop only once the checkpoint is saved; a
@@ -129,10 +129,27 @@ impl App {
             self.exit = Exit::Waiting(Instant::now());
         }
     }
+    /// A dirty native buffer the quit has not asked about yet. A buffer a
+    /// workspace close is asking about waits for that answer; one with
+    /// only an in-pane prompt is asked again by the quit, since its pane
+    /// may not be on screen.
     fn dirty_native_path(&self) -> Option<PathBuf> {
-        self.native_docs
-            .iter()
-            .find_map(|(path, doc)| doc.dirty().then(|| path.clone()))
+        self.native_docs.iter().find_map(|(path, doc)| {
+            let asked = self
+                .native_close_prompts
+                .iter()
+                .any(|request| request.path == *path && !request.in_pane());
+            (doc.dirty() && !asked).then(|| path.clone())
+        })
+    }
+    fn quit_waits_on_native(&self) -> bool {
+        self.native_close_waits_for(&native_editor::CloseOwner::Quit)
+            || !self.native_close_after_save.is_empty()
+            || !self.pending_native_close.is_empty()
+            || self
+                .native_docs
+                .values()
+                .any(native_editor::NativeDoc::dirty)
     }
     /// Window close, Quit, and Sparkle's terminate all arrive here.
     /// A dirty native buffer must be resolved before the checkpoint, and that
@@ -145,51 +162,53 @@ impl App {
         // Floating panes rejoin their workspaces first, so dirty-buffer
         // prompts and the exit checkpoint see the complete layout.
         self.dock_back_all_floating();
-        let waiting_on_native = self.dirty_native_path().is_some()
-            || self.native_close_prompt.is_some()
-            || !self.native_close_after_save.is_empty()
-            || !self.pending_native_close.is_empty();
-        if waiting_on_native {
-            self.pending_app_quit = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            self.continue_app_quit(ctx);
-        } else if self.vnc_quit_allowed() {
-            self.pending_app_quit = false;
-            self.begin_exit();
-        } else {
-            self.pending_app_quit = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        }
+        self.pending_app_quit = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.continue_app_quit(ctx);
     }
+    /// Runs every frame while a quit is pending: ask about the next dirty
+    /// buffer, then about live VNC sessions, then start the exit.
     pub(crate) fn continue_app_quit(&mut self, ctx: &egui::Context) {
         if !self.pending_app_quit || self.exit.active() {
             return;
         }
-        if !self.native_close_after_save.is_empty() || !self.pending_native_close.is_empty() {
+        if self.quit_waits_on_native() {
+            if !self.native_close_waits_for(&native_editor::CloseOwner::Quit)
+                && self.native_close_after_save.is_empty()
+                && self.pending_native_close.is_empty()
+                && let Some(path) = self.dirty_native_path()
+            {
+                self.ask_native_close(native_editor::NativeCloseRequest::new(
+                    path,
+                    None,
+                    native_editor::CloseOwner::Quit,
+                ));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
             return;
         }
-        if self.native_close_prompt.is_some() {
+        if self.vnc_quit_prompt {
             return;
         }
-        if let Some(path) = self.dirty_native_path() {
-            self.native_close_prompt = Some((path, None));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            return;
-        }
-        if self.vnc_quit_prompt || !self.vnc_quit_allowed() {
+        if self.vnc_quit_needs_prompt() {
+            self.vnc_quit_prompt = true;
             return;
         }
         self.pending_app_quit = false;
         self.begin_exit();
     }
+    /// End the current quit and everything it owns: its VNC answer, its
+    /// native prompts and save-then-close requests. Prompts and `:wq`
+    /// requests of panes and workspace closes stay.
     pub(crate) fn cancel_app_quit(&mut self) {
         self.vnc_quit_confirmed = false;
         self.vnc_quit_prompt = false;
-        if !self.pending_app_quit {
-            return;
-        }
+        let quit = native_editor::CloseOwner::Quit;
+        self.native_close_prompts
+            .retain(|request| request.owner != quit);
+        self.native_close_after_save
+            .retain(|request| request.owner != quit);
         self.pending_app_quit = false;
-        self.native_close_after_save.clear();
         crate::updater::cancel_termination();
     }
     /// Destructive shutdown steps run only after the exit is certain.
