@@ -398,3 +398,118 @@ fn commit_message_and_buttons_sit_below_the_changes_at_the_bottom() {
         "the buttons are at the bottom"
     );
 }
+
+#[test]
+fn branch_shares_the_tab_row_only_when_a_short_name_fits() {
+    let budget = |free, branch| BranchBudget {
+        free,
+        trailing: 30.0,
+        branch,
+    };
+    assert!(branch_beside_tabs(budget(80.0, 40.0)), "full name fits");
+    assert!(
+        branch_beside_tabs(budget(94.0, 300.0)),
+        "a long name truncates beside the tabs"
+    );
+    assert!(!branch_beside_tabs(budget(93.0, 300.0)), "too narrow: wrap");
+    assert!(!branch_beside_tabs(budget(60.0, 40.0)), "short name: wrap");
+}
+
+/// The History tab and branch switcher rects of one Git header frame.
+#[cfg(feature = "test-support")]
+fn header_rects(width: f32, branch: &str) -> (egui::Rect, egui::Rect) {
+    let context = ContextData {
+        cwd: "/repo".into(),
+        root: Some("/repo".into()),
+        perforce: None,
+        git_dirs: vec![],
+        branch: branch.into(),
+        changes: vec![],
+        decorations: std::collections::HashMap::default(),
+        stats: std::collections::HashMap::default(),
+        error: None,
+    };
+    let compare = workspace_ops::CompareData {
+        root: Some("/repo".into()),
+        upstream: Some("origin/main".into()),
+        ahead: 3,
+        behind: 12,
+        base: Some("origin/main".into()),
+        files: vec![],
+    };
+    let theme = AppearanceConfig::default();
+    let ctx = egui::Context::default();
+    crate::appearance::install(&ctx);
+    for _ in 0..2 {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut draft = String::new();
+                let mut input = GitPanelInput {
+                    context: &context,
+                    prepared: None,
+                    review_mode: ReviewMode::Native,
+                    neovim_review: false,
+                    theme: &theme,
+                    tab: GitTab::Commit,
+                    view_list: false,
+                    commits: &[],
+                    shelves: &[],
+                    branches: &[],
+                    commit_draft: &mut draft,
+                    recent_messages: &[],
+                    amend: &mut false,
+                    signoff: &mut false,
+                    collapse_generation: 0,
+                    tree_open: true,
+                    open_shortcut: "",
+                    compare: Some(&compare),
+                    base_ref: None,
+                    focus_message: false,
+                    commit_run: None,
+                    commit_lock: CommitLock::default(),
+                    commit_failure: None,
+                };
+                git_panel(ui, &mut input);
+            },
+        );
+        output.textures_delta.clear();
+    }
+    let target = |name: &str| -> egui::Rect {
+        ctx.data(|data| data.get_temp(egui::Id::unique(("fixture-target", name))))
+            .unwrap_or_else(|| panic!("{name} is recorded"))
+    };
+    (target("git-history"), target("git-branch"))
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn narrow_git_header_never_paints_the_branch_over_the_tabs() {
+    let long = "feature/a-very-long-branch-name-for-the-header";
+    for width in [180.0, 217.0, 260.0, 320.0, 480.0] {
+        for branch in ["master", long] {
+            let (history, switcher) = header_rects(width, branch);
+            assert!(
+                !history.intersects(switcher.shrink(0.5)),
+                "{width} {branch}: {history:?} {switcher:?}"
+            );
+            assert!(switcher.right() <= width, "{width} {branch}: {switcher:?}");
+            assert!(switcher.left() >= 0.0, "{width} {branch}: {switcher:?}");
+        }
+    }
+    // Wide enough: the branch stays on the tab row, the long name truncated.
+    let (history, switcher) = header_rects(480.0, long);
+    assert!((history.center().y - switcher.center().y).abs() < 1.0);
+    // At the default sidebar width the branch side wraps under the tabs.
+    let (history, switcher) = header_rects(217.0, long);
+    assert!(
+        switcher.top() >= history.bottom(),
+        "{history:?} {switcher:?}"
+    );
+}
