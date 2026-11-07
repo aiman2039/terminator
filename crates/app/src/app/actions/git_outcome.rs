@@ -58,11 +58,13 @@ impl App {
         if let Some((path, mode)) = outcome.compare.take() {
             self.open_compare_picker(&path, mode);
         }
-        if let Some(history) = outcome.history {
-            self.git.history = history;
+        if let Some(tab) = outcome.tab {
+            self.git.tab = tab;
         }
-        if outcome.collapse {
+        // A new generation resets every section and folder.
+        if let Some(open) = outcome.expand_all {
             self.git.collapse = self.git.collapse.wrapping_add(1);
+            self.git.tree_collapsed = !open;
         }
     }
 

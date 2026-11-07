@@ -231,11 +231,11 @@ fn git_actions_run_the_git_panel_and_file_commands() {
     let (mut app, ctx, _dir, requests) = editing();
     app.context = Some(git_context(vec![change(" M")]));
     app.preferences.visible = false;
-    app.git.history = true;
+    app.git.tab = sidebar_ui::GitTab::History;
     app.run_shortcut(&ctx, Action::GitCommit);
     assert!(app.preferences.visible);
     assert_eq!(app.preferences.tool, SidebarTool::Git);
-    assert!(app.git.focus_message && !app.git.history);
+    assert!(app.git.focus_message && app.git.tab == sidebar_ui::GitTab::Commit);
     app.run_shortcut(&ctx, Action::GitStageAll);
     let (root, op) = workspace_job(&requests);
     assert_eq!(root, PathBuf::from("/a"));

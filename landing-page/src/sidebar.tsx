@@ -4,7 +4,7 @@ import { Icon } from "./icons";
 import {
   agentCards,
   fileIcon,
-  gitGroups,
+
   historyGroups,
   systemInfo,
   type AgentCard,
@@ -258,65 +258,6 @@ export function AgentsPanel() {
                 dismiss
               </button>
             </div>
-          </div>
-        ))}
-      </div>
-    </>
-  );
-}
-
-/* ============================ Right: Git ============================ */
-export function GitPanel({
-  onOpenDiff,
-}: {
-  onOpenDiff: (f: FileNode, staged: boolean) => void;
-}) {
-  const [msg, setMsg] = useState("");
-  return (
-    <>
-      <div className="git-head">
-        <button className="ic-btn" title="Refresh">
-          <Icon name="RefreshCw" size={15} />
-        </button>
-        <button className="ic-btn" title="Fetch">
-          <Icon name="GitCompareArrows" size={15} />
-        </button>
-        <span className="field" style={{ justifyContent: "flex-end" }}>
-          <span className="weak">Last known directory</span>
-        </span>
-      </div>
-      <div className="git-branch-row">
-        <button className="ic-btn" title="Checkout branch" style={{ width: 22, height: 22 }}>
-          <Icon name="GitBranch" size={14} />
-        </button>
-        <span className="mono">master</span>
-      </div>
-      <textarea className="git-msg" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Message" aria-label="Commit message" />
-      <div className="git-actions">
-        <button className="small-btn" onClick={() => setMsg("")}>Stage All</button>
-        <button className="small-btn" onClick={() => setMsg("")}>Commit</button>
-      </div>
-      <div className="side-scroll" style={{ paddingTop: 4 }}>
-        {gitGroups.map((g) => (
-          <div key={g.title}>
-            <div className="git-group">
-              <Icon name="ChevronDown" size={12} />
-              <span>{g.title}</span>
-              <span>{g.count}</span>
-              <span className="grow" />
-              <Icon name="Plus" size={13} />
-            </div>
-            {g.files.map((f) => (
-              <div key={f.path} className="tree-row indent" onClick={() => onOpenDiff(f, g.title === "CHANGES")} title={`Open diff for ${f.path}`}>
-                <span className="row-ic">
-                  <Icon name={fileIcon(f.name)} size={15} />
-                </span>
-                <span className="row-label">{f.name}</span>
-                <span className="row-trail mono" style={{ color: f.status === "U" ? "var(--git-untracked)" : "var(--git-modified)" }}>
-                  {f.status === "U" ? "+1 U" : "+2 -1 M"}
-                </span>
-              </div>
-            ))}
           </div>
         ))}
       </div>

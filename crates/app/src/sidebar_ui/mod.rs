@@ -30,6 +30,8 @@ pub(crate) use explorer_prompts::GitConfirm;
 pub(crate) use explorer_rows::explorer_query_keeps_file;
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use git_panel::git_panel;
-pub(crate) use git_panel::{CommitLock, CommitPhase, CommitProgress, GitPanelOutcome, PreparedGit};
+pub(crate) use git_panel::{
+    CommitLock, CommitPhase, CommitProgress, GitPanelOutcome, GitTab, PreparedGit,
+};
 #[cfg(test)]
 pub(crate) use git_panel::{GitClickActionInput, git_click_action};

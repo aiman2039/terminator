@@ -100,7 +100,7 @@ impl App {
         if !left {
             self.show_git_sidebar();
         }
-        self.git.history = false;
+        self.git.tab = sidebar_ui::GitTab::Commit;
     }
 
     fn compare_focused_file(&mut self, mode: PickerMode) {

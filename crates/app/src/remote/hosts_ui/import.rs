@@ -196,7 +196,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_enabled_ui(managed && count > 0, |ui| {
                 let label = format!("Import {count} host{}", if count == 1 { "" } else { "s" });
-                start = form::primary_button(ui, &label).clicked();
+                start = crate::appearance::primary_button(ui, &label).clicked();
             });
             close = ui.button("Cancel").clicked();
         });
@@ -324,5 +324,5 @@ fn import_progress(ui: &mut egui::Ui, import: &HostImport) -> bool {
         );
     }
     ui.add_space(12.0);
-    !import.running() && form::primary_button(ui, "Done").clicked()
+    !import.running() && crate::appearance::primary_button(ui, "Done").clicked()
 }

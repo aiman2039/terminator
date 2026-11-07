@@ -138,7 +138,7 @@ impl App {
 
     fn vnc_properties_footer(&mut self, ui: &mut egui::Ui) {
         let (save, save_connect, cancel) = appearance::footer_row(ui, |ui| {
-            let save_connect = form::primary_button(ui, "Save & Connect").clicked();
+            let save_connect = appearance::primary_button(ui, "Save & Connect").clicked();
             let save = ui.button("Save").clicked();
             let cancel = ui.button("Cancel").clicked();
             (save, save_connect, cancel)

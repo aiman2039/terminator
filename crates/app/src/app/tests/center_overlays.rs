@@ -142,9 +142,64 @@ fn palette_takes_focus_only_once_after_opening() {
     let (mut app, ctx, _dir) = fixture();
     app.open_command_palette();
     assert!(app.palette.focus_pending);
-    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.palette_center(ui));
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_palette(ui.ctx()));
     output.textures_delta.clear();
     assert!(!app.palette.focus_pending);
+}
+
+#[test]
+fn search_popup_floats_near_the_top_with_room_around_it() {
+    let content = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
+    let popup = crate::palette::palette_rect(content);
+    assert!((popup.center().x - content.center().x).abs() < 1.0);
+    assert!((popup.width() - 800.0).abs() < 1.0, "{popup:?}");
+    assert!(popup.top() > content.top() && popup.top() < content.center().y);
+    assert!(popup.bottom() < content.bottom(), "{popup:?}");
+    let narrow = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0));
+    let popup = crate::palette::palette_rect(narrow);
+    assert!(narrow.contains_rect(popup), "{popup:?}");
+}
+
+#[test]
+fn press_outside_the_search_popup_closes_it_but_the_opening_frame_does_not() {
+    let (mut app, ctx, _dir) = fixture();
+    app.open_command_palette();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    let inside = crate::palette::palette_rect(screen).center();
+    let corner = egui::pos2(4.0, 4.0);
+    let press = |pos| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    let frame = |app: &mut crate::App, events| {
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.show_palette(ui.ctx()));
+        output.textures_delta.clear();
+    };
+    // The click that opened the popup lands in its first frame.
+    frame(&mut app, press(corner));
+    assert!(app.palette.open, "the opening frame keeps the popup");
+    frame(&mut app, press(inside));
+    assert!(app.palette.open, "a press inside keeps the popup");
+    frame(&mut app, press(corner));
+    assert!(!app.palette.open, "a press outside closes the popup");
 }
 
 #[test]
@@ -161,7 +216,7 @@ fn escape_closes_command_palette() {
         }],
         ..Default::default()
     };
-    let mut output = ctx.run_ui(input, |ui| app.palette_center(ui));
+    let mut output = ctx.run_ui(input, |ui| app.show_palette(ui.ctx()));
     output.textures_delta.clear();
     assert!(!app.palette.open);
 }

@@ -336,7 +336,7 @@ impl VncToolbar<'_> {
         let host = self.fields.host;
         ui.horizontal(|ui| {
             ui.label(format!("Send Ctrl+Alt+Del to {host}?"));
-            if form::primary_button(ui, "Send").clicked() {
+            if appearance::primary_button(ui, "Send").clicked() {
                 self.actions.ctrl_alt_del = true;
                 self.view.confirm_ctrl_alt_del = false;
             }

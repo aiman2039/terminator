@@ -355,29 +355,21 @@ fn file_menu(input: FileMenuInput<'_>) {
         actions,
     } = input;
     if entry.directory {
-        if ui
-            .add_enabled(transfers, egui::Button::new("Upload into this folder…"))
-            .clicked()
+        if appearance::menu_action(ui, transfers, "Upload into this folder…", "Upload").clicked()
         {
             actions.picks.push(Pick::Upload {
                 remote_dir: entry.path.clone(),
             });
-            ui.close();
         }
         return;
     }
-    if ui.button("Open in SSH editor").clicked() {
+    if appearance::menu_action(ui, true, "Open in SSH editor", "FileText").clicked() {
         actions.open = Some((entry.path.clone(), true));
-        ui.close();
     }
-    if ui
-        .add_enabled(transfers, egui::Button::new("Download…"))
-        .clicked()
-    {
+    if appearance::menu_action(ui, transfers, "Download…", "Download").clicked() {
         actions.picks.push(Pick::Download {
             path: entry.path.clone(),
             name: entry.name.clone(),
         });
-        ui.close();
     }
 }

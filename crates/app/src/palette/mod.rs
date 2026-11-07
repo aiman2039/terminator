@@ -22,6 +22,8 @@ const SYMBOL_QUERY_DELAY: Duration = Duration::from_millis(180);
 const STATE_REFRESH: Duration = Duration::from_secs(1);
 
 pub(crate) use ask::AskAgent;
+#[cfg(test)]
+pub(crate) use popup::palette_rect;
 
 pub(crate) const FILTER_FILES: u8 = 1 << 0;
 pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
@@ -40,6 +42,15 @@ const PALETTE_FILTERS: &[(&str, u8)] = &[
     ("Actions", FILTER_ACTIONS),
     ("Settings", FILTER_SETTINGS),
 ];
+
+/// The project that owns session `id`.
+fn session_project<'a>(app: &'a App, id: &str) -> Option<&'a terminator_core::Project> {
+    let session = app.state.sessions.iter().find(|session| session.id == id)?;
+    app.state
+        .projects
+        .iter()
+        .find(|project| project.id == session.project_id)
+}
 
 fn compact_path(path: &Path) -> String {
     let parts: Vec<String> = path
@@ -73,8 +84,17 @@ pub(crate) struct PaletteCache {
     built_at: Instant,
     /// Shared so a frame borrows rows without a per-frame clone (#177).
     items: std::sync::Arc<[PaletteItem]>,
-    /// Row details, computed once per cache build instead of per frame.
-    details: std::sync::Arc<[String]>,
+    /// Row texts, computed once per cache build instead of per frame.
+    details: std::sync::Arc<[RowText]>,
+}
+
+/// One result row's texts: a dim note after the title, a right-aligned
+/// owner (project or shortcut), and the footer line while selected.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RowText {
+    inline: String,
+    right: String,
+    footer: String,
 }
 
 #[derive(Clone, Debug)]
@@ -239,58 +259,46 @@ impl PaletteItem {
         }
     }
 
+    /// A file or symbol's project name and its path (with the symbol's
+    /// line, kind and container), the two halves of its detail.
+    fn path_parts<'a>(&self, app: &'a App) -> Option<(&'a str, String)> {
+        let (Self::File(path) | Self::Symbol { path, .. }) = self else {
+            return None;
+        };
+        let project = app.project_for_palette_path(path);
+        let relative = project.and_then(|project| path.strip_prefix(&project.path).ok());
+        let name = project.map_or("Other files", |project| project.name.as_str());
+        let path = compact_path(relative.unwrap_or(path));
+        let rest = if let Self::Symbol {
+            kind,
+            line,
+            container,
+            ..
+        } = self
+        {
+            let container = container
+                .as_deref()
+                .map_or(String::new(), |name| format!(" · {name}"));
+            format!("{path}:{} · {kind}{container}", line.saturating_add(1))
+        } else {
+            path
+        };
+        Some((name, rest))
+    }
+
     fn detail(&self, app: &App) -> String {
         match self {
-            Self::File(path) | Self::Symbol { path, .. } => {
-                let project = app.project_for_palette_path(path);
-                let relative = project.and_then(|project| path.strip_prefix(&project.path).ok());
-                let name = project.map_or("Other files", |project| project.name.as_str());
-                let path = compact_path(relative.unwrap_or(path));
-                if let Self::Symbol {
-                    kind,
-                    line,
-                    container,
-                    ..
-                } = self
-                {
-                    let container = container
-                        .as_deref()
-                        .map_or(String::new(), |name| format!(" · {name}"));
-                    format!(
-                        "{name} · {path}:{} · {kind}{container}",
-                        line.saturating_add(1)
-                    )
-                } else {
-                    format!("{name} · {path}")
-                }
-            }
+            Self::File(_) | Self::Symbol { .. } => self
+                .path_parts(app)
+                .map(|(name, rest)| format!("{name} · {rest}"))
+                .unwrap_or_default(),
             Self::Agent(id, _, summary) => {
-                let project = app
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| &session.id == id)
-                    .and_then(|session| {
-                        app.state
-                            .projects
-                            .iter()
-                            .find(|project| project.id == session.project_id)
-                    })
-                    .map_or("", |project| project.name.as_str());
+                let project = session_project(app, id).map_or("", |project| project.name.as_str());
                 format!("{project} · {summary}")
             }
-            Self::Session(id, _) => app
-                .state
-                .sessions
-                .iter()
-                .find(|session| &session.id == id)
-                .and_then(|session| {
-                    app.state
-                        .projects
-                        .iter()
-                        .find(|project| project.id == session.project_id)
-                })
-                .map_or_else(String::new, |project| project.name.clone()),
+            Self::Session(id, _) => {
+                session_project(app, id).map_or_else(String::new, |project| project.name.clone())
+            }
             Self::Project(id, _) => app
                 .state
                 .projects
@@ -307,6 +315,47 @@ impl PaletteItem {
                 .find(|p| &p.id == id)
                 .map_or_else(String::new, |p| p.endpoint()),
             _ => String::new(),
+        }
+    }
+
+    /// The Search Everywhere row's texts: files and symbols show their path
+    /// inline and their project on the right.
+    fn row_text(&self, app: &App) -> RowText {
+        match self {
+            Self::File(path) | Self::Symbol { path, .. } => {
+                let (project, inline) = self.path_parts(app).unwrap_or_default();
+                RowText {
+                    inline,
+                    right: project.to_owned(),
+                    footer: path.display().to_string(),
+                }
+            }
+            Self::Agent(id, _, summary) => RowText {
+                inline: summary.clone(),
+                right: session_project(app, id)
+                    .map_or_else(String::new, |project| project.name.clone()),
+                footer: summary.clone(),
+            },
+            Self::Session(..) | Self::Action(_) | Self::Editor(_) => RowText {
+                right: self.detail(app),
+                ..RowText::default()
+            },
+            Self::Project(..) => RowText {
+                footer: self.detail(app),
+                ..RowText::default()
+            },
+            _ => RowText {
+                inline: self.detail(app),
+                ..RowText::default()
+            },
+        }
+    }
+
+    /// The row's icon: the file type for files and symbols.
+    fn icon(&self) -> Option<&'static str> {
+        match self {
+            Self::File(path) | Self::Symbol { path, .. } => Some(crate::icons::file_icon(path)),
+            _ => None,
         }
     }
 
@@ -342,6 +391,7 @@ mod ask;
 mod center;
 mod index;
 mod items;
+mod popup;
 mod results;
 
 #[cfg(test)]

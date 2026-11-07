@@ -1,11 +1,14 @@
 import type * as React from "react";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { CtxMenu, type MenuItem, type MenuState } from "./menu";
 import { Palette, type Command } from "./palette";
 import { Terminal } from "./terminal";
-import { AgentsPanel, ExplorerPanel, GitPanel, HistoryPanel, InfoPanel, ProjectsTree } from "./sidebar";
-import { DiffView, EditorView, ImageView, MarkdownView, PlayerView, SettingsView, TourView } from "./views";
+import { AgentsPanel, ExplorerPanel, HistoryPanel, InfoPanel, ProjectsTree } from "./sidebar";
+import { DiffView, GitPanel } from "./git";
+import { BrowserView, LocalHistoryView } from "./panes";
+import { HostsPanel, ProblemsPanel, StructurePanel, ToolStripe, VncPanel } from "./tools";
+import { EditorView, ImageView, MarkdownView, PlayerView, SettingsView, TourView, type TourAction } from "./views";
 import {
   APP_TS,
   BILLING_TS,
@@ -13,12 +16,17 @@ import {
   DOWNLOAD,
   README_MD,
   REPO,
+  basename,
   firstLeaf,
+  fileIcon,
+  flattenFiles,
   initialGroups,
   leaf,
   nid,
   projects,
+  leaves,
   removePane,
+  updatePane,
   sessions as seedSessions,
   treesByProject,
   type FileNode,
@@ -27,9 +35,8 @@ import {
   type PaneContent,
   type Session,
 } from "./data";
-
-const LEFT_W = 260;
-const RIGHT_W = 300;
+/* Right panel width measured from native captures at 1440x900; keep in sync with --right-w in styles.css. */
+const RIGHT_W = 326;
 
 const TOOLS = [
   { id: "explorer", label: "Explorer", icon: "Files" },
@@ -43,11 +50,50 @@ const TOOLS = [
 ] as const;
 
 type ToolId = (typeof TOOLS)[number]["id"];
+
+/* JetBrains-style tool stripes on both window edges, as in the native app. */
+const STRIPE = [
+  { id: "projects", label: "Projects", icon: "Folder" },
+  { id: "explorer", label: "Explorer", icon: "Files" },
+  { id: "agents", label: "Agents", icon: "Bell" },
+  { id: "git", label: "Git", icon: "GitBranch" },
+  { id: "history", label: "History", icon: "History" },
+  { id: "info", label: "Info", icon: "Info" },
+  { id: "problems", label: "Problems", icon: "CircleAlert" },
+  { id: "structure", label: "Structure", icon: "ListTree" },
+  { id: "vnc", label: "VNC", icon: "Monitor" },
+  { id: "hosts", label: "Hosts", icon: "Globe" },
+] as const;
+type SideTool = (typeof STRIPE)[number]["id"];
+type PaletteMode = "all" | "files" | "actions" | "recent";
+const PALETTE_TITLE: Record<PaletteMode, string> = {
+  all: "Search Everywhere (double Shift)",
+  files: "Go to File (⌘⇧O)",
+  actions: "Find Action (⌘⇧A)",
+  recent: "Recent Files (⌘E)",
+};
+/** Command kinds each palette mode lists; null lists everything. */
+const PALETTE_KINDS: Record<PaletteMode, string[] | null> = {
+  all: null,
+  files: ["file"],
+  actions: ["action", "view"],
+  recent: ["file", "session"],
+};
+/** ⌘digit tool-window keys (Alt+digit on Linux in the app). */
+const TOOL_KEYS: Record<string, SideTool | undefined> = { "1": "explorer", "6": "problems", "7": "structure", "9": "git" };
+
+/* Header tool row: how many fit beside the right panel; the rest go in the overflow menu. */
+const rowWidth = (n: number, menu: boolean) => n * 36 + (n > 1 ? (n - 1) * 4 : 0) + (menu ? (n > 0 ? 4 : 0) + 32 : 0);
+const HEADER_BUDGET = RIGHT_W - 16 - 36;
+let headerFit: number = TOOLS.length;
+if (rowWidth(TOOLS.length, false) > HEADER_BUDGET) {
+  headerFit = 0;
+  while (headerFit < TOOLS.length && rowWidth(headerFit + 1, true) <= HEADER_BUDGET) headerFit++;
+}
+const HEADER_VISIBLE = TOOLS.slice(0, headerFit);
+const HEADER_HIDDEN = TOOLS.slice(headerFit);
 type Central = "dock" | "settings" | "player";
 
-function basename(p: string) {
-  return p.split("/").pop() ?? p;
-}
 
 function meta(c: PaneContent, sess: Session[]): { label: string; icon: string } {
   switch (c.kind) {
@@ -65,6 +111,10 @@ function meta(c: PaneContent, sess: Session[]): { label: string; icon: string } 
       return { label: basename(c.path), icon: "FileDiff" };
     case "image":
       return { label: basename(c.path), icon: "FileImage" };
+    case "browser":
+      return { label: basename(c.url) || c.url, icon: "Globe" };
+    case "localhistory":
+      return { label: `Local History: ${basename(c.path)}`, icon: "History" };
   }
 }
 
@@ -109,7 +159,9 @@ export default function App() {
       };
     });
   const [central, setCentral] = useState<Central>("dock");
-  const [tool, setTool] = useState<ToolId>("explorer");
+  const [tool, setTool] = useState<SideTool>("explorer");
+  const [leftTool, setLeftTool] = useState<SideTool>("projects");
+  const [maxLeaf, setMaxLeaf] = useState<string | null>(null);
   const [leftVisible, setLeftVisible] = useState(true);
   const [rightVisible, setRightVisible] = useState(true);
   const [ideMode, setIdeMode] = useState(false);
@@ -207,6 +259,19 @@ export default function App() {
 
   const openInNewTab = (content: PaneContent) => addGroup(content);
 
+  /* Like the app: one diff tab per project, reused for every file. */
+  const openDiff = (path: string) => {
+    const content: PaneContent = { kind: "diff", path };
+    const owner = groups.find((g) => leaves(g.layout).some((x) => x.content.kind === "diff"));
+    if (!owner) {
+      addGroup(content);
+      return;
+    }
+    const lf = leaves(owner.layout).find((x) => x.content.kind === "diff")!;
+    setGroups((gs) => gs.map((g) => (g.id === owner.id ? { ...g, layout: updatePane(g.layout, lf.id, content), activeLeaf: lf.id } : g)), owner.id);
+    setCentral("dock");
+  };
+
   const openFile = (f: FileNode) => {
     const name = f.name.toLowerCase();
     if (name.endsWith(".wav") || name.endsWith(".mp3")) {
@@ -215,6 +280,10 @@ export default function App() {
     }
     if (name.endsWith(".png") || name.endsWith(".jpg")) {
       openInNewTab({ kind: "image", path: f.path });
+      return;
+    }
+    if (name.endsWith(".html")) {
+      openInNewTab({ kind: "browser", url: f.path });
       return;
     }
     if (name.endsWith(".md")) {
@@ -240,14 +309,14 @@ export default function App() {
       const cur = w[pid];
       if (!cur) return w;
       const owner = cur.groups.find((g) =>
-        collectLeaves(g.layout).some((l) => l.content.kind === "term" && l.content.sid === sid),
+        leaves(g.layout).some((l) => l.content.kind === "term" && l.content.sid === sid),
       );
       if (!owner) {
         const lf = leaf({ kind: "term", sid });
         const id = nid("grp");
         return { ...w, [pid]: { groups: [...cur.groups, { id, layout: lf, activeLeaf: lf.id }], active: id } };
       }
-      const l = collectLeaves(owner.layout).find((x) => x.content.kind === "term" && x.content.sid === sid);
+      const l = leaves(owner.layout).find((x) => x.content.kind === "term" && x.content.sid === sid);
       return {
         ...w,
         [pid]: {
@@ -263,7 +332,7 @@ export default function App() {
     if (!group) return;
     const s = newSession(selectedProject);
     const next = splitLeaf(group.layout, group.activeLeaf, dir, { kind: "term", sid: s.id });
-    const nl = collectLeaves(next).find((x) => x.content.kind === "term" && x.content.sid === s.id);
+    const nl = leaves(next).find((x) => x.content.kind === "term" && x.content.sid === s.id);
     setLayout(group.id, next, nl?.id ?? group.activeLeaf);
   };
 
@@ -273,20 +342,27 @@ export default function App() {
       return;
     }
     if (id === "palette") {
-      setPaletteOpen(true);
+      openPalette("all");
       return;
     }
     if (id === "ide") {
       setIdeMode((v) => !v);
       return;
     }
+    toggleTool(id);
+  };
+
+  /* One place for "show a tool window" and the JetBrains toggle (hidden → show, shown → hide). */
+  const showTool = (t: SideTool) => {
+    setTool(t);
+    setRightVisible(true);
     setCentral("dock");
-    if (tool === id && rightVisible) {
+  };
+  const toggleTool = (t: SideTool) => {
+    if (tool === t && rightVisible) {
       setRightVisible(false);
-    } else {
-      setTool(id);
-      setRightVisible(true);
-    }
+      setCentral("dock");
+    } else showTool(t);
   };
 
   /* --------------------------- commands --------------------------- */
@@ -303,102 +379,127 @@ export default function App() {
     ];
     for (const s of sessions) cmds.push({ id: `go-${s.id}`, label: s.label, kind: "session", icon: "Terminal", sub: s.projectId, run: () => goSession(s.id) });
     for (const p of projects) cmds.push({ id: `proj-${p.id}`, label: p.name, kind: "project", icon: "FolderOpen", sub: p.path, run: () => { setSelectedProject(p.id); setCentral("dock"); } });
+    for (const t of STRIPE) if (t.id !== "projects") cmds.push({ id: `tool-${t.id}`, label: `Show ${t.label}`, kind: "view", icon: t.icon, run: () => showTool(t.id) });
     cmds.push(
-      { id: "tool-explorer", label: "Show Explorer", kind: "view", icon: "Files", run: () => { setTool("explorer"); setRightVisible(true); } },
-      { id: "tool-agents", label: "Show Agents", kind: "view", icon: "Bell", run: () => { setTool("agents"); setRightVisible(true); } },
-      { id: "tool-git", label: "Show Git", kind: "view", icon: "GitBranch", run: () => { setTool("git"); setRightVisible(true); } },
-      { id: "tool-history", label: "Show History", kind: "view", icon: "History", run: () => { setTool("history"); setRightVisible(true); } },
-      { id: "tool-info", label: "Show Info", kind: "view", icon: "Info", run: () => { setTool("info"); setRightVisible(true); } },
+      { id: "local-history", label: "Local History: src/app.ts", kind: "action", icon: "History", run: () => openInNewTab({ kind: "localhistory", path: "src/app.ts" }) },
+      { id: "new-task", label: "New task (worktree + terminal)…", kind: "action", icon: "GitBranch", run: () => newTask() },
     );
+    for (const f of flattenFiles(treesByProject[selectedProject] ?? [])) cmds.push({ id: `file-${f.path}`, label: f.name, kind: "file", icon: fileIcon(f.name), sub: f.path, run: () => openFile(f) });
     return cmds;
   }, [sessions, selectedProject, groups]);
+
+  const [paletteMode, setPaletteMode] = useState<PaletteMode>("all");
+  const openPalette = (m: PaletteMode) => {
+    setPaletteMode(m);
+    setPaletteOpen(true);
+  };
+  const paletteCommands = useMemo(() => {
+    const kinds = PALETTE_KINDS[paletteMode];
+    return kinds ? commands.filter((c) => kinds.includes(c.kind)) : commands;
+  }, [commands, paletteMode]);
+
+  /* Status-bar note, like the app's transient status notes. */
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    if (!note) return;
+    const t = setTimeout(() => setNote(""), 4000);
+    return () => clearTimeout(t);
+  }, [note]);
+
+  /* New task: worktree + terminal; types the agent command but never presses Enter. */
+  const newTask = () => {
+    const s = newSession(selectedProject);
+    setSessions((xs) => xs.map((x) => (x.id === s.id ? { ...x, label: "task/billing-fix", branch: "task/billing-fix", cwd: `~/code/${selectedProject}-worktrees/billing-fix` } : x)));
+    addGroup({ kind: "term", sid: s.id });
+    setNote("Created worktree task/billing-fix. The agent command is typed; press Enter to start it.");
+  };
 
   /* --------------------------- deep links --------------------------- */
   useEffect(() => {
     const h = window.location.hash.replace(/^#\/?/, "");
     if (!h) return;
-    if (h === "agents") {
-      setTool("agents");
-      setRightVisible(true);
-    } else if (h === "git") {
-      setTool("git");
-      setRightVisible(true);
-    } else if (h === "history") {
-      setTool("history");
-      setRightVisible(true);
-    } else if (h === "info") {
-      setTool("info");
-      setRightVisible(true);
-    } else if (h === "settings") {
-      setCentral("settings");
-    } else if (h === "player") {
-      setCentral("player");
-    } else if (h === "ide") {
-      setIdeMode(true);
-    } else if (h === "palette") {
-      setPaletteOpen(true);
-    } else if (h === "readme") {
-      setActiveGroup("grp-web-readme");
-    } else if (h === "dev") {
-      setActiveGroup("grp-web-dev");
-    } else if (h === "agents-demo") {
-      setSelectedProject("atlas-api");
-      setTool("agents");
-      setRightVisible(true);
-    } else if (h === "notes") {
-      setSelectedProject("field-notes");
-    } else if (h === "soundlab") {
-      setSelectedProject("soundlab");
-    } else if (h === "diff") {
-      setActiveGroup("grp-diff");
-      setGroups((gs) =>
-        gs.some((g) => g.id === "grp-diff")
-          ? gs
-          : [...gs, { id: "grp-diff", layout: leaf({ kind: "diff", path: "src/app.ts", staged: true }, "lf-diff"), activeLeaf: "lf-diff" }],
-      );
-    }
+    const ids = STRIPE.map((t) => t.id) as readonly string[];
+    if (ids.includes(h)) showTool(h as SideTool);
+    else if (["settings", "player", "ide", "palette", "diff"].includes(h)) tourAction(h as TourAction);
+    else if (h === "readme") setActiveGroup("grp-web-readme");
+    else if (h === "dev") setActiveGroup("grp-web-dev");
+    else if (h === "agents-demo") tourAction("agents");
+    else if (h === "notes") setSelectedProject("field-notes");
+    else if (h === "soundlab") setSelectedProject("soundlab");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* --------------------------- keyboard --------------------------- */
+  /* JetBrains keymap, as in the app: tool keys toggle hidden → show, shown → hide. */
+  /* Registered once; the ref always holds this render's handler. */
+  const lastShift = useRef(0);
+  const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  onKeyRef.current = (e: KeyboardEvent) => {
+    const meta = e.metaKey || e.ctrlKey;
+    if (e.key === "Shift" && !e.repeat && !meta && !e.altKey) {
+      const now = performance.now();
+      if (now - lastShift.current < 350) openPalette("all");
+      lastShift.current = now;
+      return;
+    }
+    if (e.altKey && !meta && e.code === "F12") {
+      e.preventDefault();
+      setIdeMode((v) => !v);
+      return;
+    }
+    if (!meta) {
+      if (e.key === "Escape") {
+        setMenu(null);
+        setPaletteOpen(false);
+      }
+      return;
+    }
+    const k = e.key.toLowerCase();
+    const digit = /^Digit(\d)$/.exec(e.code)?.[1];
+    if (digit && !e.shiftKey) {
+      const t = TOOL_KEYS[digit];
+      if (t) {
+        e.preventDefault();
+        toggleTool(t);
+      }
+    } else if (e.shiftKey && e.code === "KeyO") {
+      e.preventDefault();
+      openPalette("files");
+    } else if (e.shiftKey && e.code === "KeyA") {
+      e.preventDefault();
+      openPalette("actions");
+    } else if (e.code === "KeyE" && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      openPalette("recent");
+    } else if (k === "k" || k === "p") {
+      e.preventDefault();
+      openPalette("all");
+    } else if (k === ",") {
+      e.preventDefault();
+      setCentral("settings");
+    } else if (e.code === "KeyE" && e.altKey) {
+      e.preventDefault();
+      setIdeMode((v) => !v);
+    } else if (k === "b") {
+      e.preventDefault();
+      setLeftVisible((v) => !v);
+    } else if (k === "t") {
+      e.preventDefault();
+      const s = newSession(selectedProject);
+      addGroup({ kind: "term", sid: s.id });
+    } else if (k === "w") {
+      e.preventDefault();
+      if (group) closeGroup(group.id);
+    } else if (k === "d") {
+      e.preventDefault();
+      splitFocused(e.shiftKey ? "col" : "row");
+      }
+  };
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      if (!meta) {
-        if (e.key === "Escape") {
-          setMenu(null);
-          setPaletteOpen(false);
-        }
-        return;
-      }
-      const k = e.key.toLowerCase();
-      if (k === "k" || k === "p") {
-        e.preventDefault();
-        setPaletteOpen(true);
-      } else if (k === ",") {
-        e.preventDefault();
-        setCentral("settings");
-      } else if (k === "e") {
-        e.preventDefault();
-        setIdeMode((v) => !v);
-      } else if (k === "b") {
-        e.preventDefault();
-        setLeftVisible((v) => !v);
-      } else if (k === "t") {
-        e.preventDefault();
-        const s = newSession(selectedProject);
-        addGroup({ kind: "term", sid: s.id });
-      } else if (k === "w") {
-        e.preventDefault();
-        if (group) closeGroup(group.id);
-      } else if (k === "d") {
-        e.preventDefault();
-        splitFocused(e.shiftKey ? "col" : "row");
-      }
-    };
+    const onKey = (e: KeyboardEvent) => onKeyRef.current(e);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, []);
 
   /* --------------------------- menus --------------------------- */
   const termMenu = (e: React.MouseEvent, sid: string, leafId: string) => {
@@ -413,8 +514,8 @@ export default function App() {
         shortcut: `${mod}C`,
         run: () => navigator.clipboard?.writeText(window.getSelection()?.toString() ?? ""),
       },
-      { kind: "item", label: "Select all", icon: "TextSelect", run: () => {} },
-      { kind: "item", label: "Paste", icon: "ClipboardPaste", shortcut: `${mod}V`, run: () => {} },
+      { kind: "item", label: "Select all", icon: "TextSelect", run: () => setNote("Selected all scrollback.") },
+      { kind: "item", label: "Paste", icon: "ClipboardPaste", shortcut: `${mod}V`, run: () => setNote("Paste goes to the shell. This demo shell is read-only.") },
       { kind: "sep" },
       { kind: "item", label: "New tab", icon: "Plus", run: () => { const ns = newSession(selectedProject); addGroup({ kind: "term", sid: ns.id }); } },
       { kind: "item", label: "Split up", icon: "ArrowUp", run: () => splitFocused("col") },
@@ -441,7 +542,7 @@ export default function App() {
       { kind: "item", label: "Split right", icon: "ArrowRight", run: () => splitFocused("row") },
       { kind: "sep" },
       { kind: "item", label: "Search scrollback", icon: "Search", run: () => setTool("history") },
-      { kind: "item", label: "Clear saved scrollback", icon: "Eraser", destructive: true, run: () => {} },
+      { kind: "item", label: "Clear saved scrollback", icon: "Eraser", destructive: true, run: () => setNote("Saved scrollback cleared. The session keeps running.") },
     ]);
   };
 
@@ -460,19 +561,19 @@ export default function App() {
 
   const projectMenu = (e: React.MouseEvent, pid: string) => {
     openMenu(e, [
-      { kind: "item", label: "New task worktree…", icon: "GitBranch", run: () => {} },
+      { kind: "item", label: "New task worktree…", icon: "GitBranch", run: () => newTask() },
       { kind: "sep" },
-      { kind: "item", label: "Remove project from sidebar", icon: "X", destructive: true, run: () => {} },
+      { kind: "item", label: "Remove project from sidebar", icon: "X", destructive: true, run: () => setNote("Removed from the sidebar. Its sessions keep running in the daemon.") },
     ]);
   };
 
   const sessionMenu = (e: React.MouseEvent, s: Session) => {
     openMenu(e, [
-      { kind: "item", label: "Rename…", icon: "Pencil", run: () => {} },
+      { kind: "item", label: "Rename…", icon: "Pencil", run: () => setNote("Rename: type a new label inline.") },
       { kind: "sep" },
       { kind: "item", label: "Open session", icon: "Terminal", run: () => goSession(s.id) },
       { kind: "sep" },
-      { kind: "item", label: "Close session…", icon: "X", destructive: true, run: () => {} },
+      { kind: "item", label: "Close session…", icon: "X", destructive: true, run: () => setNote(`Close ${s.label}: keep it running in the background, or terminate it.`) },
     ]);
   };
 
@@ -482,36 +583,29 @@ export default function App() {
       { kind: "item", label: "Open to the side", icon: "Columns2", run: () => { openFile(f); } },
       { kind: "sep" },
       { kind: "item", label: "Copy path", icon: "Copy", run: () => navigator.clipboard?.writeText(f.path) },
-      { kind: "item", label: "Reveal in file manager", icon: "FolderOpen", run: () => {} },
-      { kind: "item", label: "Rename…", icon: "Pencil", run: () => {} },
-      { kind: "item", label: "Delete", icon: "X", destructive: true, run: () => {} },
+      { kind: "item", label: "Reveal in file manager", icon: "FolderOpen", run: () => setNote(`Revealed ${f.path} in the file manager.`) },
+      { kind: "item", label: "Rename…", icon: "Pencil", run: () => setNote("Rename stages every reference and writes all files or none. ⌘Z undoes it.") },
+      { kind: "item", label: "Delete", icon: "X", destructive: true, run: () => setNote(`Moved ${f.name} to the Trash. ⌘Z undoes it.`) },
     ]);
   };
 
   /* --------------------------- guided tour --------------------------- */
-  const tourAction = (action: string) => {
+  const tourAction = (action: TourAction) => {
     switch (action) {
       case "agents":
         setSelectedProject("atlas-api");
         setWorkspaces((w) => ({ ...w, "atlas-api": { ...w["atlas-api"], active: "grp-api-agents" } }));
-        setTool("agents");
-        setRightVisible(true);
-        setCentral("dock");
-        break;
-      case "git":
-        setTool("git");
-        setRightVisible(true);
-        setCentral("dock");
+        showTool("agents");
         break;
       case "diff":
-        openInNewTab({ kind: "diff", path: "src/app.ts", staged: true });
+        openDiff("src/app.ts");
         break;
       case "split":
         setCentral("dock");
         splitFocused("row");
         break;
       case "palette":
-        setPaletteOpen(true);
+        openPalette("all");
         break;
       case "player":
         setSelectedProject("soundlab");
@@ -524,10 +618,24 @@ export default function App() {
         setIdeMode(true);
         setCentral("dock");
         break;
+      case "localhistory":
+        openInNewTab({ kind: "localhistory", path: "src/app.ts" });
+        break;
+      case "hosts":
+      case "vnc":
+      case "problems":
+      case "git":
       case "history":
-        setTool("history");
-        setRightVisible(true);
-        setCentral("dock");
+        showTool(action);
+        break;
+      case "browser":
+        openInNewTab({ kind: "browser", url: "docs.html" });
+        break;
+      case "keys":
+        openPalette("files");
+        break;
+      case "task":
+        newTask();
         break;
       case "markdown":
         setSelectedProject("field-notes");
@@ -580,11 +688,17 @@ export default function App() {
                 ""
               )}
             </span>
+            <button className="bar-btn" title="New terminal in this pane" onClick={(e) => { e.stopPropagation(); const ns = newSession(selectedProject); addGroup({ kind: "term", sid: ns.id }); }}>
+              <Icon name="Plus" size={14} />
+            </button>
             <button className="bar-btn" title="Split right" onClick={(e) => { e.stopPropagation(); focus(); splitFocused("row"); }}>
               <Icon name="Columns2" size={14} />
             </button>
             <button className="bar-btn" title="Split down" onClick={(e) => { e.stopPropagation(); focus(); splitFocused("col"); }}>
               <Icon name="Rows2" size={14} />
+            </button>
+            <button className="bar-btn" title={maxLeaf === l.id ? "Restore pane" : "Maximize pane"} onClick={(e) => { e.stopPropagation(); focus(); setMaxLeaf((m) => (m === l.id ? null : l.id)); }}>
+              <Icon name="Maximize2" size={13} />
             </button>
             <button className="bar-btn danger" title="Close pane" onClick={(e) => { e.stopPropagation(); onClose(); }}>
               <Icon name="X" size={14} />
@@ -600,12 +714,20 @@ export default function App() {
     }
 
     return (
-      <section className={`pane${foc ? " foc" : ""}`} onClick={focus}>
+      <section className={`pane${foc ? " foc" : ""}${c.kind === "tour" ? " tour" : ""}`} onClick={focus}>
         {c.kind === "tour" && <TourView onClose={onClose} onAction={tourAction} />}
         {c.kind === "markdown" && <MarkdownView path={c.path} content={openFileContent(c.path)} onClose={onClose} />}
-        {c.kind === "diff" && <DiffView path={c.path} staged={c.staged} onClose={onClose} />}
+        {c.kind === "diff" && <DiffView path={c.path} onClose={onClose} onFile={openDiff} />}
+        {c.kind === "browser" && <BrowserView url={c.url} onClose={onClose} />}
+        {c.kind === "localhistory" && <LocalHistoryView path={c.path} onClose={onClose} onNote={setNote} />}
       </section>
     );
+  };
+
+  /* A maximized pane replaces its group's whole split tree. */
+  const renderGroup = (g: Group) => {
+    const maxed = maxLeaf ? leaves(g.layout).find((x) => x.id === maxLeaf) : undefined;
+    return maxed ? renderLeaf(maxed, g.id) : renderLayout(g.layout, g.id);
   };
 
   const renderLayout = (l: Layout, groupId: string): React.ReactNode => {
@@ -625,35 +747,59 @@ export default function App() {
   /* --------------------------- right sidebar --------------------------- */
   const activeSession = useMemo(() => {
     if (!group) return sessions[0];
-    const l = collectLeaves(group.layout).find((x) => x.id === group.activeLeaf);
+    const l = leaves(group.layout).find((x) => x.id === group.activeLeaf);
     const sid = l && l.content.kind === "term" ? l.content.sid : sessions.find((s) => s.projectId === selectedProject)?.id;
     return sessions.find((s) => s.id === sid) ?? sessions[0];
   }, [group, sessions, selectedProject]);
 
-  const rightW = rightVisible ? RIGHT_W : 0;
-  const budget = rightW - 16 - 36;
-  const rowWidth = (n: number, menu: boolean) => n * 36 + (n > 1 ? (n - 1) * 4 : 0) + (menu ? (n > 0 ? 4 : 0) + 32 : 0);
-  let visible: number = TOOLS.length;
-  if (rowWidth(TOOLS.length, false) > budget) {
-    visible = 0;
-    while (visible < TOOLS.length && rowWidth(visible + 1, true) <= budget) visible++;
-  }
-  const hidden = TOOLS.slice(visible);
-
   const headerToolMenu = (e: React.MouseEvent) => {
     e.stopPropagation();
-    openMenu(e, hidden.map((t) => ({ kind: "item", label: t.label, icon: t.icon, checked: tool === t.id, run: () => selectTool(t.id) })));
+    openMenu(e, HEADER_HIDDEN.map((t) => ({ kind: "item", label: t.label, icon: t.icon, checked: tool === t.id, run: () => selectTool(t.id) })));
+  };
+
+  const panelFor = (t: SideTool): React.ReactNode => {
+    switch (t) {
+      case "projects":
+        return (
+          <ProjectsTree
+            projects={projects}
+            sessions={sessions}
+            selected={selectedProject}
+            onSelect={(id) => { setSelectedProject(id); setCentral("dock"); }}
+            onOpenSession={goSession}
+            onNewTerminal={() => addGroup({ kind: "term", sid: newSession(selectedProject).id })}
+          />
+        );
+      case "explorer":
+        return <ExplorerPanel root={`~/code/${selectedProject}`} tree={treesByProject[selectedProject] ?? []} onOpenFile={openFile} />;
+      case "agents":
+        return <AgentsPanel />;
+      case "git":
+        return <GitPanel onOpenDiff={openDiff} />;
+      case "history":
+        return <HistoryPanel />;
+      case "info":
+        return <InfoPanel session={activeSession} />;
+      case "problems":
+        return <ProblemsPanel onOpen={(path) => openInNewTab({ kind: "editor", path })} />;
+      case "structure":
+        return <StructurePanel />;
+      case "vnc":
+        return <VncPanel />;
+      case "hosts":
+        return <HostsPanel />;
+    }
   };
 
   const projectNavMenu = (e: React.MouseEvent) => {
     e.stopPropagation();
     openMenu(e, [
-      { kind: "header", label: "terminator 2.4.0" },
+      { kind: "header", label: "terminator 0.159.0" },
       { kind: "sep" },
       { kind: "item", label: "Download latest release", icon: "ArrowDown", run: () => window.open(DOWNLOAD, "_blank") },
       { kind: "item", label: "Star on GitHub", icon: "ExternalLink", run: () => window.open(REPO, "_blank") },
       { kind: "sep" },
-      { kind: "item", label: "Check for updates", icon: "RefreshCw", run: () => {} },
+      { kind: "item", label: "Check for updates", icon: "RefreshCw", run: () => setNote("Terminator 0.159.0 is up to date. Updates are checked every minute.") },
     ]);
   };
 
@@ -661,15 +807,12 @@ export default function App() {
     <div className={`app${compact ? " compact" : ""}`} onContextMenu={(e) => e.preventDefault()}>
       {/* header */}
       <header className="titlebar">
-        <div className="titlebar-left" style={{ width: leftVisible ? LEFT_W : undefined }}>
+        <div className="titlebar-left">
           <div className="traffic">
             <i />
             <i />
             <i />
           </div>
-          <button className="proj-name" title="Project menu" onClick={projectNavMenu}>
-            {projects.find((p) => p.id === selectedProject)?.name ?? "terminator"}
-          </button>
           <button className="ic-btn" title="Player" onClick={() => setCentral("player")}>
             <Icon name="AudioLines" size={16} />
           </button>
@@ -682,20 +825,30 @@ export default function App() {
           <button className="ic-btn" title="Toggle sidebar" onClick={() => setLeftVisible((v) => !v)}>
             <Icon name="PanelLeft" size={16} />
           </button>
+          <button className="proj-name" title="Switch project" onClick={projectNavMenu}>
+            {projects.find((p) => p.id === selectedProject)?.name ?? "terminator"} <span className="caret">▾</span>
+          </button>
+          <button className="proj-branch" title="Branches" onClick={() => { setTool("git"); setRightVisible(true); setCentral("dock"); }}>
+            <Icon name="GitBranch" size={14} />
+            {projects.find((p) => p.id === selectedProject)?.branch}
+          </button>
+          <button className="ic-btn" title="Search everywhere (double Shift)" onClick={() => openPalette("all")}>
+            <Icon name="Search" size={15} />
+          </button>
         </div>
         <div className="titlebar-drag" />
-        <div className="titlebar-tools" style={{ width: rightVisible ? RIGHT_W : undefined }}>
-          {TOOLS.slice(0, visible).map((t) => (
+        <div className={`titlebar-tools${rightVisible ? " pinned" : ""}`}>
+          {HEADER_VISIBLE.map((t) => (
             <button
               key={t.id}
-              className={`ic-btn${(t.id === "ide" && ideMode) || (t.id === tool && rightVisible && t.id !== "settings" && t.id !== "palette") ? " on" : ""}`}
+              className={`ic-btn${(t.id === "ide" && ideMode) || (t.id === tool && rightVisible) ? " on" : ""}`}
               title={t.label}
               onClick={() => selectTool(t.id)}
             >
               <Icon name={t.icon} size={16} />
             </button>
           ))}
-          {hidden.length > 0 && (
+          {HEADER_HIDDEN.length > 0 && (
             <button className="ic-btn" title="More" onClick={headerToolMenu}>
               <Icon name="Menu" size={16} />
             </button>
@@ -709,15 +862,17 @@ export default function App() {
 
       {/* body */}
       <div className="body">
-        <aside className={`sidebar left${leftVisible ? "" : " hidden"}`} style={{ width: LEFT_W }}>
-          <ProjectsTree
-            projects={projects}
-            sessions={sessions}
-            selected={selectedProject}
-            onSelect={(id) => { setSelectedProject(id); setCentral("dock"); }}
-            onOpenSession={goSession}
-            onNewTerminal={() => addGroup({ kind: "term", sid: newSession(selectedProject).id })}
-          />
+        <ToolStripe
+          items={STRIPE}
+          active={leftVisible ? leftTool : null}
+          onPick={(id) => {
+            if (id === leftTool && leftVisible) setLeftVisible(false);
+            else { setLeftTool(id); setLeftVisible(true); }
+          }}
+          onSearch={() => openPalette("all")}
+        />
+        <aside className={`sidebar left${leftVisible ? "" : " hidden"}`} data-tool={leftTool}>
+          {panelFor(leftTool)}
         </aside>
 
         <main className="center">
@@ -727,7 +882,7 @@ export default function App() {
             <PlayerView />
           ) : ideMode ? (
             <div className="ide">
-              <div className="ide-top">{group && renderLayout(group.layout, group.id)}</div>
+              <div className="ide-top">{group && renderGroup(group)}</div>
               <div className="ide-strip">
                 <div className="tabstrip" style={{ height: 30 }}>
                   {sessions
@@ -771,23 +926,29 @@ export default function App() {
                   <button className="tplus" title="New top-level terminal tab" onClick={() => addGroup({ kind: "term", sid: newSession(selectedProject).id })}>
                     <Icon name="Plus" size={17} />
                   </button>
+                  <button className="tplus" title="All tabs" onClick={(e) => openMenu(e, groups.map((g) => { const m = meta(firstLeaf(g.layout).content, sessions); return { kind: "item" as const, label: m.label, icon: m.icon, checked: g.id === activeGroup, run: () => setActiveGroup(g.id) }; }))}>
+                    <Icon name="ChevronDown" size={15} />
+                  </button>
+                  <button className="tplus" title="Recent files (⌘E)" onClick={() => openPalette("recent")}>
+                    <Icon name="History" size={15} />
+                  </button>
                 </div>
                 <span className="tstrip-drag" />
               </div>
-              <div className="display">{group && renderLayout(group.layout, group.id)}</div>
+              <div className="display">{group && renderGroup(group)}</div>
             </>
           )}
         </main>
 
-        <aside className={`sidebar right${rightVisible ? "" : " hidden"}`} style={{ width: RIGHT_W }}>
-          {tool === "explorer" && (
-            <ExplorerPanel root={`~/code/${selectedProject}`} tree={treesByProject[selectedProject] ?? []} onOpenFile={openFile} />
-          )}
-          {tool === "agents" && <AgentsPanel />}
-          {tool === "git" && <GitPanel onOpenDiff={(f, staged) => openInNewTab({ kind: "diff", path: f.path, staged })} />}
-          {tool === "history" && <HistoryPanel />}
-          {tool === "info" && <InfoPanel session={activeSession} />}
+        <aside className={`sidebar right${rightVisible ? "" : " hidden"}`} data-tool={tool}>
+          {panelFor(tool)}
         </aside>
+        <ToolStripe
+          items={STRIPE}
+          active={rightVisible ? tool : null}
+          onPick={toggleTool}
+          onSearch={() => openPalette("all")}
+        />
       </div>
 
       {/* status */}
@@ -801,6 +962,12 @@ export default function App() {
           {sessions.filter((s) => s.kind === "shell").length} sessions running{" "}
           {projects.find((p) => p.id === selectedProject)?.branch}
         </span>
+        <span className="vsep" />
+        <span className="crumbs">
+          {selectedProject} <span className="weak">›</span> {group ? meta(firstLeaf(group.layout).content, sessions).label : ""}
+          <Icon name="Bell" size={13} />
+        </span>
+        {note && <span className="status-note">{note}</span>}
         <span className="grow" />
         {ideMode && (
           <>
@@ -815,13 +982,9 @@ export default function App() {
         <span className="mono" style={{ fontSize: 11 }}>108% · 974 MB</span>
       </footer>
 
-      {paletteOpen && <Palette commands={commands} close={() => setPaletteOpen(false)} />}
+      {paletteOpen && <Palette commands={paletteCommands} title={PALETTE_TITLE[paletteMode]} close={() => setPaletteOpen(false)} />}
       {menu && <CtxMenu menu={menu} close={() => setMenu(null)} />}
     </div>
   );
 }
 
-/* helpers */
-function collectLeaves(l: Layout): Extract<Layout, { type: "leaf" }>[] {
-  return l.type === "leaf" ? [l] : l.children.flatMap(collectLeaves);
-}

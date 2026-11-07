@@ -178,9 +178,9 @@ pub struct App {
     /// offer dock-back targets while the workspace is checked out.
     /// Excludes the active tab.
     pub(crate) dock_back_targets: Vec<(String, String, &'static str)>,
-    /// Main-dock pane queued for floating outside the app window. Same
-    /// checkout reason as [`Self::detach_pane`].
+    /// Main-dock pane queued to float in its own window (see `detach_pane`).
     pub(crate) float_pane: Option<Tab>,
+    pub(crate) pane_ops: super::docking::PaneOps,
     /// Floating tab creation queued by a floating window's own `+`/split
     /// controls: the issuing window plus the leaf path inside its dock.
     /// Consumed after that window's dock is checked back in.

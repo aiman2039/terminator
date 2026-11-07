@@ -71,13 +71,6 @@ pub(crate) fn segmented<T: PartialEq + Copy>(
     });
 }
 
-/// The form's main action, filled with the theme accent.
-pub(crate) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let fill = ui.visuals().selection.bg_fill;
-    let color = ui.visuals().selection.stroke.color;
-    ui.add(egui::Button::new(RichText::new(text).strong().color(color)).fill(fill))
-}
-
 /// Password field with an eye toggle. `saved`: a password is already in
 /// the keychain, so the empty field shows a mask instead of a prompt and
 /// typing replaces it. Returns the field response.

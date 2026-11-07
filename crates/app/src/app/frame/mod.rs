@@ -257,6 +257,7 @@ impl App {
 
     /// Modals and tool windows, browser overlays, then the floating panes.
     fn paint_windows(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.show_palette(ctx);
         self.modals(ctx, frame);
         self.show_native_rename_dialog(ctx);
         self.show_usages_window(ctx);

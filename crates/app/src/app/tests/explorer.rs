@@ -1278,7 +1278,7 @@ fn row_labels(app: &mut App, root: &Path) -> Vec<(String, usize)> {
 fn lock_files_nest_under_their_manifest_until_opened() {
     let (mut app, _dir, root) = scoped_tree();
     let labels = row_labels(&mut app, &root);
-    assert_eq!(labels[2], ("Cargo.toml +1".to_owned(), 0));
+    assert_eq!(labels[2], ("Cargo.toml".to_owned(), 0));
     assert_eq!(labels.len(), 3);
     let rows = app.explorer_rows(&root);
     assert!(rows[2].nests);

@@ -355,10 +355,10 @@ impl App {
         }
         !self.center_covers_workspace()
     }
+    /// A center page replaces the workspace (the Search popup floats over it).
     pub(crate) fn center_covers_workspace(&self) -> bool {
         self.settings_open
             || self.player_open
-            || self.palette.open
             || self.worktree_open
             || self.worktree_draft.is_some()
             || self.search_open

@@ -26,3 +26,5 @@ vendor/egui_term/target/
 .idea/
 .claude/worktrees/
 .env
+# Playwright CLI output (may contain credentials)
+.playwright-cli/

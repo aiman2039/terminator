@@ -15,40 +15,49 @@ pub(crate) struct PaintFloatDockInput<'a> {
 
 impl App {
     pub(crate) fn center_pane(&mut self, ui: &mut egui::Ui) {
+        // A center page (Settings, SSH, VNC, …) painted instead of the
+        // workspace ends the zoom.
+        if !self.center_page_or_workspace(ui) {
+            self.pane_ops.zoomed = None;
+            self.pane_ops.zoom_request = None;
+        }
+    }
+
+    /// Paints a center page, else the workspace. True for the workspace.
+    fn center_page_or_workspace(&mut self, ui: &mut egui::Ui) -> bool {
         self.settings_unsaved_dialog(ui.ctx());
         if self.settings_open {
             self.settings_center(ui);
-            return;
+            return false;
         }
         if self.player_open {
             self.player_center(ui);
-            return;
+            return false;
         }
-        if self.palette.open {
-            self.palette_center(ui);
-            return;
-        }
+        // Search Everywhere floats above this pane (`show_palette`).
         if self.worktree_open {
             self.worktree_management_center(ui);
-            return;
+            return false;
         }
         if self.worktree_draft.is_some() {
             self.worktree_center(ui);
-            return;
+            return false;
         }
         if self.search_open {
             self.search_history_center(ui);
-            return;
+            return false;
         }
         if self.commands_session.is_some() {
             self.command_blocks_center(ui);
-            return;
+            return false;
         }
         if self.local_history.is_some() {
             self.local_history_center(ui);
-            return;
+            return false;
         }
+        let workspace = !self.ssh_page_visible() && !self.vnc_page_open;
         self.ssh_page_or_vnc_center(ui);
+        workspace
     }
 
     pub(crate) fn worktree_management_center(&mut self, ui: &mut egui::Ui) {
@@ -265,6 +274,8 @@ impl App {
             .unwrap_or_else(Workspace::empty);
         self.sync_active_session(&mut dock);
         self.restore_cleared_focus(&dock);
+        let outer = ui.available_rect_before_wrap();
+        self.settle_zoom(&project, &mut dock);
         if dock.iter_all_tabs().next().is_none() {
             self.workspace_blank(ui);
             // No leaf to drop on. A strip shell released here still becomes
@@ -284,6 +295,8 @@ impl App {
         self.apply_dock_back(&mut dock);
         self.apply_float_pane(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
+        self.check_zoom(&project, &dock);
+        self.paint_zoom(ui.ctx(), outer, &project);
         self.layouts.insert(project.clone(), dock);
         self.apply_diff_replacement();
         if self.pending_layout_save {

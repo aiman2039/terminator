@@ -2,6 +2,8 @@
 mod commit;
 mod commit_progress;
 mod committed;
+mod group_header;
+mod name_row;
 mod rows;
 #[cfg(test)]
 mod tests;
@@ -14,9 +16,12 @@ use crate::diagnostics;
 use crate::{
     App, appearance, file_actions::FileAction, icons, services::ContextData, workspace_ops,
 };
+use commit::git_error_row;
 pub(crate) use commit_progress::{CommitLock, CommitPhase, CommitProgress};
 use committed::*;
 use eframe::egui::{self, Color32, RichText};
+use group_header::*;
+use name_row::*;
 #[cfg(test)]
 pub(super) use rows::GIT_TREE_ROW_HEIGHT;
 use rows::*;
@@ -73,7 +78,8 @@ pub struct GitPanelInput<'a> {
     pub review_mode: ReviewMode,
     pub neovim_review: bool,
     pub theme: &'a AppearanceConfig,
-    pub history: bool,
+    /// The open header tab.
+    pub tab: GitTab,
     pub view_list: bool,
     pub commits: &'a [(String, String)],
     pub shelves: &'a [(String, String)],
@@ -83,7 +89,10 @@ pub struct GitPanelInput<'a> {
     pub recent_messages: &'a [String],
     pub amend: &'a mut bool,
     pub signoff: &'a mut bool,
+    /// Bumped by Expand all / Collapse all: a new generation resets every
+    /// section and folder to `tree_open`.
     pub collapse_generation: u64,
+    pub tree_open: bool,
     pub open_shortcut: &'a str,
     /// Branch comparison for the current root, when available.
     pub compare: Option<&'a workspace_ops::CompareData>,
@@ -97,6 +106,18 @@ pub struct GitPanelInput<'a> {
     pub(crate) commit_lock: CommitLock,
     /// Summary line and output tail of the last failed commit or push.
     pub commit_failure: Option<&'a str>,
+}
+
+/// The Git panel's header tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GitTab {
+    /// Changes and the commit area.
+    #[default]
+    Commit,
+    /// Shelved changes (`git stash`).
+    Stash,
+    /// The commit log.
+    History,
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -119,8 +140,10 @@ pub struct GitPanelOutcome {
     pub view_log: bool,
     /// Show all changes of a side in one view (`true` = staged).
     pub show_changes: Option<bool>,
-    pub history: Option<bool>,
-    pub collapse: bool,
+    /// A header tab was picked.
+    pub tab: Option<GitTab>,
+    /// Expand all (`true`) or Collapse all (`false`) was picked.
+    pub expand_all: Option<bool>,
     pub commit: bool,
     pub commit_push: bool,
     /// Stop the commit or push in flight.
@@ -209,24 +232,17 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
     };
     if input.context.root.is_none() {
         git_not_a_repository(ui, input);
+        if let Some(error) = &error {
+            git_error_row(ui, input.theme, error, &mut outcome);
+        }
     } else {
-        let mut pass = GitPanelPass {
+        // The Commit tab shows a refresh error above its changes.
+        GitPanelPass {
             input,
             prepared,
             outcome: &mut outcome,
-        };
-        // History mode skips the error row below.
-        if !pass.repository(ui) {
-            return outcome;
         }
-    }
-    if let Some(e) = &error {
-        ui.horizontal(|ui| {
-            ui.colored_label(appearance::color(&input.theme.status_failed), e);
-            if ui.small_button("Retry").clicked() {
-                outcome.refresh = true;
-            }
-        });
+        .repository(ui);
     }
     outcome
 }
@@ -246,37 +262,30 @@ struct GitPanelPass<'a, 'b> {
 }
 
 impl GitPanelPass<'_, '_> {
-    /// Toolbar, compare line, then the log (history mode) or the commit
-    /// box and changes. Returns false in history mode.
-    fn repository(&mut self, ui: &mut egui::Ui) -> bool {
+    /// The tab header, then the open tab: the Commit tab's icon row,
+    /// changes and commit area, the Stash list, or the History log.
+    fn repository(&mut self, ui: &mut egui::Ui) {
         let branch_name = self.input.context.branch.clone();
-        git_toolbar(GitToolbarInput {
+        git_header(GitHeaderInput {
             ui,
             input: self.input,
             branch_name: &branch_name,
             outcome: self.outcome,
         });
-        if !self.input.history
-            && let Some(compare) = self.input.compare
-        {
-            git_compare_row(GitCompareRowInput {
-                ui,
-                theme: self.input.theme,
-                branch: &branch_name,
-                compare,
-                base_ref: self.input.base_ref,
-            });
+        ui.separator();
+        match self.input.tab {
+            GitTab::History => self.history(ui),
+            GitTab::Stash => self.stash_tab(ui),
+            GitTab::Commit => {
+                git_actions(GitActionsInput {
+                    ui,
+                    input: self.input,
+                    prepared: self.prepared,
+                    outcome: self.outcome,
+                });
+                self.commit_tab(ui);
+            }
         }
-        if self.input.history {
-            self.history(ui);
-            return false;
-        }
-        self.commit_box(ui);
-        if self.input.context.changes.is_empty() {
-            ui.weak("Working tree clean");
-        }
-        appearance::sidebar_scroll("git").show(ui, |ui| self.changes(ui));
-        true
     }
 
     fn history(&mut self, ui: &mut egui::Ui) {
@@ -315,6 +324,8 @@ impl GitPanelPass<'_, '_> {
             open_shortcut: input.open_shortcut,
             stats: &input.context.stats,
             lock: input.commit_lock,
+            generation: input.collapse_generation,
+            open: input.tree_open,
         };
         if input.view_list {
             self.flat_list(ui, &row_ctx);
@@ -327,7 +338,6 @@ impl GitPanelPass<'_, '_> {
                 outcome: self.outcome,
                 root,
                 prepared: group,
-                collapse_generation: input.collapse_generation,
             });
         }
         if let Some(compare) = input.compare
@@ -339,7 +349,6 @@ impl GitPanelPass<'_, '_> {
                 outcome: self.outcome,
                 root,
                 files: &compare.files,
-                collapse_generation: input.collapse_generation,
             });
         }
     }
@@ -352,22 +361,20 @@ impl GitPanelPass<'_, '_> {
                 .zip(&prepared.labels)
                 .map(|(change, label)| (prepared.group, change, label))
         });
-        let mut any = false;
         let outcome = &mut *self.outcome;
+        // The name, then its folder dimmed (`JetBrains` flat view).
         tree::cull_rows(ui, rows, |ui, (group, change, label)| {
-            any = true;
+            let (folder, name) = split_label(label);
             git_change_row(GitChangeRowInput {
                 ui,
                 ctx: row_ctx,
                 outcome,
                 change,
                 group,
-                label,
+                label: name,
+                hint: folder,
             });
         });
-        if !any {
-            ui.weak("Working tree clean");
-        }
     }
 }
 
@@ -380,14 +387,18 @@ struct GitRowCtx<'a> {
     open_shortcut: &'a str,
     stats: &'a std::collections::HashMap<PathBuf, (u32, u32)>,
     lock: CommitLock,
+    /// Expand/collapse-all generation: a new one resets every section and
+    /// folder to `open`.
+    generation: u64,
+    open: bool,
 }
 
 fn git_group_label(group: terminator_git::GitGroup) -> &'static str {
     use terminator_git::GitGroup;
     match group {
-        GitGroup::Conflicts => "CONFLICTS",
-        GitGroup::Staged => "STAGED",
-        GitGroup::Changes => "CHANGES",
-        GitGroup::Untracked => "UNTRACKED FILES",
+        GitGroup::Conflicts => "Conflicts",
+        GitGroup::Staged => "Staged",
+        GitGroup::Changes => "Changes",
+        GitGroup::Untracked => "Untracked Files",
     }
 }

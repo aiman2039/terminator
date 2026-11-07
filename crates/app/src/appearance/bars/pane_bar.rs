@@ -6,6 +6,7 @@ pub(super) struct BarTips<'a> {
     pub(super) branch: Option<&'a str>,
     pub(super) git: &'a str,
     pub(super) stack: Option<&'a str>,
+    pub(super) zoom: Option<&'a str>,
     pub(super) vertical: &'a str,
     pub(super) horizontal: &'a str,
 }
@@ -15,6 +16,7 @@ pub(super) struct BarActions {
     pub(super) stack: Option<egui::Response>,
     pub(super) split_vertical: egui::Response,
     pub(super) split_horizontal: egui::Response,
+    pub(super) zoom: Option<egui::Response>,
     pub(super) close: egui::Response,
 }
 
@@ -61,6 +63,10 @@ pub(super) fn bar_actions(input: BarActionsInput<'_>) -> BarActions {
         "Rows2",
         tips.horizontal,
     );
+    let zoom = slots
+        .zoom
+        .zip(tips.zoom)
+        .map(|(rect, tip)| button(rect, "zoom-pane", "Maximize2", tip));
     let close = bar_button(
         ui,
         BarButton {
@@ -77,6 +83,7 @@ pub(super) fn bar_actions(input: BarActionsInput<'_>) -> BarActions {
         stack,
         split_vertical,
         split_horizontal,
+        zoom,
         close,
     }
 }
@@ -98,6 +105,7 @@ pub(super) fn branch_width(ui: &egui::Ui, branch: Option<&str>) -> f32 {
 /// Right-aligned button slots, laid out right to left.
 pub(super) struct BarSlots {
     pub(super) close: egui::Rect,
+    pub(super) zoom: Option<egui::Rect>,
     pub(super) horizontal: egui::Rect,
     pub(super) vertical: egui::Rect,
     pub(super) stack: Option<egui::Rect>,
@@ -105,7 +113,8 @@ pub(super) struct BarSlots {
 }
 
 impl BarSlots {
-    pub(super) fn layout(rect: egui::Rect, git_width: f32, stack: bool) -> Self {
+    /// `(stack, zoom)`: whether those optional buttons show.
+    pub(super) fn layout(rect: egui::Rect, git_width: f32, (stack, zoom): (bool, bool)) -> Self {
         let mut cursor = rect.right() - 2.0;
         let mut slot = |width: f32| {
             let slot = egui::Rect::from_min_max(
@@ -116,12 +125,14 @@ impl BarSlots {
             slot
         };
         let close = slot(TERMINAL_BUTTON);
+        let zoom = zoom.then(|| slot(TERMINAL_BUTTON));
         let horizontal = slot(TERMINAL_BUTTON);
         let vertical = slot(TERMINAL_BUTTON);
         let stack = stack.then(|| slot(TERMINAL_BUTTON));
         let git = slot(git_width);
         Self {
             close,
+            zoom,
             horizontal,
             vertical,
             stack,

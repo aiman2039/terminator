@@ -129,7 +129,7 @@ fn running_commit_shows_its_step_cancel_and_the_last_failure() {
                     review_mode: ReviewMode::Native,
                     neovim_review: false,
                     theme: &theme,
-                    history: false,
+                    tab: GitTab::Commit,
                     view_list: false,
                     commits: &[],
                     shelves: &[],
@@ -139,6 +139,7 @@ fn running_commit_shows_its_step_cancel_and_the_last_failure() {
                     amend: &mut false,
                     signoff: &mut false,
                     collapse_generation: 0,
+                    tree_open: true,
                     open_shortcut: "",
                     compare: None,
                     base_ref: None,
@@ -236,7 +237,7 @@ fn culled_change_rows_keep_the_full_scroll_range() {
                         review_mode: ReviewMode::Native,
                         neovim_review: false,
                         theme: &theme,
-                        history: false,
+                        tab: GitTab::Commit,
                         view_list,
                         commits: &[],
                         shelves: &[],
@@ -246,6 +247,7 @@ fn culled_change_rows_keep_the_full_scroll_range() {
                         amend: &mut false,
                         signoff: &mut false,
                         collapse_generation: 0,
+                        tree_open: true,
                         open_shortcut: "",
                         compare: None,
                         base_ref: None,
@@ -260,7 +262,8 @@ fn culled_change_rows_keep_the_full_scroll_range() {
             output.textures_delta.clear();
             crate::app::painted_text(&output.shapes)
         };
-        let pointer = egui::pos2(180.0, 600.0);
+        // Over the changes; the commit area is at the bottom.
+        let pointer = egui::pos2(180.0, 200.0);
         draw(vec![egui::Event::PointerMoved(pointer)]);
         // Scroll to the very end: the last row must be there, on screen.
         for _ in 0..4 {
@@ -283,4 +286,115 @@ fn culled_change_rows_keep_the_full_scroll_range() {
             "the first row scrolled away"
         );
     }
+}
+
+#[test]
+fn flat_rows_show_the_name_then_its_folder() {
+    assert_eq!(
+        split_label("crates/app/src/palette/center.rs"),
+        ("crates/app/src/palette", "center.rs")
+    );
+    assert_eq!(split_label("README.md"), ("", "README.md"));
+    assert_eq!(files_hint(1), "1 file");
+    assert_eq!(files_hint(2), "2 files");
+}
+
+#[test]
+fn change_tree_names_a_single_child_chain_once_like_jetbrains() {
+    let root = Path::new("/repo");
+    let tests = change("/repo/crates/app/src/app/tests/center_overlays.rs");
+    let palette = change("/repo/crates/app/src/palette/center.rs");
+    let tree = build_change_tree(&[&tests, &palette], Some(root));
+    let src = tree
+        .dirs
+        .get("crates/app/src")
+        .expect("crates/app/src node");
+    assert_eq!(src.count_files(), 2);
+    assert!(src.dirs.contains_key("app/tests"));
+    assert!(src.dirs.contains_key("palette"));
+}
+
+/// Painted texts of one Commit tab frame, 360 × 700, with one staged file.
+fn commit_tab_texts(ctx: &egui::Context) -> Vec<(egui::Pos2, String)> {
+    let root = PathBuf::from("/repo");
+    let context = ContextData {
+        cwd: root.clone(),
+        root: Some(root.clone()),
+        perforce: None,
+        git_dirs: vec![],
+        branch: "main".into(),
+        changes: vec![terminator_git::Change {
+            path: root.join("src/a.rs"),
+            status: "M ".into(),
+        }],
+        decorations: std::collections::HashMap::default(),
+        stats: std::collections::HashMap::default(),
+        error: None,
+    };
+    let theme = AppearanceConfig::default();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(360.0, 700.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            let mut draft = String::new();
+            let mut input = GitPanelInput {
+                context: &context,
+                prepared: None,
+                review_mode: ReviewMode::Native,
+                neovim_review: false,
+                theme: &theme,
+                tab: GitTab::Commit,
+                view_list: false,
+                commits: &[],
+                shelves: &[],
+                branches: &[],
+                commit_draft: &mut draft,
+                recent_messages: &[],
+                amend: &mut false,
+                signoff: &mut false,
+                collapse_generation: 0,
+                tree_open: true,
+                open_shortcut: "",
+                compare: None,
+                base_ref: None,
+                focus_message: false,
+                commit_run: None,
+                commit_lock: CommitLock::default(),
+                commit_failure: None,
+            };
+            git_panel(ui, &mut input);
+        },
+    );
+    output.textures_delta.clear();
+    crate::app::painted_text(&output.shapes)
+}
+
+#[test]
+fn commit_message_and_buttons_sit_below_the_changes_at_the_bottom() {
+    let ctx = egui::Context::default();
+    crate::appearance::install(&ctx);
+    commit_tab_texts(&ctx);
+    let texts = commit_tab_texts(&ctx);
+    let at = |text: &str| {
+        texts
+            .iter()
+            .find_map(|(at, painted)| (painted == text).then_some(*at))
+            .unwrap_or_else(|| panic!("{text} is painted: {texts:?}"))
+    };
+    for tab in ["Commit", "Stash", "History"] {
+        assert!(at(tab).y < at("Staged").y, "{tab} tab above the changes");
+    }
+    assert!(at("1 file").x > at("Staged").x, "dim count after the group");
+    assert!(at("a.rs").y < at("Amend").y);
+    assert!(at("Amend").y < at("Commit Message").y);
+    assert!(at("Commit Message").y < at("Commit and Push…").y);
+    assert!(
+        at("Commit and Push…").y > 600.0,
+        "the buttons are at the bottom"
+    );
 }

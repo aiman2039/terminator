@@ -90,6 +90,7 @@ pub struct TerminalBar {
     pub stack: Option<egui::Response>,
     pub split_vertical: egui::Response,
     pub split_horizontal: egui::Response,
+    pub zoom: Option<egui::Response>,
     pub close: egui::Response,
 }
 
@@ -104,6 +105,8 @@ pub struct TerminalBarSpec<'a> {
     /// its own `+`, is hidden). None hides the button, e.g. when the pane
     /// has no leaf to stack into.
     pub stack_tip: Option<&'a str>,
+    /// Zoom (or Restore) button tip; None hides it (panes that cannot zoom).
+    pub zoom_tip: Option<&'a str>,
     pub vertical_tip: &'a str,
     pub horizontal_tip: &'a str,
     /// Stable agent brand glyph, painted bright at the caption's left edge.
@@ -155,6 +158,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         status,
         git_tip,
         stack_tip,
+        zoom_tip,
         vertical_tip,
         horizontal_tip,
         brand,
@@ -168,7 +172,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         egui::Sense::click_and_drag(),
     );
     let git_width = TERMINAL_BUTTON + branch_width(ui, branch);
-    let slots = BarSlots::layout(rect, git_width, stack_tip.is_some());
+    let slots = BarSlots::layout(rect, git_width, (stack_tip.is_some(), zoom_tip.is_some()));
     let tint = title_tint.unwrap_or_else(|| default_title_tint(ui, active));
     let lead = paint_leading_icons(
         ui,
@@ -200,6 +204,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         branch,
         git: git_tip,
         stack: stack_tip,
+        zoom: zoom_tip,
         vertical: vertical_tip,
         horizontal: horizontal_tip,
     };
@@ -220,6 +225,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         stack: actions.stack,
         split_vertical: actions.split_vertical,
         split_horizontal: actions.split_horizontal,
+        zoom: actions.zoom,
         close: actions.close,
     }
 }

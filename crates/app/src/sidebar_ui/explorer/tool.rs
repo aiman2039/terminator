@@ -287,7 +287,7 @@ impl App {
                     .iter()
                     .any(|c| c == NVIM_REVIEW_CAPABILITY),
                 theme: &self.theme,
-                history: self.git.history,
+                tab: self.git.tab,
                 view_list: self.preferences.git_view_list,
                 commits: &self.git.log,
                 shelves: &self.git.shelves,
@@ -297,6 +297,7 @@ impl App {
                 amend: &mut self.git.amend,
                 signoff: &mut self.git.signoff,
                 collapse_generation: self.git.collapse,
+                tree_open: !self.git.tree_collapsed,
                 // No key opens a listed file: Open file is the file picker.
                 open_shortcut: "",
                 compare: self

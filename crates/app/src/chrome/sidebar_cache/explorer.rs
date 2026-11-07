@@ -284,10 +284,9 @@ impl<'a> ExplorerWalk<'a> {
                 .map(|link| entry_name(link))
                 .collect::<Vec<_>>()
                 .join("/")
-        } else if !nested.is_empty() && !expanded {
-            // A closed nesting parent says how many files it holds.
-            format!("{label} +{}", nested.len())
         } else {
+            // A nesting parent keeps its plain name; the row paints a
+            // chevron (a "+N" read like a Git line count).
             label
         };
         self.rows.push(ExplorerRow {

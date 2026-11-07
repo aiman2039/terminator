@@ -36,6 +36,24 @@ impl CenterCardStyle {
             border: egui::Stroke::new(theme.border_width.max(1.0), color(&theme.border)),
         }
     }
+
+    /// The card's frame: surface fill, border, panel radius and padding.
+    pub fn frame(self) -> egui::Frame {
+        egui::Frame::new()
+            .fill(self.surface)
+            .stroke(self.border)
+            .corner_radius(PANEL_RADIUS)
+            .inner_margin(egui::Margin::same(CENTER_CARD_PADDING))
+    }
+
+    /// This style with a dim backdrop in place of the window color, for a
+    /// card over panes that stay visible behind it (pane zoom).
+    pub fn scrim(self) -> Self {
+        Self {
+            window: self.window.gamma_multiply(0.7),
+            ..self
+        }
+    }
 }
 
 /// Paints the window background and the card, runs `add` in the card, and
@@ -46,15 +64,23 @@ pub fn center_card<R>(
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (R, bool) {
     let outer = ui.available_rect_before_wrap();
+    center_card_over(ui, outer, style, add)
+}
+
+/// [`center_card`] over `outer`: a page paints the window color there, a
+/// card over visible panes uses [`CenterCardStyle::scrim`].
+pub fn center_card_over<R>(
+    ui: &mut egui::Ui,
+    outer: egui::Rect,
+    style: CenterCardStyle,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> (R, bool) {
     let card = center_card_rect(outer);
     ui.painter()
         .rect_filled(outer, egui::CornerRadius::ZERO, style.window);
     let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card));
-    let inner = egui::Frame::new()
-        .fill(style.surface)
-        .stroke(style.border)
-        .corner_radius(PANEL_RADIUS)
-        .inner_margin(egui::Margin::same(CENTER_CARD_PADDING))
+    let inner = style
+        .frame()
         .show(&mut card_ui, |ui| {
             ui.set_max_size(card.shrink(f32::from(CENTER_CARD_PADDING)).size());
             add(ui)

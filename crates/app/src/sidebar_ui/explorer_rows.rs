@@ -266,21 +266,34 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
     } else {
         git_color(theme, status)
     };
-    let r = appearance::file_row(appearance::FileRowInput {
-        ui,
-        label,
-        icon: icons::file_icon(path),
-        selected,
-        height: 24.0,
-        trailing: &status.to_string(),
-        tint: color,
-    })
+    // A nesting parent shows a chevron after its name, like JetBrains File
+    // Nesting: right while its nested files are hidden, down when shown.
+    let chevron = marks
+        .nested
+        .map(|open| if open { "ChevronDown" } else { "ChevronRight" });
+    let r = appearance::file_row_marked(
+        appearance::FileRowInput {
+            ui,
+            label,
+            icon: icons::file_icon(path),
+            selected,
+            height: 24.0,
+            trailing: &status.to_string(),
+            tint: color,
+        },
+        chevron,
+    )
     .interact(egui::Sense::drag());
     // Tooltip text is only needed for the hovered row; formatting it for
     // every row on every scroll frame allocates heavily.
     let r = if r.hovered() {
+        let nested = match marks.nested {
+            Some(false) => "\nClick to show nested files",
+            Some(true) => "\nClick to hide nested files",
+            None => "",
+        };
         r.on_hover_text(format!(
-            "{}\n{}",
+            "{}\n{}{nested}",
             path.display(),
             if ignored {
                 "Ignored"

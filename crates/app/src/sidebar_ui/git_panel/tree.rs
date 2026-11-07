@@ -37,7 +37,6 @@ pub(super) struct GitGroupSectionInput<'a, 'b> {
     pub(super) outcome: &'a mut GitPanelOutcome,
     pub(super) root: Option<&'a Path>,
     pub(super) prepared: &'a PreparedGroup,
-    pub(super) collapse_generation: u64,
 }
 
 pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
@@ -47,19 +46,17 @@ pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
         outcome,
         root,
         prepared,
-        collapse_generation,
     } = input;
     let group = prepared.group;
     let entries = &prepared.entries;
     let label = git_group_label(group);
-    let id = ui.make_persistent_id(("git-section", root, label, collapse_generation));
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        id,
-        collapse_generation == 0,
-    );
+    let id = ui.make_persistent_id(("git-section", root, label, ctx.generation));
+    let state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, ctx.open);
     let mut group_check_clicked = false;
-    let _ = state
+    // The group row has the tree's highlight, like the `JetBrains` root.
+    let background = ui.painter().add(egui::Shape::Noop);
+    let (toggle, header, _) = state
         .show_header(ui, |ui| {
             group_check_clicked = git_group_header(ui, prepared, ctx.lock.index, outcome);
         })
@@ -76,73 +73,16 @@ pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
                 group,
             });
         });
+    let row = toggle.rect.union(header.response.rect);
+    let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row.y_range());
+    let fill = ui.visuals().widgets.hovered.bg_fill.gamma_multiply(0.6);
+    ui.painter().set(
+        background,
+        egui::Shape::rect_filled(row, appearance::RADIUS_SMALL, fill),
+    );
     if group_check_clicked {
         for change in entries {
             outcome.toggle_staged(group, &change.path);
-        }
-    }
-}
-
-/// Group checkbox, `LABEL count`, and the stage/unstage-all action, which
-/// `lock` disables. Returns whether the checkbox was clicked.
-fn git_group_header(
-    ui: &mut egui::Ui,
-    prepared: &PreparedGroup,
-    lock: Option<&str>,
-    outcome: &mut GitPanelOutcome,
-) -> bool {
-    let group = prepared.group;
-    let total = prepared.entries.len();
-    let label = git_group_label(group);
-    ui.spacing_mut().item_spacing.x = 2.0;
-    let mut check_clicked = false;
-    if group != terminator_git::GitGroup::Conflicts {
-        let checked = if group == terminator_git::GitGroup::Staged {
-            total
-        } else {
-            0
-        };
-        let state = check_state(CheckStateInput { checked, total });
-        check_clicked = tri_checkbox(ui, state, lock);
-    }
-    ui.add(
-        egui::Label::new(RichText::new(format!("{label} {total}")).small().strong())
-            .selectable(false),
-    );
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        git_group_bulk_action(ui, prepared, lock, outcome);
-        if group != terminator_git::GitGroup::Conflicts
-            && appearance::sidebar_action(ui, "FileDiff", "Show all changes").clicked()
-        {
-            outcome.show_changes = Some(group == terminator_git::GitGroup::Staged);
-        }
-    });
-    check_clicked
-}
-
-fn git_group_bulk_action(
-    ui: &mut egui::Ui,
-    prepared: &PreparedGroup,
-    lock: Option<&str>,
-    outcome: &mut GitPanelOutcome,
-) {
-    let (icon, tip) = match prepared.group {
-        terminator_git::GitGroup::Staged => ("ArrowLeft", "Unstage all"),
-        terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
-            ("Plus", "Stage all")
-        }
-        terminator_git::GitGroup::Conflicts => return,
-    };
-    let action =
-        appearance::enabled_unless(ui, lock, |ui| appearance::sidebar_action(ui, icon, tip));
-    #[cfg(feature = "test-support")]
-    diagnostics::record(ui.ctx(), &format!("git-group-{tip}"), action.rect);
-    if action.clicked() {
-        let paths = prepared.entries.iter().map(|change| change.path.clone());
-        if prepared.group == terminator_git::GitGroup::Staged {
-            outcome.unstage.extend(paths);
-        } else {
-            outcome.stage.extend(paths);
         }
     }
 }
@@ -202,11 +142,16 @@ pub(in crate::sidebar_ui) struct ChangeTree {
     pub(in crate::sidebar_ui) files: Vec<terminator_git::Change>,
     labels: Vec<String>,
     count: usize,
+    /// `N files`, built once with the tree.
+    hint: String,
 }
 
 impl ChangeTree {
     pub(in crate::sidebar_ui) fn count_files(&self) -> usize {
         self.count
+    }
+    pub(super) fn files_hint(&self) -> &str {
+        &self.hint
     }
     pub(in crate::sidebar_ui) fn collect<'a>(&'a self, out: &mut Vec<&'a terminator_git::Change>) {
         out.extend(self.files.iter());
@@ -272,6 +217,7 @@ pub(super) fn compress_change_tree(node: &mut ChangeTree) {
         compress_change_tree(&mut child);
         node.dirs.insert(key, child);
     }
+    node.hint = files_hint(node.count);
 }
 
 pub(super) struct GitChangeTreeInput<'a, 'b> {
@@ -330,6 +276,7 @@ pub(super) fn git_change_tree(input: GitChangeTreeInput<'_, '_>) {
                         change,
                         group,
                         label,
+                        hint: "",
                     });
                 },
             );
@@ -360,12 +307,17 @@ fn git_tree_folder(input: GitTreeFolderInput<'_, '_>) {
         outcome,
         folder,
     } = input;
-    let id = ui.make_persistent_id(("git-tree", folder.key.to_owned(), folder.group.label()));
+    let id = ui.make_persistent_id((
+        "git-tree",
+        folder.key.to_owned(),
+        folder.group.label(),
+        ctx.generation,
+    ));
     let count = folder.child.count_files();
     let mut folder_response = None;
     let mut folder_check_clicked = false;
     let mut header =
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, ctx.open)
             .show_header(ui, |ui| {
                 let (clicked, response) = folder.header(ui, ctx);
                 folder_check_clicked = clicked;
@@ -418,15 +370,16 @@ impl TreeFolder<'_> {
             });
             check_clicked = tri_checkbox(ui, state, ctx.lock.index);
         }
-        let trailing = count.to_string();
-        let response = appearance::file_row(appearance::FileRowInput {
+        let hint = self.child.files_hint();
+        let color = ui.visuals().text_color();
+        let response = name_row(NameRowInput {
             ui,
-            label: self.name,
             icon: "Folder",
-            selected: false,
-            height: GIT_TREE_ROW_HEIGHT,
-            trailing: &trailing,
-            tint: appearance::color(&ctx.theme.secondary),
+            icon_tint: appearance::icon_color(),
+            name: self.name,
+            color,
+            hint,
+            trailing: "",
         });
         (check_clicked, response)
     }

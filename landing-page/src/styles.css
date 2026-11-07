@@ -23,31 +23,33 @@
   font-display: swap;
 }
 
-/* Exact defaults from crates/core/src/appearance.rs */
+/* Islands Dark defaults from crates/core/src/appearance/presets.rs */
 :root {
-  --window: #26282c;
-  --surface: #191a1c;
-  --hover: #212326;
-  --border: #33353b;
+  --window: #191a1c;
+  --surface: #212326;
+  --hover: #2b2d30;
+  --border: #2b2d30;
   --text: #d1d3d9;
   --secondary: #9fa2a8;
   --accent: #3871e1;
-  --selection: #233558;
+  --selection: #2a4371;
   --term-bg: #191a1c;
-  --term-fg: #d1d3d9;
-  --git-added: #81b88b;
-  --git-modified: #e2c08d;
-  --git-deleted: #c74e39;
-  --git-untracked: #73c991;
-  --git-ignored: #6e6e6e;
-  --running: #79baa3;
-  --waiting: #e2c08d;
-  --failed: #c74e39;
+  --term-fg: #bcbec4;
+  --git-added: #73bd79;
+  --git-modified: #70aeff;
+  --git-deleted: #de6a66;
+  --git-untracked: #e88f89;
+  --git-ignored: #d69a6b;
+  --running: #5fad65;
+  --waiting: #d6ae58;
+  --failed: #e37774;
   --icon: #f2f4f8;
   --badge: #ff3b30;
   --row: 28px;
   --divider: 8px;
   --toolbar: 24px;
+  --left-w: 223px;
+  --right-w: 326px;
   color-scheme: dark;
 }
 
@@ -106,6 +108,19 @@ textarea {
 }
 .ic-btn.sec {
   color: var(--secondary);
+}
+.ic-btn.sm {
+  width: 24px;
+  height: 24px;
+}
+.grow {
+  flex: 1;
+}
+.vsep {
+  width: 1px;
+  height: 14px;
+  flex: none;
+  background: var(--border);
 }
 .mono {
   font-family: "JetBrains Mono", monospace;
@@ -177,9 +192,32 @@ textarea {
 .proj-name:hover {
   background: var(--hover);
 }
+.proj-name .caret {
+  font-size: 9px;
+  color: var(--secondary);
+}
+.proj-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.proj-branch:hover {
+  background: var(--hover);
+}
+.crumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .titlebar-drag {
   flex: 1;
   min-width: 12px;
+}
+.titlebar-tools.pinned {
+  width: var(--right-w);
 }
 .titlebar-tools {
   display: flex;
@@ -199,7 +237,7 @@ textarea {
   display: flex;
 }
 .sidebar {
-  width: 260px;
+  width: var(--right-w);
   flex: none;
   min-height: 0;
   display: flex;
@@ -208,10 +246,15 @@ textarea {
   overflow: hidden;
 }
 .sidebar.left {
+  width: var(--left-w);
   border-right: 1px solid var(--border);
 }
 .sidebar.right {
   border-left: 1px solid var(--border);
+}
+/* Measured from native captures. */
+.sidebar[data-tool="explorer"] {
+  width: 217px;
 }
 .sidebar.hidden {
   display: none;
@@ -840,6 +883,70 @@ textarea {
   font-size: 12px;
   color: var(--accent);
 }
+.pane.tour {
+  flex-grow: 2;
+}
+
+/* ---------------- tool stripes (native: 43px, labeled) ---------------- */
+.stripe {
+  width: 43px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 0 6px;
+  background: var(--window);
+}
+.stripe-btn {
+  width: 40px;
+  height: 50px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 5px;
+  color: var(--icon);
+  cursor: pointer;
+}
+.stripe-btn span {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--secondary);
+}
+.stripe-btn:hover {
+  background: var(--hover);
+}
+.stripe-btn.on {
+  background: var(--selection);
+}
+.stripe-btn.on span {
+  color: var(--text);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 36px;
+  padding: 0 6px 0 10px;
+  flex: none;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.kind-chip {
+  width: 16px;
+  font: 700 10px "JetBrains Mono", monospace;
+  text-align: center;
+  flex: none;
+}
+.tag-chip {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--selection);
+  color: var(--text);
+}
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -927,33 +1034,38 @@ textarea {
   border-bottom: 1px solid var(--border);
   font-size: 12px;
 }
+.diff-title {
+  padding: 14px 12px 6px 62px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
 .diff-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: 4px 0;
   font-family: "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
-}
-.diff-side {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-}
-.diff-side > div {
-  min-width: 0;
-  overflow: hidden;
 }
 .diff-row {
   display: flex;
   white-space: pre;
 }
 .diff-row .ln {
-  width: 42px;
+  width: 36px;
   flex: none;
   text-align: right;
-  padding-right: 10px;
+  padding-right: 6px;
   color: var(--secondary);
+  background: var(--window);
   user-select: none;
+}
+.diff-row .sg {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  color: var(--secondary);
 }
 .diff-row .tx {
   flex: 1;
@@ -962,20 +1074,105 @@ textarea {
   text-overflow: ellipsis;
 }
 .diff-row.del {
-  background: rgba(199, 78, 57, 0.16);
-}
-.diff-row.del .tx {
-  color: var(--git-deleted);
+  background: rgba(222, 106, 102, 0.12);
 }
 .diff-row.add {
-  background: rgba(129, 184, 139, 0.14);
+  background: rgba(112, 174, 255, 0.1);
 }
-.diff-row.add .tx {
-  color: var(--git-added);
+.diff-row.del .tx,
+.diff-row.del .sg {
+  color: var(--git-deleted);
 }
-.diff-row.hunk {
-  background: rgba(56, 113, 225, 0.1);
-  color: var(--secondary);
+.diff-row.add .tx,
+.diff-row.add .sg {
+  color: var(--git-modified);
+}
+.diff-row.staged {
+  opacity: 0.6;
+}
+/* Hunk action gutter: only the Git diff view has one. */
+.diff-body.gutter > .diff-row,
+.diff-body.gutter .hunk {
+  margin-left: 58px;
+}
+.hunk {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 2px;
+}
+.hunk:hover {
+  border-color: var(--accent);
+}
+.hunk-gutter {
+  position: absolute;
+  left: -58px;
+  top: 0;
+  display: flex;
+  gap: 2px;
+}
+.hunk-gutter .ic-btn {
+  width: 24px;
+  height: 20px;
+}
+.diff-body.side .hunk-lines {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-flow: dense;
+}
+.diff-body.side .diff-row.del {
+  grid-column: 1;
+}
+.diff-body.side .diff-row.add {
+  grid-column: 2;
+}
+.browser-bar {
+  height: 34px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.browser-addr {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--window);
+  font-size: 12px;
+  outline: 0;
+}
+.browser-page {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 32px;
+  background: #fafafa;
+  color: #222;
+}
+.lh {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+}
+.lh-list {
+  border-right: 1px solid var(--border);
+  overflow: auto;
+}
+.diff-confirm {
+  margin: 4px 0 6px 58px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font: 12px "Inter", sans-serif;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
 }
 
 /* image preview */
@@ -1017,17 +1214,8 @@ textarea {
   white-space: nowrap;
   overflow: hidden;
 }
-.status .grow {
-  flex: 1;
-}
 .status .link {
   cursor: pointer;
-}
-.status .vsep {
-  width: 1px;
-  height: 14px;
-  background: var(--border);
-  flex: none;
 }
 .status .link:hover {
   color: var(--text);
@@ -1274,17 +1462,6 @@ textarea {
   padding: 6px;
   flex: none;
 }
-.git-head .field {
-  flex: 1;
-}
-.git-branch-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px 6px;
-  font-size: 12px;
-  color: var(--secondary);
-}
 .git-msg {
   margin: 0 6px 6px;
   height: 54px;
@@ -1310,11 +1487,93 @@ textarea {
   gap: 4px;
   padding: 4px 8px;
   font-size: 12px;
-  color: var(--secondary);
+  margin: 2px 6px;
+  border-radius: 3px;
+  background: var(--hover);
+  color: var(--text);
   text-transform: none;
 }
-.git-group .grow {
-  flex: 1;
+.git-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.git-tabs button {
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.git-tabs button.on {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--selection);
+}
+.git-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px;
+}
+.git-commit {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.git-commit label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 8px 8px;
+}
+.git-commit .git-msg {
+  display: block;
+  width: calc(100% - 12px);
+  height: 104px;
+}
+.git-note {
+  margin: 8px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  background: var(--selection);
+  font-size: 12px;
+}
+.chk {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+.small-btn.danger {
+  color: var(--failed);
+}
+.log-row {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  column-gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.log-row:hover {
+  background: var(--hover);
+}
+.log-row > .weak:last-child {
+  grid-column: 2 / -1;
+  font-size: 11px;
+}
+.log-dot {
+  width: 8px;
+  height: 8px;
+  margin: 0 2px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+}
+.log-row .log-dot {
+  margin-top: 5px;
 }
 .marker {
   width: 14px;
@@ -1330,9 +1589,6 @@ textarea {
   gap: 8px;
   padding: 8px 10px;
   font-size: 13px;
-}
-.info-h .grow {
-  flex: 1;
 }
 .info-row {
   display: flex;
@@ -1521,9 +1777,6 @@ textarea {
 .hook-row .name {
   width: 90px;
 }
-.hook-row .grow {
-  flex: 1;
-}
 
 /* ---------------- player ---------------- */
 .player {
@@ -1553,9 +1806,6 @@ textarea {
 }
 .player-time .elapsed {
   font-family: "JetBrains Mono", monospace;
-}
-.player-time .grow {
-  flex: 1;
 }
 .scrub,
 .vol {
@@ -1698,9 +1948,6 @@ textarea {
   width: 16px;
   font-family: "JetBrains Mono", monospace;
 }
-.pl-track .grow {
-  flex: 1;
-}
 .pl-track .dur {
   color: var(--secondary);
   font-family: "JetBrains Mono", monospace;
@@ -1714,9 +1961,6 @@ textarea {
   padding: 8px 12px;
   border-top: 1px solid var(--border);
   background: var(--surface);
-}
-.playlist-foot .grow {
-  flex: 1;
 }
 
 /* ---------------- ide mode ---------------- */
@@ -1761,11 +2005,6 @@ textarea {
 }
 
 /* ---------------- responsive ---------------- */
-@media (max-width: 1000px) {
-  .sidebar {
-    width: 220px;
-  }
-}
 @media (max-width: 820px) {
   body {
     overflow: auto;
@@ -1774,10 +2013,18 @@ textarea {
     height: auto;
     min-height: 100dvh;
   }
-  .sidebar {
+  .sidebar,
+  .stripe {
     display: none;
   }
   .titlebar-tools .hide-sm {
+    display: none;
+  }
+  .titlebar-tools.pinned {
+    width: auto;
+    min-width: 0;
+  }
+  .titlebar-left .proj-name {
     display: none;
   }
   .display {
@@ -1789,8 +2036,7 @@ textarea {
   .split.row > .divider {
     display: none;
   }
-  .md-split,
-  .diff-side {
+  .md-split {
     grid-template-columns: 1fr;
   }
 }
@@ -1799,4 +2045,14 @@ textarea {
   .cursor {
     animation: none;
   }
+}
+.status-note {
+  margin-left: 12px;
+  padding: 0 8px;
+  border-radius: 3px;
+  background: var(--selection);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

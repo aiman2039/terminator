@@ -208,6 +208,7 @@ impl App {
                     {
                         close = true;
                     }
+                    close |= Self::float_dock_back_bar(ui);
                     self.paint_float_dock(PaintFloatDockInput {
                         ui,
                         viewport,
@@ -216,7 +217,12 @@ impl App {
                     });
                 },
             );
-            if close {
+            let (all, pane) = self.take_dock_back(viewport, &mut dock);
+            if let Some(pane) = pane {
+                let home = window.home.clone();
+                closed.push((home.0, home.1, egui_dock::DockState::new(vec![pane])));
+            }
+            if close || all {
                 closed.push((window.home.0, window.home.1, dock));
             } else if dock.iter_all_tabs().next().is_some() {
                 window.dock = Some(dock);
@@ -240,6 +246,45 @@ impl App {
             && !self.floating.iter().any(|w| &w.viewport == viewport)
         {
             self.focus_float_tab = None;
+        }
+    }
+
+    /// The floating window's top row: Dock back, right-aligned. True when
+    /// clicked; it docks the whole window back, like closing it.
+    fn float_dock_back_bar(ui: &mut egui::Ui) -> bool {
+        let response = appearance::footer_row(ui, |ui| {
+            appearance::sidebar_action(
+                ui,
+                "ArrowDownToLine",
+                "Dock back to main window (closing this window also docks its panes back)",
+            )
+        });
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "float-dock-back", response.rect);
+        response.clicked()
+    }
+
+    /// A dock-back asked from this window's pane menu. Returns whether the
+    /// whole window goes back, and the one pane that left its dock to go
+    /// back alone (the window stays for the others).
+    fn take_dock_back(
+        &mut self,
+        viewport: egui::ViewportId,
+        dock: &mut egui_dock::DockState<Tab>,
+    ) -> (bool, Option<Tab>) {
+        let Some((_, pane)) = self.pane_ops.float_return.take_if(|(v, _)| *v == viewport) else {
+            return (false, None);
+        };
+        let Some(tab) = pane else {
+            return (true, None);
+        };
+        match dock.find_tab(&tab) {
+            Some(path) if dock.iter_all_tabs().count() > 1 => {
+                let _ = dock.remove_tab(path);
+                (false, Some(tab))
+            }
+            Some(_) => (true, None),
+            None => (false, None),
         }
     }
 

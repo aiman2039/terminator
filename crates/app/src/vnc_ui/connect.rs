@@ -209,7 +209,7 @@ impl PasswordPrompt {
         ui.add_space(8.0);
         ui.separator();
         let (connect, back) = appearance::footer_row(ui, |ui| {
-            let connect = form::primary_button(ui, "Connect").clicked();
+            let connect = appearance::primary_button(ui, "Connect").clicked();
             let back = ui.button("All hosts").clicked();
             (connect, back)
         });

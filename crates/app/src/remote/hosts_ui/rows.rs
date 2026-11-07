@@ -6,6 +6,8 @@ use crate::{App, appearance};
 use eframe::egui::{self, RichText};
 use terminator_core::{Request, remote::RemoteProject};
 
+const EDIT_REFUSED: &str = "Restart the session service to edit SSH hosts.";
+
 /// "user@host:port · /root · 2h ago".
 pub(super) fn subtitle(project: &RemoteProject, now: u64) -> String {
     let mut text = format!("{} · {}", project.ssh.authority(), project.root);
@@ -103,50 +105,38 @@ impl App {
     }
 
     fn host_menu(&mut self, ui: &mut egui::Ui, project: &RemoteProject, managed: bool) {
-        if ui.button("Open terminal").clicked() {
+        if appearance::menu_action(ui, true, "Open terminal", "Terminal").clicked() {
             self.open_host_terminal(project.id.clone());
-            ui.close();
         }
         ui.separator();
         let editable = self.edit_supported();
-        if ui
-            .add_enabled(editable, egui::Button::new("Properties…"))
-            .on_disabled_hover_text("Restart the session service to edit SSH hosts.")
+        if appearance::menu_action(ui, editable, "Properties…", "Settings2")
+            .on_disabled_hover_text(EDIT_REFUSED)
             .clicked()
         {
             self.open_ssh_properties(project.clone());
-            ui.close();
         }
-        if ui.button("Duplicate…").clicked() {
+        if appearance::menu_action(ui, true, "Duplicate…", "Copy").clicked() {
             self.duplicate_ssh_host(project);
-            ui.close();
         }
-        if ui
-            .add_enabled(editable, egui::Button::new("Set group…"))
+        if appearance::menu_action(ui, editable, "Set group…", "Folder")
             .on_hover_text("Edit the group in Properties")
-            .on_disabled_hover_text("Restart the session service to edit SSH hosts.")
+            .on_disabled_hover_text(EDIT_REFUSED)
             .clicked()
         {
             self.open_ssh_properties(project.clone());
-            ui.close();
         }
         if self.forwarding_supported()
-            && ui
-                .add_enabled(editable, egui::Button::new("Port forwards…"))
+            && appearance::menu_action(ui, editable, "Port forwards…", "Globe")
                 .on_hover_text("Add or edit forwards in Properties")
-                .on_disabled_hover_text("Restart the session service to edit SSH hosts.")
+                .on_disabled_hover_text(EDIT_REFUSED)
                 .clicked()
         {
             self.open_ssh_properties(project.clone());
-            ui.close();
         }
         ui.separator();
-        if ui
-            .add_enabled(managed, egui::Button::new("Remove…"))
-            .clicked()
-        {
+        if appearance::menu_danger_action(ui, managed, "Remove…", "Trash").clicked() {
             self.remote_ui.hosts.confirm_remove = Some(project.id.clone());
-            ui.close();
         }
     }
 
