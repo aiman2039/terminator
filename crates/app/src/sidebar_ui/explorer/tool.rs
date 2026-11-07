@@ -288,6 +288,7 @@ impl App {
                     .any(|c| c == NVIM_REVIEW_CAPABILITY),
                 theme: &self.theme,
                 history: self.git.history,
+                stash: self.git.stash,
                 view_list: self.preferences.git_view_list,
                 commits: &self.git.log,
                 shelves: &self.git.shelves,

@@ -101,6 +101,7 @@ impl App {
             self.show_git_sidebar();
         }
         self.git.history = false;
+        self.git.stash = false;
     }
 
     fn compare_focused_file(&mut self, mode: PickerMode) {

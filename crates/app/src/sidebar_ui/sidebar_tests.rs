@@ -531,6 +531,7 @@ mod tests {
                         neovim_review: false,
                         theme: &theme,
                         history: false,
+                        stash: false,
                         view_list: false,
                         commits: &[],
                         shelves: &[],
@@ -567,7 +568,7 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
-    fn git_toolbar_shows_inline_actions_when_wide_and_overflow_when_narrow() {
+    fn git_header_tabs_toolbar_and_more_menu_report_their_actions() {
         let make_context = || ContextData {
             cwd: "/repo".into(),
             root: Some("/repo".into()),
@@ -612,6 +613,7 @@ mod tests {
                         neovim_review: false,
                         theme: &theme,
                         history: false,
+                        stash: false,
                         view_list: false,
                         commits: &[],
                         shelves: &[],
@@ -638,40 +640,43 @@ mod tests {
         crate::appearance::install(&wide);
         let mut outcome = GitPanelOutcome::default();
         draw(&wide, 360.0, vec![], &mut outcome);
-        assert!(recorded_target(&wide, "git-view-list").is_some());
-        assert!(recorded_target(&wide, "git-base-ref").is_some());
-        assert!(recorded_target(&wide, "git-compare-refresh").is_some());
-        assert!(recorded_target(&wide, "git-more").is_none());
-        let list = recorded_target(&wide, "git-view-list").expect("list toggle");
-        let pos = list.center();
-        draw(
-            &wide,
-            360.0,
-            vec![egui::Event::PointerMoved(pos)],
-            &mut outcome,
-        );
-        for pressed in [true, false] {
-            draw(
-                &wide,
-                360.0,
-                vec![egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                &mut outcome,
-            );
+        for name in ["git-view-list", "git-expand", "git-collapse", "git-more"] {
+            assert!(recorded_target(&wide, name).is_some(), "{name}");
         }
-        assert!(outcome.toggle_list);
+        // Base ref and branch compare wait in the ⋮ menu.
+        assert!(recorded_target(&wide, "git-base-ref").is_none());
+        assert!(recorded_target(&wide, "git-compare-refresh").is_none());
+        let clicked = |name: &str| {
+            let rect = recorded_target(&wide, name).unwrap_or_else(|| panic!("{name}"));
+            let mut last = GitPanelOutcome::default();
+            click(rect, |events| draw(&wide, 360.0, events, &mut last));
+            last
+        };
+        assert!(clicked("git-view-list").toggle_list);
+        assert!(clicked("git-expand").expand);
+        assert!(clicked("git-collapse").collapse);
+        assert_eq!(
+            clicked("git-stash").tab,
+            Some(crate::sidebar_ui::GitTab::Stash)
+        );
+        assert_eq!(
+            clicked("git-history").tab,
+            Some(crate::sidebar_ui::GitTab::History)
+        );
+        assert_eq!(clicked("git-changes").tab, None, "Commit is already open");
+        let _ = clicked("git-more");
+        draw(&wide, 360.0, vec![], &mut outcome);
+        assert!(recorded_target(&wide, "git-base-ref").is_some());
+        assert!(clicked("git-compare-refresh").refresh_compare);
+        // A narrow sidebar keeps every toolbar icon on its one row.
         let narrow = egui::Context::default();
         crate::appearance::install(&narrow);
         let mut outcome = GitPanelOutcome::default();
         draw(&narrow, 200.0, vec![], &mut outcome);
-        assert!(recorded_target(&narrow, "git-more").is_some());
-        assert!(recorded_target(&narrow, "git-view-list").is_none());
-        assert!(recorded_target(&narrow, "git-base-ref").is_none());
-        assert!(recorded_target(&narrow, "git-compare-refresh").is_none());
+        let list = recorded_target(&narrow, "git-view-list").expect("list toggle");
+        let collapse = recorded_target(&narrow, "git-collapse").expect("collapse");
+        assert!((list.center().y - collapse.center().y).abs() < 1.0);
+        assert!(collapse.right() <= 200.0, "{collapse:?}");
     }
 
     #[test]

@@ -20,6 +20,8 @@ pub(crate) struct GitPanelState {
     pub(crate) amend: bool,
     pub(crate) signoff: bool,
     pub(crate) history: bool,
+    /// The Stash tab is open.
+    pub(crate) stash: bool,
     pub(crate) branches: Vec<String>,
     pub(crate) log: Vec<(String, String)>,
     pub(crate) shelves: Vec<(String, String)>,

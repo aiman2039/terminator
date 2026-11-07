@@ -101,3 +101,6 @@ submit and unshelve actions.
 
 `maximize.svg` and `zoom-in.svg` come from Lucide 0.577.0 with the same license
 and white-stroke adaptation, for the image preview Fit and Actual size actions.
+
+`chevrons-up-down.svg` comes from Lucide 0.577.0 with the same license and
+white-stroke adaptation, for the Git panel Expand all action.

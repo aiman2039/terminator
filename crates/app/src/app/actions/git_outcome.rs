@@ -9,6 +9,16 @@ use crate::*;
 /// Commit messages kept for the history dropdown.
 const COMMIT_HISTORY_LIMIT: usize = 20;
 
+/// The next tree generation that is expanded (even) or collapsed (odd).
+pub(crate) fn next_generation(generation: u64, expanded: bool) -> u64 {
+    let next = generation.wrapping_add(1);
+    if next.is_multiple_of(2) == expanded {
+        next
+    } else {
+        next.wrapping_add(1)
+    }
+}
+
 impl App {
     pub(crate) fn perform_git_outcome(
         &mut self,
@@ -58,11 +68,17 @@ impl App {
         if let Some((path, mode)) = outcome.compare.take() {
             self.open_compare_picker(&path, mode);
         }
-        if let Some(history) = outcome.history {
-            self.git.history = history;
+        if let Some(tab) = outcome.tab {
+            self.git.history = tab == sidebar_ui::GitTab::History;
+            self.git.stash = tab == sidebar_ui::GitTab::Stash;
         }
+        // Odd generations start collapsed, even ones expanded; a new
+        // generation resets every section and folder.
         if outcome.collapse {
-            self.git.collapse = self.git.collapse.wrapping_add(1);
+            self.git.collapse = next_generation(self.git.collapse, false);
+        }
+        if outcome.expand {
+            self.git.collapse = next_generation(self.git.collapse, true);
         }
     }
 
@@ -223,5 +239,23 @@ impl App {
             workspace.add(terminator_core::id(), tab.clone());
         }
         self.insert(&project, tab, None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_generation;
+
+    #[test]
+    fn collapse_all_picks_an_odd_generation_and_expand_all_an_even_one() {
+        assert_eq!(next_generation(0, false), 1);
+        assert_eq!(
+            next_generation(1, false),
+            3,
+            "collapse again resets folders"
+        );
+        assert_eq!(next_generation(1, true), 2);
+        assert_eq!(next_generation(2, true), 4);
+        assert_eq!(next_generation(4, false), 5);
     }
 }

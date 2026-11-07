@@ -1,27 +1,73 @@
-//! Commit message, commit options and buttons, and the shelf list.
+//! The Commit tab body: the changes fill the top and the commit area sits
+//! at the bottom (`JetBrains` style); and the Stash tab's shelf list.
 use super::*;
 
+/// Commit-area height before its first paint is measured.
+const COMMIT_AREA_ESTIMATE: f32 = 220.0;
+/// The changes keep at least this much height above the commit area.
+const MIN_TREE_HEIGHT: f32 = 80.0;
+/// Rows of the commit message field.
+const MESSAGE_ROWS: usize = 6;
+
 impl GitPanelPass<'_, '_> {
-    pub(super) fn commit_box(&mut self, ui: &mut egui::Ui) {
+    /// Changes above, the commit area below. The commit area is laid out
+    /// at its height from the last paint; a change of height repaints.
+    pub(super) fn commit_tab(&mut self, ui: &mut egui::Ui) {
+        let full = ui.available_rect_before_wrap();
+        let id = ui.scope_id().with("git-commit-area");
+        let last = ui
+            .ctx()
+            .data(|data| data.get_temp::<f32>(id))
+            .unwrap_or(COMMIT_AREA_ESTIMATE);
+        let split = (full.bottom() - last).max(full.top() + MIN_TREE_HEIGHT);
+        let tree = egui::Rect::from_min_max(full.min, egui::pos2(full.right(), split - 4.0));
+        let mut tree_ui = ui.new_child(egui::UiBuilder::new().max_rect(tree));
+        self.changes_area(&mut tree_ui);
+        let area = egui::Rect::from_min_max(egui::pos2(full.left(), split), full.max);
+        let mut area_ui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+        self.commit_area(&mut area_ui);
+        let height = area_ui.min_rect().height();
+        if (height - last).abs() > 0.5 {
+            ui.ctx().data_mut(|data| data.insert_temp(id, height));
+            ui.ctx().request_discard("Git commit area height changed");
+        }
+        ui.allocate_rect(full, egui::Sense::hover());
+    }
+
+    /// A refresh error, then the changes (or "Working tree clean").
+    fn changes_area(&mut self, ui: &mut egui::Ui) {
+        if let Some(error) = &self.input.context.error {
+            git_error_row(ui, self.input.theme, error, self.outcome);
+        }
+        if self.input.context.changes.is_empty() {
+            ui.weak("Working tree clean");
+        }
+        appearance::sidebar_scroll("git").show(ui, |ui| self.changes(ui));
+    }
+
+    /// Options, the message, the buttons, then a running commit and the
+    /// last failure.
+    fn commit_area(&mut self, ui: &mut egui::Ui) {
         let staged = self
             .prepared
             .groups
             .iter()
             .any(|group| group.group == terminator_git::GitGroup::Staged);
-        self.commit_message(ui);
+        ui.separator();
         ui.horizontal(|ui| self.commit_options(ui));
+        self.commit_message(ui);
         ui.horizontal(|ui| self.commit_buttons(ui, staged));
         self.commit_progress(ui);
         self.commit_failure(ui);
-        self.shelves(ui);
     }
 
     fn commit_message(&mut self, ui: &mut egui::Ui) {
         let message = ui.add(
             egui::TextEdit::multiline(self.input.commit_draft)
-                .hint_text("Message")
+                .hint_text("Commit Message")
+                .font(egui::TextStyle::Monospace)
                 .desired_width(ui.available_width())
-                .desired_rows(4),
+                .desired_rows(MESSAGE_ROWS),
         );
         if self.input.focus_message {
             message.request_focus();
@@ -86,76 +132,57 @@ impl GitPanelPass<'_, '_> {
         }
     }
 
-    /// Stage All, Commit, Commit and Push, and Shelve. A commit running
-    /// in this repository disables Stage All and Shelve.
+    /// The accent Commit button and Commit and Push…; both wait while a
+    /// commit runs.
     fn commit_buttons(&mut self, ui: &mut egui::Ui, staged: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let input = &*self.input;
         let outcome = &mut *self.outcome;
-        let lock = input.commit_lock;
-        let stage_all = appearance::enabled_unless(ui, lock.index, |ui| {
-            ui.add_enabled(
-                !input.context.changes.is_empty(),
-                egui::Button::new("Stage All"),
-            )
-            .on_hover_text("Stage every change")
-        });
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "git-stage-all", stage_all.rect);
-        #[cfg(not(feature = "test-support"))]
-        let _ = &stage_all;
-        if stage_all.clicked() {
-            outcome.stage_all = true;
-        }
         // Amending with an empty message keeps the previous message.
         let can_commit = input.commit_run.is_none()
             && staged
             && (*input.amend || !input.commit_draft.trim().is_empty());
-        let commit = ui.add_enabled(can_commit, egui::Button::new("Commit"));
+        let accent = appearance::color(&input.theme.accent);
+        let commit = ui.add_enabled(can_commit, appearance::primary_button("Commit", accent));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-commit", commit.rect);
         if commit.clicked() {
             outcome.commit = true;
         }
-        let commit_push = ui.add_enabled(can_commit, egui::Button::new("Commit and Push"));
+        let commit_push = ui.add_enabled(can_commit, egui::Button::new("Commit and Push…"));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-commit-push", commit_push.rect);
         if commit_push.clicked() {
             outcome.commit_push = true;
         }
-        let shelve = appearance::enabled_unless(ui, lock.stash, |ui| {
-            ui.add_enabled(staged, egui::Button::new("Shelve"))
-                .on_hover_text("Shelve staged changes (git stash)")
-        });
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "git-shelve", shelve.rect);
-        if shelve.clicked() {
-            outcome.shelve = true;
-        }
     }
 
-    fn shelves(&mut self, ui: &mut egui::Ui) {
+    /// The Stash tab: every shelf with Unshelve and Drop.
+    pub(super) fn stash_tab(&mut self, ui: &mut egui::Ui) {
         let shelves = self.input.shelves;
-        if shelves.is_empty() {
-            return;
-        }
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!("SHELVED {}", shelves.len()))
-                    .small()
-                    .strong(),
-            )
-            .selectable(false),
-        );
-        for (reference, message) in shelves {
-            ui.horizontal(|ui| self.shelf_row(ui, reference, message));
-        }
+        appearance::sidebar_scroll("git-stash").show(ui, |ui| {
+            if shelves.is_empty() {
+                ui.weak("No shelved changes");
+            }
+            for (reference, message) in shelves {
+                ui.horizontal(|ui| self.shelf_row(ui, reference, message));
+            }
+        });
     }
 
     /// One shelf with Drop and Unshelve, which a commit running in this
     /// repository disables.
     fn shelf_row(&mut self, ui: &mut egui::Ui, reference: &str, message: &str) {
         ui.spacing_mut().item_spacing.x = 4.0;
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(16.0, GIT_TREE_ROW_HEIGHT), egui::Sense::hover());
+        appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
+            ui,
+            rect,
+            icon: "Archive",
+            size: appearance::TOOLBAR_ICON,
+            tint: appearance::icon_color(),
+        });
         ui.add(egui::Label::new(message).truncate())
             .on_hover_text(format!("{reference} {message}"));
         let lock = self.input.commit_lock.stash;
@@ -178,4 +205,19 @@ impl GitPanelPass<'_, '_> {
             }
         });
     }
+}
+
+/// A refresh error with Retry.
+pub(super) fn git_error_row(
+    ui: &mut egui::Ui,
+    theme: &AppearanceConfig,
+    error: &str,
+    outcome: &mut GitPanelOutcome,
+) {
+    ui.horizontal(|ui| {
+        ui.colored_label(appearance::color(&theme.status_failed), error);
+        if ui.small_button("Retry").clicked() {
+            outcome.refresh = true;
+        }
+    });
 }

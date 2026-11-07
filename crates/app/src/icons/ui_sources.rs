@@ -164,6 +164,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/chevrons-down-up.svg"),
     ),
     (
+        "ChevronsUpDown",
+        egui::include_image!("../../assets/icons/chevrons-up-down.svg"),
+    ),
+    (
         "CaseSensitive",
         egui::include_image!("../../assets/icons/case-sensitive.svg"),
     ),

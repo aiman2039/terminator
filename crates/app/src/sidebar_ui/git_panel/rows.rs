@@ -93,6 +93,8 @@ pub(super) struct GitChangeRowInput<'a> {
     pub(super) change: &'a terminator_git::Change,
     pub(super) group: terminator_git::GitGroup,
     pub(super) label: &'a str,
+    /// Dim text after the name: the folder in the flat list.
+    pub(super) hint: &'a str,
 }
 
 pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
@@ -103,6 +105,7 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
         change,
         group,
         label,
+        hint,
     } = input;
     // Keep layout height without constructing thousands of off-screen widgets.
     if skip_clipped_git_row(ui) {
@@ -114,7 +117,7 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
         group,
         letter: change.letter(group),
     };
-    let (response, check_clicked) = row.widget(ui, label);
+    let (response, check_clicked) = row.widget(ui, label, hint);
     if check_clicked {
         outcome.toggle_staged(group, &change.path);
     }
@@ -188,7 +191,7 @@ struct ChangeRow<'a> {
 impl ChangeRow<'_> {
     /// Checkbox and file row. Returns the row response and whether the
     /// checkbox was clicked.
-    fn widget(&self, ui: &mut egui::Ui, label: &str) -> (egui::Response, bool) {
+    fn widget(&self, ui: &mut egui::Ui, label: &str, hint: &str) -> (egui::Response, bool) {
         let change = self.change;
         let group = self.group;
         let trailing = self.trailing();
@@ -203,14 +206,14 @@ impl ChangeRow<'_> {
                     let state = check_state(CheckStateInput { checked, total: 1 });
                     check_clicked = tri_checkbox(ui, state, self.ctx.lock.index);
                 }
-                appearance::file_row(appearance::FileRowInput {
+                name_row(NameRowInput {
                     ui,
-                    label,
                     icon: icons::file_icon(&change.path),
-                    selected: false,
-                    height: GIT_TREE_ROW_HEIGHT,
+                    icon_tint: appearance::icon_color(),
+                    name: label,
+                    color: git_color(self.ctx.theme, self.letter),
+                    hint,
                     trailing: &trailing,
-                    tint: git_color(self.ctx.theme, self.letter),
                 })
             })
             .inner
