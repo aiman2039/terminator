@@ -19,7 +19,9 @@ pub struct App {
     pub(crate) explorer_search_error: Option<String>,
     pub(crate) explorer_search_generation: u64,
     pub(crate) explorer_search_pending: bool,
-    pub(crate) explorer_search_last: Option<search::Query>,
+    /// The folder and query of the last Contents search; either changing
+    /// runs a new one.
+    pub(crate) explorer_search_last: Option<(PathBuf, search::Query)>,
     pub(crate) explorer_query: String,
     pub(crate) name_prompt: Option<workspace_ops::NamePrompt>,
     /// The name field takes keyboard focus on its next paint, then this clears.
@@ -27,7 +29,9 @@ pub struct App {
     /// Widget ID of the name-prompt field as last painted. The ID is scoped
     /// to the hosting sidebar, so focus handling must use the painted one.
     pub(crate) name_prompt_widget: Option<egui::Id>,
-    pub(crate) pending_delete: Option<PathBuf>,
+    /// Paths a Move to Trash prompt asks about; empty when none is open.
+    /// Each request replaces the whole set, so prompts never mix.
+    pub(crate) pending_delete: Vec<PathBuf>,
     /// Explorer tree selection, in click order, plus its range anchor.
     pub(crate) explorer_selection: Vec<PathBuf>,
     pub(crate) explorer_anchor: Option<PathBuf>,
@@ -47,8 +51,6 @@ pub struct App {
     pub(crate) explorer_scroll_to: Option<PathBuf>,
     /// Last file auto-reveal followed, so it reveals once per focus change.
     pub(crate) explorer_followed: Option<PathBuf>,
-    /// Further paths a multi-selection delete removes after `pending_delete`.
-    pub(crate) pending_delete_more: Vec<PathBuf>,
     pub(crate) services: gui_services::Services,
     pub(crate) service_owner: gui_services::Owner,
     pub(crate) service_completion: Option<async_service::Completion<Vec<Update>>>,

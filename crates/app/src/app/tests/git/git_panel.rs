@@ -464,7 +464,7 @@ fn discard_and_drop_wait_for_confirmation() {
     );
     assert_no_workspace_job(&requests);
     assert_eq!(
-        app.git.confirm,
+        app.git.confirm.clone().map(|confirm| confirm.action),
         Some(sidebar_ui::GitConfirm::Discard {
             path,
             untracked: true
@@ -480,7 +480,7 @@ fn discard_and_drop_wait_for_confirmation() {
     );
     assert_no_workspace_job(&requests);
     assert_eq!(
-        app.git.confirm,
+        app.git.confirm.clone().map(|confirm| confirm.action),
         Some(sidebar_ui::GitConfirm::DropShelf("stash@{0}".into()))
     );
 }
@@ -829,4 +829,51 @@ fn stale_git_list_replies_do_not_overwrite_the_current_repo() {
     drain_updates(&mut app, &ctx);
     assert_eq!(app.git.branches, vec!["main".to_string()]);
     assert_eq!(app.git.list_root, Some(current));
+}
+
+#[test]
+fn git_delete_replaces_an_unanswered_explorer_delete() {
+    let (mut app, ctx, _dir) = fixture();
+    // An Explorer multi-delete is still waiting for an answer.
+    app.pending_delete = vec![PathBuf::from("/a/x.rs"), PathBuf::from("/a/y.rs")];
+    let mut outcome = sidebar_ui::GitPanelOutcome::default();
+    outcome.delete.push(PathBuf::from("/a/git.rs"));
+    run_git_outcome(&mut app, &ctx, outcome);
+    // The Git panel's file alone is asked about; no Explorer path rides along.
+    assert_eq!(app.pending_delete, [PathBuf::from("/a/git.rs")]);
+}
+
+#[test]
+fn a_git_question_is_dropped_when_the_repository_changes() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    run_git_outcome(
+        &mut app,
+        &ctx,
+        sidebar_ui::GitPanelOutcome {
+            drop_shelf: Some("stash@{1}".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        app.git.confirm.as_ref().map(|confirm| confirm.root.clone()),
+        Some(PathBuf::from("/a"))
+    );
+    // Another project's repository: stash@{1} there is a different shelf.
+    app.selected = Some("b".into());
+    app.preferences.tool = SidebarTool::Git;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(360.0, 480.0),
+            )),
+            ..Default::default()
+        },
+        |ui| app.sidebar(ui),
+    );
+    output.textures_delta.clear();
+    assert!(app.git.confirm.is_none());
+    assert_no_workspace_job(&requests);
 }

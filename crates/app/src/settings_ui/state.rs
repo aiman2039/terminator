@@ -112,6 +112,11 @@ impl App {
     }
 
     pub(crate) fn open_settings(&mut self) {
+        // Already showing: hiding first would ask to discard the draft
+        // that stays on screen.
+        if self.settings_open {
+            return;
+        }
         if !self.settings_session {
             self.begin_settings_session();
         }

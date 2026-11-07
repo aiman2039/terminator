@@ -58,7 +58,10 @@ impl App {
     /// which names a shelf by position, closes.
     fn commit_step_ended(&mut self) {
         self.git.list_root = None;
-        if matches!(self.git.confirm, Some(sidebar_ui::GitConfirm::DropShelf(_))) {
+        if matches!(
+            self.git.confirm.as_ref().map(|confirm| &confirm.action),
+            Some(sidebar_ui::GitConfirm::DropShelf(_))
+        ) {
             self.git.confirm = None;
         }
     }

@@ -39,6 +39,24 @@ impl MergeTab {
     pub(crate) fn busy(&self) -> bool {
         self.pending.is_some()
     }
+
+    /// A write is in flight; its result (and `git add`) must still land.
+    pub(crate) fn saving(&self) -> bool {
+        matches!(self.pending, Some(Pending::Save(..)))
+    }
+
+    /// A tab whose save is still running (the sender is returned so the
+    /// receiver stays open).
+    #[cfg(test)]
+    pub(crate) fn saving_for_test() -> (Self, tokio::sync::mpsc::UnboundedSender<Result<(), String>>)
+    {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let tab = Self {
+            pending: Some(Pending::Save(rx, true, PathBuf::from("/a/conflict.rs"))),
+            ..Self::default()
+        };
+        (tab, tx)
+    }
 }
 
 /// Read the conflict stages of `path` and build the merge (blocking).
@@ -184,7 +202,12 @@ impl App {
     }
 
     /// Discard the tab's state and read the conflict stages again.
+    /// Ignored while a save runs: replacing the tab would drop the save's
+    /// result, and the read could race the write.
     pub(crate) fn reload_merge(&mut self, key: &str, root: &Path, path: &Path) {
+        if self.merge.get(key).is_some_and(MergeTab::saving) {
+            return;
+        }
         let (root, path) = (root.to_path_buf(), path.to_path_buf());
         let label = path.display().to_string();
         let rx = self.file_pool_job(label, move || load(&root, &path));

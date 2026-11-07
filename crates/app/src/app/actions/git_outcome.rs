@@ -18,8 +18,8 @@ impl App {
         self.git_outcome_views(ui, &mut outcome);
         self.git_outcome_commits(&mut outcome);
         self.git_outcome_index(&mut outcome);
-        for path in outcome.delete {
-            self.pending_delete = Some(path);
+        if !outcome.delete.is_empty() {
+            self.pending_delete = std::mem::take(&mut outcome.delete);
         }
         for text in outcome.copy {
             ui.ctx().copy_text(text);
@@ -94,7 +94,7 @@ impl App {
             self.queue_workspace(workspace_ops::Op::Unshelve(reference));
         }
         if let Some(reference) = outcome.drop_shelf.take() {
-            self.git.confirm = Some(crate::sidebar_ui::GitConfirm::DropShelf(reference));
+            self.ask_git_confirm(crate::sidebar_ui::GitConfirm::DropShelf(reference));
         }
     }
 
@@ -182,7 +182,7 @@ impl App {
             self.queue_workspace(workspace_ops::Op::Unstage(path));
         }
         if let Some((path, untracked)) = std::mem::take(&mut outcome.discard).into_iter().last() {
-            self.git.confirm = Some(crate::sidebar_ui::GitConfirm::Discard { path, untracked });
+            self.ask_git_confirm(crate::sidebar_ui::GitConfirm::Discard { path, untracked });
         }
     }
 

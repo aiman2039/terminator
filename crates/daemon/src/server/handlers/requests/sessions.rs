@@ -114,7 +114,7 @@ impl Shared {
             .iter_mut()
             .find(|r| r.id == session)
             .context("Unknown session")?;
-        ensure!(!relock(&rt).ended, "Session ended");
+        ensure!(relock(&rt).child_live(), "Session ended");
         if let Some(pid) = rec.pid {
             Self::hang_up_session(&rt, pid)?;
             // A shell can catch the hang-up just before it `exec`s a command
@@ -123,11 +123,7 @@ impl Shared {
             let rt = Arc::clone(&rt);
             std::thread::spawn(move || {
                 std::thread::sleep(STOP_REPEAT);
-                let live = {
-                    let rt = relock(&rt);
-                    !rt.ended && !rt.exited
-                };
-                if live {
+                if relock(&rt).child_live() {
                     let _ = Self::hang_up_session(&rt, pid);
                 }
             });

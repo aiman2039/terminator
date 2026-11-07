@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn opening_settings_again_keeps_an_unsaved_draft_open() {
+    let (mut app, _, _dir) = fixture();
+    app.open_settings();
+    app.settings_draft.shell = "/tmp/custom".into();
+    // The Settings shortcut stays live while Settings is open.
+    app.open_settings();
+    assert!(app.settings_pending.is_none(), "no discard question");
+    assert!(app.settings_open);
+    assert_eq!(app.settings_draft.shell, "/tmp/custom");
+}
+
+#[test]
 fn hide_center_overlay_when_settings_dirty_sets_pending_close() {
     let (mut app, _, _dir) = fixture();
     app.open_settings();
