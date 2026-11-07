@@ -95,8 +95,7 @@ impl App {
 
     /// The Git panel in Changes view, where the commit message is.
     fn show_git_changes(&mut self) {
-        let left =
-            self.preferences.left_visible && self.preferences.left_tool == Some(SidebarTool::Git);
+        let left = self.preferences.left_shows(SidebarTool::Git);
         if !left {
             self.show_git_sidebar();
         }

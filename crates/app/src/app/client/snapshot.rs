@@ -82,7 +82,7 @@ impl App {
         SnapshotHelpers::insert(
             snapshot,
             "left_agents",
-            serde_json::json!(self.preferences.left_agents),
+            serde_json::json!(self.preferences.left_content() == LeftContent::Agents),
         );
         SnapshotHelpers::insert(
             snapshot,

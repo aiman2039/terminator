@@ -328,7 +328,7 @@ impl App {
     }
     pub(crate) fn live_session_row_can_show(&self, project_id: &str) -> bool {
         self.preferences.left_visible
-            && !self.preferences.left_agents
+            && self.preferences.left_content() != LeftContent::Agents
             && self.preferences.expanded.get(project_id) != Some(&false)
             && !self.preferences.hidden_projects.contains(project_id)
     }

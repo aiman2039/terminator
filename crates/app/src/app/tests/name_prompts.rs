@@ -82,8 +82,8 @@ fn sidebar_hiding_releases_rename(app: &mut App, ctx: &egui::Context) {
     assert_rename_blocks(app);
     assert_hiding_releases(
         app,
-        |app| app.preferences.left_agents = true,
-        |app| app.preferences.left_agents = false,
+        |app| app.preferences.set_left_content(LeftContent::Agents),
+        |app| app.preferences.set_left_content(LeftContent::Projects),
     );
     assert_hiding_releases(
         app,

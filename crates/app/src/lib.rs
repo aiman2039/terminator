@@ -65,7 +65,7 @@ mod vnc_ui;
 use file_actions::FileAction;
 mod preferences;
 mod workspace;
-use preferences::{AgentsTab, SidebarTool, UiPreferences};
+use preferences::{AgentsTab, LeftContent, SidebarTool, UiPreferences};
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile};
 use workspace::Workspace;
 pub mod app;

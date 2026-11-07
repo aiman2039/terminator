@@ -95,10 +95,10 @@ impl App {
     pub(crate) fn tool_place(&self, ctx: &egui::Context, tool: SidebarTool) -> ToolPlace {
         let prefs = &self.preferences;
         ToolPlace {
-            left: prefs.left_visible && prefs.left_tool == Some(tool),
+            left: prefs.left_shows(tool),
             right: prefs.visible && !prefs.right_projects && prefs.tool == tool,
             focused: shortcuts::focused_sidebar(ctx),
-            usual: if prefs.left_tool == Some(tool) {
+            usual: if prefs.left_content() == LeftContent::of_tool(tool) {
                 Side::Left
             } else {
                 Side::Right
@@ -126,7 +126,8 @@ impl App {
     fn show_tool_window(&mut self, side: Side, tool: SidebarTool) {
         match side {
             Side::Left => {
-                self.preferences.left_tool = Some(tool);
+                self.preferences
+                    .set_left_content(LeftContent::of_tool(tool));
                 self.preferences.left_visible = true;
             }
             Side::Right => {

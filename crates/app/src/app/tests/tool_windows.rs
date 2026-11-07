@@ -172,7 +172,8 @@ fn a_tool_uses_the_side_where_it_shows_else_its_usual_side() {
 fn a_hidden_tool_opens_on_the_side_its_stripe_chose() {
     let (mut app, ctx, _dir) = explorer_fixture();
     // A left stripe put the Explorer in the left sidebar, now closed.
-    app.preferences.left_tool = Some(SidebarTool::Explorer);
+    app.preferences
+        .set_left_content(LeftContent::Tool(SidebarTool::Explorer));
     app.preferences.left_visible = false;
     app.preferences.tool = SidebarTool::Git;
     assert_eq!(
@@ -182,7 +183,7 @@ fn a_hidden_tool_opens_on_the_side_its_stripe_chose() {
     assert_eq!(app.tool_place(&ctx, SidebarTool::Git).usual, Side::Right);
     press(&mut app, &ctx, Action::ToolExplorer);
     assert!(app.preferences.left_visible);
-    assert_eq!(app.preferences.left_tool, Some(SidebarTool::Explorer));
+    assert!(app.preferences.left_shows(SidebarTool::Explorer));
     assert_eq!(
         app.preferences.tool,
         SidebarTool::Git,

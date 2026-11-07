@@ -198,13 +198,13 @@ impl App {
     /// treats as primary (left in IDE mode, right otherwise).
     fn show_explorer(&mut self) {
         let prefs = &mut self.preferences;
-        let left = prefs.left_visible && prefs.left_tool == Some(SidebarTool::Explorer);
+        let left = prefs.left_shows(SidebarTool::Explorer);
         let right = prefs.visible && !prefs.right_projects && prefs.tool == SidebarTool::Explorer;
         if left || right {
             return;
         }
         if prefs.ide_mode {
-            prefs.left_tool = Some(SidebarTool::Explorer);
+            prefs.set_left_content(crate::LeftContent::Tool(SidebarTool::Explorer));
             prefs.left_visible = true;
         } else {
             prefs.right_projects = false;

@@ -87,9 +87,11 @@ fn ide_stripes_switch_views_and_toggle_tools() {
         );
     };
     click(&mut app, agents);
-    assert!(app.preferences.left_visible && app.preferences.left_agents);
+    assert!(app.left_agents_shown());
     click(&mut app, projects);
-    assert!(app.preferences.left_visible && !app.preferences.left_agents);
+    assert!(
+        app.preferences.left_visible && app.preferences.left_content() == LeftContent::Projects
+    );
     click(&mut app, git);
     assert_eq!(app.preferences.tool, SidebarTool::Git);
     assert!(app.preferences.visible);
@@ -118,7 +120,10 @@ fn ide_stripes_switch_views_and_toggle_tools() {
         header_target(&ctx)("stripe-right-Projects").expect("right projects stripe");
     let right_search = header_target(&ctx)("stripe-right-Search").expect("right search");
     click(&mut app, left_git);
-    assert_eq!(app.preferences.left_tool, Some(SidebarTool::Git));
+    assert_eq!(
+        app.preferences.left_content(),
+        LeftContent::Tool(SidebarTool::Git)
+    );
     assert!(app.preferences.left_visible);
     assert_eq!(app.preferences.tool, SidebarTool::Explorer);
     click(&mut app, left_git);
@@ -134,8 +139,7 @@ fn ide_stripes_switch_views_and_toggle_tools() {
     // Same view on both sides at once (Projects left + right) must not
     // clash widget IDs: the right copy's filter takes focus and text.
     app.palette.open = false;
-    app.preferences.left_tool = None;
-    app.preferences.left_agents = false;
+    app.preferences.set_left_content(LeftContent::Projects);
     app.preferences.left_visible = true;
     app.preferences.right_projects = true;
     app.preferences.visible = true;

@@ -54,27 +54,28 @@ impl App {
         let _ = (ui, badge);
     }
 
-    /// The left sidebar is visible and paints the Agents inbox. A left tool
-    /// takes precedence over `left_agents`, so the flag alone is not enough.
+    /// The left sidebar is visible and paints the Agents inbox.
     pub(crate) fn left_agents_shown(&self) -> bool {
-        self.preferences.left_visible
-            && match self.preferences.left_tool {
-                Some(tool) => tool == SidebarTool::Agents,
-                None => self.preferences.left_agents,
-            }
+        self.preferences.left_shows(SidebarTool::Agents)
     }
 
     pub(crate) fn toggle_left_agents(&mut self) {
         if self.left_agents_shown() {
-            self.preferences.left_tool = None;
-            self.preferences.left_agents = false;
+            self.preferences
+                .set_left_content(crate::LeftContent::Projects);
             return;
         }
-        if !self.preferences.left_agents {
+        self.show_left_agents();
+    }
+
+    /// Agents in the left sidebar. Coming from other content starts on
+    /// Needs attention; reopening a hidden Agents sidebar keeps its view.
+    pub(crate) fn show_left_agents(&mut self) {
+        if self.preferences.left_content() != crate::LeftContent::Agents {
             self.preferences.agents_tab = AgentsTab::NeedsAttention;
         }
-        self.preferences.left_tool = None;
-        self.preferences.left_agents = true;
+        self.preferences
+            .set_left_content(crate::LeftContent::Agents);
         self.preferences.left_visible = true;
     }
 
@@ -136,9 +137,12 @@ impl App {
         clicked
     }
 
+    /// The inbox is on screen in either sidebar.
     pub(crate) fn agents_inbox_open(&self) -> bool {
-        self.preferences.left_agents
-            || (self.preferences.visible && self.preferences.tool == SidebarTool::Agents)
+        self.left_agents_shown()
+            || (self.preferences.visible
+                && !self.preferences.right_projects
+                && self.preferences.tool == SidebarTool::Agents)
     }
 
     /// The existing inbox: pending notifications plus terminal notices.

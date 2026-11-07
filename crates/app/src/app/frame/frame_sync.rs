@@ -118,15 +118,11 @@ impl App {
                 self.preferences.tool,
                 SidebarTool::Explorer | SidebarTool::Git
             );
-        let left_files = self.preferences.left_visible
-            && matches!(
-                self.preferences.left_tool,
-                Some(SidebarTool::Explorer | SidebarTool::Git)
-            );
+        let left_files = self.preferences.left_shows(SidebarTool::Explorer)
+            || self.preferences.left_shows(SidebarTool::Git);
         let wants_files = right_files || left_files;
         let include_stats = (self.preferences.visible && self.preferences.tool == SidebarTool::Git)
-            || (self.preferences.left_visible
-                && self.preferences.left_tool == Some(SidebarTool::Git));
+            || self.preferences.left_shows(SidebarTool::Git);
         let next = self
             .cwd()
             .filter(|_| wants_files)

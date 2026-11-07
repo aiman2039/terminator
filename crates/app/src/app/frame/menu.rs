@@ -16,7 +16,8 @@ impl App {
     /// treats as primary (left in IDE mode, right otherwise).
     pub(crate) fn open_problems(&mut self) {
         if self.preferences.ide_mode {
-            self.preferences.left_tool = Some(SidebarTool::Problems);
+            self.preferences
+                .set_left_content(LeftContent::Tool(SidebarTool::Problems));
             self.preferences.left_visible = true;
         } else {
             self.preferences.tool = SidebarTool::Problems;
