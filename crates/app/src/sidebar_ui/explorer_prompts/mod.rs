@@ -141,10 +141,20 @@ impl App {
             include: self.preferences.explorer_include.clone(),
             exclude: self.preferences.explorer_exclude.clone(),
         };
-        if self.explorer_search_last.as_ref() == Some(&query) {
+        let last = Some((cwd.to_path_buf(), query.clone()));
+        if self.explorer_search_last == last {
             return;
         }
-        self.explorer_search_last = Some(query.clone());
+        // Another folder's hits do not belong here while its search runs.
+        if self
+            .explorer_search_last
+            .as_ref()
+            .is_some_and(|(root, _)| root != cwd)
+        {
+            self.explorer_search.clear();
+            self.explorer_search_error = None;
+        }
+        self.explorer_search_last = last;
         self.explorer_search_generation = self.explorer_search_generation.wrapping_add(1);
         if query.is_empty() {
             self.explorer_search.clear();

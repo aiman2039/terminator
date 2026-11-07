@@ -100,6 +100,40 @@ fn contents_search_queues_a_query() {
 }
 
 #[test]
+#[cfg(feature = "test-support")]
+fn contents_search_runs_again_in_another_folder() {
+    let (mut app, ctx, _dir) = fixture();
+    app.preferences.tool = SidebarTool::Explorer;
+    app.preferences.explorer_search_mode = crate::preferences::ExplorerSearchMode::Contents;
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.explorer_query = "needle".into();
+    let draw = |app: &mut App, cwd: &std::path::Path| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(360.0, 220.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.explorer_toolbar(ui, cwd),
+        );
+        output.textures_delta.clear();
+    };
+    draw(&mut app, std::path::Path::new("/a"));
+    assert!(matches!(requests.try_recv(), Ok(Job::Search { .. })));
+    draw(&mut app, std::path::Path::new("/a"));
+    assert!(requests.try_recv().is_err(), "same folder and query");
+    // The same query in another project searches that project.
+    draw(&mut app, std::path::Path::new("/b"));
+    let Ok(Job::Search { root, .. }) = requests.try_recv() else {
+        panic!("another folder queues a search");
+    };
+    assert_eq!(root, PathBuf::from("/b"));
+}
+
+#[test]
 fn explorer_prepared_rows_reuse_listings_and_refresh_expansion_and_content() {
     let (mut app, _, _dir) = fixture();
     let root = PathBuf::from("/a");

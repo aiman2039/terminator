@@ -19,7 +19,9 @@ pub struct App {
     pub(crate) explorer_search_error: Option<String>,
     pub(crate) explorer_search_generation: u64,
     pub(crate) explorer_search_pending: bool,
-    pub(crate) explorer_search_last: Option<search::Query>,
+    /// The folder and query of the last Contents search; either changing
+    /// runs a new one.
+    pub(crate) explorer_search_last: Option<(PathBuf, search::Query)>,
     pub(crate) explorer_query: String,
     pub(crate) name_prompt: Option<workspace_ops::NamePrompt>,
     /// The name field takes keyboard focus on its next paint, then this clears.
