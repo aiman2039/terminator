@@ -23,7 +23,7 @@ const STATE_REFRESH: Duration = Duration::from_secs(1);
 
 pub(crate) use ask::AskAgent;
 #[cfg(test)]
-pub(crate) use center::palette_rect;
+pub(crate) use popup::palette_rect;
 
 pub(crate) const FILTER_FILES: u8 = 1 << 0;
 pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
@@ -404,6 +404,7 @@ mod ask;
 mod center;
 mod index;
 mod items;
+mod popup;
 mod results;
 
 #[cfg(test)]

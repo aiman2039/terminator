@@ -2,66 +2,12 @@
 //! JetBrains one. Tabs pick one kind, the field searches, the list shows
 //! ranked rows, and the footer shows the selected row's path. Esc or a
 //! click outside the popup closes it.
+use super::popup::{
+    FOOTER_HEIGHT, PaletteColors, PaletteRowInput, ROW_HEIGHT, palette_footer, palette_rect,
+    palette_row, pressed_outside,
+};
 use super::*;
 use std::sync::Arc;
-
-/// Height of one result row.
-const ROW_HEIGHT: f32 = 26.0;
-/// Height kept for the footer under the list.
-const FOOTER_HEIGHT: f32 = 26.0;
-/// Popup width bounds.
-const MIN_WIDTH: f32 = 560.0;
-const MAX_WIDTH: f32 = 960.0;
-/// Popup height bounds.
-const MIN_HEIGHT: f32 = 320.0;
-const MAX_HEIGHT: f32 = 760.0;
-/// Space kept between the popup and the window edges.
-const EDGE: f32 = 16.0;
-
-/// Where the popup sits in `content`: centered, near the top, about half
-/// the width and 60% of the height, inside the window edges.
-pub(crate) fn palette_rect(content: egui::Rect) -> egui::Rect {
-    let room = (content.width() - 2.0 * EDGE).max(0.0);
-    let width = (content.width() * 0.5)
-        .clamp(MIN_WIDTH, MAX_WIDTH)
-        .min(room);
-    let top = content.top() + (content.height() * 0.18).max(EDGE);
-    let height = (content.height() * 0.6)
-        .clamp(MIN_HEIGHT, MAX_HEIGHT)
-        .min((content.bottom() - EDGE - top).max(0.0));
-    egui::Rect::from_min_size(
-        egui::pos2(content.center().x - width / 2.0, top),
-        egui::vec2(width, height),
-    )
-}
-
-/// Theme colors copied out before the body borrows the app.
-#[derive(Clone, Copy)]
-struct PaletteColors {
-    surface: egui::Color32,
-    field: egui::Color32,
-    border: egui::Color32,
-    text: egui::Color32,
-    secondary: egui::Color32,
-    accent: egui::Color32,
-    selection: egui::Color32,
-    hover: egui::Color32,
-}
-
-impl PaletteColors {
-    fn new(theme: &terminator_core::appearance::AppearanceConfig) -> Self {
-        Self {
-            surface: appearance::color(&theme.surface),
-            field: appearance::color(&theme.window),
-            border: appearance::color(&theme.border),
-            text: appearance::color(&theme.text),
-            secondary: appearance::color(&theme.secondary),
-            accent: appearance::color(&theme.accent),
-            selection: appearance::color(&theme.selection),
-            hover: appearance::color(&theme.hover),
-        }
-    }
-}
 
 impl App {
     /// Paints the Search Everywhere popup while the palette is open.
@@ -507,125 +453,6 @@ struct PaletteRowsInput<'a> {
     keyboard_moved: bool,
     colors: PaletteColors,
 }
-
-struct PaletteRowInput<'a> {
-    ui: &'a mut egui::Ui,
-    item: &'a PaletteItem,
-    text: Option<&'a RowText>,
-    selected: bool,
-    colors: PaletteColors,
-}
-
-/// One row: icon, title and a dim note on the left, the owner on the right.
-fn palette_row(input: PaletteRowInput<'_>) -> egui::Response {
-    let PaletteRowInput {
-        ui,
-        item,
-        text,
-        selected,
-        colors,
-    } = input;
-    let size = egui::vec2(ui.available_width(), ROW_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let fill = if selected {
-        Some(colors.selection)
-    } else {
-        response.hovered().then_some(colors.hover)
-    };
-    if let Some(fill) = fill {
-        ui.painter().rect_filled(
-            rect,
-            egui::CornerRadius::same(appearance::RADIUS_SMALL),
-            fill,
-        );
-    }
-    let empty = RowText::default();
-    let text = text.unwrap_or(&empty);
-    let mut row = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect.shrink2(egui::vec2(8.0, 0.0)))
-            .layout(egui::Layout::right_to_left(egui::Align::Center)),
-    );
-    if !text.right.is_empty() {
-        row.add(
-            egui::Label::new(
-                egui::RichText::new(&text.right)
-                    .size(appearance::FONT_SMALL)
-                    .color(colors.secondary),
-            )
-            .selectable(false),
-        );
-    }
-    row.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let title = if let Some(icon) = item.icon() {
-            let mut image = egui::Image::new(crate::icons::source(icon))
-                .fit_to_exact_size(egui::Vec2::splat(appearance::TOOLBAR_ICON));
-            // Language icons carry their own palette.
-            if !crate::icons::is_language(icon) {
-                image = image.tint(colors.text);
-            }
-            ui.add(image);
-            item.title()
-        } else {
-            item.label()
-        };
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(title)
-                    .size(appearance::FONT_BODY)
-                    .color(colors.text),
-            )
-            .selectable(false)
-            .truncate(),
-        );
-        if !text.inline.is_empty() {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(&text.inline)
-                        .size(appearance::FONT_SMALL)
-                        .color(colors.secondary),
-                )
-                .selectable(false)
-                .truncate(),
-            );
-        }
-    });
-    response
-}
-
-/// The selected row's path, under a rule at the bottom of the popup.
-fn palette_footer(ui: &mut egui::Ui, text: Option<&RowText>, colors: PaletteColors) {
-    ui.separator();
-    let footer = text.map_or("", |text| text.footer.as_str());
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(footer)
-                .size(appearance::FONT_SMALL)
-                .color(colors.secondary),
-        )
-        .selectable(false)
-        .truncate(),
-    );
-}
-
-/// A primary press this frame that starts outside `popup`.
-fn pressed_outside(ctx: &egui::Context, popup: egui::Rect) -> bool {
-    ctx.input(|input| {
-        input.events.iter().any(|event| {
-            matches!(
-                event,
-                egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    ..
-                } if !popup.contains(*pos)
-            )
-        })
-    })
-}
-
 /// Scroll offset that centers row `index` in a viewport of `viewport` height.
 pub(super) fn palette_scroll_offset(index: usize, row_stride: f32, viewport: f32) -> f32 {
     let top = f32::from(u16::try_from(index).unwrap_or(u16::MAX)) * row_stride;
