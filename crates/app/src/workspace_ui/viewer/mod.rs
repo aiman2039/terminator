@@ -8,6 +8,7 @@ mod file_tab;
 mod pane_menu;
 mod tab_viewer;
 mod terminal_pane;
+mod zoom;
 
 pub(crate) struct Viewer<'a> {
     pub(crate) app: &'a mut App,

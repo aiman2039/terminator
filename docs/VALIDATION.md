@@ -6113,3 +6113,30 @@ Not verified: no native GUI fixture, `cargo xtask integration` or manual run.
 Not tested: `ctl wait` timeout against a live daemon, text reaching a real
 agent PTY (Ask agent, Resume, New task), the init command in a real shell,
 mouse drag in the session tree, and the `open_link` failure path.
+
+## Pane zoom and floating dock-back (2026-11-07)
+
+- Zoom pane (`zoom_pane`, Cmd+Shift+Enter; Ctrl+Shift+Enter on Linux, the
+  caption ⤢ button, the editor tab-bar button, the pane menu) shows one
+  main-dock terminal or native editor in a center card over the dimmed
+  workspace. Main-dock pane bodies paint in a view-keyed `scope_id`, so the
+  overlay paints the same widgets; the dock pane paints a placeholder while
+  zoomed.
+- Headless tests (`app::tests::pane_zoom`): one body a frame for a terminal
+  and an editor (both fail with the dock placeholder removed; the editor case
+  also trips egui's layer-change debug assert); a click in the card keeps
+  the zoom and a margin click restores it with focus; Esc stays with the
+  pane; Settings, an ended session or another tab ends the zoom; header
+  request and second click; floating "Dock back to main window" returns one
+  pane to its home tab and keeps the window for the rest; "Dock back all"
+  and the last pane close the window.
+- `cargo clippy -p terminator --all-targets [--features
+  terminator/test-support] -- -D warnings`, `cargo test -p terminator
+  -p terminator-core --locked` (GUI 1394 passed, 5 ignored; 1527 with
+  test-support) and `sh scripts/check.sh sarah` passed. `cargo fmt` could
+  not run in the agent worktree; `rustfmt --edition 2024` ran on the changed
+  files.
+
+Not verified: no native GUI fixture or manual run. Not tested: the real PTY
+resize when the zoom opens and closes, the floating corner button in a real
+second OS window, and a WKWebView pane under the zoom backdrop.

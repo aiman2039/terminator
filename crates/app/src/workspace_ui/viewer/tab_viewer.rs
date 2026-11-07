@@ -45,6 +45,9 @@ impl TabViewer for Viewer<'_> {
     fn trailing_controls_width(&self) -> f32 {
         let actions = if self.strip {
             appearance::strip_terminal_actions_width() + 4.0
+        } else if self.window.is_none() {
+            // The editor zoom button (see `editor_zoom_button`).
+            appearance::TERMINAL_BUTTON + 4.0
         } else {
             0.0
         };
@@ -127,13 +130,19 @@ impl TabViewer for Viewer<'_> {
                 ui.close();
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
-            Tab::NativeEditor { path } => self.app.native_editor_view(NativeEditorViewInput {
-                ui,
-                path,
-                project: self.project.as_deref(),
-                tab: self.tab.as_deref(),
-                node: self.render_path,
-            }),
+            Tab::NativeEditor { .. } if self.zoomed_here(tab) => Self::zoom_placeholder(ui),
+            Tab::NativeEditor { path } => {
+                let key = Tab::NativeEditor { path: path.clone() };
+                self.pane_scope(ui, &key, |viewer, ui| {
+                    viewer.app.native_editor_view(NativeEditorViewInput {
+                        ui,
+                        path,
+                        project: viewer.project.as_deref(),
+                        tab: viewer.tab.as_deref(),
+                        node: viewer.render_path,
+                    });
+                });
+            }
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
             Tab::RevisionDiff { .. } => self.app.revision_diff_view(ui, tab),

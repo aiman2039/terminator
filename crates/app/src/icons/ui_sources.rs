@@ -464,4 +464,16 @@ pub(super) static UI_SOURCES: SourceTable = &[
         "AgentMultiple",
         egui::include_image!("../../assets/icons/agent-multiple.svg"),
     ),
+    (
+        "Maximize2",
+        egui::include_image!("../../assets/icons/maximize-2.svg"),
+    ),
+    (
+        "Minimize2",
+        egui::include_image!("../../assets/icons/minimize-2.svg"),
+    ),
+    (
+        "ArrowDownToLine",
+        egui::include_image!("../../assets/icons/arrow-down-to-line.svg"),
+    ),
 ];

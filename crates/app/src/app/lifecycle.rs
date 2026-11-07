@@ -193,6 +193,7 @@ impl App {
             dock_back_pane: None,
             dock_back_targets: Vec::new(),
             float_pane: None,
+            pane_ops: Default::default(),
             add_float_tab: None,
             focus_float_tab: None,
             floating: Vec::new(),

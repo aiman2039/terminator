@@ -36,6 +36,20 @@ impl CenterCardStyle {
             border: egui::Stroke::new(theme.border_width.max(1.0), color(&theme.border)),
         }
     }
+
+    /// The card's frame: surface fill, border, panel radius and padding.
+    pub fn frame(self) -> egui::Frame {
+        egui::Frame::new()
+            .fill(self.surface)
+            .stroke(self.border)
+            .corner_radius(PANEL_RADIUS)
+            .inner_margin(egui::Margin::same(CENTER_CARD_PADDING))
+    }
+
+    /// Dim layer over panes that stay visible behind a card (pane zoom).
+    pub fn scrim(self) -> egui::Color32 {
+        self.window.gamma_multiply(0.7)
+    }
 }
 
 /// Paints the window background and the card, runs `add` in the card, and
@@ -50,11 +64,8 @@ pub fn center_card<R>(
     ui.painter()
         .rect_filled(outer, egui::CornerRadius::ZERO, style.window);
     let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card));
-    let inner = egui::Frame::new()
-        .fill(style.surface)
-        .stroke(style.border)
-        .corner_radius(PANEL_RADIUS)
-        .inner_margin(egui::Margin::same(CENTER_CARD_PADDING))
+    let inner = style
+        .frame()
         .show(&mut card_ui, |ui| {
             ui.set_max_size(card.shrink(f32::from(CENTER_CARD_PADDING)).size());
             add(ui)

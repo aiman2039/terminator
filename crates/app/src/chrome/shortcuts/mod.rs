@@ -79,6 +79,7 @@ actions! {
     ToggleIdeMode => "toggle_ide_mode", "Toggle IDE mode", "LayoutDashboard";
     MoveToMain => "move_to_main", "Move terminal to main pane", "ArrowUp";
     MoveToStrip => "move_to_strip", "Move terminal to lower pane", "ArrowDown";
+    ZoomPane => "zoom_pane", "Zoom pane", "Maximize2";
     OpenSettings => "open_settings", "Settings", "Settings";
     OpenPalette => "open_palette", "Search Everywhere", "Search";
     GotoSymbol => "goto_symbol", "Go to symbol", "ListTree";

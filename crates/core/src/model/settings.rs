@@ -101,6 +101,8 @@ impl Settings {
             ("toggle_ide_mode".into(), "command+alt+E".into()),
             ("move_to_main".into(), "command+alt+M".into()),
             ("move_to_strip".into(), "command+alt+Down".into()),
+            // iTerm2's Maximize Active Pane; Ctrl+Shift+Enter on Linux.
+            ("zoom_pane".into(), "command+shift+Enter".into()),
             ("open_settings".into(), "command+,".into()),
             ("open_palette".into(), "command+P".into()),
             ("goto_symbol".into(), "command+alt+O".into()),

@@ -28,7 +28,10 @@ impl Viewer<'_> {
         // tabs; a floating window owns a single dock with no tab layer,
         // so they stay hidden there.
         if !self.strip && self.window.is_none() {
+            self.zoom_menu_item(ui, tab, pane);
             self.pane_layout_items(ui, tab, pane);
+        } else if let Some(viewport) = self.window {
+            self.float_dock_back_items(ui, tab, viewport);
         }
         if let Tab::Terminal(sid) = tab {
             self.terminal_pane_items(ui, sid);
@@ -64,6 +67,41 @@ impl Viewer<'_> {
         if detachable || floatable {
             ui.separator();
         }
+    }
+
+    /// A floating window's way home: this pane to its old place, or the
+    /// whole window (the same as closing it).
+    fn float_dock_back_items(&mut self, ui: &mut egui::Ui, tab: &Tab, viewport: egui::ViewportId) {
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Dock back to main window",
+            icon: "ArrowDownToLine",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            self.app.pane_ops.dock_back = Some((viewport, Some(tab.clone())));
+            ui.close();
+        }
+        let panes = self
+            .app
+            .float_pane_tabs
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
+        if panes > 1
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Dock back all",
+                icon: "PanelsTopLeft",
+                shortcut: "",
+            })
+            .clicked()
+        {
+            self.app.pane_ops.dock_back = Some((viewport, None));
+            ui.close();
+        }
+        ui.separator();
     }
 
     fn pane_detach_items(&mut self, ui: &mut egui::Ui, tab: &Tab) {
