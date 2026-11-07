@@ -315,8 +315,10 @@ fn a_commit_that_does_not_land_reloads_the_shelves_and_closes_a_drop_question() 
         let mut run = committing(false);
         run.app.git.shelves = vec![("stash@{0}".into(), "WIP".into())];
         run.app.git.list_root = Some("/a".into());
-        let question = sidebar_ui::GitConfirm::DropShelf("stash@{0}".into());
-        run.app.git.confirm = Some(question);
+        run.app.git.confirm = Some(sidebar_ui::PendingGitConfirm {
+            root: "/a".into(),
+            action: sidebar_ui::GitConfirm::DropShelf("stash@{0}".into()),
+        });
         // A hook stopped between its `stash push` and `stash pop` leaves
         // its own entry at stash@{0}; the shelf moved to stash@{1}.
         let job = run.commit.clone();
@@ -618,7 +620,7 @@ fn git_panel_controls_that_could_change_the_commit_are_disabled_while_it_runs() 
     assert!(crate::diagnostics::current_rect(&run.ctx, "feature").is_none());
     pane.paint(&mut run, vec![key_press(egui::Key::Escape)]);
     assert!(run.sent().is_empty());
-    assert!(run.app.git.confirm.is_none() && run.app.pending_delete.is_none());
+    assert!(run.app.git.confirm.is_none() && run.app.pending_delete.is_empty());
     assert!(run.app.info.is_none(), "disabled controls refuse nothing");
     // A disabled control says why.
     let wait = "Wait for the commit to finish".to_owned();
@@ -707,9 +709,12 @@ fn folder_staging_waits_for_a_running_commit() {
 #[test]
 fn a_question_asked_before_the_commit_waits_for_it_to_end() {
     let mut run = committing(false);
-    let question = sidebar_ui::GitConfirm::Discard {
-        path: "/a/edited.rs".into(),
-        untracked: false,
+    let question = sidebar_ui::PendingGitConfirm {
+        root: "/a".into(),
+        action: sidebar_ui::GitConfirm::Discard {
+            path: "/a/edited.rs".into(),
+            untracked: false,
+        },
     };
     run.app.git.confirm = Some(question.clone());
     run.app.git.list_root = Some("/a".into());
@@ -750,10 +755,7 @@ fn delete_file_in_the_git_panel_still_moves_the_file_to_trash_during_a_commit() 
     pane.paint(&mut run, vec![]);
     // Like the Explorer's Delete, it writes no index, HEAD, or stash.
     pane.menu_item(&mut run, "edited.rs", "Delete file");
-    assert_eq!(
-        run.app.pending_delete.as_deref(),
-        Some(Path::new("/a/edited.rs"))
-    );
+    assert_eq!(run.app.pending_delete, [PathBuf::from("/a/edited.rs")]);
     let trash = pane.text(&mut run, "Move to Trash") + egui::vec2(4.0, 4.0);
     pane.click(&mut run, trash, egui::PointerButton::Primary);
     let sent = run.sent();

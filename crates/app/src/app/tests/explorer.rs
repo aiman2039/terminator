@@ -829,8 +829,7 @@ fn explorer_keyboard_walks_selects_and_acts_on_the_tree() {
     );
     // Delete asks once for the whole selection.
     press(&mut app, key(egui::Key::Delete, none));
-    assert_eq!(app.pending_delete, Some(root.join("a.rs")));
-    assert_eq!(app.pending_delete_more, [root.join("b.rs")]);
+    assert_eq!(app.pending_delete, [root.join("a.rs"), root.join("b.rs")]);
     // F2 renames the cursor row.
     press(&mut app, key(egui::Key::F2, none));
     assert!(matches!(

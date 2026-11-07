@@ -36,7 +36,7 @@ pub(crate) struct GitPanelState {
     /// User-picked base ref; falls back to the upstream branch when `None`.
     pub(crate) base_ref: Option<String>,
     /// Destructive Git action awaiting confirmation on the inline bar.
-    pub(crate) confirm: Option<sidebar_ui::GitConfirm>,
+    pub(crate) confirm: Option<sidebar_ui::PendingGitConfirm>,
     /// The Compare with… popup, while it is open.
     pub(crate) picker: Option<crate::revision_compare::ComparePicker>,
     /// Commit Log filter bars, by tab key.

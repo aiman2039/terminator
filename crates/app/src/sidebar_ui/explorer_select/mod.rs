@@ -201,10 +201,8 @@ impl App {
 
     /// Ask before trashing the selection (one confirmation for all).
     pub(super) fn explorer_confirm_delete(&mut self) {
-        let mut paths = self.explorer_selection.clone().into_iter();
-        if let Some(first) = paths.next() {
-            self.pending_delete = Some(first);
-            self.pending_delete_more = paths.collect();
+        if !self.explorer_selection.is_empty() {
+            self.pending_delete = self.explorer_selection.clone();
         }
     }
 

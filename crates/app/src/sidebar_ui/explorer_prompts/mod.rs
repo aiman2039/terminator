@@ -38,6 +38,15 @@ pub(crate) enum GitConfirm {
     DropShelf(String),
 }
 
+/// A [`GitConfirm`] tied to the repository it was asked in. The answer
+/// runs there or nowhere: switching repositories drops the question, so a
+/// position like `stash@{1}` never applies to another repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingGitConfirm {
+    pub(crate) root: PathBuf,
+    pub(crate) action: GitConfirm,
+}
+
 impl GitConfirm {
     fn prompt(&self) -> (String, &'static str) {
         match self {
@@ -62,12 +71,23 @@ impl GitConfirm {
 }
 
 impl App {
+    /// Ask about `action` in the current operation root, if there is one.
+    pub(crate) fn ask_git_confirm(&mut self, action: GitConfirm) {
+        self.git.confirm = self
+            .op_root()
+            .map(|root| PendingGitConfirm { root, action });
+    }
+
     pub(super) fn pending_git_confirm_bar(&mut self, ui: &mut egui::Ui) {
         let Some(pending) = self.git.confirm.clone() else {
             return;
         };
-        let (prompt, verb) = pending.prompt();
-        let op = pending.into_op();
+        if self.op_root().as_ref() != Some(&pending.root) {
+            self.git.confirm = None;
+            return;
+        }
+        let (prompt, verb) = pending.action.prompt();
+        let op = pending.action.into_op();
         // A commit running in this repository disables the action; the
         // question stays until the commit ends.
         let lock = self.commit_wait(self.git_root().as_deref(), op.commit_risk());
@@ -85,32 +105,24 @@ impl App {
     }
 
     pub(super) fn pending_delete_bar(&mut self, ui: &mut egui::Ui) {
-        let Some(path) = self.pending_delete.clone() else {
-            return;
+        let label = match self.pending_delete.as_slice() {
+            [] => return,
+            [path] => format!(
+                "Move {} to Trash?",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            paths => format!("Move {} items to Trash?", paths.len()),
         };
         ui.horizontal(|ui| {
-            ui.label(if self.pending_delete_more.is_empty() {
-                format!(
-                    "Move {} to Trash?",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                )
-            } else {
-                format!(
-                    "Move {} items to Trash?",
-                    self.pending_delete_more.len().saturating_add(1)
-                )
-            });
+            ui.label(label);
             if ui.button("Move to Trash").clicked() {
-                self.queue_workspace(workspace_ops::Op::Delete(path));
-                for more in std::mem::take(&mut self.pending_delete_more) {
-                    self.queue_workspace(workspace_ops::Op::Delete(more));
+                for path in std::mem::take(&mut self.pending_delete) {
+                    self.queue_workspace(workspace_ops::Op::Delete(path));
                 }
-                self.pending_delete = None;
                 self.explorer_selection.clear();
             }
             if ui.button("Cancel").clicked() {
-                self.pending_delete = None;
-                self.pending_delete_more.clear();
+                self.pending_delete.clear();
             }
         });
     }

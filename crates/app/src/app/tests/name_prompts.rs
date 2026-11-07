@@ -7,7 +7,7 @@ fn explorer_prompts_do_not_suspend_terminal_input() {
         dir: PathBuf::from("/a"),
         name: "a.txt".into(),
     });
-    app.pending_delete = Some(PathBuf::from("/a/old"));
+    app.pending_delete = vec![PathBuf::from("/a/old")];
     assert!(app.terminal_input_enabled("shell"));
     assert!(app.strip_terminal_input_enabled("shell"));
     app.settings_open = true;
@@ -416,7 +416,7 @@ fn hidden_sidebar_keeps_explorer_prompts() {
         name: "kept".into(),
         dir: false,
     });
-    app.pending_delete = Some(PathBuf::from("/a/old"));
+    app.pending_delete = vec![PathBuf::from("/a/old")];
     for tool in [
         SidebarTool::Agents,
         SidebarTool::History,
@@ -436,7 +436,7 @@ fn hidden_sidebar_keeps_explorer_prompts() {
         );
         output.textures_delta.clear();
         assert_eq!(prompt_name(&app), Some("kept"));
-        assert_eq!(app.pending_delete, Some(PathBuf::from("/a/old")));
+        assert_eq!(app.pending_delete, [PathBuf::from("/a/old")]);
         assert!(app.terminal_input_enabled("shell"));
     }
     app.preferences.visible = false;
@@ -452,7 +452,7 @@ fn hidden_sidebar_keeps_explorer_prompts() {
     );
     output.textures_delta.clear();
     assert_eq!(prompt_name(&app), Some("kept"));
-    assert_eq!(app.pending_delete, Some(PathBuf::from("/a/old")));
+    assert_eq!(app.pending_delete, [PathBuf::from("/a/old")]);
 }
 
 #[test]
