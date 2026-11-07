@@ -40,6 +40,15 @@ pub(crate) struct Runtime {
     /// Shell integration command blocks (`command-blocks-v1`).
     pub(crate) commands: crate::commands::Commands,
 }
+impl Runtime {
+    /// The child is still ours to signal: not reaped and not ended. Between
+    /// the reap and `ended` (the output drain) its PID may already belong
+    /// to another process.
+    pub(crate) fn child_live(&self) -> bool {
+        !self.ended && !self.exited
+    }
+}
+
 /// A cloned input descriptor must not keep a failed output connection alive.
 pub(crate) struct Disconnect(pub(crate) transport::Stream);
 impl Drop for Disconnect {
