@@ -48,6 +48,8 @@ mod tests;
 pub(crate) use tests::support::{drain_updates, painted_text};
 pub(crate) mod types;
 mod updates;
+#[cfg(test)]
+pub(crate) use updates::service_failure_update;
 pub(crate) use updates::{PostCreate, PostCreateQueue};
 #[cfg(test)]
 mod vnc_tests;

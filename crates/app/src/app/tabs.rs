@@ -101,24 +101,7 @@ impl App {
         if self.selected_project().is_none() || self.missing_projects.contains(&project) {
             return;
         }
-        let tab_id = id();
-        if let Some(index) = index {
-            self.workspace_insert.insert(tab_id.clone(), index);
-        }
-        if let Some(post) = post.filter(|post| !post.input.is_empty()) {
-            self.post_create.by_tab.insert(tab_id.clone(), post);
-        }
-        let _ = self.jobs.send(Job::rpc(
-            Request::Create {
-                project,
-                cwd,
-                file: None,
-                line: None,
-                column: None,
-                editor: false,
-            },
-            After::Workspace(tab_id, Vec::new()),
-        ));
+        self.create_terminal_tab((project, cwd), (index, post));
     }
     pub(crate) fn begin_workspace_close_tabs(&mut self, project: &str, ids: Vec<String>) {
         self.rename_session = None;

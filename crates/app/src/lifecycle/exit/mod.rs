@@ -220,6 +220,8 @@ impl App {
     pub(crate) fn cancel_exit(&mut self, error: String) {
         self.vnc_quit_confirmed = false;
         self.exit = Exit::Idle;
+        // Layouts prepared during the exit were dropped: send them again.
+        self.layout_signature = None;
         self.services.pause_reads(false);
         self.services.handle().reopen_admission();
         self.error = Some(format!(

@@ -54,6 +54,7 @@ fn new_task_types_agent_command_without_enter() {
         open_terminal: true,
         agent_command: "claude".into(),
         browser_url: "http://localhost:3000".into(),
+        ..Default::default()
     };
     app.update_tx
         .send(Update::WorktreeCreated(

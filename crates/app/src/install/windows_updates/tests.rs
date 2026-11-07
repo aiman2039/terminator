@@ -95,6 +95,18 @@ fn manual_check_runs_once_while_automatic_checks_are_off() {
 }
 
 #[test]
+fn a_check_thread_that_dies_ends_checking() {
+    let mut check = WindowsUpdateCheck::new();
+    check.probing = true;
+    check.status = Status::Checking;
+    // The worker thread panicked: its sender is gone.
+    check.worker = Some(mpsc::sync_channel(1).1);
+    assert!(check.poll_with(false, true));
+    assert!(!check.probing && check.worker.is_none());
+    assert!(matches!(check.status, Status::Failed(_)));
+}
+
+#[test]
 fn newer_release_is_offered_once() {
     let mut check = WindowsUpdateCheck::new();
     let assets = vec![(

@@ -11,7 +11,7 @@ mod io;
 mod tests;
 mod three_way;
 
-pub(crate) use io::{MergeTab, MergeTabs};
+pub(crate) use io::{MergeTab, MergeTabs, take_done};
 pub(crate) use three_way::ChunkKind;
 
 /// One version of the file, split into lines (endings kept).

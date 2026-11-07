@@ -263,9 +263,22 @@ impl App {
             self.info = Some("Nothing to undo in Explorer".into());
             return;
         };
+        // A rename that was not sent stays undoable and is not awaited.
+        let mut unsent = Vec::new();
         for (from, to) in moved.into_iter().rev() {
-            self.explorer_undoing.push((to.clone(), from.clone()));
-            self.queue_workspace(workspace_ops::Op::Rename { from: to, to: from });
+            let op = workspace_ops::Op::Rename {
+                from: to.clone(),
+                to: from.clone(),
+            };
+            if self.queue_workspace(op) {
+                self.explorer_undoing.push((to, from));
+            } else {
+                unsent.push((from, to));
+            }
+        }
+        if !unsent.is_empty() {
+            unsent.reverse();
+            self.explorer_undo.push(unsent);
         }
     }
 

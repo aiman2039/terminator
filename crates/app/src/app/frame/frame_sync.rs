@@ -16,8 +16,11 @@ impl App {
             && !backing_off
             && self.preferences != self.preferences_saved
         {
-            let _ = self.jobs.send(Job::Preferences(self.preferences.clone()));
-            self.preferences_pending = true;
+            // A refused save answers with its error; no save is pending.
+            self.preferences_pending = self
+                .jobs
+                .send(Job::Preferences(self.preferences.clone()))
+                .is_ok();
         }
     }
 

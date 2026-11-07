@@ -19,6 +19,8 @@ mod vnc;
 
 use editors::ImageInput;
 use git::{DirectoryPreviewInput, RefreshInput};
+#[cfg(test)]
+pub(crate) use service::service_failure_update;
 use sessions::FloatCreatedInput;
 pub(crate) use sessions::{PostCreate, PostCreateQueue};
 
@@ -231,6 +233,10 @@ impl App {
             Update::GitBase(path, generation, base, root) => {
                 self.apply_git_base(path, generation, (base, root));
             }
+            Update::GitBaseFailed(path, generation) => self.git_base_failed(path, generation),
+            Update::CreateFailed(tab, error) => self.handle_create_failed(&tab, error),
+            Update::WorktreeFailed(draft, error) => self.handle_worktree_failed(draft, error),
+            Update::LayoutPrepareFailed(generation) => self.layout_prepare_failed(generation),
             Update::LinePreviews(generation, lines) => {
                 self.apply_line_previews(generation, lines);
             }

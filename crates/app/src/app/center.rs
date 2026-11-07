@@ -99,7 +99,7 @@ impl App {
             self.browse_target = Some(BrowseTarget::WorktreeDest);
         }
         if submit {
-            self.submit_worktree(&clone);
+            self.submit_worktree(&mut clone);
         }
         // Keep the form after Create until the worker reports success, so a
         // failed creation can be corrected and retried.

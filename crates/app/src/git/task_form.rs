@@ -8,11 +8,14 @@ pub(crate) struct TaskStart {
     pub open_terminal: bool,
     pub agent_command: String,
     pub browser_url: String,
+    /// The [`WorktreeDraft::id`] that was submitted.
+    pub draft: u64,
 }
 
 impl WorktreeDraft {
     pub(crate) fn task_start(&self) -> TaskStart {
         TaskStart {
+            draft: self.id,
             open_terminal: self.open_terminal,
             agent_command: self.agent_command.trim().to_owned(),
             browser_url: self.browser_url.trim().to_owned(),

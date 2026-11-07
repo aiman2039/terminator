@@ -168,7 +168,7 @@ impl App {
             self.image_diffs.insert(
                 key.clone(),
                 ImageDiff {
-                    pending,
+                    pending: Some(pending),
                     mix: 0.5,
                     ..ImageDiff::default()
                 },
@@ -208,7 +208,7 @@ impl ImageDiff {
         let Some(rx) = self.pending.as_mut() else {
             return;
         };
-        let Ok(result) = rx.try_recv() else {
+        let Some(result) = crate::merge::take_done(rx) else {
             return;
         };
         self.pending = None;

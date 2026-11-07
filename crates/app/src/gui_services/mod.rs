@@ -12,3 +12,9 @@ pub use jobs::ImageJobs;
 #[cfg(test)]
 pub(crate) use submit::project_directories;
 pub use submit::{Owner, Services, Submit};
+
+/// What a refused job answers its view (see `jobs::replies`).
+#[cfg(test)]
+pub(crate) fn rejection_for_test(job: &crate::Job) -> Vec<crate::Update> {
+    jobs::JobRouting::rejection(job)
+}

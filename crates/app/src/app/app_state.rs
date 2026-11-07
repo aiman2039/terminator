@@ -463,29 +463,5 @@ pub(crate) fn inventory_is_stale(current: &State, incoming: &State) -> bool {
         || (incoming.generation == current.generation && incoming.revision < current.revision)
 }
 
-pub(crate) fn service_failure_update(
-    context: &async_service::OperationContext,
-    error: &async_service::Failure,
-) -> Option<Update> {
-    match context.subsystem {
-        // A diff or gutter write; one in a known repository ran on its queue.
-        "diff-action" | "workspace-op" if let Some(key) = &context.tab => {
-            Some(Update::DiffActionFailed(key.clone(), error.to_string()))
-        }
-        "diff" => Some(Update::Diff(
-            context.resource.clone(),
-            Err(error.to_string()),
-        )),
-        "files" => Some(Update::ResolvedTarget(context.resource.clone(), None)),
-        "images" => Some(Update::Image(
-            PathBuf::from(&context.resource),
-            context.generation,
-            Err(error.to_string()),
-        )),
-        "audio-spectrum" => None,
-        _ => Some(Update::Error(error.to_string())),
-    }
-}
-
 /// A commit's changed files: `(status letter, path)`, or the error.
 pub(crate) type CommitFiles = Result<Vec<(char, PathBuf)>, String>;

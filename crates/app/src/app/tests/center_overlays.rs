@@ -249,7 +249,7 @@ fn navigation_closes_worktree_draft_form() {
 #[test]
 fn worktree_form_stays_open_until_creation_succeeds() {
     let (mut app, _, _dir) = fixture();
-    let draft = worktree_ui::WorktreeDraft {
+    let mut draft = worktree_ui::WorktreeDraft {
         source: "a".into(),
         start: "HEAD".into(),
         branch: "task".into(),
@@ -258,11 +258,75 @@ fn worktree_form_stays_open_until_creation_succeeds() {
         ..Default::default()
     };
     app.worktree_draft = Some(draft.clone());
-    app.submit_worktree(&draft);
+    app.submit_worktree(&mut draft);
     assert!(app.worktree_draft.is_some());
     let state = app.state.clone();
     app.handle_worktree_created(state, "a".into(), worktree_ui::TaskStart::default());
     assert!(app.worktree_draft.is_none());
+}
+
+/// #264: one Create per submission, and a late reply only touches the
+/// draft it came from.
+#[test]
+fn worktree_create_is_sent_once_and_a_late_success_keeps_a_newer_draft() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, sent) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    let mut first = worktree_ui::WorktreeDraft {
+        source: "a".into(),
+        start: "HEAD".into(),
+        branch: "task".into(),
+        dest: "/tmp/task".into(),
+        id: 1,
+        ..Default::default()
+    };
+    app.submit_worktree(&mut first);
+    app.submit_worktree(&mut first);
+    assert!(first.submitting);
+    let creates = sent
+        .try_iter()
+        .filter(|job| matches!(job, Job::CreateWorktree(_)))
+        .count();
+    assert_eq!(creates, 1, "a second click while creating sends nothing");
+    // The user cancelled and opened a new draft before the reply landed.
+    let newer = worktree_ui::WorktreeDraft {
+        id: 2,
+        ..first.clone()
+    };
+    app.worktree_draft = Some(newer);
+    let state = app.state.clone();
+    app.handle_worktree_created(state, "a".into(), first.task_start());
+    assert_eq!(app.worktree_draft.as_ref().map(|d| d.id), Some(2));
+}
+
+#[test]
+fn worktree_create_failure_unlocks_its_draft() {
+    let (mut app, ctx, _dir) = fixture();
+    let draft = worktree_ui::WorktreeDraft {
+        id: 5,
+        submitting: true,
+        ..Default::default()
+    };
+    app.worktree_draft = Some(draft);
+    app.update_tx
+        .send(Update::WorktreeFailed(5, "branch exists".into()))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert!(app.worktree_draft.as_ref().is_some_and(|d| !d.submitting));
+    assert!(
+        app.error
+            .as_deref()
+            .is_some_and(|e| e.contains("branch exists"))
+    );
+    // A refused Create answers the wizard, too.
+    let create = Job::CreateWorktree(worktree_ui::WorktreeDraft {
+        id: 5,
+        ..Default::default()
+    });
+    assert!(matches!(
+        crate::gui_services::rejection_for_test(&create).as_slice(),
+        [Update::WorktreeFailed(5, _)]
+    ));
 }
 
 #[test]

@@ -30,7 +30,7 @@ pub(super) struct FetchError {
 }
 
 impl FetchError {
-    fn other(message: String) -> Self {
+    pub(super) fn other(message: String) -> Self {
         Self {
             message,
             rate_limited: None,

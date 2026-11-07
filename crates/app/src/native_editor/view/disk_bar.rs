@@ -113,10 +113,13 @@ impl ViewPass<'_> {
                 Ok(LineEnding::decode(text).0)
             },
         );
+        let error = rx
+            .is_none()
+            .then(|| "Could not start reading the file; try again.".to_owned());
         self.doc.extras.compare = Some(CompareView {
             rx,
             lines: Vec::new(),
-            error: None,
+            error,
         });
     }
 
@@ -137,7 +140,12 @@ impl ViewPass<'_> {
                     view.error = Some(format!("{error:#}"));
                     view.rx = None;
                 }
-                Err(_) => ui.ctx().request_repaint(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => ui.ctx().request_repaint(),
+                // The read ended without a result (timed out, panicked).
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    view.error = Some("The file read stopped before it finished.".into());
+                    view.rx = None;
+                }
             }
         }
         let mut close = false;

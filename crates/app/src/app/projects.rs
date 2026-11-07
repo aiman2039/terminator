@@ -445,13 +445,18 @@ impl App {
         if self.layout_signature.as_ref() == Some(&signature) {
             return;
         }
-        self.layout_signature = Some(signature);
         self.prune_closed_tab_expanded();
         let layouts = self.persistable_layouts();
         self.layout_generation = self.layout_generation.wrapping_add(1);
-        let _ = self
-            .jobs
-            .send(Job::PrepareLayouts(self.layout_generation, layouts));
+        // The signature means "sent": a refused prepare is tried again on
+        // the next pass. A prepare that is sent but never saved resets it
+        // (`layout_prepare_failed`, `handle_layouts_prepared`, exit cancel).
+        if (self.jobs)
+            .send(Job::PrepareLayouts(self.layout_generation, layouts))
+            .is_ok()
+        {
+            self.layout_signature = Some(signature);
+        }
     }
 }
 

@@ -12,20 +12,32 @@ impl App {
         generation: u64,
         layouts: Vec<(String, serde_json::Value, String)>,
     ) {
+        // The exit checkpoint saves layouts itself; a cancelled exit
+        // resets the signature so these are sent again (`cancel_exit`).
         if generation != self.layout_generation || self.exit.active() {
             return;
         }
         for (project, value, text) in layouts {
-            if self.can_persist_layout(&project)
-                && self.layout_saved.get(&project) != Some(&text)
-                && self.layout_pending.get(&project) != Some(&text)
-                && self
-                    .jobs
-                    .send(Job::SaveLayout(project.clone(), value, text.clone()))
-                    .is_ok()
+            if !self.can_persist_layout(&project)
+                || self.layout_saved.get(&project) == Some(&text)
+                || self.layout_pending.get(&project) == Some(&text)
             {
-                self.layout_pending.insert(project, text);
+                continue;
             }
+            let job = Job::SaveLayout(project.clone(), value, text.clone());
+            if self.jobs.send(job).is_ok() {
+                self.layout_pending.insert(project, text);
+            } else {
+                // Not sent: the next pass prepares and sends it again.
+                self.layout_signature = None;
+            }
+        }
+    }
+
+    /// The prepare job of `generation` ended without its layouts.
+    pub(super) fn layout_prepare_failed(&mut self, generation: u64) {
+        if generation == self.layout_generation {
+            self.layout_signature = None;
         }
     }
 

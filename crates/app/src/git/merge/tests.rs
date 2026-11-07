@@ -419,3 +419,28 @@ fn a_commit_that_starts_before_the_resolved_file_is_written_leaves_it_unstaged()
     assert_eq!(merge.app.merge[&key].message.as_deref(), Some("Saved"));
     assert_eq!(merge.app.info.as_deref(), Some(RUNNING));
 }
+
+/// A merge read the pool refused, or one that ended without a result,
+/// shows an error instead of loading forever (#267).
+#[test]
+fn refused_or_dead_merge_read_shows_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = eframe::egui::Context::default();
+    let mut app =
+        crate::App::with_context(&ctx, terminator_core::Paths::at(dir.path().join("state")));
+    app.services.handle().close_admission();
+    let tab = tab(dir.path().into(), dir.path().join("conflicted.txt"));
+    app.poll_merge(&tab);
+    let state = &app.merge[&tab.key()];
+    assert!(!state.busy(), "nothing is loading");
+    assert!(
+        state
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("Could not start"))
+    );
+    // A job whose sender went away (timeout, panic) is an error too.
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<Result<(), String>>();
+    drop(sender);
+    assert!(matches!(super::take_done(&mut receiver), Some(Err(_))));
+}

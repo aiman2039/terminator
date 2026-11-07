@@ -17,45 +17,66 @@ impl App {
         let Some(result) = completion.result.take() else {
             return ControlFlow::Break(());
         };
+        let id = completion.context.id;
         match result {
-            Ok(updates) => self.service_ready.extend(updates),
-            Err(async_service::Failure::Cancelled) => self.service_cancelled(&completion.context),
-            Err(error) => self.service_failed(&completion.context, &error),
+            Ok(updates) => {
+                self.services.settle(id, Ok(()));
+                self.service_ready.extend(updates);
+            }
+            Err(async_service::Failure::Cancelled) => {
+                let owed = self
+                    .services
+                    .settle(id, Err(&async_service::Failure::Cancelled));
+                self.service_cancelled(&completion.context, owed);
+            }
+            Err(error) => {
+                let owed = self.services.settle(id, Err(&error));
+                self.service_failed(&completion.context, &error, owed);
+            }
         }
         self.service_completion = Some(completion);
         ctx.request_repaint();
         ControlFlow::Continue(())
     }
 
-    fn service_cancelled(&mut self, context: &async_service::OperationContext) {
+    /// A cancelled operation. `owed` holds its view's reply when nothing
+    /// newer replaced it (a read stopped by Quit that was then cancelled).
+    fn service_cancelled(&mut self, context: &async_service::OperationContext, owed: Vec<Update>) {
         let key = &context.resource;
-        if matches!(context.subsystem, "diff" | "files") {
-            self.loading.remove(key);
-        }
-        if context.subsystem == git_log::LOG_SUBSYSTEM {
-            self.log_job_ended(key, context.generation, None);
-        }
-        if context.subsystem == "vnc"
-            && let Some(sid) = context.resource.strip_prefix("frame:")
-            && let Some(view) = self.vnc_views.get_mut(sid)
-        {
-            view.fetching = false;
-        }
-        if context.subsystem == "images"
-            && let Some(preview) = self
-                .images
-                .values_mut()
-                .find(|preview| preview.generation == context.generation)
-        {
-            preview.loading = false;
-            preview.cancellation = None;
+        match context.subsystem {
+            "diff" | "files" => {
+                self.loading.remove(key);
+            }
+            git_log::LOG_SUBSYSTEM => self.log_job_ended(key, context.generation, None),
+            "vnc" => {
+                if let Some(sid) = key.strip_prefix("frame:")
+                    && let Some(view) = self.vnc_views.get_mut(sid)
+                {
+                    view.fetching = false;
+                }
+            }
+            "images" => {
+                if let Some(preview) = self
+                    .images
+                    .values_mut()
+                    .find(|preview| preview.generation == context.generation)
+                {
+                    preview.loading = false;
+                    preview.cancellation = None;
+                }
+            }
+            // Its view still waits: answer it as a failure.
+            _ => self.service_ready.extend(owed),
         }
     }
 
+    /// A job that ended without its reply. The view that waits for it
+    /// gets the reply the job owes (`owed`), else its subsystem's.
     fn service_failed(
         &mut self,
         context: &async_service::OperationContext,
         error: &async_service::Failure,
+        owed: Vec<Update>,
     ) {
         if context.subsystem == gui_services::COMMIT_SUBSYSTEM {
             // The commit or push run ended without its reply.
@@ -67,13 +88,17 @@ impl App {
             self.log_job_ended(&context.resource, context.generation, Some(error));
             return;
         }
-        let Some(update) = service_failure_update(context, error) else {
-            return;
+        let updates = if owed.is_empty() {
+            service_failure_update(context, error).into_iter().collect()
+        } else {
+            owed
         };
-        if let Update::ResolvedTarget(key, _) = &update {
-            self.loading.remove(key);
+        for update in updates {
+            if let Update::ResolvedTarget(key, _) = &update {
+                self.loading.remove(key);
+            }
+            self.service_ready.push_back(update);
         }
-        self.service_ready.push_back(update);
     }
 
     pub(super) fn handle_ui_request(
@@ -169,5 +194,36 @@ impl App {
                 self.error = Some(format!("Could not start session service: {error}"));
             }
         }
+    }
+}
+
+/// The reply of a failed job that owes none of its own (see
+/// `gui_services::jobs::replies`): known subsystems answer their view,
+/// the rest report in the status bar.
+pub(crate) fn service_failure_update(
+    context: &async_service::OperationContext,
+    error: &async_service::Failure,
+) -> Option<Update> {
+    match context.subsystem {
+        // A diff or gutter write; one in a known repository ran on its queue.
+        "diff-action" | "workspace-op" if let Some(key) = &context.tab => {
+            Some(Update::DiffActionFailed(key.clone(), error.to_string()))
+        }
+        "diff" => Some(Update::Diff(
+            context.resource.clone(),
+            Err(error.to_string()),
+        )),
+        "files" => Some(Update::ResolvedTarget(context.resource.clone(), None)),
+        "images" => Some(Update::Image(
+            std::path::PathBuf::from(&context.resource),
+            context.generation,
+            Err(error.to_string()),
+        )),
+        "vnc" => context
+            .resource
+            .strip_prefix("frame:")
+            .map(|session| Update::VncFrame(session.to_owned(), Err(error.to_string()))),
+        "audio-spectrum" => None,
+        _ => Some(Update::Error(error.to_string())),
     }
 }
