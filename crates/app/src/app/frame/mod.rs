@@ -10,6 +10,7 @@ mod frame_sync;
 mod input;
 mod menu;
 mod status_bar;
+pub(crate) mod status_line;
 
 /// Env-gated idle-CPU probe. Set `TERMINATOR_REPAINT_LOG=1` and watch stderr:
 /// one line per second with the frame count plus egui's own repaint causes

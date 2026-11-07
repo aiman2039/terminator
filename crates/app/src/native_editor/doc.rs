@@ -105,7 +105,7 @@ pub struct NativeDoc {
     pub(super) mtime_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<anyhow::Result<Option<SystemTime>>>>,
     pub(super) load_error: Option<String>,
-    pub(super) save_error: Option<String>,
+    pub(super) save_error: Option<super::file_io::SaveError>,
     /// A vim message (`:q` refused, `E492`), with the buffer revision it
     /// was set at: the next edit clears it. Not a save failure, so it
     /// does not pause autosave.

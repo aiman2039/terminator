@@ -74,25 +74,14 @@ impl App {
                 self.attach_error.remove(&session.id);
             }
         }
-        if connected
-            && self
-                .error
-                .as_deref()
-                .is_some_and(daemon_connection::is_connection_error)
-        {
-            self.error = None;
+        if connected {
+            self.error.clear_kind(StatusKind::Connection);
         }
         if state.generation != self.state.generation
             || state.attachment_helper_available == Some(true)
         {
             self.installation_error = None;
-            if self
-                .error
-                .as_deref()
-                .is_some_and(installation::is_helper_error)
-            {
-                self.error = None;
-            }
+            self.error.clear_kind(StatusKind::Helper);
         }
         self.connected = connected;
         let initial = !self.state_loaded;
@@ -177,7 +166,7 @@ impl App {
                 let dock = match Workspace::load(p.layout.clone()) {
                     Ok(workspace) => workspace,
                     Err(error) => {
-                        self.error = Some(format!(
+                        self.error.set(format!(
                             "{}: {error:#}. Layout will not be overwritten.",
                             p.name
                         ));

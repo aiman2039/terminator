@@ -240,7 +240,7 @@ impl App {
             && let Some(project) = self.selected.clone()
             && let Err(error) = self.open_browser_url(&project, &url, None)
         {
-            self.error = Some(format!("{error:#}"));
+            self.error.set(format!("{error:#}"));
         }
     }
 }

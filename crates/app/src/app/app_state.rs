@@ -209,14 +209,8 @@ pub struct App {
     pub(crate) resource_tx: std::sync::mpsc::Sender<Option<resource_sample::Request>>,
     pub(crate) resource_request: Option<resource_sample::Request>,
     pub(crate) context_path: Option<PathBuf>,
-    pub(crate) error: Option<String>,
-    /// Same status text the user dismissed. Identical reports stay hidden.
-    pub(crate) dismissed_error: Option<String>,
-    /// Authentication errors belong to a service, not the selected directory.
-    pub(crate) dismissed_auth_errors: HashSet<String>,
-    /// Working directory the dismiss latch and missing-path budget belong to.
-    pub(crate) error_cwd: Option<PathBuf>,
-    pub(crate) missing_path_reports: u8,
+    /// Status-bar error with its kind and dismiss state.
+    pub(crate) error: StatusLine,
     pub(crate) info: Option<String>,
     /// The info text on screen and when it appeared: it clears after a while.
     pub(crate) info_since: Option<(String, std::time::Instant)>,
@@ -396,19 +390,6 @@ pub struct App {
     pub(crate) unread_selected: Option<String>,
     pub(crate) connected: bool,
     pub(crate) control_server: Option<ui_control::Server>,
-}
-
-pub(crate) fn is_missing_path_error(error: &str) -> bool {
-    if daemon_connection::is_connection_error(error) {
-        return false;
-    }
-    error
-        .lines()
-        .any(|line| line.trim() == "No such file or directory (os error 2)")
-}
-
-pub(crate) fn is_session_auth_error(error: &str) -> bool {
-    error.starts_with("Cannot read session service authentication file ")
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

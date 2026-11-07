@@ -193,7 +193,8 @@ impl App {
     /// Open the folders above `path`, select it, and open it if a file.
     fn explorer_jump_to(&mut self, ui: &mut egui::Ui, cwd: &Path, path: PathBuf) {
         if !path.starts_with(cwd) {
-            self.error = Some(format!("{} is outside the Explorer folder", path.display()));
+            self.error
+                .set(format!("{} is outside the Explorer folder", path.display()));
             return;
         }
         let mut parent = path.parent();

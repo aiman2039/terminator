@@ -391,7 +391,7 @@ impl NativeFileIo {
             force,
         } = request;
         if !force && Fingerprint::read(&path)? != expected {
-            anyhow::bail!("Changed on disk since loading");
+            return Err(ChangedOnDisk.into());
         }
         let text_hash = terminator_native_edit::doc::hash_text(&text);
         let bytes = encoding.encode(&line_ending.encode(text))?;
@@ -401,6 +401,44 @@ impl NativeFileIo {
             fingerprint: Fingerprint::of(&bytes),
             text_hash,
         })
+    }
+}
+
+/// The save worker refused: the disk bytes are not the ones last loaded.
+#[derive(Debug)]
+pub(super) struct ChangedOnDisk;
+
+impl std::fmt::Display for ChangedOnDisk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Changed on disk since loading")
+    }
+}
+
+impl std::error::Error for ChangedOnDisk {}
+
+/// Why the last save failed. Only a disk conflict offers "Save anyway".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SaveError {
+    ChangedOnDisk,
+    Failed(String),
+}
+
+impl SaveError {
+    pub(super) fn of(error: &anyhow::Error) -> Self {
+        if error.downcast_ref::<ChangedOnDisk>().is_some() {
+            Self::ChangedOnDisk
+        } else {
+            Self::Failed(format!("{error:#}"))
+        }
+    }
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChangedOnDisk => ChangedOnDisk.fmt(f),
+            Self::Failed(text) => f.write_str(text),
+        }
     }
 }
 

@@ -156,7 +156,8 @@ impl App {
     }
     pub(crate) fn start_remote_transfer(&mut self, project: &str, pick: Pick) {
         if !self.transfers_supported() {
-            self.error = Some("Restart the session service to transfer SSH project files".into());
+            self.error
+                .set("Restart the session service to transfer SSH project files");
             return;
         }
         let _ = self.jobs.send(Job::RemoteTransfer {

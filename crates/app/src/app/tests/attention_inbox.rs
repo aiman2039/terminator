@@ -27,7 +27,7 @@ fn attention_migration_retries_without_ack_and_preserves_later_choices() {
     drain_updates(&mut app, &ctx);
     assert!(!app.preferences.attention_migrated);
     assert!(!app.attention_pending);
-    assert!(app.error.as_deref().unwrap().contains("rejected"));
+    assert!(app.error.text().unwrap().contains("rejected"));
     app.attention_requested = Some(
         Instant::now()
             .checked_sub(Duration::from_secs(6))

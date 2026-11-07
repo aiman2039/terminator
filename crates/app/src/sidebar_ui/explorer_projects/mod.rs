@@ -162,7 +162,7 @@ impl App {
     /// locks it. True when the job was sent.
     pub(crate) fn queue_workspace(&mut self, op: workspace_ops::Op) -> bool {
         let Some(root) = self.op_root() else {
-            self.error = Some("Open a project folder first.".into());
+            self.error.set("Open a project folder first.");
             return false;
         };
         // The canonical root of the panel's repository; a folder fallback

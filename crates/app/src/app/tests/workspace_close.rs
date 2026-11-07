@@ -131,7 +131,10 @@ fn idle_close_ignores_state_pruning_of_the_closing_shell() {
             reason: "Exited".into(),
         }]),
     );
-    assert!(app.error.is_none(), "no spurious changed-while-closing");
+    assert!(
+        app.error.text().is_none(),
+        "no spurious changed-while-closing"
+    );
     assert!(app.idle_close_fallback.is_none());
     // The closed tab is gone; closing the last one leaves the usual
     // fresh empty Workspace tab (rebuilt with the same id).
@@ -195,7 +198,7 @@ fn idle_close_busy_shell_asks_without_error() {
         Some(&(String::from("a"), tab))
     );
     assert_eq!(app.idle_close_fallback.as_ref(), Some(&target));
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
     assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
 }
 
@@ -224,7 +227,7 @@ fn idle_close_failed_signal_reports_error() {
         }]),
     );
     assert_eq!(app.idle_close_fallback.as_ref(), Some(&target));
-    assert!(app.error.as_deref().is_some_and(|e| e.contains("Failed")));
+    assert!(app.error.text().is_some_and(|e| e.contains("Failed")));
     assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
 }
 

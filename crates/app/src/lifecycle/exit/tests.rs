@@ -455,7 +455,7 @@ fn failed_checkpoint_restores_interaction_and_old_ack_cannot_exit_retry() {
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert!(!app.exit.active());
-    assert!(app.error.as_ref().unwrap().contains("disk full"));
+    assert!(app.error.text().unwrap().contains("disk full"));
     app.begin_exit();
     app.update_tx.send(Update::ExitSaved(1, Ok(()))).unwrap();
     drain_updates(&mut app, &ctx);
@@ -520,7 +520,7 @@ fn quit_during_a_commit_says_to_cancel_it_first() {
     assert!(!app.exit.active());
     assert!(
         app.error
-            .as_deref()
+            .text()
             .is_some_and(|error| error.contains("cancel it in the Git panel")),
         "{:?}",
         app.error
@@ -541,7 +541,7 @@ fn unknown_project_layout_save_does_not_abort_exit() {
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert!(app.exit.active());
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 }
 #[test]
 fn exit_checkpoint_omits_unknown_projects() {

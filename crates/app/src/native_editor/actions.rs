@@ -82,7 +82,7 @@ impl App {
     /// silently.
     pub(crate) fn apply_workspace_edit(&mut self, files: Vec<native_lsp::RenameFileEdit>) {
         if let Some(stale) = files.iter().find(|file| self.edit_is_stale(file)) {
-            self.error = Some(format!(
+            self.error.set(format!(
                 "{} changed since the action was computed. Try again.",
                 native_lsp::uri_to_path(&stale.uri)
                     .map_or_else(|| stale.uri.clone(), |path| path.display().to_string())
@@ -107,7 +107,8 @@ impl App {
         // Files that are not open are edited on disk, with the same
         // checks and rollback as a rename (inside the project only).
         let Some(root) = self.selected_project().map(|project| project.path.clone()) else {
-            self.error = Some("The action edits files outside an open project".into());
+            self.error
+                .set("The action edits files outside an open project");
             return;
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -134,7 +135,9 @@ impl App {
         );
         match submitted {
             Ok(_) => self.action_apply = Some(rx),
-            Err(error) => self.error = Some(format!("Could not apply the action: {error}")),
+            Err(error) => self
+                .error
+                .set(format!("Could not apply the action: {error}")),
         }
     }
 
@@ -186,17 +189,17 @@ impl App {
             // and republishes the underlines.
             Err(_) if item.spell && native_lsp::action_command(&item.raw).is_some() => {
                 if !self.lsp.execute_action_command(path, item) {
-                    self.error = Some("The spell checker is not ready".into());
+                    self.error.set("The spell checker is not ready");
                 }
             }
             Err(_) if item.raw.get("data").is_some() => {
                 self.resolve_attempts = 0;
                 self.resolve_revision = revision;
                 if !self.lsp.request_resolve(path, &item.raw) {
-                    self.error = Some("The language server is not ready".into());
+                    self.error.set("The language server is not ready");
                 }
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => self.error.set(error),
         }
     }
 
@@ -214,7 +217,7 @@ impl App {
                         if paths.len() == 1 { "" } else { "s" }
                     ));
                 }
-                Err(error) => self.error = Some(format!("Code action not applied: {error}")),
+                Err(error) => self.error.set(format!("Code action not applied: {error}")),
             }
         }
         if let Some((path, revision, edits)) = self.lsp.edit_answers.format.take()
@@ -263,7 +266,7 @@ impl App {
                     self.resolve_attempts = self.resolve_attempts.saturating_add(1);
                     self.lsp.request_resolve(&path, &action);
                 }
-                Err(error) => self.error = Some(error),
+                Err(error) => self.error.set(error),
             }
         }
     }

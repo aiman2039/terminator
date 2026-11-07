@@ -180,10 +180,10 @@ impl App {
         }
         if let Some(error) = self
             .error
-            .as_deref()
-            .filter(|e| !installation::is_helper_error(e))
+            .get()
+            .filter(|error| error.kind != StatusKind::Helper)
         {
-            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+            ui.colored_label(appearance::color(&self.theme.status_failed), &error.text);
         }
     }
 

@@ -341,7 +341,7 @@ impl App {
             } else {
                 self.diff_split.remove(&tab.key());
             }
-            self.error = None;
+            self.error.clear();
             if self.neovim_review_unavailable() {
                 self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
             }

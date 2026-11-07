@@ -106,7 +106,7 @@ impl App {
     /// opens of a tab that is not showing start from a fresh read.
     pub(crate) fn open_merge(&mut self, path: PathBuf) {
         let Some(root) = self.context.as_ref().and_then(|c| c.root.clone()) else {
-            self.error = Some("Open the merge tool from a Git project".into());
+            self.error.set("Open the merge tool from a Git project");
             return;
         };
         let tab = super::tab(root, path);
@@ -205,7 +205,7 @@ impl App {
         }
         for (key, path, stage, result) in done {
             if let Err(error) = &result {
-                self.error = Some(error.clone());
+                self.error.set(error.clone());
             }
             self.merge_saved(&key, &path, (stage, result));
         }

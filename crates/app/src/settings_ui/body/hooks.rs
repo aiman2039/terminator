@@ -106,7 +106,8 @@ impl App {
                     .map(|s| s.id.clone())
             });
         let Some(sid) = sid else {
-            self.error = Some("Open a terminal first, then send the hello test.".into());
+            self.error
+                .set("Open a terminal first, then send the hello test.");
             return;
         };
         let label = self

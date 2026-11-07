@@ -52,7 +52,8 @@ impl App {
             self.idle_close_pending = None;
             self.idle_close_snapshot.clear();
             self.idle_close_fallback = Some(target);
-            self.error = Some("Close worker is unavailable; sessions have been preserved.".into());
+            self.error
+                .set("Close worker is unavailable; sessions have been preserved.");
             return false;
         }
         true
@@ -167,7 +168,7 @@ impl App {
         }
         self.idle_close_fallback = Some(target);
         if let Some(error) = idle_close_failure_message(changed, result) {
-            self.error = Some(error);
+            self.error.set(error);
         }
     }
 

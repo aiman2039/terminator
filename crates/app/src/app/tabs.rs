@@ -1,7 +1,6 @@
+use super::super::*;
 use std::collections::HashSet;
 use terminator_core::*;
-
-use super::super::*;
 
 impl Tab {
     /// Tab title for revision diffs, file history and merges.
@@ -45,7 +44,8 @@ pub(crate) struct HistorySessionRowCanShowInput<'a> {
 impl App {
     pub(crate) fn create(&mut self, split: Option<&str>) {
         if self.selected_remote_project().is_some() && !self.remote_supported() {
-            self.error = Some("Restart the session service to create SSH terminals".into());
+            self.error
+                .set("Restart the session service to create SSH terminals");
             return;
         }
         if self

@@ -87,7 +87,8 @@ impl App {
         match result {
             Ok(()) => self.preferences.attention_migrated = true,
             Err(error) => {
-                self.error = Some(format!("Attention settings migration: {error}"));
+                self.error
+                    .set(format!("Attention settings migration: {error}"));
             }
         }
     }

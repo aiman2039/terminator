@@ -93,7 +93,7 @@ fn legacy_helper_error_opens_recovery_and_survives_unreported_health() {
         .unwrap();
     drain_updates(&mut app, &ctx);
     assert!(app.installation_problem());
-    app.error = None; // Dismissing a general error must not hide recovery.
+    app.error.clear(); // Dismissing a general error must not hide recovery.
     app.apply_state(app.state.clone());
     assert!(app.installation_problem());
     app.open_installation_settings();
@@ -121,7 +121,7 @@ fn reconnect_clears_transport_errors_but_preserves_failed_operations() {
             .unwrap();
         drain_updates(&mut app, &ctx);
         assert!(app.connected);
-        assert!(app.error.is_none());
+        assert!(app.error.text().is_none());
     }
     for message in [
         "Settings rejected",
@@ -130,7 +130,7 @@ fn reconnect_clears_transport_errors_but_preserves_failed_operations() {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
         app.apply_state(app.state.clone());
-        assert_eq!(app.error.as_deref(), Some(message));
+        assert_eq!(app.error.text(), Some(message));
     }
 }
 
@@ -141,21 +141,21 @@ fn dismissed_missing_directory_error_does_not_return() {
     for _ in 0..2 {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
-        assert_eq!(app.error.as_deref(), Some(message));
+        assert_eq!(app.error.text(), Some(message));
     }
     app.dismiss_status_error();
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
     assert!(
-        app.error.is_none(),
+        app.error.text().is_none(),
         "dismissed missing-path error must stay dismissed"
     );
     app.update_tx
         .send(Update::Error("Settings rejected".into()))
         .unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some("Settings rejected"));
+    assert_eq!(app.error.text(), Some("Settings rejected"));
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn dismissed_auth_error_stays_hidden_across_session_navigation() {
     let message = "Cannot read session service authentication file /tmp/old/auth: No such file or directory (os error 2)";
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some(message));
+    assert_eq!(app.error.text(), Some(message));
     app.dismiss_status_error();
 
     let mut session = session_fixture("shell", SessionKind::Shell);
@@ -174,7 +174,7 @@ fn dismissed_auth_error_stays_hidden_across_session_navigation() {
     app.active_session = Some("shell".into());
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 
     app.update_tx
         .send(Update::Error("Settings rejected".into()))
@@ -183,12 +183,12 @@ fn dismissed_auth_error_stays_hidden_across_session_navigation() {
     app.dismiss_status_error();
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 
     let new_owner = "Cannot read session service authentication file /tmp/new/auth: No such file or directory (os error 2)";
     app.update_tx.send(Update::Error(new_owner.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some(new_owner));
+    assert_eq!(app.error.text(), Some(new_owner));
 }
 
 #[test]
@@ -198,12 +198,12 @@ fn missing_directory_error_stops_after_three_reports() {
     for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
-        assert_eq!(app.error.as_deref(), Some(message));
-        app.error = None;
+        assert_eq!(app.error.text(), Some(message));
+        app.error.clear();
     }
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
 }
 
 #[test]
@@ -213,11 +213,11 @@ fn missing_directory_error_retries_after_the_working_directory_changes() {
     for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
         app.update_tx.send(Update::Error(message.into())).unwrap();
         drain_updates(&mut app, &ctx);
-        app.error = None;
+        app.error.clear();
     }
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert!(app.error.is_none());
+    assert!(app.error.text().is_none());
     let mut session = session_fixture("shell", SessionKind::Shell);
     session.cwd = "/gone".into();
     app.state.sessions.push(session);
@@ -225,7 +225,7 @@ fn missing_directory_error_retries_after_the_working_directory_changes() {
     app.active_session = Some("shell".into());
     app.update_tx.send(Update::Error(message.into())).unwrap();
     drain_updates(&mut app, &ctx);
-    assert_eq!(app.error.as_deref(), Some(message));
+    assert_eq!(app.error.text(), Some(message));
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn finished_restart_helper_restores_retry() {
     tx.send(Update::RestartFinished(String::new())).unwrap();
     drain_updates(&mut app, &ctx);
     assert_eq!(app.service_op, ServiceOp::Idle);
-    assert!(app.error.as_deref().unwrap().contains("restart.log"));
+    assert!(app.error.text().unwrap().contains("restart.log"));
 }
 
 #[test]
@@ -400,7 +400,7 @@ fn service_start_queues_one_launch_and_reports() {
     assert_eq!(app.service_op, ServiceOp::Idle);
     assert!(
         app.error
-            .as_deref()
+            .text()
             .unwrap()
             .contains("Could not start session service")
     );

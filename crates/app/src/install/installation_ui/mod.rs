@@ -105,8 +105,8 @@ impl App {
         )) {
             Ok(()) => self.service_op = ServiceOp::Restarting,
             Err(()) => {
-                self.error =
-                    Some("Restart worker disconnected. Reopen Terminator to retry.".into());
+                self.error
+                    .set("Restart worker disconnected. Reopen Terminator to retry.");
             }
         }
     }
@@ -127,14 +127,14 @@ impl App {
                 )) {
                     Ok(()) => self.service_op = ServiceOp::Repairing,
                     Err(()) => {
-                        self.error = Some(
-                            "Installation worker disconnected. Reopen Terminator to retry.".into(),
-                        );
+                        self.error
+                            .set("Installation worker disconnected. Reopen Terminator to retry.");
                     }
                 }
             }
             Err(error) => {
-                self.error = Some(format!("Could not save workspace before repair: {error:#}"));
+                self.error
+                    .set(format!("Could not save workspace before repair: {error:#}"));
             }
         }
     }
@@ -220,8 +220,8 @@ impl App {
         match self.jobs.send(Job::StartSessionService) {
             Ok(()) => self.service_op = ServiceOp::Starting,
             Err(()) => {
-                self.error =
-                    Some("Service worker disconnected. Reopen Terminator to retry.".into());
+                self.error
+                    .set("Service worker disconnected. Reopen Terminator to retry.");
             }
         }
     }

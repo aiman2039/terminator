@@ -3,7 +3,7 @@
 use super::*;
 use crate::native_editor::disk::{Stamp, run_on_files};
 use crate::native_editor::extras::{CompareLine, CompareView, compare_lines};
-use crate::native_editor::file_io::{LineEnding, NativeFileIo};
+use crate::native_editor::file_io::{LineEnding, NativeFileIo, SaveError};
 use terminator_core::async_service::Policy;
 
 /// Most comparison lines painted under the conflict bar.
@@ -21,7 +21,7 @@ impl ViewPass<'_> {
         };
         ui.horizontal(|ui| {
             ui.colored_label(self.frame.failed_color, format!("Save failed: {error}"));
-            if error.contains("Changed on disk") && ui.small_button("Save anyway").clicked() {
+            if error == SaveError::ChangedOnDisk && ui.small_button("Save anyway").clicked() {
                 self.save(true);
                 ui.memory_mut(|memory| memory.request_focus(self.file_focus()));
             }

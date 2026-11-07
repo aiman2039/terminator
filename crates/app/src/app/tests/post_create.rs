@@ -144,7 +144,7 @@ fn post_create_input_is_dropped_when_the_create_fails() {
     assert!(app.post_create.by_tab.is_empty() && app.workspace_insert.is_empty());
     assert!(
         app.error
-            .as_deref()
+            .text()
             .is_some_and(|e| e.contains("daemon refused"))
     );
 }

@@ -92,7 +92,7 @@ impl App {
         self.preferences.ensure_default_playlist();
         let samples = install_samples(&self.paths.data.join("player-samples"));
         if samples.is_empty() {
-            self.error = Some("Could not install sample tracks".into());
+            self.error.set("Could not install sample tracks");
             return;
         }
         self.preferences.player_samples_seeded = true;

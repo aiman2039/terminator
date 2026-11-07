@@ -224,7 +224,7 @@ impl App {
         self.layout_signature = None;
         self.services.pause_reads(false);
         self.services.handle().reopen_admission();
-        self.error = Some(format!(
+        self.error.set(format!(
             "Could not close Terminator: {error}. Please retry closing."
         ));
         crate::updater::cancel_termination();

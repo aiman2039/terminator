@@ -23,7 +23,7 @@ impl App {
     pub(crate) fn refuse_during_commit(&mut self, root: Option<&Path>, risk: CommitRisk) -> bool {
         let refused = self.commit_blocks(root, risk);
         if refused {
-            self.error = None;
+            self.error.clear();
             self.info = Some(COMMIT_RUNNING.into());
         }
         refused

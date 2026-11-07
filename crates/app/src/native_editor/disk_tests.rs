@@ -1,5 +1,5 @@
 use super::disk::{apply_edits, text_edits};
-use super::file_io::TextEncoding;
+use super::file_io::{SaveError, TextEncoding};
 use super::test_support::{app, open, pump, save};
 use super::*;
 use std::sync::Arc;
@@ -130,8 +130,8 @@ fn save_refuses_changed_bytes_even_when_the_mtime_is_unchanged() {
     assert!(
         native
             .save_error
-            .as_deref()
-            .is_some_and(|error| error.contains("Changed on disk"))
+            .as_ref()
+            .is_some_and(|error| *error == SaveError::ChangedOnDisk)
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs\n");
 }
@@ -533,4 +533,13 @@ fn a_landed_save_sends_did_save_to_the_language_server() {
         methods.last().map(String::as_str),
         Some("textDocument/didSave")
     );
+}
+
+#[test]
+fn only_a_disk_conflict_offers_save_anyway_whatever_the_wording() {
+    use super::file_io::ChangedOnDisk;
+    let conflict = anyhow::Error::from(ChangedOnDisk).context("Save notes.txt");
+    assert_eq!(SaveError::of(&conflict), SaveError::ChangedOnDisk);
+    let other = anyhow::anyhow!("Replace file: Changed on disk folder is read-only");
+    assert!(matches!(SaveError::of(&other), SaveError::Failed(_)));
 }

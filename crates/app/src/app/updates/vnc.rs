@@ -23,7 +23,7 @@ impl App {
                     status.done = true;
                     status.error = Some(error.clone());
                 }
-                self.error = Some(error);
+                self.error.set(error);
             }
         }
     }

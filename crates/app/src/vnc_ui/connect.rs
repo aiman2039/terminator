@@ -78,7 +78,7 @@ impl App {
             label,
         } = tab;
         if let Some(error) = self.vnc_options_unsupported(&request.options, features) {
-            self.error = Some(error.into());
+            self.error.set(error);
             return;
         }
         host.clone_from(&request.host);

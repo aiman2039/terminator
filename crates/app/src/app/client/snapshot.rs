@@ -107,7 +107,7 @@ impl App {
             "generation":self.state.generation,
             "generations":self.state.generations,
             "live_count":self.state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
-            "error":self.error,
+            "error":self.error.text(),
         })
     }
 

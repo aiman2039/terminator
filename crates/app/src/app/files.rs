@@ -181,7 +181,7 @@ impl App {
                     text: text || external,
                 });
             } else {
-                self.error = Some("Remote file paths must be UTF-8".into());
+                self.error.set("Remote file paths must be UTF-8");
             }
             return;
         }
@@ -332,7 +332,7 @@ impl App {
             if let Some(project) = project
                 && let Err(error) = self.open_browser_url(&project, &url, None)
             {
-                self.error = Some(format!("Could not open {url}: {error:#}"));
+                self.error.set(format!("Could not open {url}: {error:#}"));
             }
         }
     }

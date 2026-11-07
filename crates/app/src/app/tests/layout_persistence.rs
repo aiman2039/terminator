@@ -14,7 +14,7 @@ fn invalid_saved_focus_reports_error_and_preserves_layout() {
     app.apply_state(state);
     // Loading persisted input must not allow an invalid index to reach the GUI.
     app.layouts["a"].active_pane();
-    assert!(app.error.as_ref().is_some_and(|e| e.contains("focus")));
+    assert!(app.error.text().is_some_and(|e| e.contains("focus")));
     assert!(app.layout_readonly.contains("a"));
     app.save_layouts();
     assert_eq!(app.state.projects[0].layout, saved);

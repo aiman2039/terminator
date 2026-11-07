@@ -285,39 +285,13 @@ impl App {
             let _ = self.resource_tx.send(next);
         }
     }
+    /// A background report: honors the dismiss latch and missing-path budget.
     pub(crate) fn report_status_error(&mut self, error: String) {
-        if is_session_auth_error(&error) && self.dismissed_auth_errors.contains(&error) {
-            return;
-        }
         let cwd = self.cwd();
-        if self.error_cwd.as_deref() != cwd.as_deref() {
-            self.error_cwd = cwd;
-            self.dismissed_error = None;
-            self.missing_path_reports = 0;
-        }
-        if self.dismissed_error.as_deref() == Some(error.as_str()) {
-            return;
-        }
-        if is_missing_path_error(&error) {
-            if self.error.as_deref() != Some(error.as_str()) {
-                if self.missing_path_reports >= retry_budget::MISSING_PATH_RETRY_LIMIT {
-                    return;
-                }
-                self.missing_path_reports = self.missing_path_reports.saturating_add(1);
-            }
-        } else if self.error.as_deref() != Some(error.as_str()) {
-            self.dismissed_error = None;
-            self.missing_path_reports = 0;
-        }
-        self.error = Some(error);
+        self.error.report(cwd, error);
     }
     pub(crate) fn dismiss_status_error(&mut self) {
-        self.dismissed_error = self.error.take();
-        if let Some(error) = &self.dismissed_error
-            && is_session_auth_error(error)
-        {
-            self.dismissed_auth_errors.insert(error.clone());
-        }
+        self.error.dismiss();
     }
     pub(crate) fn dialog_directory(&self) -> PathBuf {
         self.cwd()

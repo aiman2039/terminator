@@ -315,7 +315,7 @@ fn worktree_create_failure_unlocks_its_draft() {
     assert!(app.worktree_draft.as_ref().is_some_and(|d| !d.submitting));
     assert!(
         app.error
-            .as_deref()
+            .text()
             .is_some_and(|e| e.contains("branch exists"))
     );
     // A refused Create answers the wizard, too.

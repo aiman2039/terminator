@@ -126,7 +126,7 @@ impl App {
                 self.apply_state(*state);
                 self.installation_error = None;
                 self.service_failure = None;
-                self.error = None;
+                self.error.clear();
                 self.info = Some("Installation repaired. New terminals can be opened.".into());
             }
             Err(error) => {
@@ -144,7 +144,7 @@ impl App {
     }
 
     fn fail_service_op(&mut self, task: ServiceTask, message: String) {
-        self.error = Some(message.clone());
+        self.error.set(message.clone());
         self.service_failure = Some(ServiceFailure { task, message });
     }
 

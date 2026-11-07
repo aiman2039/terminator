@@ -34,7 +34,7 @@ impl App {
                 self.diffs.insert(key, Ok(std::sync::Arc::new(document)));
             }
             Err(error) if self.diffs.get(&key).is_some_and(Result::is_ok) => {
-                self.error = Some(format!(
+                self.error.set(format!(
                     "Diff refresh failed; showing the previous view: {error}"
                 ));
             }
@@ -102,7 +102,7 @@ impl App {
     ) {
         match result {
             Ok(message) => self.info = Some(message),
-            Err(error) => self.error = Some(format!("Stage failed: {error}")),
+            Err(error) => self.error.set(format!("Stage failed: {error}")),
         }
         self.git_base_generation = self.git_base_generation.wrapping_add(1);
         if let Some(cwd) = self.gutter_diff_cwd(path) {

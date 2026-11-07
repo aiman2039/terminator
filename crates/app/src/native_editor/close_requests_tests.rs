@@ -17,7 +17,7 @@ fn fail_save(app: &mut App, path: &Path) {
     let doc = app.native_docs.get_mut(path).unwrap();
     doc.saving = false;
     doc.save_rx = None;
-    doc.save_error = Some("Changed on disk since loading".into());
+    doc.save_error = Some(crate::native_editor::file_io::SaveError::ChangedOnDisk);
 }
 
 #[test]

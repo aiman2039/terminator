@@ -17,7 +17,8 @@ impl App {
                 && (state.unsaved_edits() || state.saving_edits && state.busy)
         });
         if dirty {
-            self.error = Some("Save or discard edits in the diff viewer before closing.".into());
+            self.error
+                .set("Save or discard edits in the diff viewer before closing.");
             return true;
         }
         let merge_dirty = self
@@ -25,7 +26,7 @@ impl App {
             .iter()
             .any(|(id, state)| key.is_none_or(|key| key == id) && (state.dirty || state.busy()));
         if merge_dirty {
-            self.error = Some("Save the merge result before closing.".into());
+            self.error.set("Save the merge result before closing.");
         }
         merge_dirty
     }

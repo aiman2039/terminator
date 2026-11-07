@@ -20,14 +20,14 @@ impl App {
         let mut app = Self::with_context(&cc.egui_ctx, paths.clone());
         match ui_control::spawn(paths, app.services.clone()) {
             Ok(server) => app.control_server = Some(server),
-            Err(error) => app.error = Some(format!("GUI control server: {error:#}")),
+            Err(error) => app.error.set(format!("GUI control server: {error:#}")),
         }
         #[cfg(feature = "test-support")]
         if std::env::var_os("TERMINATOR_TEST_RESPONSIVENESS").is_some()
             && let Some(socket) = std::env::var_os("TERMINATOR_TEST_STALL_NVIM")
             && let Err(error) = app.services.fixture_stalls(socket.into())
         {
-            app.error = Some(format!("Fixture stalls: {error:#}"));
+            app.error.set(format!("Fixture stalls: {error:#}"));
         }
         app
     }
@@ -221,11 +221,7 @@ impl App {
             resource_tx,
             resource_request: None,
             context_path: None,
-            error: preference_error.or(upgrade_error),
-            dismissed_error: None,
-            dismissed_auth_errors: HashSet::new(),
-            error_cwd: None,
-            missing_path_reports: 0,
+            error: StatusLine::new(preference_error.or(upgrade_error)),
             info: None,
             info_since: None,
             center: crate::CenterPage::Workspace,
