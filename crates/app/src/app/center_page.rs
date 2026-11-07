@@ -39,7 +39,8 @@ impl App {
         if self.center == CenterPage::Settings && page != CenterPage::Settings {
             self.leave_settings_page();
         }
-        if page != CenterPage::Ssh {
+        // A changed SSH host form stays for the SSH page to show again.
+        if page != CenterPage::Ssh && !self.remote_ui.draft_changed() {
             self.remote_ui.close();
             self.remote_ui.import = None;
         }

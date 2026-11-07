@@ -18,8 +18,24 @@ use terminator_core::{Request, remote::RemoteProject};
 
 impl App {
     /// Show the SSH page in the main pane, replacing any other center view.
+    /// A changed host form, kept while another page showed, comes back.
     pub(crate) fn show_ssh_page(&mut self) {
+        if !self.remote_ui.draft_changed() {
+            self.remote_ui.close();
+            self.remote_ui.import = None;
+        }
         self.show_center(crate::CenterPage::Ssh);
+    }
+
+    /// Another host form or import must not replace a changed host form:
+    /// show it and ask first. True when the caller must stop.
+    pub(crate) fn keep_changed_ssh_form(&mut self) -> bool {
+        if !self.remote_ui.draft_changed() {
+            return false;
+        }
+        self.show_center(crate::CenterPage::Ssh);
+        self.remote_ui.confirm_discard = true;
+        true
     }
 
     /// Whether the main pane shows the SSH page (hosts, Properties or

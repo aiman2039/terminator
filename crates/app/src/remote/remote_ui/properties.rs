@@ -54,6 +54,9 @@ impl FormFix {
 impl App {
     /// Opens SSH Properties on the SSH page on `draft`.
     pub(crate) fn open_ssh_properties(&mut self, draft: RemoteProject) {
+        if self.keep_changed_ssh_form() {
+            return;
+        }
         self.show_ssh_page();
         let generation = self.remote_ui.open_draft(draft);
         let _ = self.jobs.send(Job::SshConfigHosts(generation));
