@@ -163,7 +163,7 @@ impl App {
             .entry(project)
             .or_insert_with(Workspace::empty)
             .add(id(), tab);
-        self.active_session = None;
+        self.focus_non_terminal();
     }
 }
 

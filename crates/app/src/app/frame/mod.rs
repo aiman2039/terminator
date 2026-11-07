@@ -154,6 +154,8 @@ impl eframe::App for App {
         }
         self.paint_switcher(&ctx);
         self.paint_windows(&ctx, frame);
+        // Every dock painted; ops whose project or window is gone are dead.
+        self.prune_dock_ops();
         self.popups.end_frame();
         self.dismiss_stale_hover_popup(&ctx);
         appearance::click_cursor(&ctx);

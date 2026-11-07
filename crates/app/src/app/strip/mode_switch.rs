@@ -174,8 +174,7 @@ impl App {
             if let Some(Tab::Terminal(sid)) = focused
                 && shell_ids.contains(&sid)
             {
-                self.active_session = Some(sid);
-                self.non_terminal_selected = false;
+                self.focus_terminal(sid);
             }
         }
         true

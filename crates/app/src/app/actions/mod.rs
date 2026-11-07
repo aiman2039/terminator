@@ -60,10 +60,9 @@ impl App {
         self.detach_backend(sid);
         self.drop_strip_session(sid);
         if self.active_session.as_deref() == Some(sid) {
-            self.active_session = None;
             // The closed terminal was the selection. A main pane remembered
             // from earlier must not block recovery.
-            self.non_terminal_selected = false;
+            self.clear_focus();
         }
     }
 
@@ -333,7 +332,7 @@ impl App {
                 .entry(project)
                 .or_insert_with(Workspace::empty)
                 .add(id(), tab.clone());
-            self.active_session = None;
+            self.focus_non_terminal();
             self.diffs.remove(&tab.key());
             self.diff_preview.remove(&tab.key());
             self.loading.insert(tab.key());

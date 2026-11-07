@@ -105,4 +105,104 @@ impl App {
         }
         self.layouts.insert(project, dock);
     }
+
+    // Focus is `active_session` (the focused terminal) plus
+    // `non_terminal_selected` (with no terminal: a real image, browser,
+    // diff, player, or editor selection rather than a cleared focus). Write
+    // them only through these setters: they keep the pair consistent, so a
+    // stale flag never blocks `restore_cleared_focus`.
+
+    /// A terminal has focus.
+    pub(crate) fn focus_terminal(&mut self, sid: String) {
+        self.active_session = Some(sid);
+        self.non_terminal_selected = false;
+    }
+
+    /// A non-terminal pane has focus; recovery must not replace it.
+    pub(crate) fn focus_non_terminal(&mut self) {
+        self.active_session = None;
+        self.non_terminal_selected = true;
+    }
+
+    /// Nothing has focus; recovery may pick a terminal.
+    pub(crate) fn clear_focus(&mut self) {
+        self.active_session = None;
+        self.non_terminal_selected = false;
+    }
+
+    /// Focus follows `tab`: a terminal, another pane, or nothing.
+    pub(crate) fn focus_pane(&mut self, tab: Option<&Tab>) {
+        match tab {
+            Some(Tab::Terminal(sid)) => self.focus_terminal(sid.clone()),
+            Some(_) => self.focus_non_terminal(),
+            None => self.clear_focus(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+    use crate::app::tests::support::fixture;
+
+    #[test]
+    fn terminal_focus_clears_a_stale_non_terminal_selection() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.focus_non_terminal();
+        app.focus_terminal("one".into());
+        assert_eq!(app.active_session.as_deref(), Some("one"));
+        assert!(!app.non_terminal_selected);
+    }
+
+    #[test]
+    fn project_switch_to_an_unfocused_dock_allows_focus_recovery() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        // An editor had focus in project `a`.
+        app.focus_non_terminal();
+        app.layouts.insert("b".into(), Workspace::empty());
+        app.select_project("b".into());
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.active_session.is_none());
+        assert!(
+            !app.non_terminal_selected,
+            "a stale non-terminal flag would block restore_cleared_focus"
+        );
+    }
+
+    /// Focus writes go through the setters above. A direct write can leave
+    /// a terminal focused with the non-terminal flag still set.
+    #[test]
+    fn focus_fields_are_written_only_by_the_setters() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = path.to_string_lossy();
+                if !name.ends_with(".rs")
+                    || name.contains("tests")
+                    || name.ends_with("pane_focus.rs")
+                    || name.ends_with("lifecycle.rs")
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (line, code) in text.lines().enumerate() {
+                    let code = code.trim_start();
+                    if code.contains(".active_session = ")
+                        || code.contains(".non_terminal_selected = ")
+                    {
+                        offenders.push(format!("{name}:{}", line + 1));
+                    }
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "direct focus writes: {offenders:?}");
+    }
 }

@@ -32,14 +32,14 @@ impl App {
         }
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selected = Some(project.clone());
-        self.active_session = self
+        // Focus is the new project's own: a selection left in the previous
+        // project must not block recovery here.
+        let focused = self
             .layouts
             .get_mut(&project)
             .and_then(|d| d.main_surface_mut().find_active_focused())
-            .and_then(|(_, tab)| match tab {
-                Tab::Terminal(id) => Some(id.clone()),
-                _ => None,
-            });
+            .map(|(_, tab)| tab.clone());
+        self.focus_pane(focused.as_ref());
         if !self.state.remote_projects.iter().any(|p| p.id == project) || self.remote_supported() {
             self.send(Request::SelectProject { project });
         }
@@ -60,7 +60,7 @@ impl App {
         if self.selected.as_deref() == Some(project) {
             self.finish_rename(true);
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
             if let Some(next) = self
                 .visible_projects()
                 .into_iter()
@@ -225,7 +225,7 @@ impl App {
         {
             self.selection_generation = self.selection_generation.wrapping_add(1);
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
             if let Some(next) = self.visible_projects().first().map(|p| p.id.clone()) {
                 self.select_project(next);
             }
@@ -355,7 +355,7 @@ impl App {
                 }
                 self.insert(&s.project_id, pane, None);
             }
-            self.active_session = Some(s.id.clone());
+            self.focus_terminal(s.id.clone());
             self.send(Request::SelectProject {
                 project: s.project_id,
             });
@@ -418,7 +418,7 @@ impl App {
             .is_some_and(|id| !known.contains(id.as_str()))
         {
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
         }
     }
     pub(crate) fn layout_save_failed(&mut self, error: String) {

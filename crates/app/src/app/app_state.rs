@@ -153,41 +153,15 @@ pub struct App {
     pub(crate) update_tx: Sender<Update>,
     /// The one native file picker: requested, open, or idle.
     pub(crate) picker: Picker,
-    pub(crate) add_tab: Option<(egui_dock::NodePath, Option<String>)>,
-    /// Queued strip-dock tab creation (the strip's `on_add`/menu counterpart
-    /// to [`Self::add_tab`]); consumed right after the strip renders.
-    pub(crate) add_strip_tab: Option<(egui_dock::NodePath, Option<String>)>,
-    /// Strip-dock tab to focus after the strip renders.
-    pub(crate) focus_strip_tab: Option<Tab>,
-    /// Strip shell to move into the main pane once the strip dock is back in
-    /// `ide_strip_docks`. The menu runs while that dock is checked out for
-    /// paint, so the removal has to wait until it is inserted again.
-    pub(crate) move_strip_to_main: Option<String>,
-    /// Main-pane shell to move into the strip once the workspace dock is
-    /// checked back in. The caption menu runs while that dock is checked out.
-    pub(crate) move_main_to_strip: Option<String>,
-    /// Main-dock pane queued for detach into a fresh top-level tab. The
-    /// pane menu runs while the workspace dock is checked out for paint,
-    /// so the move waits until it is checked back in.
-    pub(crate) detach_pane: Option<Tab>,
-    /// Main-dock pane plus destination top-level tab id, queued by the
-    /// pane menu to dock a detached pane back. Same checkout reason as
-    /// [`Self::detach_pane`].
-    pub(crate) dock_back_pane: Option<(Tab, String)>,
+    /// Tab creation, focus, and pane moves asked for while their dock is
+    /// checked out for paint, applied in order once it is checked back in.
+    pub(crate) dock_ops: super::docking::DockOps,
     /// Sibling top-level tabs as (id, label, icon), snapshotted by the
     /// workspace strip before the main dock paints so the pane menu can
     /// offer dock-back targets while the workspace is checked out.
     /// Excludes the active tab.
     pub(crate) dock_back_targets: Vec<(String, String, &'static str)>,
-    /// Main-dock pane queued to float in its own window (see `detach_pane`).
-    pub(crate) float_pane: Option<Tab>,
     pub(crate) pane_ops: super::docking::PaneOps,
-    /// Floating tab creation queued by a floating window's own `+`/split
-    /// controls: the issuing window plus the leaf path inside its dock.
-    /// Consumed after that window's dock is checked back in.
-    pub(crate) add_float_tab: Option<(egui::ViewportId, egui_dock::NodePath, Option<String>)>,
-    /// Floating-dock tab to focus after its window renders.
-    pub(crate) focus_float_tab: Option<(egui::ViewportId, Tab)>,
     /// Docks detached into their own OS windows, rendered every frame by
     /// [`Self::paint_floating`]. Closing a window docks its layout back.
     pub(crate) floating: Vec<FloatingWindow>,
@@ -203,13 +177,11 @@ pub struct App {
     pub(crate) pane_by_tab: HashMap<String, egui_dock::NodePath>,
     pub(crate) pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pub(crate) pane_index: Option<PaneIndex>,
-    pub(crate) pane_action_source: Option<PaneSource>,
     pub(crate) native_focus_pending: Option<PaneSource>,
     /// A cross-dock move changed a dock that was checked out for paint.
     /// Baselines and layout save run after that dock is inserted again.
     pub(crate) pending_layout_save: bool,
     pub(crate) drag: super::drag_state::DragState,
-    pub(crate) focus_tab: Option<Tab>,
     /// Diff navigation requested while its dock is checked out for painting.
     pub(crate) diff_replacement: Option<(Tab, Tab)>,
     pub(crate) terminal_context: HashMap<String, String>,

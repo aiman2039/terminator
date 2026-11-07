@@ -62,7 +62,11 @@ fn staged_diff_switches_to_working_tree_after_dock_returns() {
     assert_eq!(workspace.tabs[0].primary, Some(working.clone()));
     assert!(workspace.iter_all_tabs().any(|(_, tab)| tab == &working));
     assert!(app.loading.contains(&working.key()));
-    assert_eq!(app.focus_tab, Some(working.clone()));
+    assert!(app.dock_ops.iter().any(|op| *op
+        == DockOp::FocusTab {
+            target: DockTarget::Main,
+            tab: working.clone(),
+        }));
     let Job::Diff(requested) = requests.try_recv().unwrap() else {
         panic!("working-tree diff job was not queued");
     };

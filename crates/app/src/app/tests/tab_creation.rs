@@ -359,9 +359,9 @@ fn leaf_plus_opens_stacked_in_that_split() {
         .find_tab(&Tab::Terminal("two".into()))
         .expect("right leaf present")
         .node_path();
-    app.add_tab = Some((path, None));
+    app.queue_add(DockTarget::Main, path, None);
     let mut dock = app.layouts.remove("a").unwrap();
-    app.apply_add_tab("a", &mut dock);
+    app.apply_main_dock_ops("a", &mut dock);
     app.layouts.insert("a".into(), dock);
     let Job::Control(_, After::CreateAt(_, _, split)) = received.try_recv().unwrap() else {
         panic!("leaf plus stacks into the split");

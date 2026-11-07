@@ -198,7 +198,13 @@ fn dock_back_single_pane_returns_to_home_leaf_and_keeps_window_for_others() {
         tabs: vec![first.clone(), second.clone()],
     }));
     let viewport = app.floating[0].viewport;
-    app.pane_ops.float_return = Some((viewport, Some(first.clone())));
+    app.dock_ops.push(
+        None,
+        DockOp::FloatReturn {
+            viewport,
+            pane: Some(first.clone()),
+        },
+    );
     floating_frame(&mut app, &ctx);
     let window = app
         .floating
@@ -211,7 +217,13 @@ fn dock_back_single_pane_returns_to_home_leaf_and_keeps_window_for_others() {
     assert!(workspace.find_tab(&first).is_some());
     assert_eq!(workspace.active, home);
     // Dock back all takes the rest home and closes the window.
-    app.pane_ops.float_return = Some((viewport, None));
+    app.dock_ops.push(
+        None,
+        DockOp::FloatReturn {
+            viewport,
+            pane: None,
+        },
+    );
     floating_frame(&mut app, &ctx);
     assert!(app.floating.is_empty());
     assert!(app.layouts["a"].contains(&second));
@@ -230,7 +242,13 @@ fn dock_back_of_the_last_pane_closes_the_window() {
         tabs: vec![only.clone()],
     }));
     let viewport = app.floating[0].viewport;
-    app.pane_ops.float_return = Some((viewport, Some(only.clone())));
+    app.dock_ops.push(
+        None,
+        DockOp::FloatReturn {
+            viewport,
+            pane: Some(only.clone()),
+        },
+    );
     floating_frame(&mut app, &ctx);
     assert!(app.floating.is_empty());
     assert!(app.layouts["a"].contains(&only));

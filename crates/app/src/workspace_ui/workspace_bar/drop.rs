@@ -86,16 +86,14 @@ impl App {
     fn finish_strip_pane_drop(&mut self, drop: &mut StripDrop<'_>, pane: &Tab, moved: bool) {
         if moved {
             self.focus_moved_view(pane, drop.frame.project, drop.workspace);
-            self.pending_layout_save = true;
             if let Tab::Terminal(sid) = pane {
-                self.active_session = Some(sid.clone());
-                self.focus_tab = Some(pane.clone());
+                self.focus_terminal(sid.clone());
+                self.queue_main_focus(pane.clone());
             }
             self.pane_index = None;
             drop.actions.switch = None;
         }
-        self.drag.preview_origin = None;
-        self.end_pane_drag();
+        self.end_pane_drag(Some(drop.workspace), moved);
     }
 
     /// Dropping a dragged strip tab reorders it to the insertion slot. A

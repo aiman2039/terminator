@@ -198,7 +198,7 @@ impl App {
                     .any(|session| &session.project_id == project && session.lifecycle.live())
         }) {
             self.selected = None;
-            self.active_session = None;
+            self.clear_focus();
         }
         ended_sessions
     }
@@ -416,14 +416,12 @@ impl App {
         if let Some(path) = target {
             let _ = dock.set_active_tab(path);
             dock.set_focused_node_and_surface(path.node_path());
-            self.active_session = dock
+            let focused = dock
                 .leaf(path.node_path())
                 .ok()
                 .and_then(|leaf| leaf.tabs.get(leaf.active.0))
-                .and_then(|tab| match tab {
-                    Tab::Terminal(sid) => Some(sid.clone()),
-                    _ => None,
-                });
+                .cloned();
+            self.focus_pane(focused.as_ref());
         }
     }
 }

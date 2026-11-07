@@ -110,18 +110,20 @@ impl Viewer<'_> {
         } = input;
         if git_clicked {
             if let Some(sid) = sid.clone() {
-                self.app.active_session = Some(sid.clone());
-                self.app.focus_strip_tab = Some(Tab::Terminal(sid));
+                self.app.focus_terminal(sid.clone());
+                self.app.queue_focus(DockTarget::Strip, Tab::Terminal(sid));
             }
             self.app.show_git_sidebar();
         }
         if vertical_clicked || horizontal_clicked {
             if let Some(sid) = &sid {
-                self.app.active_session = Some(sid.clone());
-                self.app.focus_strip_tab = Some(Tab::Terminal(sid.clone()));
+                self.app.focus_terminal(sid.clone());
+                self.app
+                    .queue_focus(DockTarget::Strip, Tab::Terminal(sid.clone()));
             }
             let direction = if vertical_clicked { "right" } else { "down" };
-            self.app.add_strip_tab = Some((path, Some(direction.into())));
+            self.app
+                .queue_add(DockTarget::Strip, path, Some(direction.into()));
         }
     }
 
@@ -167,8 +169,8 @@ impl Viewer<'_> {
             }
             if response.clicked() {
                 self.app.markdown.retain(sid).editor_focused = option != markdown::Mode::Preview;
-                self.app.active_session = Some(sid.clone());
-                self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
+                self.app.focus_terminal(sid.clone());
+                self.app.queue_main_focus(Tab::Terminal(sid.clone()));
                 if option == markdown::Mode::default() {
                     self.app.preferences.markdown_modes.remove(sid);
                 } else {

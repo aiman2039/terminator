@@ -119,7 +119,7 @@ impl App {
                 .add(id(), tab);
         }
         self.select_project(record.project_id);
-        self.active_session = Some(session);
+        self.focus_terminal(session);
         Ok(None)
     }
 

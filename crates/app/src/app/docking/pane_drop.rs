@@ -122,8 +122,7 @@ impl App {
     }
 
     fn cancel_pane_drop(&mut self, dock: &mut Workspace) {
-        self.revert_drop_preview(dock);
-        self.end_pane_drag();
+        self.end_pane_drag(Some(dock), false);
     }
 
     fn pane_drop_at(&self, dock: &Workspace, pane: Tab, pos: egui::Pos2) -> PaneDrop {
@@ -206,18 +205,15 @@ impl App {
     }
 
     fn release_pane_drop(&mut self, dock: &mut Workspace, drop: &PaneDrop) {
-        if let Some((path, _)) = drop.target {
-            if self.move_dropped_pane(dock, drop, path) {
-                self.pane_drop_landed(dock, &drop.pane);
-            } else {
-                self.revert_drop_preview(dock);
-            }
-        } else {
-            self.revert_drop_preview(dock);
+        let landed = drop
+            .target
+            .is_some_and(|(path, _)| self.move_dropped_pane(dock, drop, path));
+        if landed {
+            self.pane_drop_landed(dock, &drop.pane);
         }
         // A release the strip did not consume ends the drag here; the
         // post-dock checkout in `workspace_project` clears leftovers.
-        self.end_pane_drag();
+        self.end_pane_drag(Some(dock), landed);
     }
 
     fn move_dropped_pane(
@@ -253,29 +249,17 @@ impl App {
         }
     }
 
+    /// Focus follows a landed pane, whether its drag started on a caption
+    /// or a tab. [`Self::end_pane_drag`] then saves the layout.
     fn pane_drop_landed(&mut self, dock: &Workspace, pane: &Tab) {
-        if self.drag.pane_source.is_some() {
-            if let Some(project) = self.selected.clone() {
-                self.focus_moved_view(pane, &project, dock);
-            }
-            self.pending_layout_save = true;
+        if let Some(project) = self.selected.clone() {
+            self.focus_moved_view(pane, &project, dock);
         }
         if let Tab::Terminal(sid) = pane {
-            self.active_session = Some(sid.clone());
-            self.focus_tab = Some(pane.clone());
+            self.focus_terminal(sid.clone());
+            self.queue_main_focus(pane.clone());
         }
         self.pane_index = None;
-        self.drag.preview_origin = None;
-    }
-
-    /// Switch back to the tab a cancelled drag started from. Previewing never
-    /// moves panes, so the origin group always still exists.
-    pub(crate) fn revert_drop_preview(&mut self, dock: &mut Workspace) {
-        if let Some((_, origin)) = self.drag.preview_origin.take()
-            && dock.tabs.iter().any(|tab| tab.id == origin)
-        {
-            dock.active = origin;
-        }
     }
 
     /// Landing preview for the hovered split leaf: a translucent accent wash

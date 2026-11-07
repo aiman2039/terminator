@@ -279,6 +279,7 @@ impl Viewer<'_> {
         let response = &caption.response;
         let clicks = caption.clicks;
         if response.drag_started()
+            && self.app.drag.idle()
             && self.window.is_none()
             && !frame.editing
             && !clicks.closing
@@ -309,7 +310,7 @@ impl Viewer<'_> {
             self.app.close_session = Some(sid.clone());
         }
         if clicks.git {
-            self.app.active_session = Some(sid.clone());
+            self.app.focus_terminal(sid.clone());
             self.queue_focus_tab(Tab::Terminal(sid.clone()));
             self.app.show_git_sidebar();
         }
@@ -318,7 +319,7 @@ impl Viewer<'_> {
                 .queue_zoom(Some(Tab::Terminal(sid.clone())), frame.pane);
         }
         if clicks.split_vertical || clicks.split_horizontal || clicks.stack {
-            self.app.active_session = Some(sid.clone());
+            self.app.focus_terminal(sid.clone());
             self.queue_focus_tab(Tab::Terminal(sid.clone()));
         }
         if let Some(pane) = frame.pane {
@@ -331,7 +332,7 @@ impl Viewer<'_> {
             && !clicks.git
             && !clicks.on_control
         {
-            self.app.active_session = Some(sid.clone());
+            self.app.focus_terminal(sid.clone());
             self.queue_focus_tab(Tab::Terminal(sid.clone()));
         }
         if response.double_clicked() && !clicks.closing && !frame.editing && !clicks.on_control {

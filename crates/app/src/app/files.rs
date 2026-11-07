@@ -90,9 +90,8 @@ impl App {
             }
             if self.selected.as_deref() == Some(project) {
                 self.hide_center_overlay();
-                self.active_session = None;
-                self.non_terminal_selected = true;
-                self.focus_tab = Some(tab);
+                self.focus_non_terminal();
+                self.queue_main_focus(tab);
             }
             return true;
         }
@@ -110,9 +109,8 @@ impl App {
         if let Some((viewport, tab)) = floated {
             if self.selected.as_deref() == Some(project) {
                 self.hide_center_overlay();
-                self.active_session = None;
-                self.non_terminal_selected = true;
-                self.focus_float_tab = Some((viewport, tab));
+                self.focus_non_terminal();
+                self.queue_focus(DockTarget::Float(viewport), tab);
                 let _ = self.update_tx.send(Update::FocusViewport(viewport));
             }
             return true;
@@ -385,7 +383,7 @@ impl App {
                 dock.active = previous;
             }
             if same && self.selected.as_deref() == Some(&project) {
-                self.active_session = None;
+                self.focus_non_terminal();
             }
         } else {
             let anchors = match after {
@@ -397,7 +395,7 @@ impl App {
                 .or_insert_with(Workspace::empty)
                 .add_from(id(), tab, &anchors);
             if self.selected.as_deref() == Some(&project) {
-                self.active_session = None;
+                self.focus_non_terminal();
             }
         }
     }

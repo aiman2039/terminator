@@ -149,7 +149,7 @@ impl App {
                 anchors: &anchors,
             });
         if self.selected.as_ref() == Some(&project) {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         }
         if !self.state.sessions.iter().any(|s| s.id == session.id) {
             self.state.sessions.push(session);
@@ -187,7 +187,7 @@ impl App {
                 .get(&session.project_id)
                 .map(|workspace| &workspace.active);
         if same_workspace && self.selected.as_ref() == Some(&session.project_id) {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         }
         self.track_session(&session);
         self.insert(
@@ -259,7 +259,7 @@ impl App {
             && self.preferences.ide_mode
             && !self.preferences.ide_terminal_collapsed
         {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         }
     }
 
@@ -284,7 +284,7 @@ impl App {
             split: split.as_deref(),
             anchors: &anchors,
         }) {
-            self.active_session = Some(session.id.clone());
+            self.focus_terminal(session.id.clone());
         } else {
             self.insert(
                 &session.project_id,

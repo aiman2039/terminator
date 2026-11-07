@@ -87,7 +87,7 @@ pub(crate) use app::window::{
     FloatingWindow, PaneIndex, TerminalFind, begin_native_window_gesture, header_drag_space,
     window_resize_edges,
 };
-pub(crate) use app::{CenterPage, PostCreate, PostCreateQueue};
+pub(crate) use app::{CenterPage, DockOp, DockTarget, PostCreate, PostCreateQueue};
 pub(crate) use eframe::egui::{self, Color32, RichText};
 #[cfg(test)]
 pub(crate) use egui_dock::DockState;

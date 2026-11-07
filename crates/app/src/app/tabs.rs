@@ -150,11 +150,11 @@ impl App {
             let previous = workspace.active.clone();
             workspace.close(tab_id);
             if self.selected.as_deref() == Some(project) && workspace.active != previous {
-                self.active_session = match workspace.active_pane() {
-                    Some(Tab::Terminal(sid)) => Some(sid.clone()),
-                    _ => None,
-                };
-                self.non_terminal_selected = self.active_session.is_none();
+                if let Some(Tab::Terminal(sid)) = workspace.active_pane().cloned() {
+                    self.focus_terminal(sid);
+                } else {
+                    self.focus_non_terminal();
+                }
             }
         }
         self.forget_tab_expanded(project, tab_id);

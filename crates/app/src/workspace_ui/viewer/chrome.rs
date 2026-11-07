@@ -256,7 +256,7 @@ impl Viewer<'_> {
         if response.clicked()
             && let Tab::Terminal(sid) = tab
         {
-            self.app.active_session = Some(sid.clone());
+            self.app.focus_terminal(sid.clone());
             self.app.send(Request::Focus {
                 session: sid.clone(),
             });
@@ -333,7 +333,7 @@ impl Viewer<'_> {
         if !self.strip
             && self.window.is_none()
             && matches!(tab, Tab::NativeEditor { .. })
-            && self.app.drag.pane.is_none()
+            && self.app.drag.idle()
             && dragging
             && let (Some(project), Some(group)) = (&self.project, &self.tab)
         {

@@ -274,11 +274,7 @@ impl App {
         } else {
             self.paint_dock(ui, &project, &mut dock);
         }
-        self.apply_focus_tab(&mut dock);
-        self.apply_add_tab(&project, &mut dock);
-        self.apply_detach_pane(&mut dock);
-        self.apply_dock_back(&mut dock);
-        self.apply_float_pane(&project, &mut dock);
+        self.apply_main_dock_ops(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
         self.check_zoom(&project, &dock);
         self.paint_zoom(ui.ctx(), outer, &project);
@@ -294,24 +290,16 @@ impl App {
         self.paint_tab_ghost(ui);
         // A release the docks did not accept cancels so the payload cannot stick.
         if self.drag.pane.is_some() && ui.input(|i| i.pointer.any_released()) {
-            self.drag.preview_origin = None;
-            self.end_pane_drag();
+            self.end_pane_drag(None, false);
         }
         // Pane "Close tab" is queued while this workspace is checked out.
         self.drain_pending_unavailable_close();
     }
 
     pub(crate) fn follow_focus_tab(&mut self, tab: Option<Tab>) {
-        match tab {
-            Some(Tab::Terminal(sid)) => {
-                self.active_session = Some(sid);
-                self.non_terminal_selected = false;
-            }
-            Some(_) => {
-                self.active_session = None;
-                self.non_terminal_selected = true;
-            }
-            None => {}
+        // No focused tab is no observation: focus stays where it was.
+        if tab.is_some() {
+            self.focus_pane(tab.as_ref());
         }
     }
 
@@ -378,7 +366,11 @@ impl App {
     /// and pane controls. Cross-window drag-drop is unsupported, so no
     /// drop landing runs here; a main-dock drag released over a float is
     /// cancelled by the main window's own release handling.
-    pub(crate) fn paint_float_dock(&mut self, input: PaintFloatDockInput<'_>) {
+    /// Returns the window's dock-back requests for the caller to apply.
+    pub(crate) fn paint_float_dock(
+        &mut self,
+        input: PaintFloatDockInput<'_>,
+    ) -> Vec<super::docking::DockOp> {
         let PaintFloatDockInput {
             ui,
             viewport,
@@ -405,8 +397,7 @@ impl App {
                     render_tab: None,
                 },
             );
-        self.apply_add_float_tab(viewport, project, dock);
-        self.apply_focus_float_tab(viewport, dock);
+        self.apply_float_dock_ops(viewport, project, dock)
     }
 
     pub(crate) fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {

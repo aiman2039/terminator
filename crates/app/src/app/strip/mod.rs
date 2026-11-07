@@ -81,7 +81,7 @@ impl App {
             let _ = dock.set_active_tab(path);
             dock.set_focused_node_and_surface(path.node_path());
         }
-        self.active_session = Some(sid.into());
+        self.focus_terminal(sid.into());
         self.send(Request::Focus {
             session: sid.into(),
         });

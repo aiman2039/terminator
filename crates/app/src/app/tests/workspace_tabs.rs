@@ -280,9 +280,14 @@ fn terminal_bars_keep_git_and_splits_on_one_row() {
     combined_frame(&mut app, &ctx, vec![frame_press(split, true)]);
     combined_frame(&mut app, &ctx, vec![frame_press(split, false)]);
     assert_eq!(
-        app.add_tab
-            .as_ref()
-            .map(|(_, direction)| direction.as_deref()),
+        app.dock_ops.iter().find_map(|op| match op {
+            DockOp::AddTab {
+                target: DockTarget::Main,
+                split,
+                ..
+            } => Some(split.as_deref()),
+            _ => None,
+        }),
         Some(Some("down"))
     );
 }

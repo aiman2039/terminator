@@ -39,3 +39,11 @@ pub(crate) struct DragState {
     /// (not the pane snapshot ghost) follows the pointer there.
     pub(crate) strip_new_tab_hover: bool,
 }
+
+impl DragState {
+    /// No pane or top-level tab is being dragged, so a new drag may start.
+    /// Every drag start checks this, so `pane` and `tab` are never both set.
+    pub(crate) const fn idle(&self) -> bool {
+        self.pane.is_none() && self.tab.is_none()
+    }
+}

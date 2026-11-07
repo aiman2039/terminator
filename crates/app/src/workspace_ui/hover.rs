@@ -251,7 +251,7 @@ impl App {
         if let Some(preview) = self.markdown.entries.get_mut(sid) {
             preview.editor_focused = true;
         }
-        self.active_session = Some(sid.to_owned());
+        self.focus_terminal(sid.to_owned());
         self.send(Request::Focus {
             session: sid.to_owned(),
         });

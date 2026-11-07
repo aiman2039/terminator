@@ -65,8 +65,7 @@ impl App {
 
     fn cancel_pane_drag_on_escape(&mut self, ui: &egui::Ui, workspace: &mut Workspace) {
         if self.drag.pane.is_some() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.revert_drop_preview(workspace);
-            self.end_pane_drag();
+            self.end_pane_drag(Some(workspace), false);
             ui.ctx().stop_dragging();
         }
     }
