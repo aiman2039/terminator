@@ -7,8 +7,6 @@ impl Workspace {
     pub fn active_pane(&self) -> Option<&Tab> {
         self.main_surface()
             .focused_leaf()
-            // Checked: an emptied tree keeps stale focus, and blind indexing
-            // would panic.
             .and_then(|node| self.main_surface().leaf(node).ok())
             .and_then(|leaf| leaf.tabs.get(leaf.active.0))
             .or_else(|| self.iter_all_tabs().next().map(|(_, tab)| tab))
@@ -88,8 +86,6 @@ impl Workspace {
     }
 }
 
-// Serde restores raw docking indices without the checks used by UI setters.
-// Reject invalid persisted focus before any App or renderer indexing occurs.
 pub(super) fn contains_browser(workspace: &Workspace) -> bool {
     workspace.tabs.iter().any(|tab| {
         matches!(tab.primary, Some(Tab::Browser { .. }))
@@ -100,6 +96,7 @@ pub(super) fn contains_browser(workspace: &Workspace) -> bool {
     })
 }
 
+// Serde restores raw docking indices. Reject invalid focus in populated trees.
 pub(crate) fn validate_layout(layout: &DockState<Tab>) -> Result<()> {
     ensure!(
         matches!(

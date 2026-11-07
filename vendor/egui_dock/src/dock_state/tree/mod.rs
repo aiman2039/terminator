@@ -619,6 +619,7 @@ impl<Tab> Tree<Tab> {
 
         let Some(parent) = node.parent() else {
             self.nodes.clear();
+            self.focused_node = None;
             return;
         };
 

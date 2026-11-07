@@ -1,5 +1,16 @@
 # Validation evidence — 2026-09-08
 
+## Empty pane focus at startup — 2026-11-07
+
+Removing the last dock pane now clears its focus. Loading a saved empty tree
+clears stale focus before validation, for legacy and versioned layouts.
+Invalid focus in a populated tree and unknown layout versions still fail validation.
+Focused workspace tests cover last-pane removal, repair across layout versions
+2 through 10, preservation of another tab, and a second save/load cycle.
+Passed: `cargo test -p terminator --lib --locked workspace::layout_tests`
+(41 tests), `cargo fmt --all --check`, `cargo clippy -p terminator --all-targets -- -D warnings`, and `git diff --check`.
+Native startup and the installed GUI have not been checked or restarted.
+
 ## JetBrains parity: keys, editor, search, Git, design — 2026-11-05
 
 Source: eight tracks on base `5a452a3` (keys, design, LSP, editor, search,

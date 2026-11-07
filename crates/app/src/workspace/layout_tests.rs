@@ -148,29 +148,58 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn legacy_with_focus(dock: &DockState<Tab>, focus: u64) -> serde_json::Value {
+        let mut legacy = terminator_core::sanitize_layout(serde_json::to_value(dock).unwrap());
+        legacy["surfaces"][0]["Main"]["focused_node"] = serde_json::json!(focus);
+        legacy
+    }
+
+    fn versioned_saves(
+        base: &Workspace,
+        legacy: &serde_json::Value,
+    ) -> impl Iterator<Item = serde_json::Value> {
+        let base = terminator_core::sanitize_layout(serde_json::to_value(base).unwrap());
+        let legacy = legacy.clone();
+        (2..=10).map(move |version| {
+            let mut saved = base.clone();
+            saved["version"] = serde_json::json!(version);
+            saved["tabs"][0]["layout"] = legacy.clone();
+            saved
+        })
+    }
+
+    #[test]
+    fn empty_tree_stale_focus_is_repaired_in_legacy_and_versioned_layouts() {
+        let mut legacy = legacy_with_focus(&DockState::new(vec![]), 0);
+        legacy["surfaces"][0]["Main"]["nodes"] = serde_json::json!([]);
+        let restored = Workspace::load(legacy.clone()).unwrap();
+        assert!(restored.main_surface().focused_leaf().is_none());
+        assert!(restored.active_pane().is_none());
+
+        let mut base =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("replaced".into())]));
+        base.add("keep".into(), Tab::Terminal("shell".into()));
+        for saved in versioned_saves(&base, &legacy) {
+            let restored = Workspace::load(saved).unwrap();
+            let tree = restored.tabs[0].layout.main_surface();
+            assert!(tree.focused_leaf().is_none());
+            assert_eq!(restored.active_pane(), Some(&Tab::Terminal("shell".into())));
+        }
+    }
+
     #[test]
     fn invalid_focus_is_rejected_in_legacy_and_versioned_layouts() {
         let dock = DockState::new(vec![Tab::Terminal("shell".into())]);
-        let mut legacy = terminator_core::sanitize_layout(serde_json::to_value(&dock).unwrap());
-        legacy["surfaces"][0]["Main"]["focused_node"] = serde_json::json!(999);
-        assert!(
-            Workspace::load(legacy.clone())
+        let legacy = legacy_with_focus(&dock, 999);
+        let rejected = |saved| {
+            Workspace::load(saved)
                 .unwrap_err()
                 .to_string()
                 .contains("focus")
-        );
-        for version in [2, 3, 4, 5, 6, 7, 8] {
-            let mut saved = terminator_core::sanitize_layout(
-                serde_json::to_value(Workspace::from_layout(dock.clone())).unwrap(),
-            );
-            saved["version"] = serde_json::json!(version);
-            saved["tabs"][0]["layout"] = legacy.clone();
-            assert!(
-                Workspace::load(saved)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("focus")
-            );
+        };
+        assert!(rejected(legacy.clone()));
+        for saved in versioned_saves(&Workspace::from_layout(dock), &legacy) {
+            assert!(rejected(saved));
         }
     }
 
@@ -385,8 +414,10 @@ mod tests {
         let path = dock.find_tab(&Tab::Terminal("shell".into())).unwrap();
         dock.set_focused_node_and_surface(path.node_path());
         dock.remove_tab(path);
-        let workspace = Workspace::from_layout(dock);
-        assert!(workspace.active_pane().is_none());
+        assert!(dock.main_surface().focused_leaf().is_none());
+        assert!(Workspace::from_layout(dock.clone()).active_pane().is_none());
+        let restored = Workspace::load(serde_json::to_value(dock).unwrap()).unwrap();
+        assert!(restored.active_pane().is_none());
     }
 
     #[test]

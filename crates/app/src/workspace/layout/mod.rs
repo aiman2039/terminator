@@ -116,8 +116,8 @@ impl Workspace {
                     *id = terminator_core::id();
                 }
             }
-            for tab in &workspace.tabs {
-                validate_layout(&tab.layout)?;
+            for tab in &mut workspace.tabs {
+                repair_and_validate_layout(&mut tab.layout)?;
             }
             workspace
                 .recent_tabs
@@ -125,9 +125,9 @@ impl Workspace {
             workspace.record_active();
             Ok(workspace)
         } else {
-            let layout = serde_json::from_value(terminator_core::sanitize_layout(value))
+            let mut layout = serde_json::from_value(terminator_core::sanitize_layout(value))
                 .context("Invalid legacy split layout")?;
-            validate_layout(&layout)?;
+            repair_and_validate_layout(&mut layout)?;
             Ok(Self::from_layout(layout))
         }
     }
@@ -257,4 +257,17 @@ impl Workspace {
             tab.primary = next;
         }
     }
+}
+
+// Older docking code left focus on the removed root of an empty tree.
+// `set_focused_node` clears focus when the index is not a leaf.
+fn repair_and_validate_layout(layout: &mut DockState<Tab>) -> Result<()> {
+    for surface in layout.iter_surfaces_mut() {
+        if let Some(tree) = surface.node_tree_mut()
+            && tree.is_empty()
+        {
+            tree.set_focused_node(egui_dock::NodeIndex::root());
+        }
+    }
+    validate_layout(layout)
 }
