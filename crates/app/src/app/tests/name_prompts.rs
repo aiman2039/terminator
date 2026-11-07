@@ -118,10 +118,10 @@ fn painted_rename_releases_focus_when_hidden(app: &mut App, ctx: &egui::Context)
 }
 
 fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
-    let covers: [fn(&mut App); 5] = [
+    // The Search popup floats over the panes, so it is not a cover.
+    let covers: [fn(&mut App); 4] = [
         |app| app.settings_open = true,
         |app| app.player_open = true,
-        |app| app.palette.open = true,
         |app| app.worktree_open = true,
         |app| app.search_open = true,
     ];
@@ -135,7 +135,6 @@ fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
         assert!(app.strip_terminal_input_enabled("named"));
         app.settings_open = false;
         app.player_open = false;
-        app.palette.open = false;
         app.worktree_open = false;
         app.search_open = false;
         assert_rename_blocks(app);
