@@ -12,8 +12,8 @@ fn sidebar_and_menu_shortcuts_run_their_actions() {
     app.state.sessions = vec![session_fixture("live", SessionKind::Shell)];
     app.active_session = Some("live".into());
     app.run_shortcut(&ctx, Action::SearchScrollback);
-    assert!(app.search_open);
-    assert_eq!(app.search_session.as_deref(), Some("live"));
+    assert!(app.search_session().is_some());
+    assert_eq!(app.search_session(), Some("live"));
     app.run_shortcut(&ctx, Action::RenameTerminal);
     assert_eq!(
         app.rename_session.as_ref().map(|(id, _)| id.as_str()),
@@ -110,15 +110,14 @@ fn toolbar_switches_projects_opens_git_and_search() {
 fn strip_input_stays_enabled_under_center_views() {
     let (mut app, _ctx, _dir) = fixture();
     assert!(app.strip_terminal_input_enabled("shell"));
-    app.settings_open = true;
+    app.center = CenterPage::Settings;
     assert!(app.strip_terminal_input_enabled("shell"));
-    app.player_open = true;
+    app.center = CenterPage::Player;
     assert!(app.strip_terminal_input_enabled("shell"));
     app.palette.open = true;
     assert!(app.strip_terminal_input_enabled("shell"));
     app.palette.open = false;
-    app.player_open = false;
-    app.settings_open = false;
+    app.center = CenterPage::Workspace;
     // True modals still suspend the strip.
     app.add_project = true;
     assert!(!app.strip_terminal_input_enabled("shell"));
@@ -164,7 +163,7 @@ fn copy_still_respects_modal_and_editor_close_gates() {
     assert!(!app.float_terminal_copy_enabled("shell"));
     assert!(app.terminal_copy_enabled("other"));
     app.editor_close_sessions.clear();
-    app.settings_open = true;
+    app.center = CenterPage::Settings;
     assert!(!app.terminal_copy_enabled("shell"));
     assert!(app.strip_terminal_copy_enabled("shell"));
     assert!(app.float_terminal_copy_enabled("shell"));
@@ -435,9 +434,9 @@ fn command_dialogs_suspend_terminal_input_until_dismissed() {
     assert!(!app.terminal_input_enabled("shell"));
     app.palette.open = false;
     assert!(app.terminal_input_enabled("shell"));
-    app.player_open = true;
+    app.center = CenterPage::Player;
     assert!(!app.terminal_input_enabled("shell"));
-    app.player_open = false;
+    app.center = CenterPage::Workspace;
     assert!(app.terminal_input_enabled("shell"));
     app.worktree_draft = Some(worktree_ui::WorktreeDraft {
         source: "a".into(),
@@ -447,19 +446,21 @@ fn command_dialogs_suspend_terminal_input_until_dismissed() {
         open_terminal: true,
         ..Default::default()
     });
+    app.center = CenterPage::WorktreeDraft;
     assert!(!app.terminal_input_enabled("shell"));
-    app.worktree_draft = None;
+    app.hide_center_overlay();
+    assert!(app.worktree_draft.is_none());
     app.worktree_remove = Some("a".into());
     assert!(!app.terminal_input_enabled("shell"));
     app.worktree_remove = None;
     assert!(app.terminal_input_enabled("shell"));
-    app.search_open = true;
+    app.center = CenterPage::Search("live".into());
     assert!(!app.terminal_input_enabled("shell"));
-    app.search_open = false;
+    app.center = CenterPage::Workspace;
     assert!(app.terminal_input_enabled("shell"));
-    app.worktree_open = true;
+    app.center = CenterPage::Worktrees;
     assert!(!app.terminal_input_enabled("shell"));
-    app.worktree_open = false;
+    app.center = CenterPage::Workspace;
     assert!(app.terminal_input_enabled("shell"));
 }
 
@@ -468,25 +469,21 @@ fn closing_scrollback_search_restores_terminal_input() {
     let (mut app, _, _dir) = fixture();
     app.active_session = Some("live".into());
     app.search_active_scrollback(&egui::Context::default());
-    assert!(app.search_open);
-    assert_eq!(app.search_session.as_deref(), Some("live"));
+    assert!(app.search_session().is_some());
+    assert_eq!(app.search_session(), Some("live"));
     assert!(!app.terminal_input_enabled("live"));
     assert!(app.strip_terminal_input_enabled("live"));
 
     app.hide_center_overlay();
-    assert!(!app.search_open);
-    assert!(app.search_session.is_none());
+    assert!(!app.search_session().is_some());
+    assert!(app.search_session().is_none());
     assert!(app.terminal_input_enabled("live"));
     assert!(app.strip_terminal_input_enabled("live"));
 
-    // The session id is not itself a lock. A close that only cleared
-    // `search_open` used to leave every main terminal disabled.
-    app.search_session = Some("live".into());
-    assert!(app.terminal_input_enabled("live"));
-    app.search_open = true;
+    app.show_center(CenterPage::Search("live".into()));
     assert!(!app.terminal_input_enabled("live"));
     app.close_scrollback_search();
-    assert!(app.search_session.is_none());
+    assert!(app.search_session().is_none());
     assert!(app.terminal_input_enabled("live"));
 }
 
@@ -536,7 +533,7 @@ fn opening_scrollback_search_focuses_query_field() {
     let (mut app, ctx, _dir) = fixture();
     app.active_session = Some("live".into());
     app.open_scrollback_search(&ctx, "live");
-    assert!(app.search_open);
+    assert!(app.search_session().is_some());
     assert_eq!(
         ctx.memory(eframe::egui::Memory::focused),
         Some(egui::Id::unique("scrollback-search"))

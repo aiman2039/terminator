@@ -12,10 +12,7 @@ use super::super::*;
 impl App {
     pub(crate) fn command_dialog_open(&self) -> bool {
         self.palette.open
-            || self.search_open
-            || self.commands_session.is_some()
-            || self.worktree_open
-            || self.worktree_draft.is_some()
+            || self.center_is_dialog()
             || self.worktree_remove.is_some()
             || self.git.picker.is_some()
     }
@@ -243,11 +240,9 @@ impl App {
             info: None,
             info_since: None,
             add_project: false,
-            settings_open: false,
+            center: crate::CenterPage::Workspace,
             settings_session: false,
             settings_pending: None,
-            player_open: false,
-            vnc_page_open: false,
             editor_preset: external_editor::CUSTOM,
             test_editor: false,
             settings_draft: Settings::default(),
@@ -290,11 +285,7 @@ impl App {
             search: String::new(),
             scrollback_hits: crate::app::ScrollbackHits::default(),
             commands_filter: String::new(),
-            search_session: None,
-            search_open: false,
-            commands_session: None,
             command_blocks: HashMap::new(),
-            worktree_open: false,
             local_history: None,
             terminal_find: HashMap::new(),
             history_filter: HashMap::new(),

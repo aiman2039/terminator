@@ -93,7 +93,7 @@ impl App {
             self.error = Some("Local History needs an updated session service.".into());
             return;
         }
-        self.hide_center_overlay();
+        self.show_center(crate::CenterPage::LocalHistory);
         let _ = self.jobs.send(Job::LocalHistory(Op::List(path.clone())));
         self.local_history = Some(Page {
             path,

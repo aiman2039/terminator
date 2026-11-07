@@ -9,16 +9,11 @@ pub(super) const PAGE_KEY: &str = "vnc-page";
 impl App {
     /// Show the VNC page in the main pane, replacing any other center view.
     pub(crate) fn show_vnc_page(&mut self) {
-        self.hide_center_overlay();
-        self.vnc_page_open = true;
+        self.show_center(crate::CenterPage::Vnc);
     }
 
-    /// The main pane: the VNC page while it is open, else the workspace.
-    pub(crate) fn vnc_page_or_workspace_center(&mut self, ui: &mut egui::Ui) {
-        if !self.vnc_page_open {
-            self.workspace_center(ui);
-            return;
-        }
+    /// The main pane while the VNC page is open.
+    pub(crate) fn vnc_page_center(&mut self, ui: &mut egui::Ui) {
         let style = appearance::CenterCardStyle::new(&self.theme);
         let (close, dismissed) = appearance::center_card(ui, style, |ui| {
             let mut close = false;
@@ -34,7 +29,7 @@ impl App {
             close
         });
         if close || dismissed {
-            self.vnc_page_open = false;
+            self.hide_center_overlay();
         }
     }
 }

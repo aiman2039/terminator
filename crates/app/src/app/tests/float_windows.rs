@@ -327,8 +327,7 @@ fn float_terminal_ignores_center_overlays() {
         .sessions
         .push(session_fixture("float-gated", SessionKind::Shell));
     // Settings and Player cover the main window, never a float.
-    app.settings_open = true;
-    app.player_open = true;
+    app.center = CenterPage::Settings;
     let viewport = egui::ViewportId::from_hash_of("float-gated");
     let float_input = {
         let viewer = crate::workspace_ui::Viewer {

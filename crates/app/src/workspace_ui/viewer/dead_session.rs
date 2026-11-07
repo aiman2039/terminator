@@ -109,7 +109,7 @@ impl Viewer<'_> {
                     .desired_width(220.0),
             );
             if appearance::sidebar_action(ui, "ArrowLeft", "Back").clicked() {
-                self.app.search_session = None;
+                self.app.close_scrollback_search();
                 self.app.history_filter.remove(sid);
             }
         });

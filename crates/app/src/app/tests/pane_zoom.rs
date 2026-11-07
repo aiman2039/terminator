@@ -133,10 +133,10 @@ fn zoom_ends_with_its_session_tab_or_a_center_page() {
     let (mut app, ctx, _dir) = zoom_fixture("zoom-end");
     app.connected = false;
     app.run_shortcut(&ctx, Action::ZoomPane);
-    app.settings_open = true;
+    app.center = CenterPage::Settings;
     center_frame(&mut app, &ctx, vec![]);
     assert!(app.pane_ops.zoomed.is_none(), "Settings ends the zoom");
-    app.settings_open = false;
+    app.center = CenterPage::Workspace;
     app.run_shortcut(&ctx, Action::ZoomPane);
     app.state.sessions[0].lifecycle = Lifecycle::Ended;
     center_frame(&mut app, &ctx, vec![]);

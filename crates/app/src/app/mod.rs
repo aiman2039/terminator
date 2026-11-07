@@ -6,6 +6,8 @@ pub(crate) mod app_state;
 mod apply_state;
 mod attention;
 mod center;
+mod center_page;
+pub(crate) use center_page::CenterPage;
 mod client;
 mod command_blocks;
 mod commands;

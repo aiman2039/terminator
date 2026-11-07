@@ -26,38 +26,23 @@ impl App {
     /// Paints a center page, else the workspace. True for the workspace.
     fn center_page_or_workspace(&mut self, ui: &mut egui::Ui) -> bool {
         self.settings_unsaved_dialog(ui.ctx());
-        if self.settings_open {
-            self.settings_center(ui);
-            return false;
-        }
-        if self.player_open {
-            self.player_center(ui);
-            return false;
-        }
         // Search Everywhere floats above this pane (`show_palette`).
-        if self.worktree_open {
-            self.worktree_management_center(ui);
-            return false;
+        match self.center {
+            CenterPage::Workspace => {
+                self.workspace_center(ui);
+                return true;
+            }
+            CenterPage::Settings => self.settings_center(ui),
+            CenterPage::Player => self.player_center(ui),
+            CenterPage::Worktrees => self.worktree_management_center(ui),
+            CenterPage::WorktreeDraft => self.worktree_center(ui),
+            CenterPage::Search(_) => self.search_history_center(ui),
+            CenterPage::Commands(_) => self.command_blocks_center(ui),
+            CenterPage::LocalHistory => self.local_history_center(ui),
+            CenterPage::Ssh => self.ssh_page_center(ui),
+            CenterPage::Vnc => self.vnc_page_center(ui),
         }
-        if self.worktree_draft.is_some() {
-            self.worktree_center(ui);
-            return false;
-        }
-        if self.search_open {
-            self.search_history_center(ui);
-            return false;
-        }
-        if self.commands_session.is_some() {
-            self.command_blocks_center(ui);
-            return false;
-        }
-        if self.local_history.is_some() {
-            self.local_history_center(ui);
-            return false;
-        }
-        let workspace = !self.ssh_page_visible() && !self.vnc_page_open;
-        self.ssh_page_or_vnc_center(ui);
-        workspace
+        false
     }
 
     pub(crate) fn worktree_management_center(&mut self, ui: &mut egui::Ui) {
@@ -66,7 +51,7 @@ impl App {
             ui.strong("Worktrees");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if appearance::sidebar_action(ui, "X", "Close").clicked() {
-                    self.worktree_open = false;
+                    self.hide_center_overlay();
                 }
             });
         });
@@ -179,7 +164,7 @@ impl App {
         .on_hover_text(format!("{}\n{}", path, worktree.path.display()));
         if response.clicked() {
             self.select_project(project_id.clone());
-            self.worktree_open = false;
+            self.close_center_page(&CenterPage::Worktrees);
         }
         appearance::context_menu(&response, |ui| self.worktree_row_menu(ui, &project_id));
     }
@@ -194,7 +179,7 @@ impl App {
         .clicked()
         {
             self.select_project(project_id.to_owned());
-            self.worktree_open = false;
+            self.close_center_page(&CenterPage::Worktrees);
             ui.close();
         }
         if appearance::menu_item(appearance::MenuItemInput {
@@ -207,7 +192,7 @@ impl App {
         {
             self.select_project(project_id.to_owned());
             self.create(None);
-            self.worktree_open = false;
+            self.close_center_page(&CenterPage::Worktrees);
             ui.close();
         }
         if appearance::menu_item(appearance::MenuItemInput {

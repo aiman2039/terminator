@@ -114,21 +114,20 @@ impl App {
     pub(crate) fn open_settings(&mut self) {
         // Already showing: hiding first would ask to discard the draft
         // that stays on screen.
-        if self.settings_open {
+        if self.settings_open() {
             return;
         }
         if !self.settings_session {
             self.begin_settings_session();
         }
-        self.hide_center_overlay();
-        self.settings_open = true;
+        self.show_center(CenterPage::Settings);
     }
 
     pub(crate) fn end_settings_session(&mut self) {
-        self.settings_open = false;
         self.settings_session = false;
         self.settings_pending = None;
         self.shortcut_capture = None;
+        self.close_center_page(&CenterPage::Settings);
     }
 
     pub(crate) fn settings_dirty(&self) -> bool {
@@ -283,7 +282,7 @@ impl App {
     }
 
     pub(crate) fn preview_appearance(&mut self, ctx: &egui::Context) {
-        let next = if !self.settings_open {
+        let next = if !self.settings_open() {
             self.theme_committed.clone()
         } else if self.theme_draft.validate().is_ok() {
             self.theme_draft.clone()

@@ -173,8 +173,7 @@ impl App {
 
     pub(crate) fn terminal_copy_enabled(&self, sid: &str) -> bool {
         !self.picker_active
-            && !self.settings_open
-            && !self.player_open
+            && !self.center_covers_workspace()
             && !self.command_dialog_open()
             && !self.add_project
             && !self.notice_detail_modal_open()
@@ -183,8 +182,6 @@ impl App {
             && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && !self.rename_blocks_input()
             && !self.open_path
-            && !self.search_open
-            && self.commands_session.is_none()
     }
 
     /// Terminals docked in the IDE strip stay interactive while a center-only

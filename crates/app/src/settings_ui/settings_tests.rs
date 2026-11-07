@@ -87,7 +87,7 @@ mod tests {
         };
         frame(vec![egui::Event::PointerMoved(pos), button(true)], &mut app);
         frame(vec![button(false)], &mut app);
-        assert!(!app.settings_open);
+        assert!(!app.settings_open());
     }
 
     fn app() -> (App, egui::Context, tempfile::TempDir) {

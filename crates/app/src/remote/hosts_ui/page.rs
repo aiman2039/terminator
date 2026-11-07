@@ -19,14 +19,14 @@ use terminator_core::{Request, remote::RemoteProject};
 impl App {
     /// Show the SSH page in the main pane, replacing any other center view.
     pub(crate) fn show_ssh_page(&mut self) {
-        self.hide_center_overlay();
-        self.remote_ui.hosts.page_open = true;
+        self.show_center(crate::CenterPage::Ssh);
     }
 
     /// Whether the main pane shows the SSH page (hosts, Properties or
     /// import).
+    #[cfg(test)]
     pub(crate) fn ssh_page_visible(&self) -> bool {
-        self.remote_ui.hosts.page_open || self.remote_ui.open || self.remote_ui.import.is_some()
+        self.center == crate::CenterPage::Ssh
     }
 
     /// The main pane while the SSH page is open.
@@ -66,7 +66,7 @@ impl App {
         if close {
             self.remote_ui.close();
             self.remote_ui.import = None;
-            self.remote_ui.hosts.page_open = false;
+            self.hide_center_overlay();
             self.selection_generation = self.selection_generation.wrapping_add(1);
         }
     }

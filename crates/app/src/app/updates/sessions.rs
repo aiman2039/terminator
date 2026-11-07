@@ -59,6 +59,7 @@ impl App {
         start: worktree_ui::TaskStart,
     ) {
         self.worktree_draft = None;
+        self.close_center_page(&crate::CenterPage::WorktreeDraft);
         self.missing_projects.remove(&project);
         self.apply_state(state);
         self.reveal_project(project.clone());

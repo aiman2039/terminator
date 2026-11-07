@@ -52,16 +52,6 @@ impl FormFix {
 }
 
 impl App {
-    /// The main pane: the SSH page while open, else the VNC page or the
-    /// workspace.
-    pub(crate) fn ssh_page_or_vnc_center(&mut self, ui: &mut egui::Ui) {
-        if self.ssh_page_visible() {
-            self.ssh_page_center(ui);
-        } else {
-            self.vnc_page_or_workspace_center(ui);
-        }
-    }
-
     /// Opens SSH Properties on the SSH page on `draft`.
     pub(crate) fn open_ssh_properties(&mut self, draft: RemoteProject) {
         self.show_ssh_page();

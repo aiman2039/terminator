@@ -10,10 +10,10 @@ fn explorer_prompts_do_not_suspend_terminal_input() {
     app.pending_delete = vec![PathBuf::from("/a/old")];
     assert!(app.terminal_input_enabled("shell"));
     assert!(app.strip_terminal_input_enabled("shell"));
-    app.settings_open = true;
+    app.center = CenterPage::Settings;
     assert!(!app.terminal_input_enabled("shell"));
     assert!(app.strip_terminal_input_enabled("shell"));
-    app.settings_open = false;
+    app.center = CenterPage::Workspace;
     app.state
         .sessions
         .push(session_fixture("shell", SessionKind::Shell));
@@ -120,10 +120,10 @@ fn painted_rename_releases_focus_when_hidden(app: &mut App, ctx: &egui::Context)
 fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
     // The Search popup floats over the panes, so it is not a cover.
     let covers: [fn(&mut App); 4] = [
-        |app| app.settings_open = true,
-        |app| app.player_open = true,
-        |app| app.worktree_open = true,
-        |app| app.search_open = true,
+        |app| app.center = CenterPage::Settings,
+        |app| app.center = CenterPage::Player,
+        |app| app.center = CenterPage::Worktrees,
+        |app| app.center = CenterPage::Search("live".into()),
     ];
     for cover in covers {
         cover(app);
@@ -133,10 +133,7 @@ fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
             Some("Draft")
         );
         assert!(app.strip_terminal_input_enabled("named"));
-        app.settings_open = false;
-        app.player_open = false;
-        app.worktree_open = false;
-        app.search_open = false;
+        app.center = CenterPage::Workspace;
         assert_rename_blocks(app);
     }
     app.worktree_draft = Some(worktree_ui::WorktreeDraft {
@@ -147,8 +144,9 @@ fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
         open_terminal: true,
         ..Default::default()
     });
+    app.center = CenterPage::WorktreeDraft;
     assert!(app.strip_terminal_input_enabled("named"));
-    app.worktree_draft = None;
+    app.hide_center_overlay();
     assert_rename_blocks(app);
 }
 
@@ -158,11 +156,11 @@ fn strip_input_follows_the_strip(app: &mut App) {
         "a".into(),
         egui_dock::DockState::new(vec![Tab::Terminal("named".into())]),
     );
-    app.settings_open = true;
+    app.center = CenterPage::Settings;
     assert!(!app.strip_terminal_input_enabled("named"));
     app.preferences.ide_terminal_collapsed = true;
     assert!(app.strip_terminal_input_enabled("named"));
-    app.settings_open = false;
+    app.center = CenterPage::Workspace;
     app.preferences.ide_mode = false;
     app.preferences.ide_terminal_collapsed = false;
     app.preferences.ide_strip_docks.0.clear();

@@ -252,12 +252,10 @@ pub struct App {
     /// The info text on screen and when it appeared: it clears after a while.
     pub(crate) info_since: Option<(String, std::time::Instant)>,
     pub(crate) add_project: bool,
-    pub(crate) settings_open: bool,
+    /// The page in the main pane; written only by `show_center`.
+    pub(crate) center: crate::CenterPage,
     pub(crate) settings_session: bool,
     pub(crate) settings_pending: Option<settings_ui::SettingsPending>,
-    pub(crate) player_open: bool,
-    /// The VNC address book fills the main pane (same pattern as Player).
-    pub(crate) vnc_page_open: bool,
     pub(crate) editor_preset: usize,
     pub(crate) test_editor: bool,
     pub(crate) settings_draft: Settings,
@@ -274,6 +272,7 @@ pub struct App {
     /// Open Ctrl+Tab recent-tab switcher, if any.
     pub(crate) switcher: Option<crate::chrome::switcher::Switcher>,
     pub(crate) structure: crate::sidebar_ui::StructureState,
+    /// The new-worktree form; kept only on the worktree center pages.
     pub(crate) worktree_draft: Option<worktree_ui::WorktreeDraft>,
     pub(crate) worktree_remove: Option<String>,
     pub(crate) theme: AppearanceConfig,
@@ -314,15 +313,10 @@ pub struct App {
     pub(crate) scrollback_hits: crate::app::ScrollbackHits,
     /// Commands page filter; separate from the scrollback query (#201).
     pub(crate) commands_filter: String,
-    pub(crate) search_session: Option<String>,
-    pub(crate) search_open: bool,
-    /// Terminal whose shell integration commands fill the main pane.
-    pub(crate) commands_session: Option<String>,
     /// Shared so the Commands page borrows them without a per-frame clone.
     pub(crate) command_blocks:
         HashMap<String, std::sync::Arc<[terminator_core::command_blocks::CommandBlock]>>,
-    pub(crate) worktree_open: bool,
-    /// The Local History page fills the main pane (same pattern as Player).
+    /// Data of `CenterPage::LocalHistory`.
     pub(crate) local_history: Option<crate::local_history::Page>,
     pub(crate) terminal_find: HashMap<String, TerminalFind>,
     pub(crate) history_filter: HashMap<String, String>,

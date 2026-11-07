@@ -8,7 +8,7 @@ fn opening_settings_again_keeps_an_unsaved_draft_open() {
     // The Settings shortcut stays live while Settings is open.
     app.open_settings();
     assert!(app.settings_pending.is_none(), "no discard question");
-    assert!(app.settings_open);
+    assert!(app.settings_open());
     assert_eq!(app.settings_draft.shell, "/tmp/custom");
 }
 
@@ -20,29 +20,26 @@ fn hide_center_overlay_when_settings_dirty_sets_pending_close() {
     assert!(app.settings_dirty());
     app.hide_center_overlay();
     assert!(app.settings_pending.is_some());
-    assert!(!app.settings_open);
+    assert!(!app.settings_open());
 }
 
 #[test]
 fn open_settings_clears_search_and_worktree() {
     let (mut app, _, _dir) = fixture();
-    app.search_open = true;
-    app.worktree_open = true;
+    app.show_center(CenterPage::Worktrees);
+    app.worktree_draft = Some(worktree_ui::WorktreeDraft::default());
     app.open_settings();
-    assert!(!app.search_open);
-    assert!(!app.worktree_open);
-    assert!(app.settings_open);
+    assert!(app.worktree_draft.is_none());
+    assert!(app.settings_open());
 }
 
 #[test]
 fn open_player_clears_search_and_worktree() {
     let (mut app, _, _dir) = fixture();
-    app.search_open = true;
-    app.worktree_open = true;
+    app.show_center(CenterPage::Search("live".into()));
     app.open_player();
-    assert!(!app.search_open);
-    assert!(!app.worktree_open);
-    assert!(app.player_open);
+    assert!(app.search_session().is_none());
+    assert!(app.player_open());
 }
 
 #[test]
@@ -95,18 +92,18 @@ fn settings_and_player_are_center_singletons() {
     app.settings_section = SettingsSection::Terminal;
     app.settings_search = "shell".into();
     app.hide_center_overlay();
-    assert!(!app.settings_open);
+    assert!(!app.settings_open());
     assert!(app.settings_session);
     app.open_settings();
     assert_eq!(app.settings_draft.shell, "/tmp/custom-shell");
     assert_eq!(app.settings_section, SettingsSection::Terminal);
     assert_eq!(app.settings_search, "shell");
     app.open_player();
-    assert!(app.player_open);
-    assert!(!app.settings_open);
+    assert!(app.player_open());
+    assert!(!app.settings_open());
     assert!(app.settings_session);
     app.open_settings();
-    assert!(!app.player_open);
+    assert!(!app.player_open());
     assert_eq!(app.settings_draft.shell, "/tmp/custom-shell");
     app.end_settings_session();
     app.open_settings();
@@ -122,9 +119,9 @@ fn go_session_hides_center_overlay() {
         .push(session_fixture("shell", SessionKind::Shell));
     app.open_player();
     app.go_session("shell");
-    assert!(!app.player_open);
+    assert!(!app.player_open());
     app.open_player();
-    assert!(app.player_open);
+    assert!(app.player_open());
 }
 
 #[test]
@@ -133,7 +130,7 @@ fn create_hides_settings_without_ending_session() {
     app.open_settings();
     app.settings_search = "shell".into();
     app.create(None);
-    assert!(!app.settings_open);
+    assert!(!app.settings_open());
     assert!(app.settings_session);
     app.open_settings();
     assert_eq!(app.settings_search, "shell");
@@ -288,4 +285,74 @@ fn worktree_wizard_opens_only_after_the_git_probe_confirms() {
     );
     app.apply_worktree_probe(draft, true);
     assert!(app.worktree_draft.is_some());
+}
+
+#[test]
+fn opening_search_under_settings_does_not_disable_terminal_input() {
+    let (mut app, ctx, _dir) = fixture();
+    app.open_settings();
+    app.open_scrollback_search(&ctx, "shell");
+    assert!(!app.settings_open(), "one page at a time");
+    assert_eq!(app.search_session(), Some("shell"));
+    app.close_scrollback_search();
+    assert_eq!(app.center, CenterPage::Workspace);
+    assert!(app.terminal_input_enabled("shell"));
+}
+
+#[test]
+fn opening_worktrees_under_the_player_replaces_it() {
+    let (mut app, _, _dir) = fixture();
+    app.open_player();
+    app.show_center(CenterPage::Worktrees);
+    assert!(!app.player_open());
+    app.hide_center_overlay();
+    assert!(app.terminal_input_enabled("shell"));
+}
+
+#[test]
+fn worktree_probe_answer_replaces_settings_with_the_form() {
+    let (mut app, _, _dir) = fixture();
+    app.open_settings();
+    app.apply_worktree_probe(worktree_ui::WorktreeDraft::default(), true);
+    assert_eq!(app.center, CenterPage::WorktreeDraft);
+    assert!(app.worktree_draft.is_some());
+    app.hide_center_overlay();
+    assert!(app.worktree_draft.is_none());
+    assert!(app.terminal_input_enabled("shell"));
+}
+
+#[test]
+fn every_center_page_covers_workspace_browsers_and_terminal_input() {
+    let (mut app, _, _dir) = fixture();
+    let pages = [
+        CenterPage::Settings,
+        CenterPage::Player,
+        CenterPage::Vnc,
+        CenterPage::Ssh,
+        CenterPage::Worktrees,
+        CenterPage::WorktreeDraft,
+        CenterPage::Search("shell".into()),
+        CenterPage::Commands("shell".into()),
+        CenterPage::LocalHistory,
+    ];
+    for page in pages {
+        app.show_center(page.clone());
+        assert!(app.center_covers_workspace(), "{page:?}");
+        assert!(app.browser_covered(), "{page:?}");
+        assert!(!app.terminal_input_enabled("shell"), "{page:?}");
+        app.hide_center_overlay();
+        assert!(!app.center_covers_workspace());
+        assert!(!app.browser_covered());
+        assert!(app.terminal_input_enabled("shell"));
+    }
+}
+
+#[test]
+fn closing_a_page_that_is_not_shown_keeps_the_shown_page() {
+    let (mut app, _, _dir) = fixture();
+    app.open_player();
+    app.close_scrollback_search();
+    app.close_command_blocks();
+    app.close_center_page(&CenterPage::Worktrees);
+    assert!(app.player_open());
 }

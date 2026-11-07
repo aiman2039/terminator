@@ -183,12 +183,17 @@ impl App {
         if !git {
             self.info = Some("This folder is not a git checkout.".into());
         } else if self.worktree_draft.is_none() {
+            // The list page shows the form above it; else the form page.
+            if self.center != crate::CenterPage::Worktrees {
+                self.show_center(crate::CenterPage::WorktreeDraft);
+            }
             self.worktree_draft = Some(draft);
         }
     }
 
     pub(crate) fn worktree_center(&mut self, ui: &mut egui::Ui) {
         let Some(mut draft) = self.worktree_draft.clone() else {
+            self.hide_center_overlay();
             return;
         };
         let mut submit = false;
@@ -228,7 +233,11 @@ impl App {
         }
         // Keep the form after Create until the worker reports success, so a
         // failed creation can be corrected and retried.
-        self.worktree_draft = (!cancel).then_some(draft);
+        if cancel {
+            self.hide_center_overlay();
+        } else {
+            self.worktree_draft = Some(draft);
+        }
     }
 
     pub(crate) fn worktree_form(&self, input: WorktreeFormInput<'_>) {

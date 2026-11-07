@@ -97,7 +97,7 @@ fn paint_ssh_page(app: &mut App, ctx: &egui::Context) -> Vec<String> {
             )),
             ..Default::default()
         },
-        |ui| app.ssh_page_or_vnc_center(ui),
+        |ui| app.center_pane(ui),
     );
     output.textures_delta.clear();
     painted_text(&output.shapes)
@@ -236,7 +236,7 @@ fn click_ssh_margin(app: &mut App, ctx: &egui::Context) {
                 events,
                 ..Default::default()
             },
-            |ui| app.ssh_page_or_vnc_center(ui),
+            |ui| app.center_pane(ui),
         );
         output.textures_delta.clear();
     }

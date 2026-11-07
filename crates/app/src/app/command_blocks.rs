@@ -55,13 +55,14 @@ impl App {
     }
 
     pub(crate) fn open_command_blocks(&mut self, sid: &str) {
-        self.hide_center_overlay();
-        self.commands_session = Some(sid.to_owned());
+        self.show_center(CenterPage::Commands(sid.to_owned()));
         self.request_command_blocks(sid);
     }
 
     pub(crate) fn close_command_blocks(&mut self) {
-        self.commands_session = None;
+        if self.commands_session().is_some() {
+            self.hide_center_overlay();
+        }
     }
 
     fn request_command_blocks(&mut self, sid: &str) {
@@ -107,7 +108,7 @@ impl App {
     }
 
     pub(crate) fn command_blocks_center(&mut self, ui: &mut egui::Ui) {
-        let Some(sid) = self.commands_session.clone() else {
+        let Some(sid) = self.commands_session().map(str::to_owned) else {
             return;
         };
         ui.set_min_size(ui.available_size());

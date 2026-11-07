@@ -97,7 +97,7 @@ fn legacy_helper_error_opens_recovery_and_survives_unreported_health() {
     app.apply_state(app.state.clone());
     assert!(app.installation_problem());
     app.open_installation_settings();
-    assert!(app.settings_open);
+    assert!(app.settings_open());
     assert_eq!(app.settings_section, SettingsSection::Updates);
     let mut repaired = app.state.clone();
     repaired.generation = "new-daemon".into();

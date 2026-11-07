@@ -50,7 +50,7 @@ impl App {
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "worktree-add", worktree.rect);
             if worktree.clicked() {
-                self.worktree_open = true;
+                self.show_center(crate::CenterPage::Worktrees);
             }
         }
         if appearance::sidebar_action(ui, "Monitor", "New SSH host").clicked() {

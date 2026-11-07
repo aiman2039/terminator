@@ -103,7 +103,7 @@ impl App {
             "restart_confirm":self.restart_confirm,
             "can_repair":self.connected && can_retire_daemon(&self.state),
             "can_restart":self.connected && can_restart_service(&self.state),
-            "settings_visible":self.settings_open && self.settings_section == SettingsSection::Updates,
+            "settings_visible":self.settings_open() && self.settings_section == SettingsSection::Updates,
             "generation":self.state.generation,
             "generations":self.state.generations,
             "live_count":self.state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
