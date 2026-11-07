@@ -63,7 +63,7 @@ fn islands_dark_is_default_and_older_presets_are_preserved() {
     let default = AppearanceConfig::default();
     assert_eq!(default, AppearanceConfig::islands_dark());
     default.validate().unwrap();
-    // `JetBrains` Islands Dark: editor `#191A1C`, tool windows `#212326`.
+    // `JetBrains` Islands Dark: islands `#191A1C`, frame `#212326`.
     assert_eq!(default.window, "#191A1C");
     assert_eq!(default.surface, "#212326");
     assert_eq!(default.selection, "#2A4371");

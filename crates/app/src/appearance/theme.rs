@@ -130,11 +130,11 @@ pub fn color(value: &str) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// Flush panel: surface fill and a hairline edge, no gap between sections.
-/// Rounding lives on widgets, menus, and popups, not on abutting panels.
+/// Flush island panel: same fill as the main pane (`window`), as in JetBrains
+/// Islands; `surface` stays on the frame. Rounding lives on widgets and menus.
 pub fn panel_frame(theme: &AppearanceConfig) -> egui::Frame {
     egui::Frame::new()
-        .fill(color(&theme.surface))
+        .fill(color(&theme.window))
         .stroke(egui::Stroke::new(theme.border_width, color(&theme.border)))
         .inner_margin(egui::Margin::same(8))
 }

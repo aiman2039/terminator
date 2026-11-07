@@ -4,7 +4,7 @@ use super::{AppearanceConfig, Density};
 impl AppearanceConfig {
     /// `JetBrains` "Islands Dark" palette (IntelliJ 2025.2+, from
     /// `ManyIslandsDark.theme.json` and `IslandSchemeDark.xml`): near-black
-    /// editor, a slightly lighter tool-window surface, Islands file-status
+    /// islands (editor and tool windows), a slightly lighter frame, Islands file-status
     /// colors. The default; saved user themes load their explicit colors
     /// and are never rewritten to this.
     #[must_use]
@@ -32,7 +32,7 @@ impl AppearanceConfig {
         }
     }
     /// `JetBrains` New UI dark palette (before Islands): charcoal window,
-    /// lighter panel surface, muted blue selection.
+    /// lighter frame surface, muted blue selection.
     #[must_use]
     pub fn intellij_dark() -> Self {
         Self {

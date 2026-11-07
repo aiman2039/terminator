@@ -48,7 +48,7 @@ impl App {
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(appearance::color(&self.theme.window))
+                    .fill(appearance::color(&self.theme.surface))
                     .inner_margin(egui::Margin::symmetric(2, 6)),
             )
             .show(ui, |ui| {

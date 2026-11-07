@@ -224,8 +224,8 @@ impl ThemeHelpers {
 
     fn color_label(name: &str) -> String {
         match name {
-            "window" => "Workspace background".into(),
-            "surface" => "Sidebar background".into(),
+            "window" => "Workspace and sidebar background".into(),
+            "surface" => "Frame background".into(),
             "hover" => "Row highlight".into(),
             "text" => "Primary text".into(),
             "secondary" => "Secondary text".into(),
