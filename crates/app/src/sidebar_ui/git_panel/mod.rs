@@ -146,6 +146,8 @@ pub struct GitPanelOutcome {
     pub expand_all: Option<bool>,
     pub commit: bool,
     pub commit_push: bool,
+    /// Create PR was clicked.
+    pub create_pr: bool,
     /// Stop the commit or push in flight.
     pub cancel_commit: bool,
     /// Hide the last failure's output.

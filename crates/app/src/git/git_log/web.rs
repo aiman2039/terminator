@@ -15,6 +15,12 @@ pub fn commit_web_base(root: &Path) -> Option<String> {
     commit_url_base(String::from_utf8_lossy(&bytes).trim())
 }
 
+/// The lower-case host of a remote URL (ssh, scp-like or https).
+pub fn remote_host(remote: &str) -> Option<String> {
+    let url = git_url_parse::GitUrl::parse(remote).ok()?;
+    Some(url.host()?.to_ascii_lowercase())
+}
+
 /// The commit page prefix for a remote URL on a known host.
 pub fn commit_url_base(remote: &str) -> Option<String> {
     let url = git_url_parse::GitUrl::parse(remote).ok()?;

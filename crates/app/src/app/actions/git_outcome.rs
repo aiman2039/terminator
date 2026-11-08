@@ -85,6 +85,9 @@ impl App {
         if outcome.commit || outcome.commit_push {
             self.commit_draft(outcome.commit_push);
         }
+        if outcome.create_pr {
+            self.queue_workspace(workspace_ops::Op::CreatePr);
+        }
         if outcome.shelve {
             let paths =
                 self.changed_paths(|change| change.in_group(terminator_git::GitGroup::Staged));
