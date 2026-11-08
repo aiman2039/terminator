@@ -2,13 +2,14 @@
 use crate::browser::{
     self, BrowserTarget, LocalScope,
     nav::{self, NavState, NavStates},
-    view::{self, Current, wry_error},
+    view::{self, Committed, Current, wry_error},
 };
 use anyhow::Result;
 use eframe::egui;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
+    sync::atomic::Ordering,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -44,6 +45,7 @@ struct Hosted {
     url_at: Instant,
     scope: LocalScope,
     current: Current,
+    committed: Committed,
     /// Last bounds and visibility sent to the native view.
     bounds: Option<egui::Rect>,
     shown: bool,
@@ -159,7 +161,7 @@ impl BrowserHost {
         // Also capture same-document navigation (e.g. history.pushState), which
         // does not necessarily produce a page-load callback.
         for (key, hosted) in &mut self.views {
-            if hosted.url_at.elapsed() < HISTORY_POLL {
+            if hosted.url_at.elapsed() < HISTORY_POLL || !hosted.committed.load(Ordering::Acquire) {
                 continue;
             }
             hosted.url_at = Instant::now();
@@ -309,6 +311,7 @@ impl BrowserHost {
         }
         let scope = LocalScope::of(&pane.target);
         let current: Current = Arc::new(Mutex::new(href.clone()));
+        let committed = Committed::default();
         let profile = browser::ensure_profile(data_dir).map_err(|error| error.to_string())?;
         let context = self
             .context
@@ -320,6 +323,7 @@ impl BrowserHost {
             href: &href,
             scope: &scope,
             current: &current,
+            committed: &committed,
             bounds: bounds(pane.rect),
             data_dir,
             nav: &self.nav,
@@ -336,6 +340,7 @@ impl BrowserHost {
                 url_at: Instant::now(),
                 scope,
                 current,
+                committed,
                 bounds: Some(pane.rect),
                 shown: true,
             },

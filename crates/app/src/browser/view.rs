@@ -1,10 +1,17 @@
 //! Builds one native webview with the navigation, load, and download policy.
 use crate::browser::{self, LocalScope, nav::NavStates};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder};
 
 /// The view's last committed URL, shared with its navigation handler.
 pub(crate) type Current = Arc<Mutex<String>>;
+
+/// Set once the view commits its first navigation. Before that, WebKit's
+/// `WKWebView.URL` is nil and wry's `WebView::url()` panics on it.
+pub(crate) type Committed = Arc<AtomicBool>;
 
 pub(crate) struct BuildInput<'a> {
     pub frame: &'a eframe::Frame,
@@ -13,6 +20,7 @@ pub(crate) struct BuildInput<'a> {
     pub href: &'a str,
     pub scope: &'a LocalScope,
     pub current: &'a Current,
+    pub committed: &'a Committed,
     pub bounds: Rect,
     pub data_dir: &'a std::path::Path,
     pub nav: &'a NavStates,
@@ -28,6 +36,7 @@ pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
         href,
         scope,
         current,
+        committed,
         bounds,
         data_dir,
         nav,
@@ -48,6 +57,7 @@ pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
             key: key.to_owned(),
             scope: scope.clone(),
             current: Arc::clone(current),
+            committed: Arc::clone(committed),
             states: nav.clone(),
             events: Arc::clone(navigations),
         }))
@@ -91,6 +101,7 @@ struct PageLoad {
     key: String,
     scope: LocalScope,
     current: Current,
+    committed: Committed,
     states: NavStates,
     events: Arc<Mutex<Vec<(String, browser::BrowserTarget)>>>,
 }
@@ -100,10 +111,12 @@ fn page_load_handler(load: PageLoad) -> impl Fn(PageLoadEvent, String) + 'static
         key,
         scope,
         current,
+        committed,
         states,
         events,
     } = load;
     move |event, url| {
+        committed.store(true, Ordering::Release);
         let loading = matches!(event, PageLoadEvent::Started);
         states.update(&key, |state| {
             state.loading = loading;
