@@ -243,6 +243,41 @@ fn toplevel_destroy_closes_the_window_and_unknown_destroy_is_ignored() {
 }
 
 #[test]
+fn cursor_surface_pixels_go_out_with_the_hotspot_and_named_cursors_by_name() {
+    use wprs::serialization::wayland::{ClientSurface, CursorImage, CursorImageStatus};
+    let mut state = State::default();
+    let set = |status| RecvType::Object(Request::CursorImage(CursorImage { serial: 1, status }));
+    let out = state.handle(set(CursorImageStatus::Surface {
+        client_surface: ClientSurface {
+            client: CLIENT,
+            surface: WlSurfaceId(5),
+        },
+        hotspot: Point { x: 1, y: 2 },
+    }));
+    assert!(out.is_empty(), "no pixels yet");
+    send_pixels(&mut state, BLUE, 4);
+    let out = state.handle(commit(
+        5,
+        (2, 2),
+        Some(Role::Cursor(Point { x: 1, y: 2 })),
+        &[],
+    ));
+    assert!(matches!(
+        out[0].message,
+        HostMessage::Cursor {
+            width: 2,
+            height: 2,
+            hotspot_x: 1,
+            hotspot_y: 2,
+            name: None
+        }
+    ));
+    assert_eq!(out[0].payload, BLUE.repeat(4));
+    let out = state.handle(set(CursorImageStatus::Named("text".into())));
+    assert!(matches!(&out[0].message, HostMessage::Cursor { name: Some(n), .. } if n == "text"));
+}
+
+#[test]
 fn window_id_is_the_surface_id_so_a_new_bridge_keeps_it() {
     for _ in 0..2 {
         let mut state = State::default();

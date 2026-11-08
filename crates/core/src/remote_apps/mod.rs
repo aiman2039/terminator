@@ -78,6 +78,26 @@ pub struct RemoteAppsState {
     pub retry_in_seconds: u64,
     /// All open windows, toplevels before their popups.
     pub windows: Vec<RemoteWindow>,
+    /// The pointer shape the apps ask for; `None` until one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<RemoteCursor>,
+}
+
+/// A remote cursor: a named shape (`name`, a CSS cursor name), an image
+/// (`rgba`, base64 premultiplied RGBA of `width` x `height`), or hidden
+/// (neither).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteCursor {
+    /// Changes with every new cursor, so the GUI rebuilds its image once.
+    pub serial: u64,
+    pub width: u16,
+    pub height: u16,
+    pub hotspot_x: i32,
+    pub hotspot_y: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rgba: String,
 }
 
 fn is_zero(value: &u32) -> bool {

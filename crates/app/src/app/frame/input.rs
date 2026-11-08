@@ -31,6 +31,10 @@ impl App {
             }
             Self::drop_key_events(ctx, egui::Key::F8);
         }
+        if self.remote_app_captures_keys(ctx) && ctx.input(|i| i.key_pressed(egui::Key::F8)) {
+            self.release_remote_app_focus(ctx);
+            Self::drop_key_events(ctx, egui::Key::F8);
+        }
         if self.vnc_fullscreen.is_some() && ctx.input(|i| i.key_pressed(egui::Key::F11)) {
             self.exit_vnc_fullscreen(ctx);
             Self::drop_key_events(ctx, egui::Key::F11);
@@ -58,7 +62,9 @@ impl App {
     /// can read it.
     pub(crate) fn dispatch_shortcuts(&mut self, ctx: &egui::Context, jetbrains: bool) {
         self.escape_tool_window(ctx);
-        let capture_vnc = self.vnc_captures_shortcuts(ctx);
+        // A focused remote app window takes every key, like VNC capture;
+        // F8 or a click elsewhere gives the keys back.
+        let capture_vnc = self.vnc_captures_shortcuts(ctx) || self.remote_app_captures_keys(ctx);
         let editor_focus = terminator_native_edit::view::source_has_focus(ctx);
         let terminal_focus = shortcuts::terminal_has_focus(ctx);
         if jetbrains && !capture_vnc {

@@ -4,6 +4,7 @@
 //! come and go, and paints each window from its shared-memory frame.
 //! See docs/REMOTE_APPS.md.
 
+mod cursor;
 mod keys;
 mod view;
 
@@ -108,6 +109,9 @@ pub(crate) fn tab_title(saved: &str) -> String {
 pub(crate) struct RemoteAppsGui {
     sessions: HashMap<String, Session>,
     windows: HashMap<(String, u64), view::WindowView>,
+    /// egui IDs of the remote window panes painted this frame.
+    painted: HashSet<egui::Id>,
+    cursors: HashMap<String, cursor::CursorView>,
 }
 
 #[derive(Default)]
@@ -144,6 +148,26 @@ impl App {
             *session = Session::default();
         }
         session.wait_until = None;
+    }
+
+    /// Whether a painted remote window has keyboard focus: then it gets
+    /// every key and no Terminator shortcut runs.
+    pub(crate) fn remote_app_captures_keys(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|m| {
+            m.focused()
+                .is_some_and(|id| self.remote_apps.painted.contains(&id))
+        })
+    }
+
+    /// F8: give the keys back to Terminator.
+    pub(crate) fn release_remote_app_focus(&mut self, ctx: &egui::Context) {
+        ctx.memory_mut(|m| {
+            if let Some(id) = m.focused()
+                && self.remote_apps.painted.contains(&id)
+            {
+                m.surrender_focus(id);
+            }
+        });
     }
 
     pub(crate) fn remote_apps_connected(&self, project: &str) -> bool {
@@ -251,6 +275,11 @@ impl App {
                 .or_default()
                 .set_image(ctx, format!("remote-app:{project}:{window}"), image);
         }
+        self.remote_apps
+            .cursors
+            .entry(project.to_owned())
+            .or_default()
+            .update(ctx, state.cursor.as_ref());
         self.sync_remote_tabs(project, &state);
         if let Some(session) = self.remote_apps.sessions.get_mut(project) {
             session.state = Some(state);

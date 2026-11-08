@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 
 use wprs::serialization::wayland::{
-    Buffer, BufferAssignment, BufferData, BufferFormat, Role, SurfaceRequest,
-    SurfaceRequestPayload, SurfaceState, WlSurfaceId,
+    Buffer, BufferAssignment, BufferData, BufferFormat, CursorImage, CursorImageStatus, Role,
+    SurfaceRequest, SurfaceRequestPayload, SurfaceState, WlSurfaceId,
 };
 use wprs::serialization::xdg_shell::{PopupRequestPayload, ToplevelRequestPayload, XdgPositioner};
 use wprs::serialization::{ClientId, RecvType, Request};
@@ -62,6 +62,8 @@ pub struct State {
     pending: Option<Vec<u8>>,
     by_surface: HashMap<SurfaceKey, WindowId>,
     windows: HashMap<WindowId, Window>,
+    /// The surface that holds the cursor image, and its hotspot.
+    cursor: Option<(SurfaceKey, (i32, i32))>,
 }
 
 impl State {
@@ -80,11 +82,70 @@ impl State {
                 PopupRequestPayload::Destroyed => self.close((request.client, request.surface)),
             },
             RecvType::Object(Request::ClientDisconnected(client)) => self.disconnect(client),
-            // Cursor and clipboard come in a later phase.
-            RecvType::Object(
-                Request::CursorImage(_) | Request::Data(_) | Request::Capabilities(_),
-            ) => Vec::new(),
+            RecvType::Object(Request::CursorImage(image)) => self.cursor_image(image),
+            // The clipboard is handled by the bridge loop, not here.
+            RecvType::Object(Request::Data(_) | Request::Capabilities(_)) => Vec::new(),
         }
+    }
+
+    fn cursor_image(&mut self, image: CursorImage) -> Outgoing {
+        let named = |name: Option<String>| {
+            vec![Framed::new(HostMessage::Cursor {
+                width: 0,
+                height: 0,
+                hotspot_x: 0,
+                hotspot_y: 0,
+                name,
+            })]
+        };
+        match image.status {
+            CursorImageStatus::Hidden => {
+                self.cursor = None;
+                named(None)
+            }
+            CursorImageStatus::Named(name) => {
+                self.cursor = None;
+                named(Some(name))
+            }
+            CursorImageStatus::Surface {
+                client_surface,
+                hotspot,
+            } => {
+                let key = (client_surface.client, client_surface.surface);
+                self.cursor = Some((key, (hotspot.x, hotspot.y)));
+                self.cursor_pixels()
+            }
+        }
+    }
+
+    /// The cursor surface's pixels, as tightly packed BGRA rows.
+    fn cursor_pixels(&self) -> Outgoing {
+        let Some((key, (hotspot_x, hotspot_y))) = self.cursor else {
+            return Vec::new();
+        };
+        let Some(pixels) = self.surfaces.get(&key).and_then(|s| s.pixels.as_ref()) else {
+            return Vec::new();
+        };
+        let mut canvas = Canvas::new(pixels.width, pixels.height);
+        canvas.draw(&Layer {
+            x: 0,
+            y: 0,
+            width: pixels.width,
+            height: pixels.height,
+            stride: pixels.stride,
+            pixels: &pixels.data,
+            opaque: pixels.opaque,
+        });
+        vec![Framed::with_payload(
+            HostMessage::Cursor {
+                width: canvas.width(),
+                height: canvas.height(),
+                hotspot_x,
+                hotspot_y,
+                name: None,
+            },
+            canvas.pixels().to_vec(),
+        )]
     }
 
     /// The surface a window message names, for input routing.
@@ -120,6 +181,9 @@ impl State {
             .iter()
             .map(|child| (child.id, child.position.x, child.position.y))
             .collect();
+        if self.cursor.is_some_and(|(cursor, _)| cursor == key) {
+            return self.cursor_pixels();
+        }
         match self.root_of(key) {
             Some(root) => self.show(root),
             None => Vec::new(),

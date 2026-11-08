@@ -1,6 +1,7 @@
 //! Painting a remote window tab and turning egui input into bridge input.
-//! Pixels show 1:1 with physical pixels; the tab's size in physical pixels
-//! is the size the app is asked to take.
+//! One app pixel is one point: most X11 apps do not scale themselves, so
+//! 1:1 with physical pixels would make them tiny on HiDPI screens. The
+//! tab's size in points is the size the app is asked to take.
 
 use super::*;
 use eframe::egui::{
@@ -11,6 +12,8 @@ use terminator_core::remote_apps::{PointerButton as RemoteButton, RemoteWindow};
 
 /// A size must hold this long before it is sent, so a drag sends one resize.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(200);
+/// App pixels per egui point (see the module docs).
+const APP_PIXELS_PER_POINT: f32 = 1.0;
 /// Pixels per wheel line for smooth scrolling.
 const LINE_PIXELS: f64 = 15.0;
 
@@ -101,6 +104,7 @@ impl App {
         let rect = ui.available_rect_before_wrap();
         let id = egui::Id::unique(("remote-app", project, window));
         let response = ui.interact(rect, id, Sense::click_and_drag());
+        self.remote_apps.painted.insert(id);
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(
                 id,
@@ -112,7 +116,7 @@ impl App {
                 },
             );
         });
-        let ppp = ui.ctx().pixels_per_point();
+        let ppp = APP_PIXELS_PER_POINT;
         let geometry = Geometry {
             placed: place_windows(state, window, (rect.min, ppp)),
             ppp,
@@ -128,6 +132,11 @@ impl App {
                 let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
                 painter.image(texture.id(), place.rect, uv, egui::Color32::WHITE);
             }
+        }
+        if let Some(pos) = response.hover_pos()
+            && let Some(cursor) = self.remote_apps.cursors.get(project)
+        {
+            cursor.show(ui, pos, ppp);
         }
         if response.clicked() || response.drag_started() {
             response.request_focus();

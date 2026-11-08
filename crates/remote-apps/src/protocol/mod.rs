@@ -111,12 +111,15 @@ pub enum HostMessage {
         id: WindowId,
     },
     /// The payload is the cursor image as premultiplied BGRA. A zero-size
-    /// image hides the cursor.
+    /// image with no `name` hides the cursor. With `name` (a CSS cursor
+    /// name such as `text`), the client uses its own cursor of that shape.
     Cursor {
         width: u32,
         height: u32,
         hotspot_x: i32,
         hotspot_y: i32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     /// A remote app took the clipboard and offers these types.
     ClipboardOffer {

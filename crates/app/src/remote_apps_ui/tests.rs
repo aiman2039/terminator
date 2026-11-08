@@ -31,6 +31,16 @@ fn command_acts_as_control_and_only_changes_are_sent() {
 }
 
 #[test]
+fn css_cursor_names_map_to_local_cursors() {
+    use super::cursor::named;
+    use eframe::egui::CursorIcon;
+    assert_eq!(named("text"), CursorIcon::Text);
+    assert_eq!(named("pointer"), CursorIcon::PointingHand);
+    assert_eq!(named("ew-resize"), CursorIcon::ResizeColumn);
+    assert_eq!(named("something-new"), CursorIcon::Default);
+}
+
+#[test]
 fn untitled_windows_get_a_readable_tab_title() {
     assert_eq!(tab_title(""), "Remote app");
     assert_eq!(tab_title("xclock"), "xclock");

@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
 
+use base64::Engine as _;
 use terminator_core::remote_apps::{
-    ClientMessage, ErrorKind, HostMessage, RemoteAppsState, RemoteAppsStatus, RemoteWindow,
-    WindowId, protocol,
+    ClientMessage, ErrorKind, HostMessage, RemoteAppsState, RemoteAppsStatus, RemoteCursor,
+    RemoteWindow, WindowId, protocol,
 };
 use terminator_sys::SharedFrameWriter;
 
@@ -41,6 +42,7 @@ pub(crate) struct Runtime {
     retry_in_seconds: u64,
     shm_dir: PathBuf,
     files: u64,
+    cursor: Option<RemoteCursor>,
 }
 
 impl Runtime {
@@ -62,6 +64,7 @@ impl Runtime {
             retry_in_seconds: 0,
             shm_dir,
             files: 0,
+            cursor: None,
         }
     }
 
@@ -108,6 +111,7 @@ impl Runtime {
             retry_attempt: self.retry_attempt,
             retry_in_seconds: self.retry_in_seconds,
             windows,
+            cursor: self.cursor.clone(),
         }
     }
 
@@ -197,10 +201,43 @@ impl Runtime {
                 }
             }
             HostMessage::Error { kind, message } => self.fail(kind, message),
-            // Cursor and clipboard come in a later phase.
-            HostMessage::Cursor { .. }
-            | HostMessage::ClipboardOffer { .. }
-            | HostMessage::ClipboardData { .. } => return false,
+            HostMessage::Cursor {
+                width,
+                height,
+                hotspot_x,
+                hotspot_y,
+                name,
+            } => {
+                let (Ok(width), Ok(height)) = (u16::try_from(width), u16::try_from(height)) else {
+                    return false;
+                };
+                let mut rgba = framed.payload;
+                let expected = usize::from(width)
+                    .saturating_mul(usize::from(height))
+                    .saturating_mul(4);
+                if rgba.len() != expected {
+                    rgba.clear();
+                }
+                for pixel in rgba.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+                let serial = self
+                    .cursor
+                    .as_ref()
+                    .map_or(1, |c| c.serial.saturating_add(1));
+                self.cursor = Some(RemoteCursor {
+                    serial,
+                    width,
+                    height,
+                    hotspot_x,
+                    hotspot_y,
+                    name,
+                    rgba: base64::engine::general_purpose::STANDARD.encode(rgba),
+                });
+            }
+            HostMessage::ClipboardOffer { .. } | HostMessage::ClipboardData { .. } => {
+                return false;
+            }
         }
         self.bump();
         true

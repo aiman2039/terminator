@@ -187,6 +187,36 @@ fn long_poll_wakes_on_change_and_times_out_without_one() {
 }
 
 #[test]
+fn cursor_image_becomes_rgba_and_each_change_gets_a_new_serial() {
+    use base64::Engine as _;
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = runtime(dir.path());
+    let cursor = |payload: Vec<u8>, name: Option<&str>| {
+        Framed::with_payload(
+            HostMessage::Cursor {
+                width: u32::from(name.is_none()),
+                height: u32::from(name.is_none()),
+                hotspot_x: 3,
+                hotspot_y: 4,
+                name: name.map(str::to_owned),
+            },
+            payload,
+        )
+    };
+    assert!(r.apply(cursor(vec![1, 2, 3, 255], None)));
+    let first = r.snapshot().cursor.unwrap();
+    let rgba = base64::engine::general_purpose::STANDARD
+        .decode(&first.rgba)
+        .unwrap();
+    assert_eq!(rgba, [3, 2, 1, 255]);
+    assert_eq!((first.hotspot_x, first.hotspot_y), (3, 4));
+    r.apply(cursor(Vec::new(), Some("text")));
+    let second = r.snapshot().cursor.unwrap();
+    assert_eq!(second.name.as_deref(), Some("text"));
+    assert!(second.serial > first.serial);
+}
+
+#[test]
 fn exit_reasons_name_the_missing_bridge_and_a_stopped_wprsd() {
     let (kind, text) = classify(Some(127), b"sh: terminator-remote-bridge: not found\n");
     assert_eq!(kind, ErrorKind::WprsdMissing);
