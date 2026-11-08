@@ -13,7 +13,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
-use terminator_core::remote_apps::{ClientMessage, MAX_INPUT, MAX_WAIT_MS, RemoteAppsState};
+use terminator_core::remote_apps::{
+    ClientMessage, MAX_CLIPBOARD, MAX_INPUT, MAX_WAIT_MS, RemoteAppsState, TEXT_MIME_TYPES,
+};
 
 use crate::server::{Shared, relock};
 pub(crate) use runtime::Runtime;
@@ -156,15 +158,40 @@ impl Shared {
         messages: Vec<ClientMessage>,
     ) -> Result<()> {
         ensure!(messages.len() <= MAX_INPUT, "Too many input messages");
+        self.send_to_bridge(
+            session,
+            messages.into_iter().map(|m| (m, Vec::new())).collect(),
+        )
+    }
+
+    /// Offers local clipboard text to the remote apps, then sends `then`
+    /// (the paste key) after it on the same stream.
+    pub(crate) fn remote_apps_clipboard(
+        &self,
+        session: &str,
+        text: String,
+        then: Vec<ClientMessage>,
+    ) -> Result<()> {
+        ensure!(text.len() <= MAX_CLIPBOARD, "Clipboard text is too large");
+        ensure!(then.len() <= MAX_INPUT, "Too many input messages");
+        let offer = ClientMessage::ClipboardOffer {
+            mime_types: TEXT_MIME_TYPES.iter().map(|m| (*m).to_owned()).collect(),
+        };
+        let mut inputs = vec![(offer, text.into_bytes())];
+        inputs.extend(then.into_iter().map(|m| (m, Vec::new())));
+        self.send_to_bridge(session, inputs)
+    }
+
+    fn send_to_bridge(&self, session: &str, inputs: Vec<runtime::Input>) -> Result<()> {
         let handle = self.remote_apps_handle(session)?;
         let runtime = relock(&handle.runtime);
         let input = runtime
             .input
             .as_ref()
             .context("Remote apps are not connected")?;
-        for message in messages {
+        for item in inputs {
             input
-                .send(message)
+                .send(item)
                 .ok()
                 .context("Remote apps are not connected")?;
         }

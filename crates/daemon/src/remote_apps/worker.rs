@@ -159,7 +159,7 @@ fn spawn_bridge(project: &RemoteProject, control: Option<&Path>) -> anyhow::Resu
 
 /// Sends our hello, then input until the session drops its sender; closing
 /// stdin then makes the bridge exit.
-fn write_input(stdin: ChildStdin, rx: &mpsc::Receiver<ClientMessage>) {
+fn write_input(stdin: ChildStdin, rx: &mpsc::Receiver<super::runtime::Input>) {
     let mut out = BufWriter::new(stdin);
     let hello = ClientMessage::Hello {
         protocol: protocol::PROTOCOL_VERSION,
@@ -169,8 +169,8 @@ fn write_input(stdin: ChildStdin, rx: &mpsc::Receiver<ClientMessage>) {
     if protocol::write_frame(&mut out, &hello, &[]).is_err() {
         return;
     }
-    while let Ok(message) = rx.recv() {
-        if protocol::write_frame(&mut out, &message, &[]).is_err() {
+    while let Ok((message, payload)) = rx.recv() {
+        if protocol::write_frame(&mut out, &message, &payload).is_err() {
             return;
         }
     }

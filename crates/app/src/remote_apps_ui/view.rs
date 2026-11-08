@@ -39,6 +39,10 @@ impl WindowView {
         }
     }
 
+    pub(super) fn has_focus(&self) -> bool {
+        self.focused
+    }
+
     /// The configure to send now, if the wanted one held long enough.
     fn configure_due(
         &mut self,
@@ -164,9 +168,19 @@ impl App {
         let events = ui.input(|i| i.events.clone());
         let modifiers = ui.input(|i| i.modifiers);
         pointer_messages(&events, &geometry, &response, &mut messages);
-        key_messages(view, (window, focused), (&events, modifiers), &mut messages);
-        if !messages.is_empty() {
-            self.send_remote_input(session_id, messages);
+        let paste = key_messages(view, (window, focused), (&events, modifiers), &mut messages);
+        match paste {
+            // One request keeps the order: clipboard first, then the keys.
+            Some(text) if text.len() <= terminator_core::remote_apps::MAX_CLIPBOARD => {
+                messages.truncate(terminator_core::remote_apps::MAX_INPUT);
+                self.send(terminator_core::Request::RemoteAppsClipboard {
+                    session: session_id,
+                    text,
+                    then: messages,
+                });
+            }
+            _ if !messages.is_empty() => self.send_remote_input(session_id, messages),
+            _ => {}
         }
     }
 
@@ -367,13 +381,14 @@ fn remote_button(button: PointerButton) -> Option<RemoteButton> {
 }
 
 /// Keys while the tab has focus; on focus loss, releases what is held so
-/// the app does not see a stuck key.
+/// the app does not see a stuck key. Returns the text of a paste, which
+/// must reach the app's clipboard before the paste key.
 fn key_messages(
     view: &mut WindowView,
     (window, focused): (u64, bool),
     (events, modifiers): (&[Event], Modifiers),
     out: &mut Vec<ClientMessage>,
-) {
+) -> Option<String> {
     let id = WindowId(window);
     let key = |keycode: u32, pressed: bool| ClientMessage::Key {
         id,
@@ -391,7 +406,7 @@ fn key_messages(
             view.held = Modifiers::NONE;
         }
         view.focused = false;
-        return;
+        return None;
     }
     view.focused = true;
     out.extend(
@@ -400,27 +415,37 @@ fn key_messages(
             .map(|(code, pressed)| key(code, pressed)),
     );
     view.held = modifiers;
+    let mut paste = None;
     for event in events {
-        let Event::Key {
-            key: logical,
-            physical_key,
-            pressed,
-            repeat: false,
-            ..
-        } = event
-        else {
+        // egui turns Cmd/Ctrl+C, X and V into these with no key press (the
+        // release still comes as a key): press the key for the app.
+        let (code, pressed) = match event {
+            Event::Copy => (Some(keys::KEY_C), true),
+            Event::Cut => (Some(keys::KEY_X), true),
+            Event::Paste(text) => {
+                paste = Some(text.clone());
+                (Some(keys::KEY_V), true)
+            }
+            Event::Key {
+                key: logical,
+                physical_key,
+                pressed,
+                repeat: false,
+                ..
+            } => (keys::evdev(physical_key.unwrap_or(*logical)), *pressed),
+            _ => continue,
+        };
+        let Some(code) = code else {
             continue;
         };
-        let Some(code) = keys::evdev(physical_key.unwrap_or(*logical)) else {
-            continue;
-        };
-        if *pressed {
+        if pressed {
             if !view.keys_down.contains(&code) {
                 view.keys_down.push(code);
             }
         } else {
             view.keys_down.retain(|c| *c != code);
         }
-        out.push(key(code, *pressed));
+        out.push(key(code, pressed));
     }
+    paste
 }

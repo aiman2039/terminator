@@ -6,6 +6,7 @@
 //! status 1 and "server disconnected" on stderr; the daemon reports that as
 //! [`ErrorKind::WprsdStopped`].
 
+mod clipboard;
 mod input;
 pub mod launch;
 mod state;
@@ -99,7 +100,7 @@ fn resolve(options: &Options) -> Result<Target, BridgeError> {
 
 enum Incoming {
     Wprs(Box<RecvType<Request>>),
-    Client(ClientMessage),
+    Client(Box<Framed<ClientMessage>>),
     ClientGone,
 }
 
@@ -158,6 +159,7 @@ fn serve(target: Target, out: &mut impl Write) -> Result<(), BridgeError> {
     let trace = std::env::var_os("TERMINATOR_BRIDGE_TRACE").is_some();
     let mut state = state::State::default();
     let mut input = input::Input::default();
+    let mut clipboard = clipboard::Clipboard::default();
     for incoming in rx {
         match incoming {
             Incoming::Wprs(request) => {
@@ -169,23 +171,32 @@ fn serve(target: Target, out: &mut impl Write) -> Result<(), BridgeError> {
                 if let Some(started) = unrecorded.take() {
                     launch::record(&started.dir, &started.session)?;
                 }
-                for framed in state.handle(*request) {
+                let (events, frames) = match *request {
+                    RecvType::Object(Request::Data(data)) => clipboard.on_wprsd(data),
+                    request => (Vec::new(), state.handle(request)),
+                };
+                for event in events {
+                    writer.send(SendType::Object(event));
+                }
+                for framed in frames {
                     protocol::write_frame(out, &framed.message, &framed.payload)?;
                 }
             }
-            Incoming::Client(ClientMessage::Hello { protocol, .. })
-                if protocol != PROTOCOL_VERSION =>
-            {
-                return Err(BridgeError::VersionMismatch(
-                    protocol::version_mismatch_message(
-                        PROTOCOL_VERSION,
-                        env!("CARGO_PKG_VERSION"),
-                        protocol,
-                    ),
-                ));
-            }
-            Incoming::Client(message) => {
-                let events = input.events(&message, |id| state.surface_of(id).map(|key| key.1));
+            Incoming::Client(framed) => {
+                let Framed { message, payload } = *framed;
+                if let ClientMessage::Hello { protocol, .. } = message
+                    && protocol != PROTOCOL_VERSION
+                {
+                    return Err(BridgeError::VersionMismatch(
+                        protocol::version_mismatch_message(
+                            PROTOCOL_VERSION,
+                            env!("CARGO_PKG_VERSION"),
+                            protocol,
+                        ),
+                    ));
+                }
+                let mut events = clipboard.on_client(&message, payload);
+                events.extend(input.events(&message, |id| state.surface_of(id).map(|key| key.1)));
                 for event in events {
                     writer.send(SendType::Object(event));
                 }
@@ -202,7 +213,7 @@ fn spawn_stdin(tx: mpsc::Sender<Incoming>) {
         let mut input = BufReader::new(io::stdin().lock());
         loop {
             let incoming = match protocol::read_frame::<ClientMessage>(&mut input) {
-                Ok(framed) => Incoming::Client(framed.message),
+                Ok(framed) => Incoming::Client(Box::new(framed)),
                 Err(_) => Incoming::ClientGone,
             };
             let gone = matches!(incoming, Incoming::ClientGone);

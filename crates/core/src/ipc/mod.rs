@@ -80,6 +80,15 @@ pub enum Request {
         session: String,
         messages: Vec<remote_apps::ClientMessage>,
     },
+    /// Offers `text` (at most [`remote_apps::MAX_CLIPBOARD`] bytes) to the
+    /// remote apps as their clipboard, then sends `then` (the paste key),
+    /// in that order.
+    RemoteAppsClipboard {
+        session: String,
+        text: String,
+        #[serde(default)]
+        then: Vec<remote_apps::ClientMessage>,
+    },
     /// The session's windows; waits up to `wait_ms` (capped at
     /// [`remote_apps::MAX_WAIT_MS`]) for a revision newer than `since`
     /// before answering [`Response::Unchanged`].
@@ -364,6 +373,7 @@ impl Request {
             Self::RemoteAppsConnect { .. } => "RemoteAppsConnect",
             Self::RemoteAppsDisconnect { .. } => "RemoteAppsDisconnect",
             Self::RemoteAppsInput { .. } => "RemoteAppsInput",
+            Self::RemoteAppsClipboard { .. } => "RemoteAppsClipboard",
             Self::RemoteAppsState { .. } => "RemoteAppsState",
             Self::PruneHistory { .. } => "PruneHistory",
             Self::Archived { request, .. } => request.name(),

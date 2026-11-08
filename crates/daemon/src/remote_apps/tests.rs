@@ -217,6 +217,26 @@ fn cursor_image_becomes_rgba_and_each_change_gets_a_new_serial() {
 }
 
 #[test]
+fn copied_text_is_kept_with_a_new_serial_and_oversized_text_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = runtime(dir.path());
+    let data = |bytes: Vec<u8>| {
+        Framed::with_payload(
+            HostMessage::ClipboardData {
+                mime_type: "UTF8_STRING".into(),
+            },
+            bytes,
+        )
+    };
+    assert!(r.apply(data(b"one".to_vec())));
+    assert!(r.apply(data(b"two".to_vec())));
+    let clip = r.snapshot().clipboard.unwrap();
+    assert_eq!((clip.serial, clip.text.as_str()), (2, "two"));
+    let huge = vec![b'x'; terminator_core::remote_apps::MAX_CLIPBOARD + 1];
+    assert!(!r.apply(data(huge)));
+}
+
+#[test]
 fn exit_reasons_name_the_missing_bridge_and_a_stopped_wprsd() {
     let (kind, text) = classify(Some(127), b"sh: terminator-remote-bridge: not found\n");
     assert_eq!(kind, ErrorKind::WprsdMissing);

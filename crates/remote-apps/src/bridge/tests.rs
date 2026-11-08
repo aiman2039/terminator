@@ -354,3 +354,58 @@ fn first_motion_enters_the_surface_and_focus_enters_the_keyboard_once() {
     let unknown = ClientMessage::CloseRequested { id: WindowId(9) };
     assert!(input.events(&unknown, lookup).is_empty());
 }
+
+#[test]
+fn remote_copy_asks_for_text_and_sends_it_to_the_client() {
+    use super::clipboard::Clipboard;
+    use wprs::serialization::wayland::{
+        DataRequest, DataSource, DataSourceRequest, DataToTransfer, SourceMetadata,
+    };
+    let mut clipboard = Clipboard::default();
+    let offer = DataRequest::SourceRequest(DataSourceRequest::SetSelection(
+        DataSource::Selection,
+        SourceMetadata {
+            mime_types: vec!["image/png".into(), "UTF8_STRING".into()],
+            dnd_actions: 0,
+        },
+    ));
+    let (events, frames) = clipboard.on_wprsd(offer);
+    assert_eq!(events.len(), 1);
+    assert!(frames.is_empty());
+    let data = DataRequest::TransferData(DataSource::Selection, DataToTransfer(b"hi".to_vec()));
+    let (_, frames) = clipboard.on_wprsd(data);
+    assert!(matches!(
+        &frames[0].message,
+        HostMessage::ClipboardData { mime_type } if mime_type == "UTF8_STRING"
+    ));
+    assert_eq!(frames[0].payload, b"hi");
+}
+
+#[test]
+fn local_paste_offers_text_and_serves_it_when_an_app_asks() {
+    use super::clipboard::Clipboard;
+    use wprs::serialization::wayland::{DataDestinationRequest, DataRequest, DataSource};
+    let mut clipboard = Clipboard::default();
+    let ask = || {
+        DataRequest::DestinationRequest(DataDestinationRequest::RequestDataTransfer(
+            DataSource::Selection,
+            "UTF8_STRING".into(),
+        ))
+    };
+    assert!(
+        clipboard.on_wprsd(ask()).0.is_empty(),
+        "nothing offered yet"
+    );
+    let offer = ClientMessage::ClipboardOffer {
+        mime_types: vec!["UTF8_STRING".into()],
+    };
+    assert_eq!(clipboard.on_client(&offer, b"local".to_vec()).len(), 1);
+    let (events, _) = clipboard.on_wprsd(ask());
+    assert!(matches!(
+        &events[0],
+        wprs::serialization::Event::Data(wprs::serialization::wayland::DataEvent::TransferData(
+            DataSource::Selection,
+            data
+        )) if data.0 == b"local"
+    ));
+}

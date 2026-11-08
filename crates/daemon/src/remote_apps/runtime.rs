@@ -7,10 +7,13 @@ use std::time::Instant;
 
 use base64::Engine as _;
 use terminator_core::remote_apps::{
-    ClientMessage, ErrorKind, HostMessage, RemoteAppsState, RemoteAppsStatus, RemoteCursor,
-    RemoteWindow, WindowId, protocol,
+    ClientMessage, ErrorKind, HostMessage, MAX_CLIPBOARD, RemoteAppsState, RemoteAppsStatus,
+    RemoteClipboard, RemoteCursor, RemoteWindow, WindowId, protocol,
 };
 use terminator_sys::SharedFrameWriter;
+
+/// One message to the bridge and its payload (clipboard bytes).
+pub(crate) type Input = (ClientMessage, Vec<u8>);
 
 const FILE_PREFIX: &str = "remote-app-";
 const FILE_SUFFIX: &str = ".fb";
@@ -31,7 +34,7 @@ pub(crate) struct Runtime {
     pub(crate) revision: u64,
     windows: BTreeMap<WindowId, Window>,
     /// Input to the bridge; `None` while no bridge runs.
-    pub(crate) input: Option<mpsc::Sender<ClientMessage>>,
+    pub(crate) input: Option<mpsc::Sender<Input>>,
     /// The user (or the detach timeout) asked to stop; no more retries.
     pub(crate) stop_requested: bool,
     /// Last time a viewer asked for the state, for the detach timeout.
@@ -43,6 +46,7 @@ pub(crate) struct Runtime {
     shm_dir: PathBuf,
     files: u64,
     cursor: Option<RemoteCursor>,
+    clipboard: Option<RemoteClipboard>,
 }
 
 impl Runtime {
@@ -65,6 +69,7 @@ impl Runtime {
             shm_dir,
             files: 0,
             cursor: None,
+            clipboard: None,
         }
     }
 
@@ -112,6 +117,7 @@ impl Runtime {
             retry_in_seconds: self.retry_in_seconds,
             windows,
             cursor: self.cursor.clone(),
+            clipboard: self.clipboard.clone(),
         }
     }
 
@@ -235,9 +241,20 @@ impl Runtime {
                     rgba: base64::engine::general_purpose::STANDARD.encode(rgba),
                 });
             }
-            HostMessage::ClipboardOffer { .. } | HostMessage::ClipboardData { .. } => {
-                return false;
+            HostMessage::ClipboardData { .. } => {
+                if framed.payload.len() > MAX_CLIPBOARD {
+                    return false;
+                }
+                let serial = self
+                    .clipboard
+                    .as_ref()
+                    .map_or(1, |c| c.serial.saturating_add(1));
+                self.clipboard = Some(RemoteClipboard {
+                    serial,
+                    text: String::from_utf8_lossy(&framed.payload).into_owned(),
+                });
             }
+            HostMessage::ClipboardOffer { .. } => return false,
         }
         self.bump();
         true

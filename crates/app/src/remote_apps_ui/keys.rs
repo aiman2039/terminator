@@ -7,6 +7,9 @@ use eframe::egui::{Key, Modifiers};
 pub(super) const LEFT_SHIFT: u32 = 42;
 pub(super) const LEFT_CTRL: u32 = 29;
 pub(super) const LEFT_ALT: u32 = 56;
+pub(super) const KEY_C: u32 = 46;
+pub(super) const KEY_V: u32 = 47;
+pub(super) const KEY_X: u32 = 45;
 
 /// The evdev code of a physical key, or `None` for keys the host cannot
 /// take (media keys, Fn) and modifiers (sent from [`modifier_changes`]).

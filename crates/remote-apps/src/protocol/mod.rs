@@ -21,6 +21,16 @@ mod tests;
 
 /// Bump only for changes that old peers cannot ignore.
 pub const PROTOCOL_VERSION: u32 = 1;
+/// Clipboard text MIME types, preferred first. Clipboard text travels in
+/// the payload of `ClipboardOffer` (client to host, offered to the apps)
+/// and `ClipboardData` (host to client, what an app copied).
+pub const TEXT_MIME_TYPES: &[&str] = &[
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "TEXT",
+    "STRING",
+];
 /// Largest JSON header. Titles and MIME lists are small.
 pub const MAX_HEADER: usize = 1024 * 1024;
 /// Largest payload: one compressed 8K BGRA frame fits with room.

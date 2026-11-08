@@ -21,6 +21,9 @@ pub const DEFAULT_COMMAND: &str = "terminator-remote-bridge --ensure";
 /// `XAUTHORITY` and `WAYLAND_DISPLAY`, so apps started in the terminal open
 /// as Terminator tabs. A dead session prints one line and exports nothing.
 pub const SHELL_ENV: &str = r#"for __t in "${XDG_RUNTIME_DIR:-/nonexistent}/terminator-remote" "/tmp/terminator-remote-$(id -u)"; do if [ -f "$__t/session.json" ]; then __d=$(sed -n 's/.*"display": *"\(:[0-9]*\)".*/\1/p' "$__t/session.json"); if [ -n "$__d" ] && [ -S "/tmp/.X11-unix/X${__d#:}" ]; then export DISPLAY="$__d" XAUTHORITY="$__t/Xauthority" WAYLAND_DISPLAY="$__t/wprs-0"; else echo "terminator: remote apps are not running on this host (use Show remote apps)" >&2; fi; break; fi; done; unset __t __d; "#;
+/// Largest clipboard text carried either way.
+pub const MAX_CLIPBOARD: usize = 1024 * 1024;
+pub use terminator_remote_apps::protocol::TEXT_MIME_TYPES;
 /// Most input messages in one request.
 pub const MAX_INPUT: usize = 64;
 /// Longest a state request waits for a newer revision.
@@ -87,6 +90,17 @@ pub struct RemoteAppsState {
     /// The pointer shape the apps ask for; `None` until one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<RemoteCursor>,
+    /// The last text a remote app copied. The GUI puts it on the local
+    /// clipboard only while one of this host's windows has focus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard: Option<RemoteClipboard>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteClipboard {
+    /// Changes with every copy.
+    pub serial: u64,
+    pub text: String,
 }
 
 /// A remote cursor: a named shape (`name`, a CSS cursor name), an image

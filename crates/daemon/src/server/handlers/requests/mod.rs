@@ -123,6 +123,14 @@ impl Shared {
                 self.remote_apps_input(&session, messages)?;
                 Ok(Outcome::Reply(Response::Ok))
             }
+            Request::RemoteAppsClipboard {
+                session,
+                text,
+                then,
+            } => {
+                self.remote_apps_clipboard(&session, text, then)?;
+                Ok(Outcome::Reply(Response::Ok))
+            }
             Request::RemoteAppsState {
                 session,
                 since,

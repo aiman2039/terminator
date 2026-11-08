@@ -122,6 +122,8 @@ struct Session {
     fetching: bool,
     wait_until: Option<Instant>,
     error: Option<String>,
+    /// The remote clipboard serial already seen.
+    clipboard_serial: u64,
 }
 
 impl Session {
@@ -280,11 +282,41 @@ impl App {
             .entry(project.to_owned())
             .or_default()
             .update(ctx, state.cursor.as_ref());
+        self.take_remote_clipboard(ctx, project, &state);
         self.sync_remote_tabs(project, &state);
         if let Some(session) = self.remote_apps.sessions.get_mut(project) {
             session.state = Some(state);
         }
         ctx.request_repaint();
+    }
+
+    /// Puts text a remote app copied on the local clipboard, but only while
+    /// one of this host's windows has focus: a background app must not
+    /// replace the clipboard. The first state after connecting only sets
+    /// the baseline.
+    fn take_remote_clipboard(
+        &mut self,
+        ctx: &egui::Context,
+        project: &str,
+        state: &RemoteAppsState,
+    ) {
+        let Some(clipboard) = &state.clipboard else {
+            return;
+        };
+        let focused = self
+            .remote_apps
+            .windows
+            .iter()
+            .any(|((p, _), view)| p == project && view.has_focus());
+        let Some(session) = self.remote_apps.sessions.get_mut(project) else {
+            return;
+        };
+        let new = clipboard.serial > session.clipboard_serial;
+        let first = session.clipboard_serial == 0 && session.state.is_none();
+        session.clipboard_serial = clipboard.serial;
+        if new && focused && !first {
+            ctx.copy_text(clipboard.text.clone());
+        }
     }
 
     /// Opens a tab for each new toplevel window, renames tabs, and, while

@@ -32,6 +32,7 @@ fn state(status: RemoteAppsStatus, windows: Vec<RemoteWindow>) -> Box<RemoteApps
             retry_attempt: 0,
             retry_in_seconds: 0,
             cursor: None,
+            clipboard: None,
             windows,
         },
         images: Vec::new(),
