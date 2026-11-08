@@ -1,5 +1,37 @@
 # Validation evidence — 2026-09-08
 
+## Remote app windows (remote-apps-v1) — 2026-11-08
+
+Branch `worktree-remote-apps`. A remote X11 app on an SSH host opens as a
+Terminator tab through wprs (docs/REMOTE_APPS.md). Checked on macOS (Apple
+Silicon) with Linux parts in an arm64 Debian container; not yet on a real
+x86_64 host.
+
+- Bridge, Linux container: 33 unit tests; `dev/bridge-e2e.sh` (reattach,
+  first frame 164x164, resize to 400x300, close) and
+  `dev/bridge-ensure-e2e.sh` (the bridge starts wprsd with its own cookie,
+  a client without the cookie is refused, a second bridge reuses wprsd),
+  also with `TERMINATOR_WPRS_WRAPPER`: pass.
+- Daemon over SSH, `dev/daemon-e2e.sh` (isolated daemon, Docker sshd host
+  from `dev/sshd.Dockerfile`): connect, shared-memory frame, resize, a
+  killed bridge reconnects after 1 s with the same window ID, evdev keys
+  typed into an xterm reach it (`hi`), clipboard text offered from this
+  side is read by `xclip -o` on the host, text copied with `xclip` on the
+  host reaches the session state, close, disconnect: pass (two runs).
+- GUI, `dev/gui-e2e.sh` (isolated daemon and GUI, seeded layout): xclock
+  opened as its own tab and filled it (screenshot checked).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `sarah`, and the core (241), daemon (166) and GUI (1487) test suites: pass.
+- Verify recipe with a local sshd: SSH terminals still work; connecting a
+  host without the bridge reports `wprsd_missing`.
+- On the real CentOS 7 host (no root, NFS home, X66 in use): nix-portable
+  Xwayland 24.1.14 and `host-smoke.sh` (wprsd + Xwayland + xclock with the
+  private cookie) pass.
+
+Not checked yet: mouse clicks and the cursor in a real app, the GUI's
+Cmd+C/V mapping in a live window, the static x86_64 bridge on the CentOS 7
+host, and wprsd under `nix-portable` outliving the bridge.
+
 ## Empty pane focus at startup — 2026-11-07
 
 Removing the last dock pane now clears its focus. Loading a saved empty tree

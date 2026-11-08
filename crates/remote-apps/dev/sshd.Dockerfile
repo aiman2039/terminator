@@ -4,6 +4,7 @@
 FROM terminator-remote-apps-dev
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+        xterm xclip \
     && mkdir -p /run/sshd \
     && rm -rf /var/lib/apt/lists/*
 

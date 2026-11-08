@@ -39,6 +39,39 @@ anything on the host. If the host install is missing or too old, Terminator
 tells the user to update Terminator on the host. Xwayland comes from the
 host's packages (`xwayland`).
 
+## Set up a host
+
+1. Check it: `ssh HOST sh -s < crates/remote-apps/dev/host-check.sh`.
+2. Build the bridge for x86_64 hosts (static, any glibc):
+   `sh crates/remote-apps/dev/build-host.sh`, then copy
+   `target/host-x86_64/terminator-remote-bridge` to the host, for example
+   `~/bin/`.
+3. wprsd, xwayland-xdg-shell and Xwayland:
+   - Packages or a Terminator install on the host: put them on `PATH` (or
+     beside the bridge). The default apps command,
+     `terminator-remote-bridge --ensure`, then works if the bridge is on the
+     non-login `PATH`; else give its full path.
+   - No root (for example CentOS 7): install
+     [nix-portable](https://github.com/DavHau/nix-portable) in `~/bin`, set
+     `NP_LOCATION` to a local (non-NFS) disk, and set the host's
+     Properties → **Remote apps command** to:
+
+     ```sh
+     env NP_LOCATION=/local/disk TERMINATOR_WPRS_WRAPPER='~/bin/nix-portable nix shell nixpkgs#wprs nixpkgs#xwayland -c' ~/bin/terminator-remote-bridge --ensure
+     ```
+
+     The wrapper starts wprsd in its own nix-portable process, so the apps
+     keep running when the bridge (the viewer) stops. The first start
+     downloads wprs; nixpkgs builds it with AVX2.
+4. In Terminator: Hosts sidebar → the host's menu → **Show remote apps**.
+   New terminals on the host get `DISPLAY`; run an X11 app there (for
+   example `xclock`) and it opens as a tab.
+
+Keys: a focused remote tab takes every key (Cmd works as Ctrl); F8 or a
+click elsewhere gives the keys back to Terminator. Copy and paste work for
+text; text an app copies reaches this computer only while one of that host's
+windows has focus.
+
 ## Versions
 
 - Both sides send `Hello` with `PROTOCOL_VERSION`, the Terminator version and
@@ -122,12 +155,19 @@ host's packages (`xwayland`).
    in physical pixels is the window size (200 ms debounce); popups draw over
    their parent. Pointer, wheel (Wayland axis signs) and evdev keys by
    physical position (Cmd acts as Ctrl). Closing a tab asks the app to close.
-   Live check: `dev/gui-e2e.sh` (xclock fills its tab). Not done yet: cursor
-   image, keeping global shortcuts away from a focused remote tab (like VNC
-   capture), clipboard, HiDPI scale > 1 sent to the app, input checked
-   against a real app beyond unit tests.
-4. Launch UX: `DISPLAY` and `WAYLAND_DISPLAY` in host terminals, shell hook.
-5. Clipboard, packaging of the Linux host binaries, `docs/VALIDATION.md`.
+   Live check: `dev/gui-e2e.sh` (xclock fills its tab). A focused remote tab
+   takes every key (F8 gives them back). The cursor comes from the app (CSS
+   name → local cursor; image → drawn at the pointer). One app pixel is one
+   point, so X11 apps are readable on HiDPI screens. **Done.**
+4. Launch UX: new SSH and Mosh terminals export `DISPLAY`, `XAUTHORITY` and
+   `WAYLAND_DISPLAY` from `session.json` when its X socket is live (else one
+   line says remote apps are not running); host Properties → Remote apps
+   command. **Done.**
+5. Clipboard (text, selection; local text goes with the paste key in one
+   request; remote text reaches the local clipboard only while one of that
+   host's windows has focus), static x86_64 bridge build
+   (`dev/build-host.sh`), `TERMINATOR_WPRS_WRAPPER` for nix-portable hosts,
+   `docs/VALIDATION.md`. **Done; the real-host test is next.**
 
 ## Development
 

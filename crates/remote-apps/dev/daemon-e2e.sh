@@ -77,6 +77,46 @@ wait_for ".status == \"connected\" and (.windows | map(.id) | index($win)) != nu
     || fail "window did not come back" "$state"
 echo "reconnected, window $win is back"
 
+input() { rpc "{\"RemoteAppsInput\":{\"session\":\"$session\",\"messages\":[$1]}}" >/dev/null; }
+focus() {
+    input "{\"type\":\"configure\",\"id\":$1,\"width\":400,\"height\":300,\"scale\":1,\"focused\":true}"
+}
+host_x() {
+    docker exec tra-sshd sh -c \
+        "export DISPLAY=$display XAUTHORITY=/tmp/terminator-remote-0/Xauthority; $1"
+}
+
+# Keyboard: typed keys reach an xterm, which writes them to a file.
+host_x "xterm -T typed -e sh -c 'read line; echo \"\$line\" >/tmp/typed' >/dev/null 2>&1 &"
+wait_for '.windows | map(select(.title == "typed")) | length == 1' || fail "no xterm" "$state"
+term=$(echo "$state" | jq '.RemoteApps.windows | map(select(.title == "typed"))[0].id')
+focus "$term"
+sleep 1
+key() { printf '{"type":"key","id":%s,"keycode":%s,"pressed":%s}' "$term" "$1" "$2"; }
+input "$(key 35 true),$(key 35 false),$(key 23 true),$(key 23 false),$(key 28 true),$(key 28 false)"
+for _ in $(seq 20); do
+    [ "$(docker exec tra-sshd cat /tmp/typed 2>/dev/null)" = hi ] && break
+    sleep 0.5
+done
+[ "$(docker exec tra-sshd cat /tmp/typed 2>/dev/null)" = hi ] || fail "keys did not reach xterm" ""
+echo "keyboard: xterm got 'hi'"
+
+# Clipboard, this computer to the host: an X11 app reads the offered text.
+focus "$win"
+rpc "{\"RemoteAppsClipboard\":{\"session\":\"$session\",\"text\":\"hello-local\",\"then\":[]}}" >/dev/null
+for _ in $(seq 10); do
+    got=$(host_x "timeout 2 xclip -o -selection clipboard" 2>/dev/null)
+    [ "$got" = hello-local ] && break
+    sleep 0.5
+done
+[ "$got" = hello-local ] || fail "host clipboard has '$got'" "$(tail -n 20 "$t/daemon.log")"
+echo "clipboard to host: ok"
+
+# Clipboard, host to this computer: text an X11 app copies reaches the state.
+host_x "printf hello-remote | xclip -selection clipboard"
+wait_for '.clipboard.text == "hello-remote"' || fail "copied text did not arrive" "$state"
+echo "clipboard from host: ok"
+
 rpc "{\"RemoteAppsInput\":{\"session\":\"$session\",\"messages\":[{\"type\":\"close_requested\",\"id\":$win}]}}" >/dev/null
 wait_for '.windows | length == 0' || fail "window did not close" "$state"
 [ ! -e "$shm" ] || fail "shared frame not removed" ""
