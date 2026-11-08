@@ -4,6 +4,7 @@ mod commit;
 #[cfg(test)]
 mod commit_tests;
 mod entries;
+mod pr;
 #[cfg(test)]
 mod tests;
 mod vcs;
@@ -15,6 +16,7 @@ pub(crate) use commit::{
     commit_landed, push_failed,
 };
 use entries::*;
+use pr::create_pr;
 use vcs::*;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -57,6 +59,8 @@ pub enum Op {
     /// The full message of `HEAD`, for Amend.
     HeadMessage,
     Switch(String),
+    /// Create PR (`gh pr create` or `glab mr create`) on an explicit click.
+    CreatePr,
     Log,
     Compare {
         base: Option<String>,
@@ -105,6 +109,7 @@ impl Op {
             | Self::Shelves
             | Self::Branches
             | Self::HeadMessage
+            | Self::CreatePr
             | Self::Log
             | Self::Compare { .. }
             | Self::CompareTargets
@@ -183,6 +188,7 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         Op::Branches => Ok(Report::Branches(branches(root)?)),
         Op::HeadMessage => head_message(root),
         Op::Switch(name) => switch(root, &name),
+        Op::CreatePr => create_pr(root),
         Op::Log => Ok(Report::Log(log(root)?)),
         Op::Compare { base } => Ok(Report::Compare(compare(root, base.as_deref())?)),
         Op::CompareTargets => crate::revision_compare::list_targets(root)
