@@ -7939,6 +7939,7 @@ version = "0.159.0"
 dependencies = [
  "anyhow",
  "fallible-iterator",
+ "nix 0.30.1",
  "rkyv",
  "serde",
  "serde_json",

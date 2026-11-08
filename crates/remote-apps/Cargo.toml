@@ -18,8 +18,9 @@ zstd = "0.13.3"
 # protocol module only.
 [target.'cfg(target_os = "linux")'.dependencies]
 wprs = { path = "../../vendor/wprs" }
-# Same version as wprs, so one copy is built.
+# Same versions as wprs, so one copy is built.
 rkyv = "0.8.14"
+nix = { version = "0.30.1", features = ["fs", "hostname", "socket", "user"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 anyhow.workspace = true

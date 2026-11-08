@@ -81,7 +81,13 @@ host's packages (`xwayland`).
    (`terminator-remote-bridge`; frames are full-window zstd BGRA for now,
    cursor and clipboard come later).
 2. Daemon session (`remote-apps-v1`): start the bridge through the SSH master,
-   own the stream, detach and reattach.
+   own the stream, detach and reattach. Host side done:
+   `terminator-remote-bridge --ensure` finds or starts this user's wprsd
+   (private dir `$XDG_RUNTIME_DIR/terminator-remote` or
+   `/tmp/terminator-remote-<uid>`, own Xauthority cookie, `-auth` shim for
+   Xwayland, free display from `:100`, detached process group) and writes
+   `session.json` after wprsd has an output. Tools come from beside the
+   bridge, else from `PATH`. Test: `dev/bridge-ensure-e2e.sh`.
 3. GUI: tab per toplevel, popups as overlays, input, cursor, resize, HiDPI.
 4. Launch UX: `DISPLAY` and `WAYLAND_DISPLAY` in host terminals, shell hook.
 5. Clipboard, packaging of the Linux host binaries, `docs/VALIDATION.md`.

@@ -7,13 +7,14 @@
 //! [`ErrorKind::WprsdStopped`].
 
 mod input;
+pub mod launch;
 mod state;
 
 #[cfg(test)]
 mod tests;
 
 use std::io::{self, BufReader, BufWriter, Write};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
@@ -22,11 +23,13 @@ use wprs::serialization::{Event, RecvType, Request, SendType, Serializer};
 use crate::protocol::{
     self, ClientMessage, ErrorKind, FrameError, Framed, HostMessage, PROTOCOL_VERSION,
 };
+use launch::{LaunchError, Session};
 
 /// What the bridge was started with.
-pub struct Options<'a> {
-    /// wprsd's socket.
-    pub socket: &'a Path,
+pub struct Options {
+    /// wprsd's socket. `None` finds or starts this user's wprsd
+    /// (`--ensure`), and then `display` and `wayland_display` are ignored.
+    pub socket: Option<PathBuf>,
     /// `DISPLAY` for X11 apps, if wprsd runs Xwayland.
     pub display: Option<String>,
     /// `WAYLAND_DISPLAY` for Wayland apps.
@@ -40,7 +43,58 @@ pub enum BridgeError {
     #[error("{0}")]
     VersionMismatch(String),
     #[error(transparent)]
+    Launch(#[from] LaunchError),
+    #[error(transparent)]
     Frame(#[from] FrameError),
+}
+
+impl BridgeError {
+    fn kind(&self) -> ErrorKind {
+        match self {
+            Self::WprsdMissing { .. } | Self::Launch(LaunchError::Missing(_)) => {
+                ErrorKind::WprsdMissing
+            }
+            Self::Launch(LaunchError::XwaylandMissing) => ErrorKind::XwaylandMissing,
+            Self::VersionMismatch(_) => ErrorKind::VersionMismatch,
+            Self::Launch(_) | Self::Frame(_) => ErrorKind::Other,
+        }
+    }
+}
+
+/// A wprsd this bridge started; recorded once it has an output.
+struct Started {
+    dir: PathBuf,
+    session: Session,
+}
+
+/// Where to connect, what to tell the client, and what to record.
+struct Target {
+    socket: PathBuf,
+    display: Option<String>,
+    wayland_display: String,
+    started: Option<Started>,
+}
+
+fn resolve(options: &Options) -> Result<Target, BridgeError> {
+    if let Some(socket) = &options.socket {
+        return Ok(Target {
+            socket: socket.clone(),
+            display: options.display.clone(),
+            wayland_display: options.wayland_display.clone(),
+            started: None,
+        });
+    }
+    let dir = launch::runtime_dir()?;
+    let (session, started) = match launch::live_session(&dir) {
+        Some(session) => (session, false),
+        None => (launch::start(&dir)?, true),
+    };
+    Ok(Target {
+        socket: session.socket.clone(),
+        display: Some(session.display.clone()),
+        wayland_display: session.wayland_display.clone(),
+        started: started.then_some(Started { dir, session }),
+    })
 }
 
 enum Incoming {
@@ -51,25 +105,26 @@ enum Incoming {
 
 /// Runs until the client closes stdin (Ok) or a fatal error. Errors are also
 /// sent to the client as [`HostMessage::Error`] when stdout still works.
-pub fn run(options: &Options<'_>) -> Result<(), BridgeError> {
+pub fn run(options: &Options) -> Result<(), BridgeError> {
     let mut out = BufWriter::new(io::stdout().lock());
+    let target = resolve(options);
+    let (display, wayland_display) = match &target {
+        Ok(t) => (t.display.clone(), t.wayland_display.clone()),
+        Err(_) => (None, options.wayland_display.clone()),
+    };
     send(
         &mut out,
         HostMessage::Hello {
             protocol: PROTOCOL_VERSION,
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            display: options.display.clone(),
-            wayland_display: options.wayland_display.clone(),
+            display,
+            wayland_display,
             capabilities: Vec::new(),
         },
     )?;
-    let result = serve(options, &mut out);
+    let result = target.and_then(|target| serve(target, &mut out));
     if let Err(error) = &result {
-        let kind = match error {
-            BridgeError::WprsdMissing { .. } => ErrorKind::WprsdMissing,
-            BridgeError::VersionMismatch(_) => ErrorKind::VersionMismatch,
-            BridgeError::Frame(_) => ErrorKind::Other,
-        };
+        let kind = error.kind();
         let message = error.to_string();
         // stdout may be the thing that failed; nothing more to do then.
         let _ = send(&mut out, HostMessage::Error { kind, message });
@@ -77,15 +132,16 @@ pub fn run(options: &Options<'_>) -> Result<(), BridgeError> {
     result
 }
 
-fn serve(options: &Options<'_>, out: &mut impl Write) -> Result<(), BridgeError> {
+fn serve(target: Target, out: &mut impl Write) -> Result<(), BridgeError> {
     let (tx, rx) = mpsc::channel();
     spawn_stdin(tx.clone());
-    let mut serializer = Serializer::<Event, Request>::new_client(options.socket).map_err(|e| {
+    let mut serializer = Serializer::<Event, Request>::new_client(&target.socket).map_err(|e| {
         BridgeError::WprsdMissing {
-            path: options.socket.display().to_string(),
+            path: target.socket.display().to_string(),
             reason: e.to_string(),
         }
     })?;
+    let mut unrecorded = target.started;
     if let Some(reader) = serializer.reader() {
         thread::spawn(move || {
             while let Ok(request) = reader.recv() {
@@ -107,6 +163,11 @@ fn serve(options: &Options<'_>, out: &mut impl Write) -> Result<(), BridgeError>
             Incoming::Wprs(request) => {
                 if trace {
                     trace_request(&request);
+                }
+                // wprsd answered our connect, so it handled the output that
+                // followed it: shells may now use the display.
+                if let Some(started) = unrecorded.take() {
+                    launch::record(&started.dir, &started.session)?;
                 }
                 for framed in state.handle(*request) {
                     protocol::write_frame(out, &framed.message, &framed.payload)?;

@@ -1,7 +1,7 @@
 //! End-to-end check of the host bridge, run on Linux by `dev/bridge-e2e.sh`
 //! after it starts wprsd and an X11 app:
 //!
-//! `bridge_probe BRIDGE_BIN SOCKET [--prime]`
+//! `bridge_probe BRIDGE_BIN SOCKET|--ensure [--prime]`
 //!
 //! It acts as the local daemon: it starts the bridge, waits for a window and
 //! its first frame, resizes the window, waits for a frame of the new size,
@@ -43,8 +43,13 @@ fn probe() -> Result<(), String> {
     let (Some(bridge), Some(socket)) = (args.next(), args.next()) else {
         return Err("usage: bridge_probe BRIDGE_BIN SOCKET".into());
     };
+    let bridge_args = if socket == "--ensure" {
+        vec!["--ensure".to_owned()]
+    } else {
+        vec!["--socket".to_owned(), socket]
+    };
     let mut child = Command::new(bridge)
-        .args(["--socket", &socket])
+        .args(bridge_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

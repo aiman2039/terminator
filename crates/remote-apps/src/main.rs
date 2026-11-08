@@ -2,7 +2,11 @@
 //! daemon starts it over SSH; it speaks the Terminator display protocol on
 //! stdin/stdout. Usage:
 //!
-//! `terminator-remote-bridge --socket PATH [--display :N] [--wayland-display NAME]`
+//! `terminator-remote-bridge --ensure`: find or start this user's wprsd
+//! with Xwayland, then serve it (what the daemon runs).
+//!
+//! `terminator-remote-bridge --socket PATH [--display :N] [--wayland-display NAME]`:
+//! serve a wprsd that is already running.
 
 use std::process::ExitCode;
 
@@ -13,10 +17,15 @@ fn main() -> ExitCode {
     use terminator_remote_apps::bridge::{self, Options};
 
     let mut socket = None;
+    let mut ensure = false;
     let mut display = None;
     let mut wayland_display = "wprs-0".to_owned();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
+        if arg == "--ensure" {
+            ensure = true;
+            continue;
+        }
         let value = args.next();
         match (arg.as_str(), value) {
             ("--socket", Some(v)) => socket = Some(PathBuf::from(v)),
@@ -25,11 +34,11 @@ fn main() -> ExitCode {
             _ => return report(&format!("unknown or incomplete argument: {arg}")),
         }
     }
-    let Some(socket) = socket else {
-        return report("--socket PATH is required");
-    };
+    if ensure == socket.is_some() {
+        return report("give exactly one of --ensure or --socket PATH");
+    }
     let options = Options {
-        socket: &socket,
+        socket,
         display,
         wayland_display,
     };
