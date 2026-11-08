@@ -141,6 +141,21 @@ fn directories_to_list(input: DirectoriesToListInput<'_>) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether a refresh re-lists every visible folder. `last` is the request
+/// the current listings were made for.
+fn full_refresh(last: Option<&Request>, request: &Request, wake: Wake, seen: &Dirty) -> bool {
+    let same_scope = last
+        .is_some_and(|last| last.cwd == request.cwd && last.include_stats == request.include_stats);
+    // A new generation with the same folders is a forced refresh (the GUI
+    // retries a vanished project this way), also when a watch event woke
+    // the worker before the request did.
+    let forced = last.is_some_and(|last| {
+        last.directories == request.directories
+            && (wake == Wake::Request || last.generation != request.generation)
+    });
+    !same_scope || forced || wake == Wake::Timer || seen.full || ignore_rules_changed(&seen.paths)
+}
+
 /// A change to ignore rules or the index can flip any entry's ignored
 /// state, so it re-lists everything.
 fn ignore_rules_changed(dirty: &[PathBuf]) -> bool {

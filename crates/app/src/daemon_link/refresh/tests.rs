@@ -368,3 +368,35 @@ fn rewatch_records_targets_in_shared_state_for_later_unwatch() {
         vec![(second, RecursiveMode::NonRecursive)]
     );
 }
+
+#[test]
+fn new_generation_is_a_full_refresh_even_when_a_watch_event_woke_the_worker() {
+    let root = PathBuf::from("/project");
+    let last = Request {
+        cwd: root.clone(),
+        generation: 1,
+        directories: vec![root.clone()],
+        include_stats: false,
+    };
+    // A dirty path in an unrelated folder: a partial pass would reuse the
+    // old listing of `/project`.
+    let seen = Dirty {
+        paths: vec![PathBuf::from("/elsewhere/file")],
+        ..Dirty::default()
+    };
+    let retry = Request {
+        generation: 2,
+        ..last.clone()
+    };
+    assert!(full_refresh(Some(&last), &retry, Wake::Watch, &seen));
+    assert!(full_refresh(Some(&last), &retry, Wake::Request, &seen));
+    // Same generation woken by a watch event: only the touched folders.
+    assert!(!full_refresh(Some(&last), &last, Wake::Watch, &seen));
+    // New folders shown: partial, so they are listed without the rest.
+    let expanded = Request {
+        generation: 2,
+        directories: vec![root.clone(), root.join("src")],
+        ..last.clone()
+    };
+    assert!(!full_refresh(Some(&last), &expanded, Wake::Watch, &seen));
+}

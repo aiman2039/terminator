@@ -518,9 +518,11 @@ fn wq_close_uses_view_issuing_the_save() {
     use crate::native_editor::CloseIssuer;
     let (mut app, ctx, _dir) = fixture();
     let path = PathBuf::from("/a/wq-issuer.md");
+    // Already loaded and saved: an unloaded doc starts a background read,
+    // and the close waits while it runs, which makes the count racy.
     app.native_docs.insert(
         path.clone(),
-        crate::native_editor::NativeDoc::new(path.clone(), false),
+        crate::native_editor::NativeDoc::loaded(path.clone(), ""),
     );
     let float = egui::ViewportId::from_hash_of("wq-float");
     app.floating.push(float_window(FloatWindowInput {

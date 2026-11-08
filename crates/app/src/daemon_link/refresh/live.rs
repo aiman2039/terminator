@@ -1,8 +1,8 @@
 //! Production refresh worker: watcher-driven, cancellable, partial re-listing.
 pub(super) use super::watch_state::{WatchState, WatcherFactory, rewatch};
 use super::{
-    DirectoriesToListInput, Dirty, Request, Wake, directories_to_list, ignore_rules_changed,
-    normalize, watch_targets,
+    DirectoriesToListInput, Dirty, Request, Wake, directories_to_list, full_refresh, normalize,
+    watch_targets,
 };
 use crate::{Update, gui_services::Services, services};
 use std::{
@@ -159,7 +159,7 @@ impl RefreshWorker {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let full = self.full_refresh(&request, &seen);
+        let full = full_refresh(self.listed_for.as_ref(), &request, self.wake, &seen);
         let pass = RefreshPass {
             request,
             seen,
@@ -201,24 +201,6 @@ impl RefreshWorker {
             return Ok(ControlFlow::Continue(()));
         }
         Ok(self.await_wake(fallback).await)
-    }
-
-    /// Whether this refresh re-lists every visible folder.
-    fn full_refresh(&self, request: &Request, seen: &Dirty) -> bool {
-        let same_scope = self.listed_for.as_ref().is_some_and(|last| {
-            last.cwd == request.cwd && last.include_stats == request.include_stats
-        });
-        // A new generation with the same folders is a forced refresh.
-        let forced = self.wake == Wake::Request
-            && self
-                .listed_for
-                .as_ref()
-                .is_some_and(|last| last.directories == request.directories);
-        !same_scope
-            || forced
-            || self.wake == Wake::Timer
-            || seen.full
-            || ignore_rules_changed(&seen.paths)
     }
 
     async fn relist(&self, pass: &RefreshPass, operation: &CancellationToken) -> Vec<PathBuf> {

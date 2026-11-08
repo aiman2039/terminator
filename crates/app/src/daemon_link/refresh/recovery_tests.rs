@@ -57,10 +57,13 @@ async fn refresh_until(
         .unwrap();
     let mut updates = 0_usize;
     loop {
-        let update = tokio::time::timeout_at(deadline, events.recv())
-            .await
-            .expect("refresh recovered before the deadline")
-            .expect("refresh worker running");
+        let Ok(update) = tokio::time::timeout_at(deadline, events.recv()).await else {
+            panic!(
+                "no matching refresh of generation {generation} within {seconds} s \
+                 ({updates} refresh updates seen)"
+            );
+        };
+        let update = update.expect("refresh worker running");
         if matches!(update, Update::Refresh(..) | Update::DirectoryPreview(..)) {
             updates = updates.saturating_add(1);
         }
