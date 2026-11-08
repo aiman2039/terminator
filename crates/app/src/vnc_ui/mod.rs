@@ -40,6 +40,7 @@ pub(crate) use frame::{VncDecodedFrame, decode_frame};
 use keyboard::{
     MODIFIER_KEYSYMS, accelerator_keysym, egui_key_to_x11, modifier_bits, modifier_transitions,
 };
+pub(crate) use shm::open_frame;
 pub(crate) use state::{PropertiesTab, VncSidebarState, VncViewState};
 use std::{
     io::Read,

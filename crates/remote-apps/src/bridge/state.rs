@@ -30,6 +30,21 @@ struct Pixels {
     data: Vec<u8>,
 }
 
+impl Pixels {
+    /// This buffer drawn at `x`,`y`.
+    fn layer(&self, x: i32, y: i32) -> Layer<'_> {
+        Layer {
+            x,
+            y,
+            width: self.width,
+            height: self.height,
+            stride: self.stride,
+            pixels: &self.data,
+            opaque: self.opaque,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Surface {
     pixels: Option<Pixels>,
@@ -127,15 +142,7 @@ impl State {
             return Vec::new();
         };
         let mut canvas = Canvas::new(pixels.width, pixels.height);
-        canvas.draw(&Layer {
-            x: 0,
-            y: 0,
-            width: pixels.width,
-            height: pixels.height,
-            stride: pixels.stride,
-            pixels: &pixels.data,
-            opaque: pixels.opaque,
-        });
+        canvas.draw(&pixels.layer(0, 0));
         vec![Framed::with_payload(
             HostMessage::Cursor {
                 width: canvas.width(),
@@ -318,15 +325,7 @@ impl State {
             return;
         };
         if let Some(pixels) = &surface.pixels {
-            canvas.draw(&Layer {
-                x,
-                y,
-                width: pixels.width,
-                height: pixels.height,
-                stride: pixels.stride,
-                pixels: &pixels.data,
-                opaque: pixels.opaque,
-            });
+            canvas.draw(&pixels.layer(x, y));
         }
         if depth >= MAX_DEPTH {
             return;

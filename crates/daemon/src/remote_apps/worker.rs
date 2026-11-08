@@ -115,7 +115,7 @@ fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) ->
         return RunEnd::NoSsh("ssh has no pipes".into());
     };
     let (tx, rx) = mpsc::channel();
-    let stopped = handle.update_with(|r| {
+    let stopped = handle.update(|r| {
         if !r.stop_requested {
             r.input = Some(tx);
         }
@@ -130,9 +130,8 @@ fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) ->
     let stderr = thread::spawn(move || read_stderr(stderr));
     let mut input = BufReader::new(stdout);
     while let Ok(framed) = protocol::read_frame::<HostMessage>(&mut input) {
-        handle.update(|r| {
-            r.apply(framed);
-        });
+        let rgba = super::runtime::decode_frame(&framed);
+        handle.apply(framed, rgba);
     }
     let code = child.wait().ok().and_then(|status| status.code());
     RunEnd::Exited {

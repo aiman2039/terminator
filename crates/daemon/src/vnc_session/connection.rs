@@ -252,8 +252,9 @@ fn detach_due(shared: &Shared, runtime: &Arc<Mutex<VncRuntime>>, session_started
             .is_some_and(|limit| unwatched >= limit)
 }
 
-/// The Settings value as a time limit; 0 keeps detached sessions.
-fn detach_limit(minutes: u32) -> Option<Duration> {
+/// The Settings value as a time limit; 0 keeps detached sessions. Remote-app
+/// sessions use the same setting.
+pub(crate) fn detach_limit(minutes: u32) -> Option<Duration> {
     (minutes > 0).then(|| Duration::from_secs(u64::from(minutes).saturating_mul(60)))
 }
 

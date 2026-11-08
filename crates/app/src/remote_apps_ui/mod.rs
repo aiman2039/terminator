@@ -12,16 +12,16 @@ mod view;
 mod tests;
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Component, Path};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result};
 use eframe::egui::{self, ColorImage};
 use terminator_core::remote_apps::{
     CAPABILITY, ClientMessage, RemoteAppsState, RemoteAppsStatus, WindowId, WindowRole,
 };
 use terminator_core::{Request, id};
-use terminator_sys::{FrameRect, SharedFrameReader};
+use terminator_sys::FrameRect;
 
 use crate::{After, App, Job, Tab};
 
@@ -72,15 +72,7 @@ fn read_window(
     sequence: u64,
     runtime: &Path,
 ) -> Result<Option<ColorImage>> {
-    ensure!(
-        path.starts_with(runtime) && !path.components().any(|c| c == Component::ParentDir),
-        "Remote app frame is outside the runtime directory"
-    );
-    let reader = SharedFrameReader::open(path)?;
-    ensure!(
-        reader.size() == size,
-        "Remote app frame has a different size"
-    );
+    let reader = crate::vnc_ui::open_frame(path, size, runtime)?;
     let full = FrameRect {
         x: 0,
         y: 0,
@@ -109,15 +101,14 @@ pub(crate) fn tab_title(saved: &str) -> String {
 pub(crate) struct RemoteAppsGui {
     sessions: HashMap<String, Session>,
     windows: HashMap<(String, u64), view::WindowView>,
-    /// egui IDs of the remote window panes painted this frame.
-    painted: HashSet<egui::Id>,
     cursors: HashMap<String, cursor::CursorView>,
 }
 
 #[derive(Default)]
 struct Session {
     id: Option<String>,
-    state: Option<RemoteAppsState>,
+    /// Shared so painting a tab does not copy the state every frame.
+    state: Option<std::sync::Arc<RemoteAppsState>>,
     since: u64,
     fetching: bool,
     wait_until: Option<Instant>,
@@ -155,21 +146,24 @@ impl App {
     /// Whether a painted remote window has keyboard focus: then it gets
     /// every key and no Terminator shortcut runs.
     pub(crate) fn remote_app_captures_keys(&self, ctx: &egui::Context) -> bool {
-        ctx.memory(|m| {
-            m.focused()
-                .is_some_and(|id| self.remote_apps.painted.contains(&id))
-        })
+        ctx.memory(|m| m.focused())
+            .is_some_and(|id| self.is_remote_pane(id))
     }
 
     /// F8: give the keys back to Terminator.
     pub(crate) fn release_remote_app_focus(&mut self, ctx: &egui::Context) {
-        ctx.memory_mut(|m| {
-            if let Some(id) = m.focused()
-                && self.remote_apps.painted.contains(&id)
-            {
-                m.surrender_focus(id);
-            }
-        });
+        if let Some(id) = ctx.memory(|m| m.focused())
+            && self.is_remote_pane(id)
+        {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
+
+    fn is_remote_pane(&self, id: egui::Id) -> bool {
+        self.remote_apps
+            .windows
+            .keys()
+            .any(|(project, window)| view::pane_id(project, *window) == id)
     }
 
     pub(crate) fn remote_apps_connected(&self, project: &str) -> bool {
@@ -285,7 +279,7 @@ impl App {
         self.take_remote_clipboard(ctx, project, &state);
         self.sync_remote_tabs(project, &state);
         if let Some(session) = self.remote_apps.sessions.get_mut(project) {
-            session.state = Some(state);
+            session.state = Some(std::sync::Arc::new(state));
         }
         ctx.request_repaint();
     }

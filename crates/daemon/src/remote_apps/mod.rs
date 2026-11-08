@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use terminator_core::remote_apps::{
-    ClientMessage, MAX_CLIPBOARD, MAX_INPUT, MAX_WAIT_MS, RemoteAppsState, TEXT_MIME_TYPES,
+    ClientMessage, HostMessage, MAX_CLIPBOARD, MAX_INPUT, MAX_WAIT_MS, RemoteAppsState,
+    TEXT_MIME_TYPES, protocol,
 };
 
 use crate::server::{Shared, relock};
@@ -34,16 +35,19 @@ impl Handle {
         }
     }
 
-    /// Runs `change` and wakes waiting polls.
-    pub(crate) fn update(&self, change: impl FnOnce(&mut Runtime)) {
-        self.update_with(change);
-    }
-
-    /// [`Handle::update`] that returns what `change` returns.
-    pub(crate) fn update_with<T>(&self, change: impl FnOnce(&mut Runtime) -> T) -> T {
+    /// Runs `change` and wakes waiting polls; returns what `change` returns.
+    pub(crate) fn update<T>(&self, change: impl FnOnce(&mut Runtime) -> T) -> T {
         let value = change(&mut relock(&self.runtime));
         self.changed.notify_all();
         value
+    }
+
+    /// Applies a bridge message; wakes waiting polls only when it changed
+    /// something.
+    pub(crate) fn apply(&self, framed: protocol::Framed<HostMessage>, rgba: Option<Vec<u8>>) {
+        if relock(&self.runtime).apply(framed, rgba) {
+            self.changed.notify_all();
+        }
     }
 
     pub(crate) fn read<T>(&self, view: impl FnOnce(&Runtime) -> T) -> T {
@@ -59,23 +63,22 @@ impl Handle {
         });
     }
 
+    /// The runtime once `ready` holds, or after `wait` (then `ready` may
+    /// still be false).
+    fn wait_until(
+        &self,
+        wait: Duration,
+        ready: impl Fn(&Runtime) -> bool,
+    ) -> std::sync::MutexGuard<'_, Runtime> {
+        let runtime = relock(&self.runtime);
+        self.changed
+            .wait_timeout_while(runtime, wait, |r| !ready(r))
+            .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard)
+    }
+
     /// Waits up to `wait` for a stop request; returns whether one came.
     pub(crate) fn wait_stop(&self, wait: Duration) -> bool {
-        let deadline = Instant::now().checked_add(wait);
-        let mut runtime = relock(&self.runtime);
-        loop {
-            if runtime.stop_requested {
-                return true;
-            }
-            let Some(left) = deadline.and_then(|d| d.checked_duration_since(Instant::now())) else {
-                return false;
-            };
-            runtime = self
-                .changed
-                .wait_timeout(runtime, left)
-                .map(|(guard, _)| guard)
-                .unwrap_or_else(|poisoned| poisoned.into_inner().0);
-        }
+        self.wait_until(wait, |r| r.stop_requested).stop_requested
     }
 
     fn snapshot(&self) -> RemoteAppsState {
@@ -84,19 +87,8 @@ impl Handle {
 
     /// The state once its revision passes `since`, or `None` after `wait`.
     fn wait_newer(&self, since: u64, wait: Duration) -> Option<RemoteAppsState> {
-        let deadline = Instant::now().checked_add(wait);
-        let mut runtime = relock(&self.runtime);
-        loop {
-            if runtime.revision > since {
-                return Some(runtime.snapshot());
-            }
-            let left = deadline?.checked_duration_since(Instant::now())?;
-            runtime = self
-                .changed
-                .wait_timeout(runtime, left)
-                .map(|(guard, _)| guard)
-                .unwrap_or_else(|poisoned| poisoned.into_inner().0);
-        }
+        let runtime = self.wait_until(wait, |r| r.revision > since);
+        (runtime.revision > since).then(|| runtime.snapshot())
     }
 }
 
@@ -113,24 +105,21 @@ impl Shared {
             .cloned()
             .context("Unknown SSH project")?;
         let mut sessions = relock(&self.remote_apps);
-        if let Some(live) = sessions.values().find(|h| {
-            let r = relock(&h.runtime);
-            r.project_id == project_id && r.status.live() && !r.stop_requested
-        }) {
+        if let Some(live) = sessions
+            .values()
+            .find(|h| h.read(|r| r.live_for(project_id) && !r.stop_requested))
+        {
             live.update(|r| r.last_viewed = Instant::now());
             return Ok(live.snapshot());
         }
-        let id = uuid::Uuid::new_v4().simple().to_string();
+        let id = terminator_core::id();
         let handle = Arc::new(Handle::new(Runtime::new(
             id.clone(),
             project.id.clone(),
             self.paths.runtime.clone(),
         )));
         // Ended sessions of this project are replaced.
-        sessions.retain(|_, h| {
-            let r = relock(&h.runtime);
-            r.project_id != project_id || r.status.live()
-        });
+        sessions.retain(|_, h| h.read(|r| r.project_id != project_id || r.status.live()));
         sessions.insert(id, Arc::clone(&handle));
         drop(sessions);
         let snapshot = handle.snapshot();
@@ -140,8 +129,7 @@ impl Shared {
             let minutes = relock(&shared.upgrade()?.state)
                 .settings
                 .vnc_detached_timeout_minutes;
-            // 0 is never, like VNC sessions.
-            (minutes > 0).then(|| Duration::from_secs(u64::from(minutes).saturating_mul(60)))
+            crate::vnc_session::detach_limit(minutes)
         });
         worker::start(handle, project, control, detach_limit);
         Ok(snapshot)
@@ -220,9 +208,8 @@ impl Shared {
 
     /// Whether a live remote-apps session uses `project`.
     pub(crate) fn remote_apps_live_for(&self, project: &str) -> bool {
-        relock(&self.remote_apps).values().any(|h| {
-            let r = relock(&h.runtime);
-            r.project_id == project && r.status.live()
-        })
+        relock(&self.remote_apps)
+            .values()
+            .any(|h| h.read(|r| r.live_for(project)))
     }
 }

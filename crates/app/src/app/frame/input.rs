@@ -64,10 +64,10 @@ impl App {
         self.escape_tool_window(ctx);
         // A focused remote app window takes every key, like VNC capture;
         // F8 or a click elsewhere gives the keys back.
-        let capture_vnc = self.vnc_captures_shortcuts(ctx) || self.remote_app_captures_keys(ctx);
+        let keys_captured = self.vnc_captures_shortcuts(ctx) || self.remote_app_captures_keys(ctx);
         let editor_focus = terminator_native_edit::view::source_has_focus(ctx);
         let terminal_focus = shortcuts::terminal_has_focus(ctx);
-        if jetbrains && !capture_vnc {
+        if jetbrains && !keys_captured {
             self.run_jetbrains_shortcuts(ctx, editor_focus);
         } else {
             self.double_shift = Default::default();
@@ -76,7 +76,7 @@ impl App {
         // find bar counts as the terminal.
         let terminal_keyboard = self.terminal_has_keyboard(ctx);
         for &action in Action::ALL {
-            if capture_vnc {
+            if keys_captured {
                 continue;
             }
             if !self.shortcut_allowed(action) || !self.shortcut_applies(action) {

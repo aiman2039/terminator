@@ -61,11 +61,7 @@ pub fn runtime_dir() -> Result<PathBuf, LaunchError> {
         Some(base) if base.is_dir() => base.join("terminator-remote"),
         _ => PathBuf::from(format!("/tmp/terminator-remote-{uid}")),
     };
-    match fs::DirBuilder::new().mode(0o700).create(&dir) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
+    private_dir(&dir)?;
     let meta = fs::symlink_metadata(&dir)?;
     if !meta.is_dir() {
         return Err(LaunchError::UnsafeDir(dir, "not a directory"));
@@ -130,8 +126,7 @@ pub fn start(dir: &Path) -> Result<Session, LaunchError> {
         .spawn()?;
     let deadline = Instant::now().checked_add(START_TIMEOUT);
     loop {
-        if let Some(status) = child.try_wait()? {
-            let _ = status;
+        if child.try_wait()?.is_some() {
             return Err(LaunchError::StartFailed {
                 log: tail(&log_path),
             });
@@ -293,11 +288,7 @@ fn write_cookie(path: &Path, number: u32) -> Result<(), LaunchError> {
 /// own directory), so it also works inside a wrapper's environment.
 fn xwayland_shim(dir: &Path, xauthority: &Path) -> Result<PathBuf, LaunchError> {
     let bin = dir.join("bin");
-    match fs::DirBuilder::new().mode(0o700).create(&bin) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
+    private_dir(&bin)?;
     let script = format!(
         "#!/bin/sh\nself={}\nIFS=:\nfor d in $PATH; do\n  [ \"$d\" = \"$self\" ] && continue\n  [ -x \"$d/Xwayland\" ] && exec \"$d/Xwayland\" -auth {} \"$@\"\ndone\necho 'terminator-remote-bridge: Xwayland not found on PATH' >&2\nexit 127\n",
         shell_quote(&bin.to_string_lossy()),
@@ -316,6 +307,14 @@ fn xwayland_shim(dir: &Path, xauthority: &Path) -> Result<PathBuf, LaunchError> 
 
 fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// Creates `dir` as 0700 unless it exists.
+fn private_dir(dir: &Path) -> io::Result<()> {
+    match fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(error) if error.kind() != io::ErrorKind::AlreadyExists => Err(error),
+        _ => Ok(()),
+    }
 }
 
 fn private_file(path: &Path) -> io::Result<File> {

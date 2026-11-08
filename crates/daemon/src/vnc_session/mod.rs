@@ -371,6 +371,7 @@ fn validate_project(state: &terminator_core::State, project: &str) -> Result<()>
 
 mod connect;
 pub(crate) use connect::VncFrameRequest;
+pub(crate) use connection::detach_limit;
 struct RunVncThreadInput {
     shared: Arc<Shared>,
     runtime: Arc<Mutex<VncRuntime>>,

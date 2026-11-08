@@ -73,6 +73,12 @@ impl WindowView {
     }
 }
 
+/// The egui ID of a remote window's pane; it has keyboard focus while the
+/// window takes keys.
+pub(super) fn pane_id(project: &str, window: u64) -> egui::Id {
+    egui::Id::unique(("remote-app", project, window))
+}
+
 /// Where one window is drawn in the tab.
 struct Placed {
     id: u64,
@@ -101,14 +107,13 @@ impl App {
                     .is_some_and(|v| v.texture.is_some())
             })
         });
-        let (Some(state), Some(_), Some(session_id)) = (state.as_ref(), shown, session_id) else {
-            self.remote_app_placeholder(ui, project, (state.as_ref(), error));
+        let (Some(state), Some(_), Some(session_id)) = (state.as_deref(), shown, session_id) else {
+            self.remote_app_placeholder(ui, project, (state.as_deref(), error));
             return;
         };
         let rect = ui.available_rect_before_wrap();
-        let id = egui::Id::unique(("remote-app", project, window));
+        let id = pane_id(project, window);
         let response = ui.interact(rect, id, Sense::click_and_drag());
-        self.remote_apps.painted.insert(id);
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(
                 id,

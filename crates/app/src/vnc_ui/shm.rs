@@ -15,23 +15,27 @@ pub(crate) enum ShmPixels {
     Torn,
 }
 
+/// Opens a daemon shared frame file, refusing paths outside the runtime
+/// directory and files of another size (VNC and remote apps).
+pub(crate) fn open_frame(
+    path: &Path,
+    size: (u16, u16),
+    runtime: &Path,
+) -> Result<SharedFrameReader> {
+    ensure!(
+        path.starts_with(runtime) && !path.components().any(|c| matches!(c, Component::ParentDir)),
+        "Shared frame is outside the runtime directory"
+    );
+    let reader = SharedFrameReader::open(path)?;
+    ensure!(reader.size() == size, "Shared frame has a different size");
+    Ok(reader)
+}
+
 /// Copy the published rectangles out of `shm`. Errors mean the file cannot
 /// be used at all (outside the runtime directory, wrong size, missing), and
 /// the viewer should fall back to compressed frames.
 pub(crate) fn read(shm: &VncShmFrame, size: (u16, u16), runtime: &Path) -> Result<ShmPixels> {
-    ensure!(
-        shm.path.starts_with(runtime)
-            && !shm
-                .path
-                .components()
-                .any(|c| matches!(c, Component::ParentDir)),
-        "Shared VNC frame is outside the runtime directory"
-    );
-    let reader = SharedFrameReader::open(&shm.path)?;
-    ensure!(
-        reader.size() == size,
-        "Shared VNC frame has a different size"
-    );
+    let reader = open_frame(&shm.path, size, runtime)?;
     let rects: Vec<FrameRect> = shm
         .regions
         .iter()

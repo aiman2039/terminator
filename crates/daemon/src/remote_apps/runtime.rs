@@ -12,6 +12,15 @@ use terminator_core::remote_apps::{
 };
 use terminator_sys::SharedFrameWriter;
 
+/// A `Frame`'s pixels as RGBA, decoded off the session lock (decompression
+/// takes milliseconds for large windows).
+pub(crate) fn decode_frame(framed: &protocol::Framed<HostMessage>) -> Option<Vec<u8>> {
+    let HostMessage::Frame { width, height, .. } = framed.message else {
+        return None;
+    };
+    terminator_core::remote_apps::zstd_bgra_to_rgba(&framed.payload, width, height)
+}
+
 /// One message to the bridge and its payload (clipboard bytes).
 pub(crate) type Input = (ClientMessage, Vec<u8>);
 
@@ -141,8 +150,18 @@ impl Runtime {
         self.bump();
     }
 
-    /// Applies one bridge message. Returns whether anything changed.
-    pub(crate) fn apply(&mut self, framed: protocol::Framed<HostMessage>) -> bool {
+    /// Whether this is a live session of `project`.
+    pub(crate) fn live_for(&self, project: &str) -> bool {
+        self.project_id == project && self.status.live()
+    }
+
+    /// Applies one bridge message; `rgba` is a `Frame`'s pixels from
+    /// [`decode_frame`]. Returns whether anything changed.
+    pub(crate) fn apply(
+        &mut self,
+        framed: protocol::Framed<HostMessage>,
+        rgba: Option<Vec<u8>>,
+    ) -> bool {
         match framed.message {
             HostMessage::Hello {
                 protocol: version,
@@ -200,7 +219,7 @@ impl Runtime {
             }
             HostMessage::Frame {
                 id, width, height, ..
-            } => return self.frame(id, (width, height), &framed.payload),
+            } => return self.frame(id, (width, height), rgba),
             HostMessage::WindowClosed { id } => {
                 if self.windows.remove(&id).is_none() {
                     return false;
@@ -266,22 +285,27 @@ impl Runtime {
         self.error = Some(message);
     }
 
-    /// Publishes a frame into the window's shared-memory file, making a new
-    /// file when the size changed. Bad frames are dropped.
-    fn frame(&mut self, id: WindowId, size: (u32, u32), payload: &[u8]) -> bool {
-        let (Ok(width), Ok(height)) = (u16::try_from(size.0), u16::try_from(size.1)) else {
-            return false;
-        };
-        let Some(rgba) = terminator_core::remote_apps::zstd_bgra_to_rgba(payload, size.0, size.1)
+    /// Publishes a frame (RGBA decoded by [`decode_frame`] before the lock)
+    /// into the window's shared-memory file, making a new file when the size
+    /// changed. Bad frames are dropped.
+    fn frame(&mut self, id: WindowId, size: (u32, u32), rgba: Option<Vec<u8>>) -> bool {
+        let (Ok(width), Ok(height), Some(rgba)) =
+            (u16::try_from(size.0), u16::try_from(size.1), rgba)
         else {
             return false;
         };
-        let path = self.next_path();
+        if !self.windows.contains_key(&id) {
+            return false;
+        }
+        let resized = self.windows.get(&id).is_some_and(|w| {
+            w.writer.as_ref().map(SharedFrameWriter::size) != Some((width, height))
+        });
+        let path = resized.then(|| self.next_path());
         let revision = self.revision.saturating_add(1);
         let Some(window) = self.windows.get_mut(&id) else {
             return false;
         };
-        if window.writer.as_ref().map(SharedFrameWriter::size) != Some((width, height)) {
+        if let Some(path) = path {
             window.writer = None;
             match SharedFrameWriter::create(&path, width, height) {
                 Ok(writer) => window.writer = Some(writer),

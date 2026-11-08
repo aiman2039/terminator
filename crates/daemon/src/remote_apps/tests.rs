@@ -11,6 +11,12 @@ use terminator_sys::{FrameRect, SharedFrameReader};
 use super::{Handle, Runtime, worker::classify, worker::watch_detach};
 use terminator_core::remote_apps::{permanent, retry_delay_seconds};
 
+/// Applies a message the way the worker does: frames decoded first.
+fn apply(r: &mut Runtime, framed: Framed<HostMessage>) -> bool {
+    let rgba = super::runtime::decode_frame(&framed);
+    r.apply(framed, rgba)
+}
+
 fn runtime(dir: &std::path::Path) -> Runtime {
     Runtime::new("s1".into(), "p1".into(), dir.to_path_buf())
 }
@@ -52,7 +58,7 @@ fn frame(id: u64, width: u32, height: u32, bgra: [u8; 4]) -> Framed<HostMessage>
 fn hello_connects_and_records_the_display() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    assert!(r.apply(hello(PROTOCOL_VERSION)));
+    assert!(apply(&mut r, hello(PROTOCOL_VERSION)));
     let state = r.snapshot();
     assert_eq!(state.status, RemoteAppsStatus::Connected);
     assert_eq!(state.display.as_deref(), Some(":100"));
@@ -62,7 +68,7 @@ fn hello_connects_and_records_the_display() {
 fn newer_host_protocol_fails_and_names_this_computer_to_update() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    r.apply(hello(PROTOCOL_VERSION + 1));
+    apply(&mut r, hello(PROTOCOL_VERSION + 1));
     let state = r.snapshot();
     assert_eq!(state.status, RemoteAppsStatus::Failed);
     assert_eq!(state.error_kind, Some(ErrorKind::VersionMismatch));
@@ -78,9 +84,9 @@ fn newer_host_protocol_fails_and_names_this_computer_to_update() {
 fn frame_lands_in_shared_memory_as_rgba_and_close_removes_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    r.apply(hello(PROTOCOL_VERSION));
-    r.apply(opened(1));
-    assert!(r.apply(frame(1, 2, 2, [10, 20, 30, 255])));
+    apply(&mut r, hello(PROTOCOL_VERSION));
+    apply(&mut r, opened(1));
+    assert!(apply(&mut r, frame(1, 2, 2, [10, 20, 30, 255])));
     let window = r.snapshot().windows.remove(0);
     assert_eq!((window.width, window.height), (2, 2));
     let path = window.shm.unwrap();
@@ -94,7 +100,10 @@ fn frame_lands_in_shared_memory_as_rgba_and_close_removes_the_file() {
     let pixels = reader.read(window.sequence, &[full]).unwrap();
     assert_eq!(pixels[0].1, [30, 20, 10, 255].repeat(4));
 
-    r.apply(Framed::new(HostMessage::WindowClosed { id: WindowId(1) }));
+    apply(
+        &mut r,
+        Framed::new(HostMessage::WindowClosed { id: WindowId(1) }),
+    );
     assert!(r.snapshot().windows.is_empty());
     assert!(!path.exists());
 }
@@ -103,10 +112,10 @@ fn frame_lands_in_shared_memory_as_rgba_and_close_removes_the_file() {
 fn resize_moves_the_window_to_a_new_file() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    r.apply(opened(1));
-    r.apply(frame(1, 2, 2, [0; 4]));
+    apply(&mut r, opened(1));
+    apply(&mut r, frame(1, 2, 2, [0; 4]));
     let first = r.snapshot().windows[0].shm.clone().unwrap();
-    r.apply(frame(1, 4, 3, [0; 4]));
+    apply(&mut r, frame(1, 4, 3, [0; 4]));
     let window = &r.snapshot().windows[0];
     assert_eq!((window.width, window.height), (4, 3));
     assert_ne!(window.shm.as_ref(), Some(&first));
@@ -117,13 +126,13 @@ fn resize_moves_the_window_to_a_new_file() {
 fn corrupt_or_unknown_frames_change_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    r.apply(opened(1));
+    apply(&mut r, opened(1));
     let before = r.snapshot().revision;
     let mut bad = frame(1, 2, 2, [0; 4]);
     bad.payload = b"junk".to_vec();
-    assert!(!r.apply(bad));
-    assert!(!r.apply(frame(9, 2, 2, [0; 4])));
-    assert!(!r.apply(frame(1, 70_000, 1, [0; 4])));
+    assert!(!apply(&mut r, bad));
+    assert!(!apply(&mut r, frame(9, 2, 2, [0; 4])));
+    assert!(!apply(&mut r, frame(1, 70_000, 1, [0; 4])));
     assert_eq!(r.snapshot().revision, before);
 }
 
@@ -131,11 +140,14 @@ fn corrupt_or_unknown_frames_change_nothing() {
 fn bridge_error_is_kept_when_the_bridge_then_exits() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    r.apply(opened(1));
-    r.apply(Framed::new(HostMessage::Error {
-        kind: ErrorKind::XwaylandMissing,
-        message: "Xwayland not found".into(),
-    }));
+    apply(&mut r, opened(1));
+    apply(
+        &mut r,
+        Framed::new(HostMessage::Error {
+            kind: ErrorKind::XwaylandMissing,
+            message: "Xwayland not found".into(),
+        }),
+    );
     r.end(
         RemoteAppsStatus::Failed,
         Some((ErrorKind::Other, "exit 2".into())),
@@ -149,17 +161,20 @@ fn bridge_error_is_kept_when_the_bridge_then_exits() {
 fn popups_are_listed_after_their_parents() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    r.apply(Framed::new(HostMessage::WindowOpened {
-        id: WindowId(1),
-        role: WindowRole::Popup {
-            parent: WindowId(2),
-            x: 0,
-            y: 0,
-        },
-        title: String::new(),
-        app_id: String::new(),
-    }));
-    r.apply(opened(2));
+    apply(
+        &mut r,
+        Framed::new(HostMessage::WindowOpened {
+            id: WindowId(1),
+            role: WindowRole::Popup {
+                parent: WindowId(2),
+                x: 0,
+                y: 0,
+            },
+            title: String::new(),
+            app_id: String::new(),
+        }),
+    );
+    apply(&mut r, opened(2));
     let ids: Vec<u64> = r.snapshot().windows.iter().map(|w| w.id.0).collect();
     assert_eq!(ids, [2, 1]);
 }
@@ -178,7 +193,7 @@ fn long_poll_wakes_on_change_and_times_out_without_one() {
     let poke = thread::spawn(move || {
         thread::sleep(Duration::from_millis(30));
         waker.update(|r| {
-            r.apply(opened(1));
+            apply(r, opened(1));
         });
     });
     let state = handle.wait_newer(since, Duration::from_secs(5)).unwrap();
@@ -203,14 +218,14 @@ fn cursor_image_becomes_rgba_and_each_change_gets_a_new_serial() {
             payload,
         )
     };
-    assert!(r.apply(cursor(vec![1, 2, 3, 255], None)));
+    assert!(apply(&mut r, cursor(vec![1, 2, 3, 255], None)));
     let first = r.snapshot().cursor.unwrap();
     let rgba = base64::engine::general_purpose::STANDARD
         .decode(&first.rgba)
         .unwrap();
     assert_eq!(rgba, [3, 2, 1, 255]);
     assert_eq!((first.hotspot_x, first.hotspot_y), (3, 4));
-    r.apply(cursor(Vec::new(), Some("text")));
+    apply(&mut r, cursor(Vec::new(), Some("text")));
     let second = r.snapshot().cursor.unwrap();
     assert_eq!(second.name.as_deref(), Some("text"));
     assert!(second.serial > first.serial);
@@ -228,12 +243,12 @@ fn copied_text_is_kept_with_a_new_serial_and_oversized_text_is_dropped() {
             bytes,
         )
     };
-    assert!(r.apply(data(b"one".to_vec())));
-    assert!(r.apply(data(b"two".to_vec())));
+    assert!(apply(&mut r, data(b"one".to_vec())));
+    assert!(apply(&mut r, data(b"two".to_vec())));
     let clip = r.snapshot().clipboard.unwrap();
     assert_eq!((clip.serial, clip.text.as_str()), (2, "two"));
     let huge = vec![b'x'; terminator_core::remote_apps::MAX_CLIPBOARD + 1];
-    assert!(!r.apply(data(huge)));
+    assert!(!apply(&mut r, data(huge)));
 }
 
 #[test]
@@ -262,9 +277,9 @@ fn retries_back_off_to_a_minute_and_skip_install_problems() {
 fn retry_keeps_the_error_closes_windows_and_hello_clears_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    r.apply(hello(PROTOCOL_VERSION));
-    r.apply(opened(1));
-    r.apply(frame(1, 1, 1, [0; 4]));
+    apply(&mut r, hello(PROTOCOL_VERSION));
+    apply(&mut r, opened(1));
+    apply(&mut r, frame(1, 1, 1, [0; 4]));
     r.retrying((ErrorKind::Other, "Connection reset".into()), 2, 2);
     let state = r.snapshot();
     assert_eq!(state.status, RemoteAppsStatus::Connecting);
@@ -273,7 +288,7 @@ fn retry_keeps_the_error_closes_windows_and_hello_clears_it() {
     assert!(state.windows.is_empty());
     assert!(!r.hello_seen);
 
-    r.apply(hello(PROTOCOL_VERSION));
+    apply(&mut r, hello(PROTOCOL_VERSION));
     let state = r.snapshot();
     assert_eq!(state.status, RemoteAppsStatus::Connected);
     assert_eq!((state.error, state.retry_attempt), (None, 0));
@@ -284,10 +299,13 @@ fn bridge_error_is_read_back_only_while_failed() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
     assert!(r.bridge_error().is_none());
-    r.apply(Framed::new(HostMessage::Error {
-        kind: ErrorKind::WprsdMissing,
-        message: "wprsd not found".into(),
-    }));
+    apply(
+        &mut r,
+        Framed::new(HostMessage::Error {
+            kind: ErrorKind::WprsdMissing,
+            message: "wprsd not found".into(),
+        }),
+    );
     assert_eq!(r.bridge_error().map(|e| e.0), Some(ErrorKind::WprsdMissing));
 }
 
