@@ -1,0 +1,21 @@
+[package]
+name = "terminator-remote-apps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Seamless remote app windows: the Terminator display protocol and the host bridge to wprsd."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+# The host bridge links wprs. wprs (through smithay) needs libxkbcommon and
+# libwayland, so only Linux hosts build it; the macOS GUI and daemon use the
+# protocol module only.
+[target.'cfg(target_os = "linux")'.dependencies]
+wprs = { path = "../../vendor/wprs" }
+
+[lints]
+workspace = true
