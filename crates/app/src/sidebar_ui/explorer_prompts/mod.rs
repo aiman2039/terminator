@@ -114,18 +114,28 @@ impl App {
             ),
             paths => format!("Move {} items to Trash?", paths.len()),
         };
-        ui.horizontal(|ui| {
+        let mut confirm = false;
+        let mut cancel = false;
+        let modal = egui::Modal::new(egui::Id::unique("confirm-delete")).show(ui.ctx(), |ui| {
+            ui.set_width(320.0);
+            ui.heading("Move to Trash");
+            ui.add_space(8.0);
             ui.label(label);
-            if ui.button("Move to Trash").clicked() {
-                for path in std::mem::take(&mut self.pending_delete) {
-                    self.queue_workspace(workspace_ops::Op::Delete(path));
-                }
-                self.explorer_selection.clear();
-            }
-            if ui.button("Cancel").clicked() {
-                self.pending_delete.clear();
-            }
+            ui.add_space(12.0);
+            appearance::footer_row(ui, |ui| {
+                confirm = ui.button("Move to Trash").clicked();
+                cancel = ui.button("Cancel").clicked();
+            });
         });
+        cancel |= modal.should_close();
+        if confirm {
+            for path in std::mem::take(&mut self.pending_delete) {
+                self.queue_workspace(workspace_ops::Op::Delete(path));
+            }
+            self.explorer_selection.clear();
+        } else if cancel {
+            self.pending_delete.clear();
+        }
     }
 
     /// Contents search results, grouped by file. Clicking a hit opens that

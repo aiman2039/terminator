@@ -1,8 +1,9 @@
 name: sccache on Cloudflare R2
 description: >-
   Install sccache and route rustc through it when the job environment has the
-  R2 bucket and credentials. Without them (for example a fork), or when the
-  server cannot reach the bucket, builds run without sccache.
+  R2 bucket and credentials. Without them (for example a fork), builds run
+  without sccache. With them, a server that cannot reach the bucket fails the
+  job with an error annotation.
 runs:
   using: composite
   steps:
@@ -15,10 +16,18 @@ runs:
       env:
         SCCACHE_REGION: auto
       run: |
-        # A cache failure must not fail the build: probe the bucket first.
-        if ! sccache --start-server; then
-          echo "::warning::sccache cannot use the R2 bucket; building without sccache."
-          exit 0
+        # Secrets are set, so a broken cache is a config error: fail loudly
+        # (GitHub emails the actor on a failed run) and show the reason.
+        if ! out="$(SCCACHE_LOG=debug sccache --start-server 2>&1)"; then
+          echo "$out"
+          echo "::error title=sccache broken::sccache cannot use the R2 bucket (endpoint ${SCCACHE_ENDPOINT:-unset}). Fix the SCCACHE_*/R2_* secrets. Details are in this step's log."
+          exit 1
+        fi
+        sccache --show-stats
+        # Probe a real write: start-server can pass while the bucket still rejects access.
+        if ! sccache --show-stats | grep -qi "cache location.*s3"; then
+          echo "::error title=sccache not using R2::Cache location is not S3/R2."
+          exit 1
         fi
         echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
         echo "SCCACHE_REGION=auto" >> "$GITHUB_ENV"
