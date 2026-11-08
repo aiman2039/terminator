@@ -18,6 +18,7 @@ pub(crate) fn blank_project() -> RemoteProject {
         mosh: false,
         shell_command: None,
         mosh_command: None,
+        apps_command: None,
     }
 }
 

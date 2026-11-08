@@ -88,6 +88,22 @@ host's packages (`xwayland`).
    Xwayland, free display from `:100`, detached process group) and writes
    `session.json` after wprsd has an output. Tools come from beside the
    bridge, else from `PATH`. Test: `dev/bridge-ensure-e2e.sh`.
+   Daemon side done (not yet tested against a live host): capability
+   `remote-apps-v1`; requests `RemoteAppsConnect{project}` (one live session
+   per project, reused), `RemoteAppsState{session, since, wait_ms}` (long
+   poll), `RemoteAppsInput` and `RemoteAppsDisconnect`. The daemon runs
+   `exec sh -c 'exec <apps_command>'` over the project's SSH master (no
+   login shell: profile output would corrupt the stream), with
+   `RemoteProject::apps_command` defaulting to
+   `terminator-remote-bridge --ensure`. Each window's pixels are
+   premultiplied RGBA in a `terminator_sys` shared-frame file
+   (`remote-app-*.fb` in the runtime directory); a new size gets a new file.
+   Exit reasons: exit 127 or "not found" → `wprsd_missing` ("bridge is not
+   installed on the host"), "server disconnected" → `wprsd_stopped`, SSH
+   exit 255 → the classified SSH error. A bridge `Error` message wins over
+   the exit reason. Removing an SSH project is refused while its remote apps
+   are connected. Still to do: reconnect with backoff and the detached
+   timeout.
 3. GUI: tab per toplevel, popups as overlays, input, cursor, resize, HiDPI.
 4. Launch UX: `DISPLAY` and `WAYLAND_DISPLAY` in host terminals, shell hook.
 5. Clipboard, packaging of the Linux host binaries, `docs/VALIDATION.md`.

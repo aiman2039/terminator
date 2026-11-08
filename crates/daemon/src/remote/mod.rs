@@ -22,7 +22,7 @@ use terminator_core::{
 };
 pub(crate) use transfers::Transfers;
 
-pub(super) fn command(
+pub(crate) fn command(
     ssh: &terminator_core::ssh::SshOptions,
     control: Option<&Path>,
 ) -> Result<Command> {
@@ -307,6 +307,10 @@ impl Shared {
                 relock(&self.remote_transfers).active(id) == 0,
                 "Wait for this SSH project's file transfers to finish before removing it"
             );
+            ensure!(
+                !self.remote_apps_live_for(id),
+                "Disconnect this SSH project's remote apps before removing it"
+            );
             if let Some(paths) = &self.catalog_paths {
                 terminator_core::generations::Catalog::open(paths)?.remove_remote_project(id)?;
             }
@@ -388,6 +392,7 @@ mod tests {
             mosh: false,
             shell_command: None,
             mosh_command: None,
+            apps_command: None,
         }
     }
     #[test]

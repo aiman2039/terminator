@@ -204,6 +204,7 @@ mod tests {
             mosh,
             shell_command: None,
             mosh_command: None,
+            apps_command: None,
         }
     }
 

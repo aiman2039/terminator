@@ -1,11 +1,26 @@
-//! Platform-neutral pixel work for the host bridge: compositing a window's
-//! surface tree into one BGRA image, and placing popups.
+//! Platform-neutral pixel work: compositing a window's surface tree into one
+//! BGRA image and placing popups (host bridge), and decoding frames (daemon).
 
 #[cfg(test)]
 mod tests;
 
 /// Bytes per BGRA pixel.
 const BPP: usize = 4;
+
+/// Decodes a [`crate::protocol::FrameEncoding::ZstdBgra`] payload of a full
+/// `width` x `height` frame into premultiplied RGBA. `None` when the payload
+/// is corrupt or not exactly that size.
+pub fn zstd_bgra_to_rgba(payload: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+    let len = row_bytes(width)?.checked_mul(usize::try_from(height).ok()?)?;
+    let mut pixels = zstd::bulk::decompress(payload, len).ok()?;
+    if pixels.len() != len {
+        return None;
+    }
+    for pixel in pixels.chunks_exact_mut(BPP) {
+        pixel.swap(0, 2);
+    }
+    Some(pixels)
+}
 
 /// One surface buffer drawn at `x`,`y` in window coordinates. `pixels` holds
 /// premultiplied BGRA rows (`ARGB8888` little-endian), `stride` bytes apart.

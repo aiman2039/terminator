@@ -7816,6 +7816,7 @@ dependencies = [
  "sha2",
  "sysinfo",
  "tempfile",
+ "terminator-remote-apps",
  "terminator-sys",
  "thiserror 2.0.21",
  "tokio",
@@ -7863,6 +7864,7 @@ dependencies = [
  "vt100",
  "vte",
  "zeroize",
+ "zstd",
 ]
 
 [[package]]

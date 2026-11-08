@@ -19,9 +19,13 @@ pub fn normalize_command(text: &str, default: &str) -> Option<String> {
 
 /// Each saved command is one trimmed, non-empty line.
 pub(super) fn validate_commands(project: &RemoteProject) -> Result<(), RemoteError> {
-    for command in [&project.shell_command, &project.mosh_command]
-        .into_iter()
-        .flatten()
+    for command in [
+        &project.shell_command,
+        &project.mosh_command,
+        &project.apps_command,
+    ]
+    .into_iter()
+    .flatten()
     {
         let valid = !command.is_empty()
             && command.trim() == command

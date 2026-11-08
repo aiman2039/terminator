@@ -102,6 +102,11 @@ pub struct RemoteProject {
     /// `-- sh -c <script>`. `None` uses [`mosh::default_server_command`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mosh_command: Option<String>,
+    /// Host command that starts the remote-apps bridge (`remote-apps-v1`),
+    /// for example through nix-portable. `None` uses
+    /// [`crate::remote_apps::DEFAULT_COMMAND`]. Omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps_command: Option<String>,
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -361,6 +366,7 @@ mod tests {
             mosh: false,
             shell_command: None,
             mosh_command: None,
+            apps_command: None,
         };
         assert_ne!(p.identity_path(), std::path::PathBuf::from(&p.root));
         assert_eq!(
@@ -387,6 +393,7 @@ mod tests {
             mosh: false,
             shell_command: None,
             mosh_command: None,
+            apps_command: None,
         };
         // Unset: older readers see the same JSON, and Settings decides.
         assert!(

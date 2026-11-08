@@ -16,6 +16,7 @@ dunce = "1"
 libc.workspace = true
 rustix.workspace = true
 terminator-sys.workspace = true
+terminator-remote-apps.workspace = true
 toml_edit = { version = "0.25", features = ["serde"] }
 
 rusqlite = { version = "0.40", features = ["bundled"] }

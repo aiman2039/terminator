@@ -309,6 +309,7 @@ pub(crate) fn remote_project(name: &str, ssh: SshOptions) -> RemoteProject {
         mosh: false,
         shell_command: None,
         mosh_command: None,
+        apps_command: None,
     }
 }
 fn probe(h: &Harness, project: &RemoteProject) -> Result<Response> {

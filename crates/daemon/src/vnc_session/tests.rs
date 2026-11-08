@@ -23,6 +23,7 @@ fn vnc_accepts_ssh_project_ids_and_rejects_unknown_projects() {
             mosh: false,
             shell_command: None,
             mosh_command: None,
+            apps_command: None,
         });
     assert!(state.projects.is_empty());
     assert!(validate_project(&state, "ssh-project").is_ok());

@@ -106,6 +106,19 @@ fn huge_canvas_is_empty_instead_of_aborting() {
     assert_eq!((canvas.width(), canvas.height()), (0, 0));
 }
 
+#[test]
+fn zstd_frame_decodes_to_rgba_and_wrong_size_is_refused() {
+    let bgra = [RED, BLUE].concat();
+    let payload = zstd::bulk::compress(&bgra, 1).unwrap();
+    assert_eq!(
+        zstd_bgra_to_rgba(&payload, 2, 1).unwrap(),
+        [[255, 0, 0, 255], [0, 0, 255, 255]].concat()
+    );
+    assert!(zstd_bgra_to_rgba(&payload, 3, 1).is_none());
+    assert!(zstd_bgra_to_rgba(&payload, 1, 1).is_none());
+    assert!(zstd_bgra_to_rgba(b"junk", 2, 1).is_none());
+}
+
 fn menu(anchor: u32, gravity: u32) -> Positioner {
     Positioner {
         width: 100,
