@@ -136,6 +136,7 @@ impl App {
                     "VNC Viewer".into()
                 }
             }
+            Tab::RemoteApp { title, .. } => crate::remote_apps_ui::tab_title(title),
             Tab::Browser { .. } | Tab::Player => "Terminator".into(),
         }
     }

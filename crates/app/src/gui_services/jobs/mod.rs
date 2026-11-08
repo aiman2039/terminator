@@ -18,6 +18,7 @@ pub(crate) use git::DiffContextInput;
 mod platform;
 pub(crate) use platform::TestExternalInput;
 mod remote;
+pub(crate) mod remote_apps;
 pub(crate) use remote::RemoteAddInput;
 pub(crate) use remote::RemoteAssetInput;
 pub(crate) use remote::RemoteTransferInput;

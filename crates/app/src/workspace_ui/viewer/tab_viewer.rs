@@ -141,6 +141,9 @@ impl TabViewer for Viewer<'_> {
                 );
             }
             Tab::Terminal(sid) => self.terminal_pane(ui, sid),
+            Tab::RemoteApp {
+                project, window, ..
+            } => self.app.remote_app_view(ui, project, *window),
         }
     }
 }

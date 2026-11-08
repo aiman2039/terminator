@@ -138,6 +138,57 @@ impl Workspace {
         self.normalize(previous);
     }
 
+    /// Removes every pane whose [`Tab::key`] is `key`, for example a remote
+    /// window that closed on its host.
+    pub(crate) fn remove_key(&mut self, key: &str) {
+        if !self
+            .tabs
+            .iter()
+            .any(|tab| tab.layout.find_tab_from(|pane| pane.key() == key).is_some())
+        {
+            return;
+        }
+        let previous = self.active_index();
+        for tab in &mut self.tabs {
+            while let Some(path) = tab.layout.find_tab_from(|pane| pane.key() == key) {
+                tab.layout.remove_tab(path);
+            }
+            if tab.primary.as_ref().is_some_and(|pane| pane.key() == key) {
+                tab.primary = tab
+                    .layout
+                    .iter_all_tabs()
+                    .next()
+                    .map(|(_, pane)| pane.clone());
+            }
+        }
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.normalize(previous);
+    }
+
+    /// Sets the saved title of the remote window tabs with `key`. Returns
+    /// whether one changed.
+    pub(crate) fn retitle_remote_app(&mut self, key: &str, title: &str) -> bool {
+        let mut changed = false;
+        for tab in &mut self.tabs {
+            let panes = tab
+                .layout
+                .iter_all_tabs_mut()
+                .map(|(_, pane)| pane)
+                .chain(tab.primary.as_mut());
+            for pane in panes {
+                if pane.key() == key
+                    && let Tab::RemoteApp { title: saved, .. } = pane
+                    && saved != title
+                {
+                    title.clone_into(saved);
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     pub(super) fn normalize(&mut self, previous: usize) {
         if self.tabs.is_empty() {
             // An emptied workspace is rebuilt from scratch. `Self::empty()` mints

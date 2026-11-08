@@ -109,6 +109,22 @@ impl Services {
             | Job::VncTransferPoll { .. }
             | Job::VncConnectTab { .. }
             | Job::VncFrame { .. }) => self.vnc_job(job, cancel, updates).await,
+            Job::RemoteApps {
+                project,
+                session,
+                since,
+            } => {
+                self.remote_apps(
+                    crate::gui_services::jobs::remote_apps::RemoteAppsInput {
+                        project,
+                        session,
+                        since,
+                        cancel,
+                    },
+                    updates,
+                )
+                .await
+            }
         }
     }
 }

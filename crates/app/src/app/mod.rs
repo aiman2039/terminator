@@ -54,5 +54,7 @@ mod updates;
 pub(crate) use updates::service_failure_update;
 pub(crate) use updates::{PostCreate, PostCreateQueue};
 #[cfg(test)]
+mod remote_apps_tests;
+#[cfg(test)]
 mod vnc_tests;
 pub(crate) mod window;

@@ -369,7 +369,8 @@ impl App {
             | Tab::FileHistory { .. }
             | Tab::Merge { .. }
             | Tab::ChangesDiff { .. }
-            | Tab::Vnc { .. } => true,
+            | Tab::Vnc { .. }
+            | Tab::RemoteApp { .. } => true,
         };
         let survives = old_group
             .as_ref()

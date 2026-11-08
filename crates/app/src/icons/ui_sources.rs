@@ -222,6 +222,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/monitor.svg"),
     ),
     (
+        "AppWindow",
+        egui::include_image!("../../assets/icons/app-window.svg"),
+    ),
+    (
         "Keyboard",
         egui::include_image!("../../assets/icons/keyboard.svg"),
     ),

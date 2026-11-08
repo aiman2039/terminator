@@ -52,6 +52,9 @@ fn remote(job: &Job) -> Option<Reply> {
         Job::VncFrame { session, .. } => {
             reply(session.clone(), |s, e| vec![Update::VncFrame(s, Err(e))])
         }
+        Job::RemoteApps { project, .. } => {
+            reply(project.clone(), |p, e| vec![Update::RemoteApps(p, Err(e))])
+        }
         _ => None,
     }
 }

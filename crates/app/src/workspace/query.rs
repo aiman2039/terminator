@@ -42,6 +42,7 @@ impl Workspace {
                         } if s == session && h == host && p == port
                     )
                 }
+                Tab::RemoteApp { .. } => existing.key() == pane.key(),
                 _ => existing == pane,
             })
         })
