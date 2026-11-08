@@ -114,6 +114,18 @@ host's packages (`xwayland`).
    never), the daemon stops the bridge; the apps stay in wprsd and the next
    connect shows them. **Phase 2 done.**
 3. GUI: tab per toplevel, popups as overlays, input, cursor, resize, HiDPI.
+   First pass done: `Tab::RemoteApp { project, window, title }` (layout
+   v12, key `remote-app:<project>:<window>`). SSH host menu → Show remote
+   apps / Disconnect remote apps; restored tabs reconnect at start. New
+   toplevels open tabs, titles follow, windows that close close their tabs
+   (not while reconnecting). Pixels 1:1 with physical pixels; the tab size
+   in physical pixels is the window size (200 ms debounce); popups draw over
+   their parent. Pointer, wheel (Wayland axis signs) and evdev keys by
+   physical position (Cmd acts as Ctrl). Closing a tab asks the app to close.
+   Live check: `dev/gui-e2e.sh` (xclock fills its tab). Not done yet: cursor
+   image, keeping global shortcuts away from a focused remote tab (like VNC
+   capture), clipboard, HiDPI scale > 1 sent to the app, input checked
+   against a real app beyond unit tests.
 4. Launch UX: `DISPLAY` and `WAYLAND_DISPLAY` in host terminals, shell hook.
 5. Clipboard, packaging of the Linux host binaries, `docs/VALIDATION.md`.
 
