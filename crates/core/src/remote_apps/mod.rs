@@ -15,6 +15,12 @@ pub const CAPABILITY: &str = "remote-apps-v1";
 /// Host command when the project sets none: a Terminator install on the
 /// host puts the bridge on `PATH`.
 pub const DEFAULT_COMMAND: &str = "terminator-remote-bridge --ensure";
+/// Shell code (POSIX `sh`, safe under `set -eu`) that new SSH terminals run
+/// first: when this user's bridge recorded a session (`session.json`, see
+/// the bridge's `--ensure`) and its X socket exists, it exports `DISPLAY`,
+/// `XAUTHORITY` and `WAYLAND_DISPLAY`, so apps started in the terminal open
+/// as Terminator tabs. A dead session prints one line and exports nothing.
+pub const SHELL_ENV: &str = r#"for __t in "${XDG_RUNTIME_DIR:-/nonexistent}/terminator-remote" "/tmp/terminator-remote-$(id -u)"; do if [ -f "$__t/session.json" ]; then __d=$(sed -n 's/.*"display": *"\(:[0-9]*\)".*/\1/p' "$__t/session.json"); if [ -n "$__d" ] && [ -S "/tmp/.X11-unix/X${__d#:}" ]; then export DISPLAY="$__d" XAUTHORITY="$__t/Xauthority" WAYLAND_DISPLAY="$__t/wprs-0"; else echo "terminator: remote apps are not running on this host (use Show remote apps)" >&2; fi; break; fi; done; unset __t __d; "#;
 /// Most input messages in one request.
 pub const MAX_INPUT: usize = 64;
 /// Longest a state request waits for a newer revision.
@@ -128,4 +134,77 @@ pub fn retry_delay_seconds(attempt: u32) -> u64 {
         .checked_shl(attempt.saturating_sub(1).min(6))
         .unwrap_or(60)
         .min(60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SHELL_ENV;
+    use std::os::unix::net::UnixListener;
+    use std::process::Command;
+
+    /// Runs the snippet like a remote terminal does; returns stdout, stderr.
+    fn run(runtime: &std::path::Path) -> (String, String) {
+        let script = format!(
+            "set -eu; {SHELL_ENV} echo \"D=${{DISPLAY:-none}} X=${{XAUTHORITY:-none}} W=${{WAYLAND_DISPLAY:-none}}\""
+        );
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .env("XDG_RUNTIME_DIR", runtime)
+            .env_remove("DISPLAY")
+            .env_remove("XAUTHORITY")
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        (
+            String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+            String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        )
+    }
+
+    #[test]
+    fn no_session_exports_nothing_and_says_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (out, err) = run(dir.path());
+        assert_eq!(out, "D=none X=none W=none");
+        assert!(err.is_empty() || err.contains("remote apps"), "{err}");
+    }
+
+    #[test]
+    fn dead_session_says_so_and_exports_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("terminator-remote");
+        std::fs::create_dir(&session).unwrap();
+        std::fs::write(session.join("session.json"), r#"{"display": ":4999"}"#).unwrap();
+        let (out, err) = run(dir.path());
+        assert_eq!(out, "D=none X=none W=none");
+        assert!(err.contains("remote apps are not running"), "{err}");
+    }
+
+    #[test]
+    fn live_session_exports_display_cookie_and_wayland_socket() {
+        // Needs a writable /tmp/.X11-unix, as on the hosts this runs on.
+        let x11 = std::path::Path::new("/tmp/.X11-unix");
+        if std::fs::create_dir_all(x11).is_err() {
+            return;
+        }
+        let number = 4000 + std::process::id() % 900;
+        let socket = x11.join(format!("X{number}"));
+        let Ok(_listener) = UnixListener::bind(&socket) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("terminator-remote");
+        std::fs::create_dir(&session).unwrap();
+        std::fs::write(
+            session.join("session.json"),
+            format!("{{\n  \"display\": \":{number}\",\n  \"pid\": 1\n}}"),
+        )
+        .unwrap();
+        let (out, _) = run(dir.path());
+        let _ = std::fs::remove_file(&socket);
+        let t = session.display();
+        assert_eq!(out, format!("D=:{number} X={t}/Xauthority W={t}/wprs-0"));
+    }
 }

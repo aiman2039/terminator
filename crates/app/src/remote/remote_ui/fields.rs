@@ -202,6 +202,29 @@ pub(super) fn command_fields(ui: &mut egui::Ui, draft: &mut RemoteProject, enabl
     .on_disabled_hover_text("Requires an updated session service.");
 }
 
+/// The host command that starts the remote-apps bridge. `enabled` only when
+/// the daemon runs remote apps (`remote-apps-v1`).
+pub(super) fn apps_command_field(ui: &mut egui::Ui, draft: &mut RemoteProject, enabled: bool) {
+    ui.add_enabled_ui(enabled, |ui| {
+        command_field(
+            ui,
+            "Remote apps command",
+            &mut draft.apps_command,
+            (
+                terminator_core::remote_apps::DEFAULT_COMMAND,
+                "Default (terminator-remote-bridge --ensure)",
+            ),
+        );
+        form::hint(
+            ui,
+            "Starts the remote-apps bridge on the host; it must end with `--ensure`. Runs with plain `sh -c` (no login profile), so use full paths, for example `~/bin/nix-portable nix shell nixpkgs#wprs nixpkgs#xwayland -c ~/bin/terminator-remote-bridge --ensure`.",
+            "",
+        );
+    })
+    .response
+    .on_disabled_hover_text("Requires an updated session service.");
+}
+
 /// An editable host command; blank shows `placeholder`, and the full
 /// default is on hover. Blank or the default saves nothing, so a later
 /// default still applies.
