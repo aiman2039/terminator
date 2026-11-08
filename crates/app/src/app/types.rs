@@ -88,6 +88,15 @@ pub(crate) enum Tab {
         #[serde(default)]
         label: String,
     },
+    /// One window of a remote app on an SSH project's host (layout v12,
+    /// `remote-apps-v1`). `window` is the host's stable window ID; `title`
+    /// is the last title seen, shown until the session reconnects.
+    RemoteApp {
+        project: String,
+        window: u64,
+        #[serde(default)]
+        title: String,
+    },
 }
 
 /// Exact source of a view action. File paths identify buffers, not editor views.
@@ -104,6 +113,13 @@ impl Tab {
         {
             return id.clone();
         }
+        // The title changes; the window stays the same tab.
+        if let Self::RemoteApp {
+            project, window, ..
+        } = self
+        {
+            return format!("remote-app:{project}:{window}");
+        }
         serde_json::to_string(self).unwrap_or_default()
     }
 
@@ -116,6 +132,7 @@ impl Tab {
 
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
+            Self::RemoteApp { .. } => 12,
             Self::ChangesDiff { .. } => 11,
             Self::Merge { .. } => 10,
             Self::RevisionDiff { .. } | Self::FileHistory { .. } => 9,
@@ -296,6 +313,13 @@ pub(crate) enum Job {
         /// Shared-memory long poll; `None` for daemons without `vnc-shm-v1`.
         shm: Option<terminator_core::vnc::VncShmRequest>,
     },
+    /// Connect a project's remote apps (`session: None`), or long-poll the
+    /// session's windows and read changed pixels off the GUI thread.
+    RemoteApps {
+        project: String,
+        session: Option<String>,
+        since: u64,
+    },
     /// Load a commit-log or blame tab off the GUI thread.
     GitView(Tab),
     GitLog(Tab, git_log::LogQuery),
@@ -389,6 +413,11 @@ pub(crate) enum Update {
     VncFrame(
         String,
         Result<Option<crate::vnc_ui::VncDecodedFrame>, String>,
+    ),
+    /// A project's remote-apps state; `Ok(None)` is unchanged.
+    RemoteApps(
+        String,
+        Result<Option<Box<crate::remote_apps_ui::RemoteAppsFrame>>, String>,
     ),
     FocusViewport(egui::ViewportId),
     RevealFileSession(String, String),

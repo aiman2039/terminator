@@ -37,6 +37,7 @@ impl App {
         // View state and remote sessions both follow the tabs now that the
         // dock is checked back in and every copy has had its say.
         self.prune_vnc_views();
+        self.remote_apps_tick(ctx);
         self.markdown.end_frame(ctx);
         self.prune_hidden_backends();
     }

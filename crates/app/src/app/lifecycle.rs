@@ -159,6 +159,7 @@ impl App {
             remote_ui: crate::remote_ui::RemoteUi::default(),
             vnc_fullscreen: None,
             vnc_views: HashMap::new(),
+            remote_apps: crate::remote_apps_ui::RemoteAppsGui::default(),
             vnc_sidebar: crate::vnc_ui::VncSidebarState::default(),
             visible_vnc: HashSet::new(),
             player: player::Controller::new(services),

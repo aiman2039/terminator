@@ -52,6 +52,7 @@ cc = "1"
 
 [dev-dependencies]
 alacritty_terminal = "0.26"
+zstd = "0.13.3"
 
 [lints]
 workspace = true

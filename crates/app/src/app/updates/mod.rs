@@ -139,6 +139,7 @@ impl App {
                 self.handle_vnc_tab_connected(ctx, tab_id, result);
             }
             Update::VncFrame(session, result) => self.handle_vnc_frame(ctx, &session, result),
+            Update::RemoteApps(project, result) => self.handle_remote_apps(ctx, &project, result),
             Update::Image(path, generation, result) => self.handle_image(
                 ctx,
                 ImageInput {

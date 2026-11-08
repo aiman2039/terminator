@@ -216,7 +216,7 @@ impl App {
                 Tab::Browser { target, .. } => {
                     target.file().and_then(Path::parent).map(PathBuf::from)
                 }
-                Tab::Player | Tab::Vnc { .. } => None,
+                Tab::Player | Tab::Vnc { .. } | Tab::RemoteApp { .. } => None,
                 Tab::CommitLog { cwd }
                 | Tab::Blame { cwd, .. }
                 | Tab::RevisionDiff { cwd, .. }

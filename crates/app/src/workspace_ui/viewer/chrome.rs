@@ -112,6 +112,7 @@ impl Viewer<'_> {
                 "VNC Viewer".into()
             }
             .into(),
+            Tab::RemoteApp { title, .. } => crate::remote_apps_ui::tab_title(title).into(),
         }
     }
 
@@ -183,6 +184,17 @@ impl Viewer<'_> {
     ) -> OnCloseResponse {
         if matches!(tab, Tab::Diff { .. } | Tab::Merge { .. })
             && self.app.block_unsaved_diff(Some(&tab.key()))
+        {
+            return OnCloseResponse::Ignore;
+        }
+        // Closing a remote window's tab asks the app to close it, like its
+        // close button. The tab goes when the window does, so an app that
+        // asks "save changes?" keeps its tab. Without a live session the
+        // tab just closes.
+        if let Tab::RemoteApp {
+            project, window, ..
+        } = tab
+            && self.app.remote_app_close_requested(project, *window)
         {
             return OnCloseResponse::Ignore;
         }

@@ -130,6 +130,9 @@ pub struct App {
     pub(crate) vnc_views: HashMap<String, crate::vnc_ui::VncViewState>,
     pub(crate) vnc_sidebar: crate::vnc_ui::VncSidebarState,
     pub(crate) visible_vnc: HashSet<String>,
+    /// Remote app windows (`remote-apps-v1`): sessions by project and
+    /// textures by window.
+    pub(crate) remote_apps: crate::remote_apps_ui::RemoteAppsGui,
     pub(crate) player: player::Controller,
     pub(crate) markdown: markdown::Previews,
     pub(crate) visible_images: HashSet<PathBuf>,

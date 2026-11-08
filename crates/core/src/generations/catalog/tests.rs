@@ -31,6 +31,7 @@ fn an_older_workspace_writer_does_not_erase_remote_projects() {
         mosh: false,
         shell_command: None,
         mosh_command: None,
+        apps_command: None,
     };
     let state = State {
         generation: "fixture".into(),

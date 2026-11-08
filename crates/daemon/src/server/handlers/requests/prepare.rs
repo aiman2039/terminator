@@ -44,7 +44,10 @@ impl RequestClass {
         let admission = shared_write
             || matches!(
                 request,
-                Request::Create { .. } | Request::CreateReview { .. } | Request::VncConnect { .. }
+                Request::Create { .. }
+                    | Request::CreateReview { .. }
+                    | Request::VncConnect { .. }
+                    | Request::RemoteAppsConnect { .. }
             );
         let coordinated = admission
             || matches!(

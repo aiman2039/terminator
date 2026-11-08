@@ -1,0 +1,42 @@
+[package]
+name = "terminator-remote-apps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Seamless remote app windows: the Terminator display protocol and the host bridge to wprsd."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Frame payloads (both sides).
+zstd = "0.13.3"
+
+[features]
+# The host bridge links wprs. wprs (through smithay) needs libxkbcommon and
+# libwayland, so only the Linux host build turns this on; the daemon and GUI
+# use the protocol and compose modules only.
+bridge = ["dep:wprs", "dep:rkyv", "dep:nix"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wprs = { path = "../../vendor/wprs", optional = true }
+# Same versions as wprs, so one copy is built.
+rkyv = { version = "0.8.14", optional = true }
+nix = { version = "0.30.1", features = ["fs", "hostname", "socket", "user"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+anyhow.workspace = true
+fallible-iterator = "0.3.0"
+
+[[bin]]
+name = "terminator-remote-bridge"
+path = "src/main.rs"
+required-features = ["bridge"]
+
+[[example]]
+name = "bridge_probe"
+required-features = ["bridge"]
+
+[lints]
+workspace = true

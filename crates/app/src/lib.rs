@@ -61,6 +61,7 @@ mod settings_ui;
 use settings_ui::{BrowseTarget, SettingsSection};
 mod palette;
 use shortcuts::Action;
+mod remote_apps_ui;
 mod vnc_ui;
 use file_actions::FileAction;
 mod preferences;

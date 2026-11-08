@@ -252,6 +252,11 @@ impl JobRouting {
             Job::VncFrame { session, .. } => {
                 ("vnc", format!("frame:{session}"), Policy::ReplaceableRead)
             }
+            Job::RemoteApps { project, .. } => (
+                "remote-apps",
+                format!("apps:{project}"),
+                Policy::ReplaceableRead,
+            ),
             Job::VncConnectTab { tab_id, .. } => (
                 "daemon",
                 format!("vnc-connect:{tab_id}"),
@@ -302,6 +307,7 @@ impl JobRouting {
                 | Job::Forwards(_)
                 | Job::RemoteAsset { .. }
                 | Job::VncFrame { .. }
+                | Job::RemoteApps { .. }
         ) || matches!(
             job,
             Job::Diff(Tab::Diff {

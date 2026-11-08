@@ -21,6 +21,7 @@ enum Launch {
     Review { staged: bool },
 }
 mod remote;
+mod remote_apps;
 mod shell;
 mod shell_integration;
 mod storage;

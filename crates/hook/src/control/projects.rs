@@ -68,6 +68,7 @@ impl Ctl {
             mosh: false,
             shell_command: None,
             mosh_command: None,
+            apps_command: None,
         };
         project.validate()?;
         rpc(

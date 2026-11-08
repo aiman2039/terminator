@@ -112,6 +112,33 @@ impl Shared {
                 regions,
                 shm,
             }),
+            Request::RemoteAppsConnect { project } => Ok(Outcome::Reply(Response::RemoteApps(
+                Box::new(self.remote_apps_connect(&project)?),
+            ))),
+            Request::RemoteAppsDisconnect { session } => {
+                self.remote_apps_disconnect(&session)?;
+                Ok(Outcome::Reply(Response::Ok))
+            }
+            Request::RemoteAppsInput { session, messages } => {
+                self.remote_apps_input(&session, messages)?;
+                Ok(Outcome::Reply(Response::Ok))
+            }
+            Request::RemoteAppsClipboard {
+                session,
+                text,
+                then,
+            } => {
+                self.remote_apps_clipboard(&session, text, then)?;
+                Ok(Outcome::Reply(Response::Ok))
+            }
+            Request::RemoteAppsState {
+                session,
+                since,
+                wait_ms,
+            } => Ok(Outcome::Reply(
+                self.remote_apps_state(&session, since, wait_ms)?
+                    .map_or(Response::Unchanged, |s| Response::RemoteApps(Box::new(s))),
+            )),
             Request::PruneHistory { budget } => self.on_prune_history(budget),
             Request::Archived {
                 generation,

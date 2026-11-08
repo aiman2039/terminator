@@ -108,6 +108,22 @@ impl App {
         if appearance::menu_action(ui, true, "Open terminal", "Terminal").clicked() {
             self.open_host_terminal(project.id.clone());
         }
+        if self.remote_apps_supported() {
+            if appearance::menu_action(ui, true, "Show remote apps", "AppWindow")
+                .on_hover_text("Open this host's app windows as tabs")
+                .clicked()
+            {
+                self.select_project(project.id.clone());
+                self.connect_remote_apps(&project.id);
+            }
+            if self.remote_apps_connected(&project.id)
+                && appearance::menu_action(ui, true, "Disconnect remote apps", "CircleStop")
+                    .on_hover_text("The apps keep running on the host")
+                    .clicked()
+            {
+                self.disconnect_remote_apps(&project.id);
+            }
+        }
         ui.separator();
         let editable = self.edit_supported();
         if appearance::menu_action(ui, editable, "Properties…", "Settings2")

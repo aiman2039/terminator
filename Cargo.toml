@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100", "vendor/egui_commonmark", "vendor/vnc-rs"]
+exclude = ["vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100", "vendor/egui_commonmark", "vendor/vnc-rs", "vendor/wprs"]
 resolver = "2"
 [workspace.package]
 version = "0.163.0"
@@ -11,6 +11,7 @@ rust-version = "1.97.1"
 terminator-core = { path = "crates/core" }
 terminator-git = { path = "crates/git" }
 terminator-integrations = { path = "crates/integrations" }
+terminator-remote-apps = { path = "crates/remote-apps" }
 terminator-sys = { path = "crates/sys" }
 terminator-updater = { path = "crates/updater" }
 anyhow = "1"

@@ -152,7 +152,12 @@ fn inline_envelope(envelope: &Envelope) -> bool {
             | Request::Screen { session }
             | Request::History { session }
             | Request::VncFrame { session, .. }
-            | Request::VncDisconnect { session } => session.len() <= 128,
+            | Request::VncDisconnect { session }
+            | Request::RemoteAppsState { session, .. }
+            | Request::RemoteAppsDisconnect { session } => session.len() <= 128,
+            Request::RemoteAppsInput { session, messages } => {
+                session.len() <= 128 && messages.len() <= crate::remote_apps::MAX_INPUT
+            }
             Request::VncInput { session, events } => session.len() <= 128 && events.len() <= 32,
             _ => false,
         }

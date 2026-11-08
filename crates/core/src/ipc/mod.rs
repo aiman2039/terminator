@@ -6,7 +6,7 @@ use std::{
 };
 
 use super::{HookEvent, MAX_FRAME, PROTOCOL_VERSION, Paths, Session, Settings, State};
-use crate::{generations, idle_close, snapshot, transport, vnc, worktrees};
+use crate::{generations, idle_close, remote_apps, snapshot, transport, vnc, worktrees};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -66,6 +66,37 @@ pub enum Request {
         /// advertise `vnc-shm-v1`. Older daemons ignore it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shm: Option<vnc::VncShmRequest>,
+    },
+    /// Start (or reuse) the remote-apps session of a remote project
+    /// (`remote-apps-v1`). Answers [`Response::RemoteApps`].
+    RemoteAppsConnect {
+        project: String,
+    },
+    RemoteAppsDisconnect {
+        session: String,
+    },
+    /// At most [`remote_apps::MAX_INPUT`] messages.
+    RemoteAppsInput {
+        session: String,
+        messages: Vec<remote_apps::ClientMessage>,
+    },
+    /// Offers `text` (at most [`remote_apps::MAX_CLIPBOARD`] bytes) to the
+    /// remote apps as their clipboard, then sends `then` (the paste key),
+    /// in that order.
+    RemoteAppsClipboard {
+        session: String,
+        text: String,
+        #[serde(default)]
+        then: Vec<remote_apps::ClientMessage>,
+    },
+    /// The session's windows; waits up to `wait_ms` (capped at
+    /// [`remote_apps::MAX_WAIT_MS`]) for a revision newer than `since`
+    /// before answering [`Response::Unchanged`].
+    RemoteAppsState {
+        session: String,
+        since: u64,
+        #[serde(default)]
+        wait_ms: u32,
     },
     PruneHistory {
         budget: u64,
@@ -315,6 +346,8 @@ impl Request {
             | Self::ForwardStatus
             | Self::WorktreeAdd { .. }
             | Self::WorktreeRemove { .. } => 40,
+            // Connect runs the host's first SSH sign-in.
+            Self::RemoteAppsConnect { .. } => 40,
             Self::VncFrame { .. }
             | Self::CloseIdleSessions { .. }
             | Self::LocalHistoryRevert { .. } => 30,
@@ -337,6 +370,11 @@ impl Request {
             Self::VncDisconnect { .. } => "VncDisconnect",
             Self::VncInput { .. } => "VncInput",
             Self::VncFrame { .. } => "VncFrame",
+            Self::RemoteAppsConnect { .. } => "RemoteAppsConnect",
+            Self::RemoteAppsDisconnect { .. } => "RemoteAppsDisconnect",
+            Self::RemoteAppsInput { .. } => "RemoteAppsInput",
+            Self::RemoteAppsClipboard { .. } => "RemoteAppsClipboard",
+            Self::RemoteAppsState { .. } => "RemoteAppsState",
             Self::PruneHistory { .. } => "PruneHistory",
             Self::Archived { request, .. } => request.name(),
             Self::CloseIdleSessions { .. } => "CloseIdleSessions",
@@ -426,6 +464,7 @@ pub enum Response {
     VncCreated(vnc::VncSession),
     VncTransferStatus(vnc::VncTransferStatus),
     VncFrame(Box<vnc::VncFrame>),
+    RemoteApps(Box<remote_apps::RemoteAppsState>),
     Unchanged,
     Ok,
     State(Box<State>),

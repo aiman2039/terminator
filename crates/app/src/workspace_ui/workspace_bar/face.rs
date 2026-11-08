@@ -99,6 +99,9 @@ impl App {
                 status: self.vnc_tab_status(session),
                 hint: None,
             },
+            Some(Tab::RemoteApp { title, .. }) => {
+                TabFace::plain(crate::remote_apps_ui::tab_title(title), "AppWindow")
+            }
             None => TabFace::plain("Workspace".into(), "Terminal"),
         }
     }

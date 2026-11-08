@@ -321,13 +321,34 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(12);
+        saved["version"] = serde_json::json!(13);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()
                 .to_string()
                 .contains("Unsupported")
         );
+    }
+
+    #[test]
+    fn remote_app_layout_v12_round_trips_and_keys_ignore_the_title() {
+        let tab = Tab::RemoteApp {
+            project: "p1".into(),
+            window: 42,
+            title: "xclock".into(),
+        };
+        let mut workspace = Workspace::empty();
+        workspace.add("app".into(), tab.clone());
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert_eq!(restored.version, 12);
+        let renamed = Tab::RemoteApp {
+            project: "p1".into(),
+            window: 42,
+            title: "other".into(),
+        };
+        assert!(restored.contains(&renamed));
+        assert_eq!(tab.key(), renamed.key());
     }
 
     #[test]

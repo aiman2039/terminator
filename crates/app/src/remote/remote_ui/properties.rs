@@ -2,7 +2,8 @@
 //! project. Same look as VNC Properties: a titled card, section captions,
 //! labels above fields, and one accent button.
 use super::fields::{
-    command_fields, connection_fields, group_field, mosh_field, sign_in_fields, timeout_field,
+    apps_command_field, command_fields, connection_fields, group_field, mosh_field, sign_in_fields,
+    timeout_field,
 };
 use super::*;
 use crate::vnc_ui::form;
@@ -162,6 +163,7 @@ impl App {
         );
         mosh_field(ui, &mut draft.mosh, mosh);
         command_fields(ui, draft, has(terminator_core::remote::COMMANDS_CAPABILITY));
+        apps_command_field(ui, draft, has(terminator_core::remote_apps::CAPABILITY));
         let config = hosts.and_then(|h| h.iter().find(|h| h.alias == draft.ssh.host));
         if let Some(found) = remote.probe.poll(&draft.ssh.host) {
             remote.resolved = Some(found);

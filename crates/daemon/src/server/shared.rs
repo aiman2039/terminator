@@ -69,6 +69,8 @@ pub(crate) struct Shared {
     pub(crate) store: Mutex<storage::Store>,
     pub(crate) sessions: Mutex<HashMap<String, Arc<Mutex<Runtime>>>>,
     pub(crate) vnc_sessions: Mutex<HashMap<String, Arc<Mutex<vnc_session::VncRuntime>>>>,
+    /// Remote-apps sessions by ID; lock this before any session's runtime.
+    pub(crate) remote_apps: Mutex<HashMap<String, Arc<crate::remote_apps::Handle>>>,
     pub(crate) paths: Paths,
     pub(crate) auth: String,
     pub(crate) focused: Mutex<(bool, Instant)>,

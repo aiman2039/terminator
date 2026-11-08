@@ -118,7 +118,11 @@ impl App {
                         && !session.review
                 })
                 .and_then(|session| session.file.clone()),
-            Tab::CommitLog { .. } | Tab::ChangesDiff { .. } | Tab::Player | Tab::Vnc { .. } => None,
+            Tab::CommitLog { .. }
+            | Tab::ChangesDiff { .. }
+            | Tab::Player
+            | Tab::Vnc { .. }
+            | Tab::RemoteApp { .. } => None,
         }
     }
 

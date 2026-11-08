@@ -9,36 +9,32 @@ impl Workspace {
     }
 
     pub(crate) fn remove_terminal_ids(&mut self, ids: &HashSet<String>) {
-        if ids.is_empty() {
-            return;
+        if !ids.is_empty() {
+            self.remove_where(|pane| matches!(pane, Tab::Terminal(sid) if ids.contains(sid)));
         }
+    }
+
+    /// Removes every pane that `doomed` matches, re-picks each top-level
+    /// tab's primary pane, and drops tabs left empty.
+    fn remove_where(&mut self, doomed: impl Fn(&Tab) -> bool) {
         let hit = self.tabs.iter().any(|tab| {
-            tab.layout
-                .iter_all_tabs()
-                .any(|(_, pane)| matches!(pane, Tab::Terminal(sid) if ids.contains(sid)))
+            tab.primary.as_ref().is_some_and(&doomed)
+                || tab.layout.iter_all_tabs().any(|(_, pane)| doomed(pane))
         });
         if !hit {
             return;
         }
         let previous = self.active_index();
         for tab in &mut self.tabs {
-            let panes: Vec<Tab> = tab
-                .layout
-                .iter_all_tabs()
-                .filter(|(_, pane)| matches!(pane, Tab::Terminal(sid) if ids.contains(sid)))
-                .map(|(_, pane)| pane.clone())
-                .collect();
-            for pane in panes {
-                while let Some(path) = tab.layout.find_tab(&pane) {
-                    tab.layout.remove_tab(path);
-                }
-                if tab.primary.as_ref() == Some(&pane) {
-                    tab.primary = tab
-                        .layout
-                        .iter_all_tabs()
-                        .next()
-                        .map(|(_, pane)| pane.clone());
-                }
+            while let Some(path) = tab.layout.find_tab_from(&doomed) {
+                tab.layout.remove_tab(path);
+            }
+            if tab.primary.as_ref().is_some_and(&doomed) {
+                tab.primary = tab
+                    .layout
+                    .iter_all_tabs()
+                    .next()
+                    .map(|(_, pane)| pane.clone());
             }
         }
         self.tabs
@@ -88,27 +84,7 @@ impl Workspace {
     }
 
     pub fn strip_player(&mut self) {
-        if !self.tabs.iter().any(|tab| {
-            tab.primary == Some(Tab::Player) || tab.layout.find_tab(&Tab::Player).is_some()
-        }) {
-            return;
-        }
-        let previous = self.active_index();
-        for tab in &mut self.tabs {
-            while let Some(path) = tab.layout.find_tab(&Tab::Player) {
-                tab.layout.remove_tab(path);
-            }
-            if tab.primary == Some(Tab::Player) {
-                tab.primary = tab
-                    .layout
-                    .iter_all_tabs()
-                    .next()
-                    .map(|(_, pane)| pane.clone());
-            }
-        }
-        self.tabs
-            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
-        self.normalize(previous);
+        self.remove_where(|pane| *pane == Tab::Player);
     }
 
     pub fn remove_session(&mut self, sid: &str) {
@@ -136,6 +112,35 @@ impl Workspace {
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
         self.normalize(previous);
+    }
+
+    /// Removes every pane whose [`Tab::key`] is `key`, for example a remote
+    /// window that closed on its host.
+    pub(crate) fn remove_key(&mut self, key: &str) {
+        self.remove_where(|pane| pane.key() == key);
+    }
+
+    /// Sets the saved title of the remote window tabs with `key`. Returns
+    /// whether one changed.
+    pub(crate) fn retitle_remote_app(&mut self, key: &str, title: &str) -> bool {
+        let mut changed = false;
+        for tab in &mut self.tabs {
+            let panes = tab
+                .layout
+                .iter_all_tabs_mut()
+                .map(|(_, pane)| pane)
+                .chain(tab.primary.as_mut());
+            for pane in panes {
+                if pane.key() == key
+                    && let Tab::RemoteApp { title: saved, .. } = pane
+                    && saved != title
+                {
+                    title.clone_into(saved);
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     pub(super) fn normalize(&mut self, previous: usize) {

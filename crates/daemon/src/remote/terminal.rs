@@ -56,6 +56,8 @@ fn remote_script(
         "set -eu; cd -- {}; export COLORTERM=truecolor; ",
         terminator_core::quote(cwd)
     );
+    // Apps started here open as Terminator tabs (`remote-apps-v1`).
+    script.push_str(terminator_core::remote_apps::SHELL_ENV);
     if let Some((file, socket)) = editor {
         script.push_str("umask 077; d=\"$HOME/.cache/terminator/e\"; test ! -L \"$HOME/.cache/terminator\"; test ! -L \"$d\"; mkdir -p \"$d\"; chmod 700 \"$HOME/.cache/terminator\" \"$d\"; exec nvim --listen \"$HOME/");
         script.push_str(socket);
@@ -204,6 +206,7 @@ mod tests {
             mosh,
             shell_command: None,
             mosh_command: None,
+            apps_command: None,
         }
     }
 
