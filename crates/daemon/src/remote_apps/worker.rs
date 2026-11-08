@@ -2,78 +2,148 @@
 //! between it and the session's [`Runtime`].
 
 use std::io::{BufReader, BufWriter, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use terminator_core::remote::RemoteProject;
 use terminator_core::remote_apps::{
-    ClientMessage, DEFAULT_COMMAND, ErrorKind, HostMessage, RemoteAppsStatus, protocol,
+    ClientMessage, DEFAULT_COMMAND, ErrorKind, HostMessage, RemoteAppsStatus, permanent, protocol,
+    retry_delay_seconds,
 };
 
 use super::Handle;
 
 /// Most stderr kept for error messages.
 const STDERR_LIMIT: usize = 16 * 1024;
+/// How often the detach timeout is checked.
+const DETACH_CHECK: Duration = Duration::from_secs(10);
 
-/// Starts the bridge and the threads that serve it. Errors end the session
-/// at once with a message the GUI shows.
-pub(super) fn start(handle: &Arc<Handle>, project: &RemoteProject, control: Option<PathBuf>) {
-    let (tx, rx) = mpsc::channel();
-    let child = spawn_bridge(project, control);
-    let mut child = match child {
-        Ok(child) => child,
-        Err(error) => {
-            handle.update(|r| {
-                r.end(
-                    RemoteAppsStatus::Failed,
-                    Some((ErrorKind::Other, format!("Cannot run ssh: {error:#}"))),
-                );
-            });
+/// The detach timeout now; `None` is never. Read on every check so a
+/// Settings change applies to live sessions.
+pub(super) type DetachLimit = Box<dyn Fn() -> Option<Duration> + Send>;
+
+/// How one bridge run ended.
+enum RunEnd {
+    /// ssh could not start: retrying will not help.
+    NoSsh(String),
+    Exited {
+        code: Option<i32>,
+        stderr: Vec<u8>,
+    },
+}
+
+/// Runs the bridge until the user disconnects, the detach timeout passes,
+/// or a failure that a retry cannot fix. Temporary failures (network, SSH,
+/// wprsd stopped) retry with backoff; windows come back with the same IDs.
+pub(super) fn start(
+    handle: Arc<Handle>,
+    project: RemoteProject,
+    control: Option<PathBuf>,
+    detach_limit: DetachLimit,
+) {
+    let watcher = Arc::clone(&handle);
+    thread::spawn(move || watch_detach(&watcher, &detach_limit, DETACH_CHECK));
+    thread::spawn(move || {
+        let mut attempt = 0_u32;
+        loop {
+            let end = run_once(&handle, &project, control.as_deref());
+            let (stop, bridge_error, reached_wprsd) =
+                handle.read(|r| (r.stop_requested, r.bridge_error(), r.hello_seen));
+            if stop {
+                handle.update(|r| r.end(RemoteAppsStatus::Disconnected, None));
+                return;
+            }
+            let failure = match (bridge_error, end) {
+                (Some(error), _) => error,
+                (None, RunEnd::NoSsh(message)) => {
+                    handle.update(|r| {
+                        r.end(RemoteAppsStatus::Failed, Some((ErrorKind::Other, message)));
+                    });
+                    return;
+                }
+                (None, RunEnd::Exited { code, stderr }) => classify(code, &stderr),
+            };
+            if permanent(failure.0) {
+                handle.update(|r| r.end(RemoteAppsStatus::Failed, Some(failure)));
+                return;
+            }
+            attempt = if reached_wprsd {
+                1
+            } else {
+                attempt.saturating_add(1)
+            };
+            let delay = retry_delay_seconds(attempt);
+            handle.update(|r| r.retrying(failure, attempt, delay));
+            if handle.wait_stop(Duration::from_secs(delay)) {
+                handle.update(|r| r.end(RemoteAppsStatus::Disconnected, None));
+                return;
+            }
+            handle.update(super::Runtime::retry_started);
+        }
+    });
+}
+
+/// Stops the session when no viewer asked for its state within the limit.
+/// The apps keep running in the host's wprsd; connecting again shows them.
+pub(super) fn watch_detach(handle: &Handle, limit: &DetachLimit, every: Duration) {
+    loop {
+        if handle.wait_stop(every) || handle.read(|r| !r.status.live()) {
             return;
         }
+        let idle = handle.read(|r| r.last_viewed.elapsed());
+        if limit().is_some_and(|limit| idle > limit) {
+            handle.request_stop();
+            return;
+        }
+    }
+}
+
+/// One bridge process: starts it, serves it, and waits for it to exit.
+fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) -> RunEnd {
+    let mut child = match spawn_bridge(project, control) {
+        Ok(child) => child,
+        Err(error) => return RunEnd::NoSsh(format!("Cannot run ssh: {error:#}")),
     };
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
         let _ = child.kill();
-        handle.update(|r| {
-            r.end(
-                RemoteAppsStatus::Failed,
-                Some((ErrorKind::Other, "ssh has no pipes".into())),
-            );
-        });
-        return;
+        let _ = child.wait();
+        return RunEnd::NoSsh("ssh has no pipes".into());
     };
-    handle.update(|r| r.input = Some(tx));
-    thread::spawn(move || write_input(stdin, &rx));
-    let stderr = thread::spawn(move || read_stderr(stderr));
-    let handle = Arc::clone(handle);
-    thread::spawn(move || {
-        let mut input = BufReader::new(stdout);
-        while let Ok(framed) = protocol::read_frame::<HostMessage>(&mut input) {
-            handle.update(|r| {
-                r.apply(framed);
-            });
+    let (tx, rx) = mpsc::channel();
+    let stopped = handle.update_with(|r| {
+        if !r.stop_requested {
+            r.input = Some(tx);
         }
-        let status = child.wait();
-        let stderr = stderr.join().unwrap_or_default();
-        handle.update(|r| {
-            if r.input.is_none() && r.status != RemoteAppsStatus::Failed {
-                // The user disconnected.
-                r.end(RemoteAppsStatus::Disconnected, None);
-            } else {
-                let failure = classify(status.ok().and_then(|s| s.code()), &stderr);
-                r.end(RemoteAppsStatus::Failed, Some(failure));
-            }
-        });
+        r.stop_requested
     });
+    if stopped {
+        // Disconnect came while ssh started: close stdin at once.
+        drop(stdin);
+    } else {
+        thread::spawn(move || write_input(stdin, &rx));
+    }
+    let stderr = thread::spawn(move || read_stderr(stderr));
+    let mut input = BufReader::new(stdout);
+    while let Ok(framed) = protocol::read_frame::<HostMessage>(&mut input) {
+        handle.update(|r| {
+            r.apply(framed);
+        });
+    }
+    let code = child.wait().ok().and_then(|status| status.code());
+    RunEnd::Exited {
+        code,
+        stderr: stderr.join().unwrap_or_default(),
+    }
 }
 
-fn spawn_bridge(project: &RemoteProject, control: Option<PathBuf>) -> anyhow::Result<Child> {
+fn spawn_bridge(project: &RemoteProject, control: Option<&Path>) -> anyhow::Result<Child> {
     project.validate()?;
-    let mut command = crate::remote::command(&project.ssh, control.as_deref())?;
+    let mut command = crate::remote::command(&project.ssh, control)?;
     let host_command = project.apps_command.as_deref().unwrap_or(DEFAULT_COMMAND);
     // No login shell: profile output on stdout would corrupt the stream.
     command.arg(format!(

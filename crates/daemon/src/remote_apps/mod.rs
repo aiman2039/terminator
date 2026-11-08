@@ -34,8 +34,46 @@ impl Handle {
 
     /// Runs `change` and wakes waiting polls.
     pub(crate) fn update(&self, change: impl FnOnce(&mut Runtime)) {
-        change(&mut relock(&self.runtime));
+        self.update_with(change);
+    }
+
+    /// [`Handle::update`] that returns what `change` returns.
+    pub(crate) fn update_with<T>(&self, change: impl FnOnce(&mut Runtime) -> T) -> T {
+        let value = change(&mut relock(&self.runtime));
         self.changed.notify_all();
+        value
+    }
+
+    pub(crate) fn read<T>(&self, view: impl FnOnce(&Runtime) -> T) -> T {
+        view(&relock(&self.runtime))
+    }
+
+    /// Stops the session: no more retries, and the bridge's stdin closes
+    /// (it exits; the apps stay in wprsd).
+    pub(crate) fn request_stop(&self) {
+        self.update(|r| {
+            r.stop_requested = true;
+            r.input = None;
+        });
+    }
+
+    /// Waits up to `wait` for a stop request; returns whether one came.
+    pub(crate) fn wait_stop(&self, wait: Duration) -> bool {
+        let deadline = Instant::now().checked_add(wait);
+        let mut runtime = relock(&self.runtime);
+        loop {
+            if runtime.stop_requested {
+                return true;
+            }
+            let Some(left) = deadline.and_then(|d| d.checked_duration_since(Instant::now())) else {
+                return false;
+            };
+            runtime = self
+                .changed
+                .wait_timeout(runtime, left)
+                .map(|(guard, _)| guard)
+                .unwrap_or_else(|poisoned| poisoned.into_inner().0);
+        }
     }
 
     fn snapshot(&self) -> RemoteAppsState {
@@ -62,7 +100,10 @@ impl Handle {
 
 impl Shared {
     /// The live session of `project`, or a new one.
-    pub(crate) fn remote_apps_connect(&self, project_id: &str) -> Result<RemoteAppsState> {
+    pub(crate) fn remote_apps_connect(
+        self: &Arc<Self>,
+        project_id: &str,
+    ) -> Result<RemoteAppsState> {
         let project = relock(&self.state)
             .remote_projects
             .iter()
@@ -72,8 +113,9 @@ impl Shared {
         let mut sessions = relock(&self.remote_apps);
         if let Some(live) = sessions.values().find(|h| {
             let r = relock(&h.runtime);
-            r.project_id == project_id && r.status.live()
+            r.project_id == project_id && r.status.live() && !r.stop_requested
         }) {
+            live.update(|r| r.last_viewed = Instant::now());
             return Ok(live.snapshot());
         }
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -89,15 +131,22 @@ impl Shared {
         });
         sessions.insert(id, Arc::clone(&handle));
         drop(sessions);
-        worker::start(&handle, &project, self.ssh_control(&project.ssh));
-        Ok(handle.snapshot())
+        let snapshot = handle.snapshot();
+        let control = self.ssh_control(&project.ssh);
+        let shared = Arc::downgrade(self);
+        let detach_limit: worker::DetachLimit = Box::new(move || {
+            let minutes = relock(&shared.upgrade()?.state)
+                .settings
+                .vnc_detached_timeout_minutes;
+            // 0 is never, like VNC sessions.
+            (minutes > 0).then(|| Duration::from_secs(u64::from(minutes).saturating_mul(60)))
+        });
+        worker::start(handle, project, control, detach_limit);
+        Ok(snapshot)
     }
 
     pub(crate) fn remote_apps_disconnect(&self, session: &str) -> Result<()> {
-        let handle = self.remote_apps_handle(session)?;
-        // Dropping the input sender closes the bridge's stdin; it exits and
-        // the worker marks the session disconnected.
-        handle.update(|r| r.input = None);
+        self.remote_apps_handle(session)?.request_stop();
         Ok(())
     }
 
@@ -130,6 +179,7 @@ impl Shared {
         wait_ms: u32,
     ) -> Result<Option<RemoteAppsState>> {
         let handle = self.remote_apps_handle(session)?;
+        handle.update(|r| r.last_viewed = Instant::now());
         let wait = Duration::from_millis(u64::from(wait_ms.min(MAX_WAIT_MS)));
         Ok(handle.wait_newer(since, wait))
     }

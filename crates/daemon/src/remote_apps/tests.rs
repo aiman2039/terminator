@@ -8,7 +8,8 @@ use terminator_core::remote_apps::{
 };
 use terminator_sys::{FrameRect, SharedFrameReader};
 
-use super::{Handle, Runtime, worker::classify};
+use super::{Handle, Runtime, worker::classify, worker::watch_detach};
+use terminator_core::remote_apps::{permanent, retry_delay_seconds};
 
 fn runtime(dir: &std::path::Path) -> Runtime {
     Runtime::new("s1".into(), "p1".into(), dir.to_path_buf())
@@ -195,4 +196,87 @@ fn exit_reasons_name_the_missing_bridge_and_a_stopped_wprsd() {
     assert!(text.contains("wprsd stopped"));
     let (kind, _) = classify(None, b"");
     assert_eq!(kind, ErrorKind::Other);
+}
+
+#[test]
+fn retries_back_off_to_a_minute_and_skip_install_problems() {
+    let delays: Vec<u64> = (1..=9).map(retry_delay_seconds).collect();
+    assert_eq!(delays, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+    assert!(permanent(ErrorKind::WprsdMissing));
+    assert!(permanent(ErrorKind::VersionMismatch));
+    assert!(!permanent(ErrorKind::WprsdStopped));
+    assert!(!permanent(ErrorKind::Other));
+}
+
+#[test]
+fn retry_keeps_the_error_closes_windows_and_hello_clears_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = runtime(dir.path());
+    r.apply(hello(PROTOCOL_VERSION));
+    r.apply(opened(1));
+    r.apply(frame(1, 1, 1, [0; 4]));
+    r.retrying((ErrorKind::Other, "Connection reset".into()), 2, 2);
+    let state = r.snapshot();
+    assert_eq!(state.status, RemoteAppsStatus::Connecting);
+    assert_eq!(state.error.as_deref(), Some("Connection reset"));
+    assert_eq!((state.retry_attempt, state.retry_in_seconds), (2, 2));
+    assert!(state.windows.is_empty());
+    assert!(!r.hello_seen);
+
+    r.apply(hello(PROTOCOL_VERSION));
+    let state = r.snapshot();
+    assert_eq!(state.status, RemoteAppsStatus::Connected);
+    assert_eq!((state.error, state.retry_attempt), (None, 0));
+}
+
+#[test]
+fn bridge_error_is_read_back_only_while_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = runtime(dir.path());
+    assert!(r.bridge_error().is_none());
+    r.apply(Framed::new(HostMessage::Error {
+        kind: ErrorKind::WprsdMissing,
+        message: "wprsd not found".into(),
+    }));
+    assert_eq!(r.bridge_error().map(|e| e.0), Some(ErrorKind::WprsdMissing));
+}
+
+#[test]
+fn stop_request_wakes_a_waiting_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let handle = Arc::new(Handle::new(runtime(dir.path())));
+    assert!(!handle.wait_stop(Duration::from_millis(10)));
+    let stopper = Arc::clone(&handle);
+    let stop = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(30));
+        stopper.request_stop();
+    });
+    assert!(handle.wait_stop(Duration::from_secs(5)));
+    assert!(handle.read(|r| r.input.is_none()));
+    stop.join().unwrap();
+}
+
+#[test]
+fn detach_timeout_stops_a_session_nobody_views() {
+    let dir = tempfile::tempdir().unwrap();
+    let handle = Handle::new(runtime(dir.path()));
+    let limit: super::worker::DetachLimit = Box::new(|| Some(Duration::from_millis(20)));
+    watch_detach(&handle, &limit, Duration::from_millis(30));
+    assert!(handle.read(|r| r.stop_requested));
+}
+
+#[test]
+fn detach_timeout_of_never_keeps_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let handle = Arc::new(Handle::new(runtime(dir.path())));
+    let watched = Arc::clone(&handle);
+    let watcher = thread::spawn(move || {
+        let never: super::worker::DetachLimit = Box::new(|| None);
+        watch_detach(&watched, &never, Duration::from_millis(10));
+    });
+    thread::sleep(Duration::from_millis(60));
+    assert!(!handle.read(|r| r.stop_requested));
+    // The watcher ends with the session.
+    handle.update(|r| r.end(RemoteAppsStatus::Disconnected, None));
+    watcher.join().unwrap();
 }

@@ -105,8 +105,14 @@ host's packages (`xwayland`).
    installed on the host"), "server disconnected" → `wprsd_stopped`, SSH
    exit 255 → the classified SSH error. A bridge `Error` message wins over
    the exit reason. Removing an SSH project is refused while its remote apps
-   are connected. Still to do: reconnect with backoff and the detached
-   timeout.
+   are connected. Window IDs are wprsd surface IDs, so a new bridge keeps
+   them. Temporary failures (SSH, network, wprsd stopped) retry after 1, 2,
+   4 … 60 s while the status is `connecting` with `error`, `retry_attempt`
+   and `retry_in_seconds`; a missing bridge or Xwayland, a version mismatch
+   or no `ssh` end the session. With no viewer (no `RemoteAppsState` or
+   connect) for Settings → VNC detached timeout (default 30 min, 0 is
+   never), the daemon stops the bridge; the apps stay in wprsd and the next
+   connect shows them. **Phase 2 done.**
 3. GUI: tab per toplevel, popups as overlays, input, cursor, resize, HiDPI.
 4. Launch UX: `DISPLAY` and `WAYLAND_DISPLAY` in host terminals, shell hook.
 5. Clipboard, packaging of the Linux host binaries, `docs/VALIDATION.md`.

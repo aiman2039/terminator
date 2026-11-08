@@ -70,6 +70,42 @@ pub struct RemoteAppsState {
     pub display: Option<String>,
     /// Grows on every change; the GUI sends the last one it saw as `since`.
     pub revision: u64,
+    /// While `Connecting` after a failure: which retry this is, and seconds
+    /// until it starts. `error` keeps the failure. Zero otherwise.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retry_attempt: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub retry_in_seconds: u64,
     /// All open windows, toplevels before their popups.
     pub windows: Vec<RemoteWindow>,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Failures that a retry cannot fix: the user must install or update
+/// something first.
+#[must_use]
+pub fn permanent(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::WprsdMissing
+            | ErrorKind::XwaylandMissing
+            | ErrorKind::VersionMismatch
+            | ErrorKind::Unsupported
+    )
+}
+
+/// Seconds before retry `attempt` (1-based): 1, 2, 4, … capped at 60.
+#[must_use]
+pub fn retry_delay_seconds(attempt: u32) -> u64 {
+    1_u64
+        .checked_shl(attempt.saturating_sub(1).min(6))
+        .unwrap_or(60)
+        .min(60)
 }

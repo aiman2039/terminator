@@ -209,7 +209,7 @@ fn popup_opens_as_overlay_of_its_parent_window_at_the_anchor() {
     assert_eq!(
         out[0].message,
         HostMessage::WindowOpened {
-            id: WindowId(2),
+            id: WindowId(3),
             role: WindowRole::Popup {
                 parent: WindowId(1),
                 x: 5,
@@ -240,6 +240,22 @@ fn toplevel_destroy_closes_the_window_and_unknown_destroy_is_ignored() {
     );
     assert!(state.handle(destroy(1)).is_empty());
     assert!(state.surface_of(WindowId(1)).is_none());
+}
+
+#[test]
+fn window_id_is_the_surface_id_so_a_new_bridge_keeps_it() {
+    for _ in 0..2 {
+        let mut state = State::default();
+        send_pixels(&mut state, RED, 1);
+        let out = state.handle(commit(42, (1, 1), Some(toplevel("t")), &[]));
+        assert!(matches!(
+            out[0].message,
+            HostMessage::WindowOpened {
+                id: WindowId(42),
+                ..
+            }
+        ));
+    }
 }
 
 #[test]

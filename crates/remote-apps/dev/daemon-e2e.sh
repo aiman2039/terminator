@@ -68,6 +68,15 @@ size=$(wc -c <"$shm" | tr -d ' ')
 [ "$size" = $((64 + 400 * 300 * 4)) ] || fail "shared frame is $size bytes" ""
 echo "resized to 400x300, shared frame $size bytes"
 
+# A dropped link: the bridge dies, the daemon retries, and the window comes
+# back with the same ID because xclock kept running in wprsd.
+docker exec tra-sshd pkill -f terminator-remote-bridge
+wait_for '.status == "connecting" and .retry_attempt > 0' || fail "no retry" "$state"
+echo "$state" | jq -c '.RemoteApps | {status, error, retry_attempt, retry_in_seconds}'
+wait_for ".status == \"connected\" and (.windows | map(.id) | index($win)) != null" \
+    || fail "window did not come back" "$state"
+echo "reconnected, window $win is back"
+
 rpc "{\"RemoteAppsInput\":{\"session\":\"$session\",\"messages\":[{\"type\":\"close_requested\",\"id\":$win}]}}" >/dev/null
 wait_for '.windows | length == 0' || fail "window did not close" "$state"
 [ ! -e "$shm" ] || fail "shared frame not removed" ""

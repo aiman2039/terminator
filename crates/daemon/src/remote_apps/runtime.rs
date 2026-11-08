@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use terminator_core::remote_apps::{
     ClientMessage, ErrorKind, HostMessage, RemoteAppsState, RemoteAppsStatus, RemoteWindow,
@@ -28,8 +29,16 @@ pub(crate) struct Runtime {
     display: Option<String>,
     pub(crate) revision: u64,
     windows: BTreeMap<WindowId, Window>,
-    /// Input to the bridge; `None` once disconnected.
+    /// Input to the bridge; `None` while no bridge runs.
     pub(crate) input: Option<mpsc::Sender<ClientMessage>>,
+    /// The user (or the detach timeout) asked to stop; no more retries.
+    pub(crate) stop_requested: bool,
+    /// Last time a viewer asked for the state, for the detach timeout.
+    pub(crate) last_viewed: Instant,
+    /// The running bridge said hello (it reached wprsd).
+    pub(crate) hello_seen: bool,
+    retry_attempt: u32,
+    retry_in_seconds: u64,
     shm_dir: PathBuf,
     files: u64,
 }
@@ -46,9 +55,41 @@ impl Runtime {
             revision: 1,
             windows: BTreeMap::new(),
             input: None,
+            stop_requested: false,
+            last_viewed: Instant::now(),
+            hello_seen: false,
+            retry_attempt: 0,
+            retry_in_seconds: 0,
             shm_dir,
             files: 0,
         }
+    }
+
+    /// The error the bridge itself sent before it stopped, if any.
+    pub(crate) fn bridge_error(&self) -> Option<(ErrorKind, String)> {
+        (self.status == RemoteAppsStatus::Failed)
+            .then(|| self.error_kind.zip(self.error.clone()))
+            .flatten()
+    }
+
+    /// The bridge stopped and a retry follows in `delay` seconds. Windows
+    /// close now; the next bridge reopens them with the same IDs.
+    pub(crate) fn retrying(&mut self, failure: (ErrorKind, String), attempt: u32, delay: u64) {
+        self.input = None;
+        self.hello_seen = false;
+        self.windows.clear();
+        self.status = RemoteAppsStatus::Connecting;
+        self.error_kind = Some(failure.0);
+        self.error = Some(failure.1);
+        self.retry_attempt = attempt;
+        self.retry_in_seconds = delay;
+        self.bump();
+    }
+
+    /// A retry starts now.
+    pub(crate) fn retry_started(&mut self) {
+        self.retry_in_seconds = 0;
+        self.bump();
     }
 
     pub(crate) fn snapshot(&self) -> RemoteAppsState {
@@ -64,6 +105,8 @@ impl Runtime {
             error_kind: self.error_kind,
             display: self.display.clone(),
             revision: self.revision,
+            retry_attempt: self.retry_attempt,
+            retry_in_seconds: self.retry_in_seconds,
             windows,
         }
     }
@@ -77,6 +120,7 @@ impl Runtime {
     pub(crate) fn end(&mut self, status: RemoteAppsStatus, error: Option<(ErrorKind, String)>) {
         self.input = None;
         self.windows.clear();
+        self.retry_in_seconds = 0;
         if self.status == RemoteAppsStatus::Failed && self.error.is_some() {
             // Keep the bridge's own explanation (it sent Error, then exited).
         } else {
@@ -98,6 +142,11 @@ impl Runtime {
             } => {
                 if version == protocol::PROTOCOL_VERSION {
                     self.status = RemoteAppsStatus::Connected;
+                    self.hello_seen = true;
+                    self.error = None;
+                    self.error_kind = None;
+                    self.retry_attempt = 0;
+                    self.retry_in_seconds = 0;
                     self.display = display;
                 } else {
                     self.fail(

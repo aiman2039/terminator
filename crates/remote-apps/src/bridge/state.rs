@@ -62,7 +62,6 @@ pub struct State {
     pending: Option<Vec<u8>>,
     by_surface: HashMap<SurfaceKey, WindowId>,
     windows: HashMap<WindowId, Window>,
-    next_id: u64,
 }
 
 impl State {
@@ -199,8 +198,12 @@ impl State {
             }
             _ => return None,
         };
-        self.next_id = self.next_id.checked_add(1)?;
-        let id = WindowId(self.next_id);
+        // wprsd's surface ID: the same for every bridge that attaches, so a
+        // reconnect keeps each window's identity (and its tab).
+        let id = WindowId(root.1.0);
+        if self.windows.contains_key(&id) {
+            return None;
+        }
         let (title, app_id) = self.names(root);
         self.by_surface.insert(root, id);
         self.windows.insert(
