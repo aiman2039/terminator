@@ -88,7 +88,10 @@ host's packages (`xwayland`).
    Xwayland, free display from `:100`, detached process group) and writes
    `session.json` after wprsd has an output. Tools come from beside the
    bridge, else from `PATH`. Test: `dev/bridge-ensure-e2e.sh`.
-   Daemon side done (not yet tested against a live host): capability
+   Daemon side done, tested end to end by `dev/daemon-e2e.sh` (local
+   isolated daemon → SSH → Docker host from `dev/sshd.Dockerfile` → xclock:
+   connect, shared-memory frame, resize to 400x300, close, disconnect):
+   capability
    `remote-apps-v1`; requests `RemoteAppsConnect{project}` (one live session
    per project, reused), `RemoteAppsState{session, since, wait_ms}` (long
    poll), `RemoteAppsInput` and `RemoteAppsDisconnect`. The daemon runs
