@@ -3,7 +3,7 @@
 # the bridge starts wprsd itself (no xauth tool, its own cookie), records
 # the session, a "shell" reads it and starts xclock, and a second bridge
 # reuses the same wprsd. Run from the repository root inside the dev image:
-#   cargo build -p terminator-remote-apps --bins --examples
+#   cargo build -p terminator-remote-apps --features bridge --bins --examples
 #   sh crates/remote-apps/dev/bridge-ensure-e2e.sh
 set -eu
 out=${CARGO_TARGET_DIR:-target}/debug

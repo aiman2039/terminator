@@ -2,7 +2,7 @@
 # End-to-end bridge test in the dev image: wprsd + Xwayland + xclock, then
 # bridge_probe drives terminator-remote-bridge like the local daemon would.
 # Run from the repository root inside the dev image:
-#   cargo build -p terminator-remote-apps --bins --examples
+#   cargo build -p terminator-remote-apps --features bridge --bins --examples
 #   sh crates/remote-apps/dev/bridge-e2e.sh
 set -eu
 bin=${WPRS_BIN:-/build/release}

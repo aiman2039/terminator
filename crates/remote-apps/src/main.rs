@@ -10,7 +10,7 @@
 
 use std::process::ExitCode;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "bridge"))]
 fn main() -> ExitCode {
     use std::path::PathBuf;
 
@@ -48,9 +48,9 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", feature = "bridge")))]
 fn main() -> ExitCode {
-    report("terminator-remote-bridge runs on Linux hosts only")
+    report("terminator-remote-bridge runs on Linux hosts, built with --features bridge")
 }
 
 #[expect(

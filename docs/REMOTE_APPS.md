@@ -107,7 +107,7 @@ local daemon: reattach, first frame, resize to 400x300, close). Inside the dev
 image, from `/src`:
 
 ```sh
-cargo build -p terminator-remote-apps --bins --examples
+cargo build -p terminator-remote-apps --features bridge --bins --examples
 sh crates/remote-apps/dev/bridge-e2e.sh
 ```
 
