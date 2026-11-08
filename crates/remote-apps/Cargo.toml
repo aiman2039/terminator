@@ -10,12 +10,24 @@ description = "Seamless remote app windows: the Terminator display protocol and 
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Frame payloads (both sides).
+zstd = "0.13.3"
 
 # The host bridge links wprs. wprs (through smithay) needs libxkbcommon and
 # libwayland, so only Linux hosts build it; the macOS GUI and daemon use the
 # protocol module only.
 [target.'cfg(target_os = "linux")'.dependencies]
 wprs = { path = "../../vendor/wprs" }
+# Same version as wprs, so one copy is built.
+rkyv = "0.8.14"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+anyhow.workspace = true
+fallible-iterator = "0.3.0"
+
+[[bin]]
+name = "terminator-remote-bridge"
+path = "src/main.rs"
 
 [lints]
 workspace = true

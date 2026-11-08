@@ -10,4 +10,7 @@
 //! leaves the host. Only [`protocol`] crosses the network, and it is
 //! versioned.
 
+#[cfg(target_os = "linux")]
+pub mod bridge;
+pub mod compose;
 pub mod protocol;

@@ -113,10 +113,9 @@ fn unknown_message_type_is_a_json_error() {
 
 #[test]
 fn version_mismatch_names_the_side_to_update() {
-    assert!(version_mismatch_message(0, "0.150.0").contains("Update Terminator on the host"));
+    assert!(version_mismatch_message(1, "0.150.0", 2).contains("Update Terminator on the host"));
     assert!(
-        version_mismatch_message(PROTOCOL_VERSION + 1, "0.200.0")
-            .contains("Update Terminator on this computer")
+        version_mismatch_message(3, "0.200.0", 2).contains("Update Terminator on this computer")
     );
 }
 

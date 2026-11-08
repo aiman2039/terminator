@@ -70,12 +70,16 @@ host's packages (`xwayland`).
 | Mac key mapping | Each host has a key mapping setting. |
 | Orphaned `wprsd` | Stops after the idle timeout. |
 | Old local daemon | Feature hidden without `remote-apps-v1`. |
+| App starts before wprsd has an output | xwayland-xdg-shell never maps its window (upstream). The host launcher connects the bridge once (it sends the output) before it exports `DISPLAY`; wprsd keeps the output after the bridge leaves. |
+| Configure sends an unknown window-state bit | wprsd panics. The bridge sends only `TILED` and `ACTIVATED`. |
 
 ## Phases
 
 0. Spike: vendor wprs, protocol crate, Linux dev image. **Done.**
 1. Bridge: wprs client on the host that composites windows and speaks the
-   protocol over stdio. Test in the dev image with `xclock`.
+   protocol over stdio. Test in the dev image with `xclock`. **Done**
+   (`terminator-remote-bridge`; frames are full-window zstd BGRA for now,
+   cursor and clipboard come later).
 2. Daemon session (`remote-apps-v1`): start the bridge through the SSH master,
    own the stream, detach and reattach.
 3. GUI: tab per toplevel, popups as overlays, input, cursor, resize, HiDPI.
@@ -91,3 +95,15 @@ docker run --rm -v "$PWD":/src:ro -v terminator-remote-apps-build:/build \
   -e RUSTUP_TOOLCHAIN=1.97.1 -w /src/vendor/wprs \
   terminator-remote-apps-dev cargo build --release --bins
 ```
+
+Bridge end-to-end test (wprsd + Xwayland + xclock; the probe acts as the
+local daemon: reattach, first frame, resize to 400x300, close). Inside the dev
+image, from `/src`:
+
+```sh
+cargo build -p terminator-remote-apps --bins --examples
+sh crates/remote-apps/dev/bridge-e2e.sh
+```
+
+Set `TERMINATOR_BRIDGE_TRACE=1` to print each wprsd request on the bridge's
+stderr, and `LOG_LEVEL=debug` for wprsd logs.

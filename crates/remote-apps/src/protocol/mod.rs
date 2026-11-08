@@ -293,8 +293,12 @@ pub fn read_frame<M: for<'de> Deserialize<'de>>(
 
 /// The text both sides show when the versions differ. It names the side to
 /// update, because the user cannot see the other side's version.
-pub fn version_mismatch_message(host_protocol: u32, host_version: &str) -> String {
-    if host_protocol < PROTOCOL_VERSION {
+pub fn version_mismatch_message(
+    host_protocol: u32,
+    host_version: &str,
+    client_protocol: u32,
+) -> String {
+    if host_protocol < client_protocol {
         format!(
             "The host's Terminator ({host_version}) is too old for remote apps. Update Terminator on the host."
         )

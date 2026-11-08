@@ -7937,10 +7937,14 @@ dependencies = [
 name = "terminator-remote-apps"
 version = "0.159.0"
 dependencies = [
+ "anyhow",
+ "fallible-iterator",
+ "rkyv",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "wprs",
+ "zstd",
 ]
 
 [[package]]
