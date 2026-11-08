@@ -106,27 +106,21 @@ pub fn start(dir: &Path) -> Result<Session, LaunchError> {
     ensure_x11_dir()?;
     let xauthority = dir.join("Xauthority");
     write_cookie(&xauthority, number)?;
-    let shim = xwayland_shim(dir, &tools.xwayland, &xauthority)?;
+    let shim = xwayland_shim(dir, &xauthority)?;
     let socket = dir.join("wprs.sock");
     let _ = fs::remove_file(&socket);
     let log_path = dir.join("wprsd.log");
     let log = private_file(&log_path)?;
-    let path = std::env::join_paths(std::iter::once(shim).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
-    .map_err(io::Error::other)?;
-    let mut child = Command::new(&tools.wprsd)
-        .arg(format!("--socket={}", socket.display()))
-        .arg("--enable-xwayland=true")
-        .arg(format!(
-            "--xwayland-xdg-shell-path={}",
-            tools.xdg_shell.display()
-        ))
-        .arg(format!("--xwayland-xdg-shell-args=--display={number}"))
-        .arg("--stderr-log-level=warn")
+    let args = [
+        format!("--socket={}", socket.display()),
+        "--enable-xwayland=true".to_owned(),
+        format!("--xwayland-xdg-shell-path={}", tools.xdg_shell),
+        format!("--xwayland-xdg-shell-args=--display={number}"),
+        "--stderr-log-level=warn".to_owned(),
+    ];
+    let mut child = wprsd_command(&tools, &args, shim)?
         .env("XDG_RUNTIME_DIR", dir)
         .env("XAUTHORITY", &xauthority)
-        .env("PATH", path)
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
         .stdin(Stdio::null())
@@ -164,15 +158,58 @@ pub fn start(dir: &Path) -> Result<Session, LaunchError> {
 }
 
 struct Tools {
+    /// See [`WRAPPER_ENV`].
+    wrapper: Option<String>,
     wprsd: PathBuf,
-    xdg_shell: PathBuf,
-    xwayland: PathBuf,
+    /// A path, or a name the wrapper's PATH resolves.
+    xdg_shell: String,
 }
 
+/// The wprsd command with the `-auth` shim first on its PATH.
+fn wprsd_command(tools: &Tools, args: &[String], shim: PathBuf) -> Result<Command, LaunchError> {
+    if let Some(wrapper) = &tools.wrapper {
+        // The wrapper (for example `nix-portable nix shell … -c`) puts its
+        // own directories first on PATH, so the shim goes first inside it.
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "exec {wrapper} sh -c 'PATH=\"$TERMINATOR_SHIM_DIR:$PATH\"; export PATH; exec wprsd \"$@\"' wprsd \"$@\""
+            ))
+            .arg("sh")
+            .args(args)
+            .env("TERMINATOR_SHIM_DIR", shim);
+        return Ok(command);
+    }
+    let path = std::env::join_paths(std::iter::once(shim).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .map_err(io::Error::other)?;
+    let mut command = Command::new(&tools.wprsd);
+    command.args(args).env("PATH", path);
+    Ok(command)
+}
+
+/// Shell words that start a command with wprs on its PATH, for example
+/// `~/bin/nix-portable nix shell nixpkgs#wprs nixpkgs#xwayland -c`. wprsd
+/// then runs in its own wrapper process, so it outlives the bridge.
+pub const WRAPPER_ENV: &str = "TERMINATOR_WPRS_WRAPPER";
+
 impl Tools {
-    /// wprsd and xwayland-xdg-shell next to this binary (a Terminator
-    /// install), else on PATH (for example from nix-portable).
+    /// With [`WRAPPER_ENV`], the wrapper provides the tools. Else wprsd and
+    /// xwayland-xdg-shell next to this binary (a Terminator install), else
+    /// on PATH.
     fn find() -> Result<Self, LaunchError> {
+        if let Some(wrapper) = std::env::var(WRAPPER_ENV)
+            .ok()
+            .filter(|w| !w.trim().is_empty())
+        {
+            return Ok(Self {
+                wrapper: Some(wrapper),
+                wprsd: PathBuf::from("wprsd"),
+                xdg_shell: "xwayland-xdg-shell".to_owned(),
+            });
+        }
         let beside = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf));
@@ -184,10 +221,11 @@ impl Tools {
                 .or_else(|| on_path(name))
                 .ok_or(LaunchError::Missing(name))
         };
+        on_path("Xwayland").ok_or(LaunchError::XwaylandMissing)?;
         Ok(Self {
+            wrapper: None,
             wprsd: find("wprsd")?,
-            xdg_shell: find("xwayland-xdg-shell")?,
-            xwayland: on_path("Xwayland").ok_or(LaunchError::XwaylandMissing)?,
+            xdg_shell: find("xwayland-xdg-shell")?.display().to_string(),
         })
     }
 }
@@ -251,7 +289,9 @@ fn write_cookie(path: &Path, number: u32) -> Result<(), LaunchError> {
 
 /// xwayland-xdg-shell starts `Xwayland` from PATH with no way to add
 /// arguments, so a shim first on PATH adds `-auth`.
-fn xwayland_shim(dir: &Path, xwayland: &Path, xauthority: &Path) -> Result<PathBuf, LaunchError> {
+/// The shim finds the real `Xwayland` on PATH when it runs (skipping its
+/// own directory), so it also works inside a wrapper's environment.
+fn xwayland_shim(dir: &Path, xauthority: &Path) -> Result<PathBuf, LaunchError> {
     let bin = dir.join("bin");
     match fs::DirBuilder::new().mode(0o700).create(&bin) {
         Ok(()) => {}
@@ -259,8 +299,8 @@ fn xwayland_shim(dir: &Path, xwayland: &Path, xauthority: &Path) -> Result<PathB
         Err(error) => return Err(error.into()),
     }
     let script = format!(
-        "#!/bin/sh\nexec {} -auth {} \"$@\"\n",
-        shell_quote(&xwayland.to_string_lossy()),
+        "#!/bin/sh\nself={}\nIFS=:\nfor d in $PATH; do\n  [ \"$d\" = \"$self\" ] && continue\n  [ -x \"$d/Xwayland\" ] && exec \"$d/Xwayland\" -auth {} \"$@\"\ndone\necho 'terminator-remote-bridge: Xwayland not found on PATH' >&2\nexit 127\n",
+        shell_quote(&bin.to_string_lossy()),
         shell_quote(&xauthority.to_string_lossy()),
     );
     let shim = bin.join("Xwayland");
