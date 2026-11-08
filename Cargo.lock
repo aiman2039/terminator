@@ -7935,7 +7935,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-remote-apps"
-version = "0.159.0"
+version = "0.163.0"
 dependencies = [
  "anyhow",
  "fallible-iterator",
