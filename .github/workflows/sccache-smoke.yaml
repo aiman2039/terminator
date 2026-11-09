@@ -1,0 +1,73 @@
+name: sccache smoke test
+
+# Manual check of sccache on R2. Trigger with:
+#   gh workflow run sccache-smoke.yaml -f os=ubuntu-24.04
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: Runner to test
+        type: choice
+        default: all
+        options:
+          - all
+          - macos-15
+          - ubuntu-24.04
+          - windows-2025
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+  SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  smoke:
+    name: sccache (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ inputs.os == 'all' && fromJSON('["macos-15","ubuntu-24.04","windows-2025"]') || fromJSON(format('["{0}"]', inputs.os)) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+      # The action skips sccache when secrets are empty; here that is a failure.
+      - name: Require the R2 settings
+        shell: bash
+        run: |
+          status=0
+          for name in SCCACHE_BUCKET SCCACHE_ENDPOINT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is empty. Check the SCCACHE_*/R2_* repository secrets."
+              status=1
+            fi
+          done
+          exit "$status"
+      - name: Send the server log to a file
+        shell: bash
+        run: echo "SCCACHE_ERROR_LOG=$RUNNER_TEMP/sccache.log" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/sccache
+      - name: Build, upload and hit the cache
+        shell: bash
+        run: bash scripts/sccache-smoke.sh
+      # Printed rather than uploaded: GitHub masks secrets in job logs, not in artifacts.
+      - name: Server log (debug)
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$SCCACHE_ERROR_LOG" ]; then
+            cat "$SCCACHE_ERROR_LOG"
+          else
+            echo "No server log: sccache never started."
+          fi
