@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use terminator_core::remote::RemoteProject;
 use terminator_core::remote_apps::{
-    ClientMessage, DEFAULT_COMMAND, ErrorKind, HostMessage, RemoteAppsStatus, permanent, protocol,
-    retry_delay_seconds,
+    ClientMessage, DEFAULT_COMMAND, ErrorKind, HostMessage, protocol,
 };
 
 use super::Handle;
+use super::runtime::Next;
 
 /// Most stderr kept for error messages.
 const STDERR_LIMIT: usize = 16 * 1024;
@@ -47,38 +47,19 @@ pub(super) fn start(
     let watcher = Arc::clone(&handle);
     thread::spawn(move || watch_detach(&watcher, &detach_limit, DETACH_CHECK));
     thread::spawn(move || {
-        let mut attempt = 0_u32;
         loop {
-            let end = run_once(&handle, &project, control.as_deref());
-            let (stop, bridge_error, reached_wprsd) =
-                handle.read(|r| (r.stop_requested, r.bridge_error(), r.hello_seen));
-            if stop {
-                handle.update(|r| r.end(RemoteAppsStatus::Disconnected, None));
-                return;
-            }
-            let failure = match (bridge_error, end) {
-                (Some(error), _) => error,
-                (None, RunEnd::NoSsh(message)) => {
-                    handle.update(|r| {
-                        r.end(RemoteAppsStatus::Failed, Some((ErrorKind::Other, message)));
-                    });
+            let exit = match run_once(&handle, &project, control.as_deref()) {
+                RunEnd::NoSsh(message) => {
+                    handle.update(|r| r.end(Some((ErrorKind::HostSetup, message))));
                     return;
                 }
-                (None, RunEnd::Exited { code, stderr }) => classify(code, &stderr),
+                RunEnd::Exited { code, stderr } => classify(code, &stderr),
             };
-            if permanent(failure.0) {
-                handle.update(|r| r.end(RemoteAppsStatus::Failed, Some(failure)));
+            let Next::Retry(delay) = handle.update(|r| r.bridge_exited(exit)) else {
                 return;
-            }
-            attempt = if reached_wprsd {
-                1
-            } else {
-                attempt.saturating_add(1)
             };
-            let delay = retry_delay_seconds(attempt);
-            handle.update(|r| r.retrying(failure, attempt, delay));
             if handle.wait_stop(Duration::from_secs(delay)) {
-                handle.update(|r| r.end(RemoteAppsStatus::Disconnected, None));
+                handle.update(|r| r.end(None));
                 return;
             }
             handle.update(super::Runtime::retry_started);
@@ -90,7 +71,7 @@ pub(super) fn start(
 /// The apps keep running in the host's wprsd; connecting again shows them.
 pub(super) fn watch_detach(handle: &Handle, limit: &DetachLimit, every: Duration) {
     loop {
-        if handle.wait_stop(every) || handle.read(|r| !r.status.live()) {
+        if handle.wait_stop(every) || handle.read(|r| !r.status().live()) {
             return;
         }
         let idle = handle.read(|r| r.last_viewed.elapsed());
@@ -115,13 +96,8 @@ fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) ->
         return RunEnd::NoSsh("ssh has no pipes".into());
     };
     let (tx, rx) = mpsc::channel();
-    let stopped = handle.update(|r| {
-        if !r.stop_requested {
-            r.input = Some(tx);
-        }
-        r.stop_requested
-    });
-    if stopped {
+    let started = handle.update(|r| r.bridge_started(tx));
+    if !started {
         // Disconnect came while ssh started: close stdin at once.
         drop(stdin);
     } else {
@@ -130,7 +106,7 @@ fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) ->
     let stderr = thread::spawn(move || read_stderr(stderr));
     let mut input = BufReader::new(stdout);
     while let Ok(framed) = protocol::read_frame::<HostMessage>(&mut input) {
-        let rgba = super::runtime::decode_frame(&framed);
+        let rgba = super::pixels::decode_frame(&framed);
         handle.apply(framed, rgba);
     }
     let code = child.wait().ok().and_then(|status| status.code());

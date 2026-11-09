@@ -319,6 +319,7 @@ pub(crate) enum Job {
         project: String,
         session: Option<String>,
         since: u64,
+        readers: crate::remote_apps_ui::Readers,
     },
     /// Load a commit-log or blame tab off the GUI thread.
     GitView(Tab),

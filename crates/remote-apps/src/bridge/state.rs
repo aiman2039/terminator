@@ -1,17 +1,24 @@
 //! What the bridge knows about wprsd's surfaces, and the window messages
-//! each wprsd request causes.
+//! they cause.
+//!
+//! Commits only record pixels and mark the changed areas of their window.
+//! [`State::flush`] then renders each changed window once, compositing
+//! only those areas (each into a canvas of its own size, so no full window
+//! copy is kept), so a burst of commits becomes one small frame per window
+//! and the output never runs ahead of the link (the caller flushes only
+//! when the writer is idle).
 
 use std::collections::HashMap;
 
 use wprs::serialization::wayland::{
-    Buffer, BufferAssignment, BufferData, BufferFormat, CursorImage, CursorImageStatus, Role,
-    SurfaceRequest, SurfaceRequestPayload, SurfaceState, WlSurfaceId,
+    BufferAssignment, CursorImage, CursorImageStatus, Role, SurfaceRequest, SurfaceRequestPayload,
+    SurfaceState, WlSurfaceId,
 };
-use wprs::serialization::xdg_shell::{PopupRequestPayload, ToplevelRequestPayload, XdgPositioner};
+use wprs::serialization::xdg_shell::{PopupRequestPayload, ToplevelRequestPayload};
 use wprs::serialization::{ClientId, RecvType, Request};
-use wprs::vec4u8::Vec4u8s;
 
-use crate::compose::{self, Canvas, Layer, Positioner};
+use super::buffer::{Pixels, pixels, positioner};
+use crate::compose::{self, Canvas, Damage};
 use crate::protocol::{FrameEncoding, Framed, HostMessage, Rect, WindowId, WindowRole};
 
 pub type SurfaceKey = (ClientId, WlSurfaceId);
@@ -21,29 +28,6 @@ pub type Outgoing = Vec<Framed<HostMessage>>;
 const ZSTD_LEVEL: i32 = 1;
 /// Deepest subsurface tree drawn; stops cycles from a confused peer.
 const MAX_DEPTH: usize = 16;
-
-struct Pixels {
-    width: u32,
-    height: u32,
-    stride: usize,
-    opaque: bool,
-    data: Vec<u8>,
-}
-
-impl Pixels {
-    /// This buffer drawn at `x`,`y`.
-    fn layer(&self, x: i32, y: i32) -> Layer<'_> {
-        Layer {
-            x,
-            y,
-            width: self.width,
-            height: self.height,
-            stride: self.stride,
-            pixels: &self.data,
-            opaque: self.opaque,
-        }
-    }
-}
 
 #[derive(Default)]
 struct Surface {
@@ -68,6 +52,10 @@ struct Window {
     key: SurfaceKey,
     title: String,
     app_id: String,
+    /// The size of the last frame sent; a new size sends the whole window.
+    size: Option<(u32, u32)>,
+    /// Areas changed since the last frame.
+    damage: Damage,
 }
 
 #[derive(Default)]
@@ -79,48 +67,141 @@ pub struct State {
     windows: HashMap<WindowId, Window>,
     /// The surface that holds the cursor image, and its hotspot.
     cursor: Option<(SurfaceKey, (i32, i32))>,
+    /// Window, cursor and clipboard messages waiting for the next flush, in
+    /// order.
+    control: Outgoing,
 }
 
 impl State {
-    pub fn handle(&mut self, request: RecvType<Request>) -> Outgoing {
+    /// Records a wprsd request. Messages come out of [`State::flush`].
+    pub fn handle(&mut self, request: RecvType<Request>) {
         match request {
-            RecvType::RawBuffer(bytes) => {
-                self.pending = Some(bytes);
-                Vec::new()
-            }
+            RecvType::RawBuffer(bytes) => self.pending = Some(bytes),
             RecvType::Object(Request::Surface(request)) => self.surface(request),
-            RecvType::Object(Request::Toplevel(request)) => match request.payload {
-                ToplevelRequestPayload::Destroyed => self.close((request.client, request.surface)),
-                _ => Vec::new(),
-            },
+            RecvType::Object(Request::Toplevel(request)) => {
+                if matches!(request.payload, ToplevelRequestPayload::Destroyed) {
+                    self.close((request.client, request.surface));
+                }
+            }
             RecvType::Object(Request::Popup(request)) => match request.payload {
                 PopupRequestPayload::Destroyed => self.close((request.client, request.surface)),
             },
             RecvType::Object(Request::ClientDisconnected(client)) => self.disconnect(client),
             RecvType::Object(Request::CursorImage(image)) => self.cursor_image(image),
-            // The clipboard is handled by the bridge loop, not here.
-            RecvType::Object(Request::Data(_) | Request::Capabilities(_)) => Vec::new(),
+            // The clipboard and the replay end are handled by the bridge
+            // loop, not here.
+            RecvType::Object(Request::Data(_) | Request::Capabilities(_) | Request::ReplayDone) => {
+            }
         }
     }
 
-    fn cursor_image(&mut self, image: CursorImage) -> Outgoing {
+    /// Queues a message that is not a frame (for example clipboard text).
+    pub fn queue(&mut self, message: Framed<HostMessage>) {
+        self.control.push(message);
+    }
+
+    /// Whether [`State::flush`] has frames to render.
+    #[cfg(test)]
+    pub fn has_frames(&self) -> bool {
+        self.windows.values().any(|w| !w.damage.is_empty())
+    }
+
+    /// Queued control messages, then (when `frames`) one frame per changed
+    /// window holding only its changed area.
+    pub fn flush(&mut self, frames: bool) -> Outgoing {
+        let mut out = std::mem::take(&mut self.control);
+        if !frames {
+            return out;
+        }
+        let ids: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|(_, w)| !w.damage.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            out.extend(self.render(id));
+        }
+        out
+    }
+
+    fn render(&mut self, id: WindowId) -> Option<Framed<HostMessage>> {
+        let window = self.windows.get_mut(&id)?;
+        let damage = window.damage.take();
+        let key = window.key;
+        let (width, height) = self
+            .surfaces
+            .get(&key)?
+            .pixels
+            .as_ref()
+            .map(|p| (p.width, p.height))?;
+        let damage = if window.size == Some((width, height)) {
+            damage
+        } else {
+            window.size = Some((width, height));
+            vec![Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }]
+        };
+        let areas: Vec<Rect> = damage
+            .into_iter()
+            .filter_map(|r| compose::clamp(r, width, height))
+            .collect();
+        if areas.is_empty() {
+            return None;
+        }
+        let mut pixels = Vec::new();
+        for area in &areas {
+            pixels.extend_from_slice(&self.compose(key, *area));
+        }
+        let payload = zstd::bulk::compress(&pixels, ZSTD_LEVEL).ok()?;
+        Some(Framed::with_payload(
+            HostMessage::Frame {
+                id,
+                width,
+                height,
+                damage: areas,
+                encoding: FrameEncoding::ZstdBgra,
+            },
+            payload,
+        ))
+    }
+
+    /// The window whose root is `key`, composited inside `area` only, as
+    /// packed BGRA rows of `area`'s size.
+    fn compose(&self, key: SurfaceKey, area: Rect) -> Vec<u8> {
+        let mut canvas = Canvas::new(area.width, area.height);
+        let top = Node {
+            key,
+            x: 0_i32.saturating_sub(area.x),
+            y: 0_i32.saturating_sub(area.y),
+            depth: 0,
+        };
+        self.draw_tree(&mut canvas, top);
+        canvas.into_pixels()
+    }
+
+    fn cursor_image(&mut self, image: CursorImage) {
         let named = |name: Option<String>| {
-            vec![Framed::new(HostMessage::Cursor {
+            Framed::new(HostMessage::Cursor {
                 width: 0,
                 height: 0,
                 hotspot_x: 0,
                 hotspot_y: 0,
                 name,
-            })]
+            })
         };
         match image.status {
             CursorImageStatus::Hidden => {
                 self.cursor = None;
-                named(None)
+                self.control.push(named(None));
             }
             CursorImageStatus::Named(name) => {
                 self.cursor = None;
-                named(Some(name))
+                self.control.push(named(Some(name)));
             }
             CursorImageStatus::Surface {
                 client_surface,
@@ -128,31 +209,32 @@ impl State {
             } => {
                 let key = (client_surface.client, client_surface.surface);
                 self.cursor = Some((key, (hotspot.x, hotspot.y)));
-                self.cursor_pixels()
+                self.queue_cursor_pixels();
             }
         }
     }
 
     /// The cursor surface's pixels, as tightly packed BGRA rows.
-    fn cursor_pixels(&self) -> Outgoing {
+    fn queue_cursor_pixels(&mut self) {
         let Some((key, (hotspot_x, hotspot_y))) = self.cursor else {
-            return Vec::new();
+            return;
         };
         let Some(pixels) = self.surfaces.get(&key).and_then(|s| s.pixels.as_ref()) else {
-            return Vec::new();
+            return;
         };
         let mut canvas = Canvas::new(pixels.width, pixels.height);
         canvas.draw(&pixels.layer(0, 0));
-        vec![Framed::with_payload(
+        let (width, height) = (canvas.width(), canvas.height());
+        self.control.push(Framed::with_payload(
             HostMessage::Cursor {
-                width: canvas.width(),
-                height: canvas.height(),
+                width,
+                height,
                 hotspot_x,
                 hotspot_y,
                 name: None,
             },
-            canvas.pixels().to_vec(),
-        )]
+            canvas.into_pixels(),
+        ));
     }
 
     /// The surface a window message names, for input routing.
@@ -160,21 +242,25 @@ impl State {
         self.windows.get(&id).map(|window| window.key)
     }
 
-    fn surface(&mut self, request: SurfaceRequest) -> Outgoing {
+    fn surface(&mut self, request: SurfaceRequest) {
         let key = (request.client, request.surface);
         match request.payload {
             SurfaceRequestPayload::Commit(state) => self.commit(key, state),
             SurfaceRequestPayload::Destroyed => {
-                let out = self.close(key);
+                // A subsurface going away uncovers part of its window.
+                if let Some(root) = self.root_of(key).filter(|root| *root != key) {
+                    self.damage_all(root);
+                }
+                self.close(key);
                 self.surfaces.remove(&key);
-                out
             }
         }
     }
 
-    fn commit(&mut self, key: SurfaceKey, state: SurfaceState) -> Outgoing {
+    fn commit(&mut self, key: SurfaceKey, state: SurfaceState) {
         let pending = self.pending.take();
         let surface = self.surfaces.entry(key).or_default();
+        let old_size = surface.pixels.as_ref().map(|p| (p.width, p.height));
         match state.buffer {
             Some(BufferAssignment::New(buffer)) => surface.pixels = pixels(buffer, pending),
             Some(BufferAssignment::Removed) => surface.pixels = None,
@@ -183,18 +269,88 @@ impl State {
         if state.role.is_some() {
             surface.role = state.role;
         }
-        surface.children = state
+        let children: Vec<(WlSurfaceId, i32, i32)> = state
             .z_ordered_children
             .iter()
             .map(|child| (child.id, child.position.x, child.position.y))
             .collect();
+        let moved = children != surface.children;
+        surface.children = children;
+        let new_size = surface.pixels.as_ref().map(|p| (p.width, p.height));
         if self.cursor.is_some_and(|(cursor, _)| cursor == key) {
-            return self.cursor_pixels();
+            self.queue_cursor_pixels();
+            return;
         }
-        match self.root_of(key) {
-            Some(root) => self.show(root),
-            None => Vec::new(),
+        let Some(root) = self.root_of(key) else {
+            return;
+        };
+        if !self.ensure_open(root) {
+            return;
         }
+        // Without damage, after a resize or a subsurface move, redraw all.
+        match (state.damage, moved || old_size != new_size) {
+            (Some(rects), false) => {
+                let (dx, dy) = self.offset_in(key, root);
+                for r in rects {
+                    self.damage(
+                        root,
+                        Rect {
+                            x: r.loc.x.saturating_add(dx),
+                            y: r.loc.y.saturating_add(dy),
+                            width: u32::try_from(r.size.w).unwrap_or(0),
+                            height: u32::try_from(r.size.h).unwrap_or(0),
+                        },
+                    );
+                }
+            }
+            _ => self.damage_all(root),
+        }
+    }
+
+    fn damage(&mut self, root: SurfaceKey, rect: Rect) {
+        if let Some(id) = self.by_surface.get(&root)
+            && let Some(window) = self.windows.get_mut(id)
+        {
+            window.damage.add(rect);
+        }
+    }
+
+    fn damage_all(&mut self, root: SurfaceKey) {
+        if let Some(full) = self
+            .surfaces
+            .get(&root)
+            .and_then(|s| s.pixels.as_ref())
+            .map(Pixels::bounds)
+        {
+            self.damage(root, full);
+        }
+    }
+
+    /// Where `key` sits inside its window `root`.
+    fn offset_in(&self, key: SurfaceKey, root: SurfaceKey) -> (i32, i32) {
+        let (mut x, mut y) = (0_i32, 0_i32);
+        let mut current = key;
+        for _ in 0..MAX_DEPTH {
+            if current == root {
+                break;
+            }
+            let Some(Role::SubSurface(sub)) =
+                self.surfaces.get(&current).and_then(|s| s.role.as_ref())
+            else {
+                break;
+            };
+            let parent = (current.0, sub.parent);
+            if let Some(&(_, dx, dy)) = self
+                .surfaces
+                .get(&parent)
+                .and_then(|p| p.children.iter().find(|(id, _, _)| *id == current.1))
+            {
+                x = x.saturating_add(dx);
+                y = y.saturating_add(dy);
+            }
+            current = parent;
+        }
+        (x, y)
     }
 
     /// The toplevel or popup that `key` belongs to, through subsurface
@@ -211,69 +367,46 @@ impl State {
         None
     }
 
-    /// Opens, renames and redraws the window for `root`.
-    fn show(&mut self, root: SurfaceKey) -> Outgoing {
-        let Some(size) = self.surfaces.get(&root).and_then(|s| s.pixels.as_ref()) else {
-            return Vec::new();
-        };
-        let (width, height) = (size.width, size.height);
-        let mut out = Vec::new();
-        let id = match self.by_surface.get(&root) {
-            Some(id) => *id,
-            None => match self.open(root) {
-                Some((id, opened)) => {
-                    out.push(opened);
-                    id
-                }
-                None => return out,
-            },
-        };
-        out.extend(self.rename(id, root));
-        let mut canvas = Canvas::new(width, height);
-        let top = Node {
-            key: root,
-            x: 0,
-            y: 0,
-            depth: 0,
-        };
-        self.draw_tree(&mut canvas, top);
-        if let Ok(payload) = zstd::bulk::compress(canvas.pixels(), ZSTD_LEVEL) {
-            let damage = vec![Rect {
-                x: 0,
-                y: 0,
-                width: canvas.width(),
-                height: canvas.height(),
-            }];
-            out.push(Framed::with_payload(
-                HostMessage::Frame {
-                    id,
-                    width: canvas.width(),
-                    height: canvas.height(),
-                    damage,
-                    encoding: FrameEncoding::ZstdBgra,
-                },
-                payload,
-            ));
+    /// Opens the window for `root` once it has pixels, and renames it when
+    /// its title changed. Returns whether the window is open.
+    fn ensure_open(&mut self, root: SurfaceKey) -> bool {
+        if self
+            .surfaces
+            .get(&root)
+            .and_then(|s| s.pixels.as_ref())
+            .is_none()
+        {
+            return false;
         }
-        out
+        match self.by_surface.get(&root).copied() {
+            Some(id) => {
+                self.rename(id, root);
+                true
+            }
+            None => self.open(root),
+        }
     }
 
-    fn open(&mut self, root: SurfaceKey) -> Option<(WindowId, Framed<HostMessage>)> {
-        let role = match &self.surfaces.get(&root)?.role {
+    fn open(&mut self, root: SurfaceKey) -> bool {
+        let role = match self.surfaces.get(&root).and_then(|s| s.role.as_ref()) {
             Some(Role::XdgToplevel(_)) => WindowRole::Toplevel,
             Some(Role::XdgPopup(popup)) => {
-                let parent_root = self.root_of((root.0, popup.parent_surface_id))?;
-                let parent = *self.by_surface.get(&parent_root)?;
+                let Some(parent) = self
+                    .root_of((root.0, popup.parent_surface_id))
+                    .and_then(|parent_root| self.by_surface.get(&parent_root).copied())
+                else {
+                    return false;
+                };
                 let (x, y) = compose::popup_position(&positioner(&popup.positioner));
                 WindowRole::Popup { parent, x, y }
             }
-            _ => return None,
+            _ => return false,
         };
         // wprsd's surface ID: the same for every bridge that attaches, so a
         // reconnect keeps each window's identity (and its tab).
         let id = WindowId(root.1.0);
         if self.windows.contains_key(&id) {
-            return None;
+            return false;
         }
         let (title, app_id) = self.names(root);
         self.by_surface.insert(root, id);
@@ -283,30 +416,35 @@ impl State {
                 key: root,
                 title: title.clone(),
                 app_id: app_id.clone(),
+                size: None,
+                damage: Damage::default(),
             },
         );
-        let opened = HostMessage::WindowOpened {
+        self.control.push(Framed::new(HostMessage::WindowOpened {
             id,
             role,
             title,
             app_id,
-        };
-        Some((id, Framed::new(opened)))
+        }));
+        self.damage_all(root);
+        true
     }
 
-    fn rename(&mut self, id: WindowId, root: SurfaceKey) -> Option<Framed<HostMessage>> {
+    fn rename(&mut self, id: WindowId, root: SurfaceKey) {
         let (title, app_id) = self.names(root);
-        let window = self.windows.get_mut(&id)?;
+        let Some(window) = self.windows.get_mut(&id) else {
+            return;
+        };
         if window.title == title && window.app_id == app_id {
-            return None;
+            return;
         }
         window.title.clone_from(&title);
         window.app_id.clone_from(&app_id);
-        Some(Framed::new(HostMessage::WindowChanged {
+        self.control.push(Framed::new(HostMessage::WindowChanged {
             id,
             title,
             app_id,
-        }))
+        }));
     }
 
     fn names(&self, root: SurfaceKey) -> (String, String) {
@@ -319,6 +457,7 @@ impl State {
         }
     }
 
+    /// Draws the surface tree of `node` into `canvas`.
     fn draw_tree(&self, canvas: &mut Canvas, node: Node) {
         let Node { key, x, y, depth } = node;
         let Some(surface) = self.surfaces.get(&key) else {
@@ -343,70 +482,24 @@ impl State {
         }
     }
 
-    fn close(&mut self, key: SurfaceKey) -> Outgoing {
-        match self.by_surface.remove(&key) {
-            Some(id) => {
-                self.windows.remove(&id);
-                vec![Framed::new(HostMessage::WindowClosed { id })]
-            }
-            None => Vec::new(),
+    fn close(&mut self, key: SurfaceKey) {
+        if let Some(id) = self.by_surface.remove(&key) {
+            self.windows.remove(&id);
+            self.control
+                .push(Framed::new(HostMessage::WindowClosed { id }));
         }
     }
 
-    fn disconnect(&mut self, client: ClientId) -> Outgoing {
+    fn disconnect(&mut self, client: ClientId) {
         let gone: Vec<SurfaceKey> = self
             .surfaces
             .keys()
             .filter(|key| key.0 == client)
             .copied()
             .collect();
-        let mut out = Vec::new();
         for key in gone {
-            out.extend(self.close(key));
+            self.close(key);
             self.surfaces.remove(&key);
         }
-        out
-    }
-}
-
-/// Decodes a wprs buffer. wprsd sends the bytes in a raw-buffer message just
-/// before the commit, filtered for compression; `unfilter` restores BGRA.
-fn pixels(buffer: Buffer, pending: Option<Vec<u8>>) -> Option<Pixels> {
-    let filtered = match buffer.data {
-        BufferData::External => pending?,
-        BufferData::Uncompressed(data) => data.0.into(),
-        BufferData::Compressed(_) => return None,
-    };
-    let meta = buffer.metadata;
-    let width = u32::try_from(meta.width).ok()?;
-    let height = u32::try_from(meta.height).ok()?;
-    let stride = usize::try_from(meta.stride).ok()?;
-    let needed = stride.checked_mul(usize::try_from(height).ok()?)?;
-    if filtered.len() < needed || !filtered.len().is_multiple_of(4) {
-        return None;
-    }
-    let mut data = vec![0; filtered.len()];
-    wprs::filtering::unfilter(&Vec4u8s::from(filtered), &mut data);
-    Some(Pixels {
-        width,
-        height,
-        stride,
-        opaque: matches!(meta.format, BufferFormat::Xrgb8888),
-        data,
-    })
-}
-
-fn positioner(p: &XdgPositioner) -> Positioner {
-    Positioner {
-        width: p.width,
-        height: p.height,
-        anchor_x: p.anchor_rect.loc.x,
-        anchor_y: p.anchor_rect.loc.y,
-        anchor_width: p.anchor_rect.size.w,
-        anchor_height: p.anchor_rect.size.h,
-        anchor: p.anchor_edges,
-        gravity: p.gravity,
-        offset_x: p.offset.x,
-        offset_y: p.offset.y,
     }
 }

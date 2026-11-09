@@ -4,16 +4,17 @@ use std::time::Duration;
 
 use terminator_core::remote_apps::{
     ErrorKind, HostMessage, RemoteAppsStatus, WindowId, WindowRole,
-    protocol::{FrameEncoding, Framed, PROTOCOL_VERSION},
+    protocol::{FrameEncoding, Framed, PROTOCOL_VERSION, Rect},
+    retry_delay_seconds,
 };
 use terminator_sys::{FrameRect, SharedFrameReader};
 
+use super::runtime::Next;
 use super::{Handle, Runtime, worker::classify, worker::watch_detach};
-use terminator_core::remote_apps::{permanent, retry_delay_seconds};
 
 /// Applies a message the way the worker does: frames decoded first.
 fn apply(r: &mut Runtime, framed: Framed<HostMessage>) -> bool {
-    let rgba = super::runtime::decode_frame(&framed);
+    let rgba = super::pixels::decode_frame(&framed);
     r.apply(framed, rgba)
 }
 
@@ -31,6 +32,10 @@ fn hello(protocol: u32) -> Framed<HostMessage> {
     })
 }
 
+fn ready() -> Framed<HostMessage> {
+    Framed::new(HostMessage::Ready)
+}
+
 fn opened(id: u64) -> Framed<HostMessage> {
     Framed::new(HostMessage::WindowOpened {
         id: WindowId(id),
@@ -40,36 +45,62 @@ fn opened(id: u64) -> Framed<HostMessage> {
     })
 }
 
-fn frame(id: u64, width: u32, height: u32, bgra: [u8; 4]) -> Framed<HostMessage> {
-    let pixels = bgra.repeat(usize::try_from(width.checked_mul(height).unwrap()).unwrap());
+fn rect(x: i32, y: i32, width: u32, height: u32) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// A frame of a `size` window whose `damage` is all one BGRA color.
+fn damaged(id: u64, size: (u32, u32), damage: Rect, bgra: [u8; 4]) -> Framed<HostMessage> {
+    let count = damage.width.checked_mul(damage.height).unwrap();
+    let pixels = bgra.repeat(usize::try_from(count).unwrap());
     Framed::with_payload(
         HostMessage::Frame {
             id: WindowId(id),
-            width,
-            height,
-            damage: Vec::new(),
+            width: size.0,
+            height: size.1,
+            damage: vec![damage],
             encoding: FrameEncoding::ZstdBgra,
         },
         zstd::bulk::compress(&pixels, 1).unwrap(),
     )
 }
 
-#[test]
-fn hello_connects_and_records_the_display() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut r = runtime(dir.path());
-    assert!(apply(&mut r, hello(PROTOCOL_VERSION)));
-    let state = r.snapshot();
-    assert_eq!(state.status, RemoteAppsStatus::Connected);
-    assert_eq!(state.display.as_deref(), Some(":100"));
+/// A whole-window frame.
+fn frame(id: u64, width: u32, height: u32, bgra: [u8; 4]) -> Framed<HostMessage> {
+    damaged(id, (width, height), rect(0, 0, width, height), bgra)
+}
+
+fn exited(r: &mut Runtime) -> Next {
+    r.bridge_exited((ErrorKind::Other, "Connection reset".into()))
 }
 
 #[test]
-fn newer_host_protocol_fails_and_names_this_computer_to_update() {
+fn hello_alone_is_connecting_and_ready_connects() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
+    assert!(apply(&mut r, hello(PROTOCOL_VERSION)));
+    let state = r.snapshot(0);
+    assert_eq!(state.status, RemoteAppsStatus::Connecting);
+    assert_eq!(state.display.as_deref(), Some(":100"));
+    apply(&mut r, ready());
+    assert_eq!(r.snapshot(0).status, RemoteAppsStatus::Connected);
+}
+
+#[test]
+fn newer_host_protocol_stops_the_bridge_and_fails_for_good() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = runtime(dir.path());
+    let (tx, _rx) = std::sync::mpsc::channel();
+    assert!(r.bridge_started(tx));
     apply(&mut r, hello(PROTOCOL_VERSION + 1));
-    let state = r.snapshot();
+    assert!(r.input().is_none());
+    assert!(matches!(exited(&mut r), Next::Stop));
+    let state = r.snapshot(0);
     assert_eq!(state.status, RemoteAppsStatus::Failed);
     assert_eq!(state.error_kind, Some(ErrorKind::VersionMismatch));
     assert!(
@@ -87,8 +118,9 @@ fn frame_lands_in_shared_memory_as_rgba_and_close_removes_the_file() {
     apply(&mut r, hello(PROTOCOL_VERSION));
     apply(&mut r, opened(1));
     assert!(apply(&mut r, frame(1, 2, 2, [10, 20, 30, 255])));
-    let window = r.snapshot().windows.remove(0);
+    let window = r.snapshot(0).windows.remove(0);
     assert_eq!((window.width, window.height), (2, 2));
+    assert!(window.regions.is_empty());
     let path = window.shm.unwrap();
     let reader = SharedFrameReader::open(&path).unwrap();
     let full = FrameRect {
@@ -104,20 +136,58 @@ fn frame_lands_in_shared_memory_as_rgba_and_close_removes_the_file() {
         &mut r,
         Framed::new(HostMessage::WindowClosed { id: WindowId(1) }),
     );
-    assert!(r.snapshot().windows.is_empty());
+    assert!(r.snapshot(0).windows.is_empty());
     assert!(!path.exists());
 }
 
 #[test]
-fn resize_moves_the_window_to_a_new_file() {
+fn damage_patches_the_window_and_is_reported_since_a_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = runtime(dir.path());
+    apply(&mut r, opened(1));
+    apply(&mut r, frame(1, 4, 4, [0, 0, 0, 255]));
+    let since = r.snapshot(0).revision;
+    apply(
+        &mut r,
+        damaged(1, (4, 4), rect(1, 1, 1, 1), [0, 0, 255, 255]),
+    );
+    apply(
+        &mut r,
+        damaged(1, (4, 4), rect(2, 2, 1, 1), [0, 0, 255, 255]),
+    );
+    let window = r.snapshot(since).windows.remove(0);
+    assert_eq!(window.regions, [rect(1, 1, 2, 2)]);
+    // A viewer with nothing gets the whole window.
+    assert!(r.snapshot(0).windows[0].regions.is_empty());
+    let reader = SharedFrameReader::open(window.shm.as_ref().unwrap()).unwrap();
+    let full = FrameRect {
+        x: 0,
+        y: 0,
+        width: 4,
+        height: 4,
+    };
+    let pixels = reader.read(window.sequence, &[full]).unwrap().remove(0).1;
+    let red = [255, 0, 0, 255];
+    let black = [0, 0, 0, 255];
+    let at = |x: usize, y: usize| pixels.get((y * 4 + x) * 4..(y * 4 + x) * 4 + 4).unwrap();
+    assert_eq!(at(1, 1), red);
+    assert_eq!(at(2, 2), red);
+    assert_eq!(at(0, 0), black);
+}
+
+#[test]
+fn resize_moves_the_window_to_a_new_file_and_needs_a_whole_frame() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
     apply(&mut r, opened(1));
     apply(&mut r, frame(1, 2, 2, [0; 4]));
-    let first = r.snapshot().windows[0].shm.clone().unwrap();
+    let first = r.snapshot(0).windows[0].shm.clone().unwrap();
+    assert!(!apply(&mut r, damaged(1, (4, 3), rect(0, 0, 1, 1), [0; 4])));
+    let since = r.snapshot(0).revision;
     apply(&mut r, frame(1, 4, 3, [0; 4]));
-    let window = &r.snapshot().windows[0];
+    let window = &r.snapshot(since).windows[0];
     assert_eq!((window.width, window.height), (4, 3));
+    assert!(window.regions.is_empty());
     assert_ne!(window.shm.as_ref(), Some(&first));
     assert!(!first.exists());
 }
@@ -127,17 +197,17 @@ fn corrupt_or_unknown_frames_change_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
     apply(&mut r, opened(1));
-    let before = r.snapshot().revision;
+    let before = r.snapshot(0).revision;
     let mut bad = frame(1, 2, 2, [0; 4]);
     bad.payload = b"junk".to_vec();
     assert!(!apply(&mut r, bad));
     assert!(!apply(&mut r, frame(9, 2, 2, [0; 4])));
     assert!(!apply(&mut r, frame(1, 70_000, 1, [0; 4])));
-    assert_eq!(r.snapshot().revision, before);
+    assert_eq!(r.snapshot(0).revision, before);
 }
 
 #[test]
-fn bridge_error_is_kept_when_the_bridge_then_exits() {
+fn bridge_error_wins_over_the_exit_reason() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
     apply(&mut r, opened(1));
@@ -148,11 +218,11 @@ fn bridge_error_is_kept_when_the_bridge_then_exits() {
             message: "Xwayland not found".into(),
         }),
     );
-    r.end(
-        RemoteAppsStatus::Failed,
-        Some((ErrorKind::Other, "exit 2".into())),
-    );
-    let state = r.snapshot();
+    // Not shown before the bridge exits.
+    assert_eq!(r.snapshot(0).error_kind, None);
+    assert!(matches!(exited(&mut r), Next::Stop));
+    let state = r.snapshot(0);
+    assert_eq!(state.status, RemoteAppsStatus::Failed);
     assert_eq!(state.error_kind, Some(ErrorKind::XwaylandMissing));
     assert!(state.windows.is_empty());
 }
@@ -175,7 +245,7 @@ fn popups_are_listed_after_their_parents() {
         }),
     );
     apply(&mut r, opened(2));
-    let ids: Vec<u64> = r.snapshot().windows.iter().map(|w| w.id.0).collect();
+    let ids: Vec<u64> = r.snapshot(0).windows.iter().map(|w| w.id.0).collect();
     assert_eq!(ids, [2, 1]);
 }
 
@@ -202,7 +272,7 @@ fn long_poll_wakes_on_change_and_times_out_without_one() {
 }
 
 #[test]
-fn cursor_image_becomes_rgba_and_each_change_gets_a_new_serial() {
+fn cursor_is_sent_once_as_rgba_with_a_new_serial_per_change() {
     use base64::Engine as _;
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
@@ -219,20 +289,22 @@ fn cursor_image_becomes_rgba_and_each_change_gets_a_new_serial() {
         )
     };
     assert!(apply(&mut r, cursor(vec![1, 2, 3, 255], None)));
-    let first = r.snapshot().cursor.unwrap();
+    let state = r.snapshot(0);
+    let first = state.cursor.unwrap();
     let rgba = base64::engine::general_purpose::STANDARD
         .decode(&first.rgba)
         .unwrap();
     assert_eq!(rgba, [3, 2, 1, 255]);
     assert_eq!((first.hotspot_x, first.hotspot_y), (3, 4));
+    assert!(r.snapshot(state.revision).cursor.is_none());
     apply(&mut r, cursor(Vec::new(), Some("text")));
-    let second = r.snapshot().cursor.unwrap();
+    let second = r.snapshot(state.revision).cursor.unwrap();
     assert_eq!(second.name.as_deref(), Some("text"));
     assert!(second.serial > first.serial);
 }
 
 #[test]
-fn copied_text_is_kept_with_a_new_serial_and_oversized_text_is_dropped() {
+fn copied_text_is_sent_once_with_a_new_serial_and_oversized_text_is_dropped() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
     let data = |bytes: Vec<u8>| {
@@ -244,9 +316,13 @@ fn copied_text_is_kept_with_a_new_serial_and_oversized_text_is_dropped() {
         )
     };
     assert!(apply(&mut r, data(b"one".to_vec())));
+    let first = r.snapshot(0).clipboard.unwrap().serial;
     assert!(apply(&mut r, data(b"two".to_vec())));
-    let clip = r.snapshot().clipboard.unwrap();
-    assert_eq!((clip.serial, clip.text.as_str()), (2, "two"));
+    let state = r.snapshot(0);
+    let clip = state.clipboard.unwrap();
+    assert_eq!(clip.text, "two");
+    assert!(clip.serial > first);
+    assert!(r.snapshot(state.revision).clipboard.is_none());
     let huge = vec![b'x'; terminator_core::remote_apps::MAX_CLIPBOARD + 1];
     assert!(!apply(&mut r, data(huge)));
 }
@@ -267,52 +343,50 @@ fn exit_reasons_name_the_missing_bridge_and_a_stopped_wprsd() {
 fn retries_back_off_to_a_minute_and_skip_install_problems() {
     let delays: Vec<u64> = (1..=9).map(retry_delay_seconds).collect();
     assert_eq!(delays, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
-    assert!(permanent(ErrorKind::WprsdMissing));
-    assert!(permanent(ErrorKind::VersionMismatch));
-    assert!(!permanent(ErrorKind::WprsdStopped));
-    assert!(!permanent(ErrorKind::Other));
+    assert!(ErrorKind::WprsdMissing.permanent());
+    assert!(ErrorKind::VersionMismatch.permanent());
+    assert!(ErrorKind::HostSetup.permanent());
+    assert!(ErrorKind::TakenOver.permanent());
+    assert!(!ErrorKind::WprsdStopped.permanent());
+    assert!(!ErrorKind::Other.permanent());
 }
 
 #[test]
-fn retry_keeps_the_error_closes_windows_and_hello_clears_it() {
+fn retry_keeps_the_error_and_only_ready_clears_it_and_the_backoff() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
     apply(&mut r, hello(PROTOCOL_VERSION));
+    apply(&mut r, ready());
     apply(&mut r, opened(1));
     apply(&mut r, frame(1, 1, 1, [0; 4]));
-    r.retrying((ErrorKind::Other, "Connection reset".into()), 2, 2);
-    let state = r.snapshot();
+    assert!(matches!(exited(&mut r), Next::Retry(1)));
+    let state = r.snapshot(0);
     assert_eq!(state.status, RemoteAppsStatus::Connecting);
     assert_eq!(state.error.as_deref(), Some("Connection reset"));
-    assert_eq!((state.retry_attempt, state.retry_in_seconds), (2, 2));
+    assert_eq!((state.retry_attempt, state.retry_in_seconds), (1, 1));
     assert!(state.windows.is_empty());
-    assert!(!r.hello_seen);
 
+    // A bridge that says hello and dies still backs off further.
+    r.retry_started();
     apply(&mut r, hello(PROTOCOL_VERSION));
-    let state = r.snapshot();
+    assert!(matches!(exited(&mut r), Next::Retry(2)));
+
+    r.retry_started();
+    apply(&mut r, hello(PROTOCOL_VERSION));
+    assert_eq!(r.snapshot(0).status, RemoteAppsStatus::Connecting);
+    apply(&mut r, ready());
+    let state = r.snapshot(0);
     assert_eq!(state.status, RemoteAppsStatus::Connected);
     assert_eq!((state.error, state.retry_attempt), (None, 0));
+    assert!(matches!(exited(&mut r), Next::Retry(1)));
 }
 
 #[test]
-fn bridge_error_is_read_back_only_while_failed() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut r = runtime(dir.path());
-    assert!(r.bridge_error().is_none());
-    apply(
-        &mut r,
-        Framed::new(HostMessage::Error {
-            kind: ErrorKind::WprsdMissing,
-            message: "wprsd not found".into(),
-        }),
-    );
-    assert_eq!(r.bridge_error().map(|e| e.0), Some(ErrorKind::WprsdMissing));
-}
-
-#[test]
-fn stop_request_wakes_a_waiting_retry() {
+fn stop_request_wakes_a_waiting_retry_and_ends_disconnected() {
     let dir = tempfile::tempdir().unwrap();
     let handle = Arc::new(Handle::new(runtime(dir.path())));
+    let (tx, _rx) = std::sync::mpsc::channel();
+    assert!(handle.update(|r| r.bridge_started(tx)));
     assert!(!handle.wait_stop(Duration::from_millis(10)));
     let stopper = Arc::clone(&handle);
     let stop = thread::spawn(move || {
@@ -320,8 +394,12 @@ fn stop_request_wakes_a_waiting_retry() {
         stopper.request_stop();
     });
     assert!(handle.wait_stop(Duration::from_secs(5)));
-    assert!(handle.read(|r| r.input.is_none()));
+    assert!(handle.read(|r| r.input().is_none()));
     stop.join().unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    assert!(!handle.update(|r| r.bridge_started(tx)));
+    assert!(matches!(handle.update(exited), Next::Stop));
+    assert_eq!(handle.snapshot().status, RemoteAppsStatus::Disconnected);
 }
 
 #[test]
@@ -345,6 +423,6 @@ fn detach_timeout_of_never_keeps_the_session() {
     thread::sleep(Duration::from_millis(60));
     assert!(!handle.read(|r| r.stop_requested));
     // The watcher ends with the session.
-    handle.update(|r| r.end(RemoteAppsStatus::Disconnected, None));
+    handle.update(|r| r.end(None));
     watcher.join().unwrap();
 }

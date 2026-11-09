@@ -5,8 +5,14 @@ Vendored from https://github.com/wayland-transpositor/wprs (formerly
 (2026-08-31). Apache-2.0; `LICENSE` and the per-file copyright headers are
 retained.
 
-No source changes. The tree is upstream except `.git` and `Cargo.lock`, where
-crates with security advisories are updated to fixed versions.
+## Local changes
+
+- `Cargo.lock`: crates with security advisories are updated to fixed versions.
+- `serialization::Request::ReplayDone` (last variant, so the other
+  variants keep their tags): wprsd sends it in `handle_connect` after the
+  surfaces that already exist, so Terminator's bridge knows the window list
+  is complete without a timer. `wprsc` ignores it. A wprsd without it still
+  works with the bridge, which then falls back to a quiet-time guess.
 
 ## How Terminator uses it
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # End-to-end: local isolated daemon -> SSH -> Docker host with wprsd and the
 # bridge -> xclock. Checks connect, the window's shared-memory frame, resize,
-# close and disconnect. Run on this computer from the repository root after:
+# reconnect, keys, clipboard, takeover, close and disconnect. Run on this computer from the repository root after:
 #   cargo build --workspace
 #   docker build -t terminator-remote-apps-sshd -f crates/remote-apps/dev/sshd.Dockerfile crates/remote-apps/dev
 #   (in the dev image) cargo build -p terminator-remote-apps --features bridge --bins
@@ -116,6 +116,21 @@ echo "clipboard to host: ok"
 host_x "printf hello-remote | xclip -selection clipboard"
 wait_for '.clipboard.text == "hello-remote"' || fail "copied text did not arrive" "$state"
 echo "clipboard from host: ok"
+
+# Another computer's bridge takes over: this session ends for good with
+# taken_over (no retry fight), and connecting again brings the window back.
+docker exec tra-sshd sh -c "$apps </dev/null >/dev/null 2>&1"
+wait_for '.status == "failed" and .error_kind == "taken_over"' || fail "no takeover" "$state"
+echo "taken over: $(echo "$state" | jq -r .RemoteApps.error)"
+state=$(rpc "{\"RemoteAppsConnect\":{\"project\":\"$id\"}}")
+session=$(echo "$state" | jq -r .RemoteApps.session)
+wait_for ".status == \"connected\" and (.windows | map(.id) | index($win)) != null" \
+    || fail "window did not come back after takeover" "$state"
+echo "connected again, window $win is back"
+
+# A session the daemon does not know answers the error the GUI reconnects on.
+gone=$(rpc '{"RemoteAppsState":{"session":"no-such-session","since":0}}' 2>&1)
+echo "$gone" | grep -q "Unknown remote-apps session" || fail "unknown session" "$gone"
 
 rpc "{\"RemoteAppsInput\":{\"session\":\"$session\",\"messages\":[{\"type\":\"close_requested\",\"id\":$win}]}}" >/dev/null
 wait_for '.windows | length == 0' || fail "window did not close" "$state"

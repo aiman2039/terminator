@@ -1,7 +1,7 @@
 //! End-to-end check of the host bridge, run on Linux by `dev/bridge-e2e.sh`
 //! after it starts wprsd and an X11 app:
 //!
-//! `bridge_probe BRIDGE_BIN SOCKET|--ensure [--prime]`
+//! `bridge_probe BRIDGE_BIN SOCKET|--ensure [--prime|--hold]`
 //!
 //! It acts as the local daemon: it starts the bridge, waits for a window and
 //! its first frame, resizes the window, waits for a frame of the new size,
@@ -10,6 +10,9 @@
 //! `--prime` only connects once and leaves. xwayland-xdg-shell maps X
 //! windows only after wprsd has an output, and the bridge gives it one;
 //! wprsd keeps it after the bridge leaves.
+//!
+//! `--hold` waits until a newer bridge of the same user takes over and
+//! passes when this bridge reports `TakenOver`.
 
 use std::io::{BufReader, BufWriter};
 use std::process::{Command, ExitCode, Stdio};
@@ -73,15 +76,37 @@ fn probe() -> Result<(), String> {
         version: "probe".into(),
         capabilities: Vec::new(),
     })?;
-    if args.next().as_deref() == Some("--prime") {
-        wait_for(&rx, "hello", |m| {
-            matches!(m.message, HostMessage::Hello { .. }).then_some(())
-        })?;
-        thread::sleep(Duration::from_secs(1));
-        drop(child.stdin.take());
-        let _ = child.kill();
-        say("primed: wprsd has an output");
-        return Ok(());
+    match args.next().as_deref() {
+        Some("--prime") => {
+            wait_for(&rx, "ready", |m| {
+                matches!(m.message, HostMessage::Ready).then_some(())
+            })?;
+            drop(child.stdin.take());
+            let _ = child.kill();
+            say("primed: wprsd has an output");
+            return Ok(());
+        }
+        Some("--hold") => {
+            wait_for(&rx, "ready", |m| {
+                matches!(m.message, HostMessage::Ready).then_some(())
+            })?;
+            say("ready: holding until another bridge takes over");
+            let kind = loop {
+                let framed = rx
+                    .recv_timeout(WAIT.saturating_mul(2))
+                    .map_err(|_| "timed out waiting for a takeover".to_owned())?;
+                if let HostMessage::Error { kind, .. } = framed.message {
+                    break kind;
+                }
+            };
+            let _ = child.wait();
+            if kind != protocol::ErrorKind::TakenOver {
+                return Err(format!("expected TakenOver, got {kind:?}"));
+            }
+            say("PASS: the older bridge was taken over");
+            return Ok(());
+        }
+        _ => {}
     }
 
     let id = wait_for(&rx, "a toplevel window", |m| match &m.message {
@@ -122,24 +147,22 @@ fn probe() -> Result<(), String> {
     Ok(())
 }
 
+/// The window size of a frame of `want` whose payload holds exactly its
+/// damage rectangles.
 fn frame_size(message: &Framed<HostMessage>, want: WindowId) -> Option<(u32, u32)> {
-    match message.message {
+    match &message.message {
         HostMessage::Frame {
-            id, width, height, ..
-        } if id == want => {
-            let expected = u64::from(width)
-                .checked_mul(u64::from(height))?
-                .checked_mul(4)?;
-            (zstd_len(&message.payload)? == expected).then_some((width, height))
+            id,
+            width,
+            height,
+            damage,
+            ..
+        } if *id == want => {
+            terminator_remote_apps::compose::zstd_bgra_to_rgba(&message.payload, damage)?;
+            Some((*width, *height))
         }
         _ => None,
     }
-}
-
-fn zstd_len(payload: &[u8]) -> Option<u64> {
-    zstd::bulk::decompress(payload, 64 << 20)
-        .ok()
-        .and_then(|bytes| u64::try_from(bytes.len()).ok())
 }
 
 fn wait_for<T>(

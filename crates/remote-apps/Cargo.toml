@@ -23,7 +23,7 @@ bridge = ["dep:wprs", "dep:rkyv", "dep:nix"]
 wprs = { path = "../../vendor/wprs", optional = true }
 # Same versions as wprs, so one copy is built.
 rkyv = { version = "0.8.14", optional = true }
-nix = { version = "0.30.1", features = ["fs", "hostname", "socket", "user"], optional = true }
+nix = { version = "0.30.1", features = ["fs", "hostname", "signal", "socket", "user"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 anyhow.workspace = true

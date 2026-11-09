@@ -3,19 +3,14 @@
 //! 1:1 with physical pixels would make them tiny on HiDPI screens. The
 //! tab's size in points is the size the app is asked to take.
 
+use super::pointer::{Geometry, pointer_messages};
 use super::*;
-use eframe::egui::{
-    Event, EventFilter, Modifiers, MouseWheelUnit, PointerButton, Pos2, Rect, Sense,
-    TextureOptions, Vec2,
-};
-use terminator_core::remote_apps::{PointerButton as RemoteButton, RemoteWindow};
+use eframe::egui::{Event, EventFilter, Modifiers, Pos2, Rect, Sense, TextureOptions};
 
 /// A size must hold this long before it is sent, so a drag sends one resize.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(200);
 /// App pixels per egui point (see the module docs).
 const APP_PIXELS_PER_POINT: f32 = 1.0;
-/// Pixels per wheel line for smooth scrolling.
-const LINE_PIXELS: f64 = 15.0;
 
 #[derive(Default)]
 pub(crate) struct WindowView {
@@ -27,20 +22,75 @@ pub(crate) struct WindowView {
     held: Modifiers,
     keys_down: Vec<u32>,
     focused: bool,
+    /// The pointer was over the window in the last paint.
+    hovered: bool,
+    /// The egui pass that last painted this window as a tab. Only the first
+    /// view in a pass sends input, so two views of one window do not fight.
+    painted_pass: Option<u64>,
+    /// When the user last asked the app to close the window.
+    pub(super) close_asked: Option<Instant>,
 }
 
 impl WindowView {
-    pub(super) fn set_image(&mut self, ctx: &egui::Context, name: String, image: ColorImage) {
-        match &mut self.texture {
-            Some(texture) => texture.set(image, TextureOptions::NEAREST),
-            None => {
-                self.texture = Some(ctx.load_texture(name, image, TextureOptions::NEAREST));
+    /// Applies new pixels. `false` when they are patches for a texture this
+    /// view does not have (or of another size): read the whole window.
+    pub(super) fn set_pixels(
+        &mut self,
+        ctx: &egui::Context,
+        name: impl FnOnce() -> String,
+        pixels: Pixels,
+    ) -> bool {
+        match (pixels, &mut self.texture) {
+            (Pixels::Full(image), Some(texture)) => texture.set(image, TextureOptions::NEAREST),
+            (Pixels::Full(image), None) => {
+                self.texture = Some(ctx.load_texture(name(), image, TextureOptions::NEAREST));
             }
+            (Pixels::Patches(patches), Some(texture)) => {
+                let [width, height] = texture.size();
+                let fits = patches.iter().all(|([x, y], image)| {
+                    x.saturating_add(image.size[0]) <= width
+                        && y.saturating_add(image.size[1]) <= height
+                });
+                if !fits {
+                    return false;
+                }
+                for (pos, image) in patches {
+                    texture.set_partial(pos, image, TextureOptions::NEAREST);
+                }
+            }
+            (Pixels::Patches(_), None) => return false,
         }
+        true
     }
 
     pub(super) fn has_focus(&self) -> bool {
         self.focused
+    }
+
+    /// When no tab painted this window in this pass or the one before:
+    /// releases held keys, tells the app it lost focus and the pointer,
+    /// once. The previous pass counts because floating panes paint after
+    /// this check runs.
+    pub(super) fn release_if_unpainted(&mut self, window: u64, pass: u64) -> Vec<ClientMessage> {
+        let mut out = Vec::new();
+        if self
+            .painted_pass
+            .is_some_and(|p| p >= pass.saturating_sub(1))
+        {
+            return out;
+        }
+        key_messages(self, (window, false), (&[], Modifiers::NONE), &mut out);
+        if let Some((width, height, true)) = self.sent
+            && let Some(unfocused) = self.configure_due((width, height, false), Instant::now())
+        {
+            out.push(configure(window, unfocused));
+        }
+        if std::mem::take(&mut self.hovered) {
+            out.push(ClientMessage::PointerLeave {
+                id: WindowId(window),
+            });
+        }
+        out
     }
 
     /// The configure to send now, if the wanted one held long enough.
@@ -73,23 +123,20 @@ impl WindowView {
     }
 }
 
+fn configure(window: u64, (width, height, focused): (u32, u32, bool)) -> ClientMessage {
+    ClientMessage::Configure {
+        id: WindowId(window),
+        width,
+        height,
+        scale: 1,
+        focused,
+    }
+}
+
 /// The egui ID of a remote window's pane; it has keyboard focus while the
 /// window takes keys.
 pub(super) fn pane_id(project: &str, window: u64) -> egui::Id {
     egui::Id::unique(("remote-app", project, window))
-}
-
-/// Where one window is drawn in the tab.
-struct Placed {
-    id: u64,
-    rect: Rect,
-}
-
-/// Every window drawn in a tab, bottom to top, and the points-to-pixels
-/// factor.
-struct Geometry {
-    placed: Vec<Placed>,
-    ppp: f32,
 }
 
 impl App {
@@ -99,15 +146,15 @@ impl App {
         let error = session.and_then(|s| s.error.clone());
         let session_id = session.and_then(|s| s.id.clone());
         let key = (project.to_owned(), window);
-        let shown = state.as_ref().and_then(|s| {
-            s.windows.iter().find(|w| w.id.0 == window).filter(|_| {
-                self.remote_apps
-                    .windows
-                    .get(&key)
-                    .is_some_and(|v| v.texture.is_some())
-            })
-        });
-        let (Some(state), Some(_), Some(session_id)) = (state.as_deref(), shown, session_id) else {
+        let shown = state
+            .as_ref()
+            .is_some_and(|s| s.windows.iter().any(|w| w.id.0 == window))
+            && self
+                .remote_apps
+                .windows
+                .get(&key)
+                .is_some_and(|v| v.texture.is_some());
+        let (Some(state), true, Some(session_id)) = (state.as_deref(), shown, session_id) else {
             self.remote_app_placeholder(ui, project, (state.as_deref(), error));
             return;
         };
@@ -125,12 +172,32 @@ impl App {
                 },
             );
         });
-        let ppp = APP_PIXELS_PER_POINT;
-        let geometry = Geometry {
-            placed: place_windows(state, window, (rect.min, ppp)),
-            ppp,
+        let geometry = Geometry::new(state, window, (rect.min, APP_PIXELS_PER_POINT));
+        self.paint_remote_windows(ui, project, (&geometry, &response));
+        let pass = ui.ctx().cumulative_pass_nr();
+        // `shown` checked the view has a texture, so it exists.
+        let Some(view) = self.remote_apps.windows.get_mut(&key) else {
+            return;
         };
-        let painter = ui.painter_at(rect);
+        if view.painted_pass == Some(pass) {
+            // Another view of this window already sent input this pass.
+            return;
+        }
+        view.painted_pass = Some(pass);
+        if response.clicked() || response.drag_started() {
+            response.request_focus();
+            self.focus_non_terminal();
+        }
+        self.remote_view_input(ui, (&key, session_id), (&geometry, &response));
+    }
+
+    fn paint_remote_windows(
+        &self,
+        ui: &egui::Ui,
+        project: &str,
+        (geometry, response): (&Geometry, &egui::Response),
+    ) {
+        let painter = ui.painter_at(response.rect);
         for place in &geometry.placed {
             if let Some(texture) = self
                 .remote_apps
@@ -145,34 +212,47 @@ impl App {
         if let Some(pos) = response.hover_pos()
             && let Some(cursor) = self.remote_apps.cursors.get(project)
         {
-            cursor.show(ui, pos, ppp);
+            cursor.show(ui, pos, geometry.ppp);
         }
-        if response.clicked() || response.drag_started() {
-            response.request_focus();
-            self.focus_non_terminal();
-        }
+    }
+
+    /// Sends this pass's configure, pointer and key input of a painted
+    /// window.
+    fn remote_view_input(
+        &mut self,
+        ui: &egui::Ui,
+        (key, session_id): (&(String, u64), String),
+        (geometry, response): (&Geometry, &egui::Response),
+    ) {
+        let window = key.1;
+        let rect = response.rect;
         let focused = response.has_focus() && ui.ctx().input(|i| i.focused);
         let size = (
-            physical(rect.width(), ppp),
-            physical(rect.height(), ppp),
+            physical(rect.width(), geometry.ppp),
+            physical(rect.height(), geometry.ppp),
             focused,
         );
         let mut messages = Vec::new();
-        let view = self.remote_apps.windows.entry(key).or_default();
-        if let Some((width, height, focused)) = view.configure_due(size, Instant::now()) {
-            messages.push(ClientMessage::Configure {
-                id: WindowId(window),
-                width,
-                height,
-                scale: 1,
-                focused,
+        let Some(view) = self.remote_apps.windows.get_mut(key) else {
+            return;
+        };
+        let hovered = response.hovered() || response.is_pointer_button_down_on();
+        if std::mem::replace(&mut view.hovered, hovered)
+            && !hovered
+            && let Some(first) = geometry.placed.first()
+        {
+            messages.push(ClientMessage::PointerLeave {
+                id: WindowId(first.id),
             });
+        }
+        if let Some(due) = view.configure_due(size, Instant::now()) {
+            messages.push(configure(window, due));
         } else if view.wanted.is_some() {
             ui.ctx().request_repaint_after(RESIZE_DEBOUNCE);
         }
         let events = ui.input(|i| i.events.clone());
         let modifiers = ui.input(|i| i.modifiers);
-        pointer_messages(&events, &geometry, &response, &mut messages);
+        pointer_messages(&events, geometry, response, &mut messages);
         let paste = key_messages(view, (window, focused), (&events, modifiers), &mut messages);
         match paste {
             // One request keeps the order: clipboard first, then the keys.
@@ -206,6 +286,11 @@ impl App {
                     _ => "Connecting to the remote app…".to_owned(),
                 },
                 Some(RemoteAppsStatus::Connected) => "The window is closed on the host.".to_owned(),
+                Some(RemoteAppsStatus::Failed)
+                    if state.and_then(|s| s.error_kind) == Some(ErrorKind::TakenOver) =>
+                {
+                    "Another Terminator shows these remote apps now.".to_owned()
+                }
                 Some(RemoteAppsStatus::Failed) => "Remote apps stopped.".to_owned(),
                 Some(RemoteAppsStatus::Disconnected) => "Remote apps are disconnected.".to_owned(),
             };
@@ -224,37 +309,6 @@ impl App {
     }
 }
 
-/// The toplevel at `origin` and its popups (and their popups) at their
-/// offsets, bottom to top.
-#[expect(
-    clippy::arithmetic_side_effects,
-    clippy::cast_precision_loss,
-    reason = "f32 screen geometry; offsets are window pixels."
-)]
-fn place_windows(state: &RemoteAppsState, window: u64, (origin, ppp): (Pos2, f32)) -> Vec<Placed> {
-    let mut placed: Vec<(u64, Pos2)> = vec![(window, origin)];
-    // Popups come after their parents in the list (the daemon sorts them),
-    // so one pass finds every level.
-    for w in &state.windows {
-        if let WindowRole::Popup { parent, x, y } = w.role
-            && let Some(&(_, at)) = placed.iter().find(|(id, _)| *id == parent.0)
-        {
-            placed.push((w.id.0, at + Vec2::new(x as f32, y as f32) / ppp));
-        }
-    }
-    placed
-        .into_iter()
-        .filter_map(|(id, at)| {
-            let w: &RemoteWindow = state.windows.iter().find(|w| w.id.0 == id)?;
-            let size = Vec2::new(f32::from(w.width), f32::from(w.height)) / ppp;
-            Some(Placed {
-                id,
-                rect: Rect::from_min_size(at, size),
-            })
-        })
-        .collect()
-}
-
 fn physical(points: f32, ppp: f32) -> u32 {
     let pixels = (points * ppp).round();
     if pixels.is_finite() && pixels >= 1.0 {
@@ -269,120 +323,6 @@ fn physical(points: f32, ppp: f32) -> u32 {
     } else {
         1
     }
-}
-
-/// The topmost window under `pos`, and `pos` in its pixels.
-#[expect(clippy::arithmetic_side_effects, reason = "f32 screen geometry.")]
-fn target(geometry: &Geometry, pos: Pos2) -> Option<(u64, f64, f64)> {
-    let placed = &geometry.placed;
-    let place = placed
-        .iter()
-        .rev()
-        .find(|p| p.rect.contains(pos))
-        .or(placed.first())?;
-    let local = (pos - place.rect.min) * geometry.ppp;
-    Some((place.id, f64::from(local.x), f64::from(local.y)))
-}
-
-fn pointer_messages(
-    events: &[Event],
-    geometry: &Geometry,
-    response: &egui::Response,
-    out: &mut Vec<ClientMessage>,
-) {
-    let placed = &geometry.placed;
-    let area = response.rect;
-    let pressed = response.is_pointer_button_down_on();
-    for event in events {
-        match event {
-            Event::PointerMoved(pos) if area.contains(*pos) || pressed => {
-                if let Some((id, x, y)) = target(geometry, *pos) {
-                    out.push(ClientMessage::PointerMotion {
-                        id: WindowId(id),
-                        x,
-                        y,
-                    });
-                }
-            }
-            Event::PointerButton {
-                pos,
-                button,
-                pressed: down,
-                ..
-            } if area.contains(*pos) || !*down => {
-                let (Some(button), Some((id, x, y))) =
-                    (remote_button(*button), target(geometry, *pos))
-                else {
-                    continue;
-                };
-                out.push(ClientMessage::PointerMotion {
-                    id: WindowId(id),
-                    x,
-                    y,
-                });
-                out.push(ClientMessage::PointerButton {
-                    id: WindowId(id),
-                    button,
-                    pressed: *down,
-                });
-            }
-            Event::MouseWheel { unit, delta, .. } if response.hovered() => {
-                let Some((id, _, _)) = response.hover_pos().and_then(|pos| target(geometry, pos))
-                else {
-                    continue;
-                };
-                out.push(scroll(WindowId(id), *unit, *delta));
-            }
-            Event::PointerGone => {
-                if let Some(first) = placed.first() {
-                    out.push(ClientMessage::PointerLeave {
-                        id: WindowId(first.id),
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// egui wheel deltas are positive up/left; Wayland axes are positive
-/// down/right.
-fn scroll(id: WindowId, unit: MouseWheelUnit, delta: Vec2) -> ClientMessage {
-    let (dx, dy) = (-f64::from(delta.x), -f64::from(delta.y));
-    match unit {
-        MouseWheelUnit::Point => ClientMessage::Scroll {
-            id,
-            dx,
-            dy,
-            discrete_x: 0,
-            discrete_y: 0,
-        },
-        MouseWheelUnit::Line | MouseWheelUnit::Page => ClientMessage::Scroll {
-            id,
-            dx: dx * LINE_PIXELS,
-            dy: dy * LINE_PIXELS,
-            discrete_x: clicks(dx),
-            discrete_y: clicks(dy),
-        },
-    }
-}
-
-fn clicks(lines: f64) -> i32 {
-    let lines = lines.round().clamp(-100.0, 100.0);
-    // Clamped to ±100 above.
-    #[expect(clippy::cast_possible_truncation, reason = "Clamped to ±100.")]
-    let lines = lines as i32;
-    lines
-}
-
-fn remote_button(button: PointerButton) -> Option<RemoteButton> {
-    Some(match button {
-        PointerButton::Primary => RemoteButton::Left,
-        PointerButton::Secondary => RemoteButton::Right,
-        PointerButton::Middle => RemoteButton::Middle,
-        PointerButton::Extra1 => RemoteButton::Back,
-        PointerButton::Extra2 => RemoteButton::Forward,
-    })
 }
 
 /// Keys while the tab has focus; on focus loss, releases what is held so

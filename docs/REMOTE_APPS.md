@@ -42,14 +42,15 @@ host's packages (`xwayland`).
 ## Set up a host
 
 1. Check it: `ssh HOST sh -s < crates/remote-apps/dev/host-check.sh`.
-2. Build the bridge for x86_64 hosts (static, any glibc):
-   `sh crates/remote-apps/dev/build-host.sh`, then copy
-   `target/host-x86_64/terminator-remote-bridge` to the host, for example
-   `~/bin/`.
-3. wprsd, xwayland-xdg-shell and Xwayland:
-   - Packages or a Terminator install on the host: put them on `PATH` (or
-     beside the bridge). The default apps command,
-     `terminator-remote-bridge --ensure`, then works if the bridge is on the
+2. Build the host tools for x86_64 hosts (static, any glibc):
+   `sh crates/remote-apps/dev/build-host.sh`, then copy all of
+   `target/host-x86_64/` (`terminator-remote-bridge`, `wprsd`,
+   `xwayland-xdg-shell`) into one directory on the host, for example
+   `~/bin/`. The bridge uses the wprsd beside it first, so both speak the
+   same wprs protocol.
+3. Xwayland:
+   - From packages (`xwayland`) on `PATH`: the default apps command,
+     `terminator-remote-bridge --ensure`, works if the bridge is on the
      non-login `PATH`; else give its full path.
    - No root (for example CentOS 7): install
      [nix-portable](https://github.com/DavHau/nix-portable) in `~/bin`, set
@@ -57,15 +58,42 @@ host's packages (`xwayland`).
      Properties → **Remote apps command** to:
 
      ```sh
-     env NP_LOCATION=/local/disk TERMINATOR_WPRS_WRAPPER='~/bin/nix-portable nix shell nixpkgs#wprs nixpkgs#xwayland -c' ~/bin/terminator-remote-bridge --ensure
+     env NP_LOCATION=/local/disk TERMINATOR_WPRS_WRAPPER='~/bin/nix-portable nix shell nixpkgs#xwayland -c' ~/bin/terminator-remote-bridge --ensure
      ```
 
-     The wrapper starts wprsd in its own nix-portable process, so the apps
-     keep running when the bridge (the viewer) stops. The first start
-     downloads wprs; nixpkgs builds it with AVX2.
+     The wrapper starts wprsd (from beside the bridge) in its own
+     nix-portable process with Xwayland on its `PATH`, so the apps keep
+     running when the bridge (the viewer) stops. The first start downloads
+     Xwayland. Without the tools beside the bridge, add `nixpkgs#wprs` to
+     the wrapper (nixpkgs builds it with AVX2; it has no `ReplayDone`, so
+     `Ready` comes after 3 s).
 4. In Terminator: Hosts sidebar → the host's menu → **Show remote apps**.
    New terminals on the host get `DISPLAY`; run an X11 app there (for
    example `xclock`) and it opens as a tab.
+
+### Real-host test
+
+On this computer: build Terminator (`cargo build --workspace --bins
+--locked`) and the host tools (step 2). On the host, then in Terminator:
+
+1. `ldd ~/bin/terminator-remote-bridge` says "not a dynamic executable",
+   and `~/bin/wprsd --help` runs.
+2. Show remote apps: the status becomes connected; `/tmp/terminator-remote-$(id -u)/`
+   holds `wprsd.json`, `session.json`, `bridge.pid`, `wprsd.log`.
+3. New SSH terminal: `echo $DISPLAY` shows the display; `xclock &` opens a
+   tab; `xterm &` opens another.
+4. Type in xterm; click and scroll; open a menu (popup over the tab); resize
+   the tab; copy and paste both ways.
+5. Close Terminator and open it again: the tabs come back with the apps.
+6. Drop the network (sleep the laptop or `kill` the ssh master): the tab
+   says Reconnecting, then the apps come back.
+7. Show remote apps from a second computer (or a second Terminator data
+   dir): the first one says another Terminator shows them.
+8. Close a window from the app and with the tab's close button (twice
+   within 5 s closes an app that ignores it).
+
+On a failure, send `/tmp/terminator-remote-$(id -u)/wprsd.log` and the
+host's error text from the tab.
 
 Keys: a focused remote tab takes every key (Cmd works as Ctrl); F8 or a
 click elsewhere gives the keys back to Terminator. Copy and paste work for
@@ -87,13 +115,15 @@ windows has focus.
 |---|---|
 | `wprsd` stops | Bridge sends `Error{wprsd_stopped}` with the last log lines. The GUI shows a bar on the host. A shell hook prints a clear line when `DISPLAY` is dead. The display restarts with backoff and keeps its number. |
 | Network drop or sleep | Apps keep running in `wprsd`; the tab shows "Reconnecting…" and reattaches. |
-| Two Terminator instances | The newest takes the windows; the other shows "moved to another client". |
+| Two Terminator instances | wprsd serves one client. A new bridge writes `bridge.pid`, waits 3 s for the old bridge to see it and leave, then kills it. The old one ends with `Error{taken_over}` (no retry); its tabs say "Another Terminator shows these remote apps now". |
+| Daemon restarted | `RemoteAppsState` for an unknown session fails with "Unknown remote-apps session" (`UNKNOWN_SESSION`, the same text in every daemon version); the GUI connects again and keeps the tabs. |
+| Old bridge or old daemon | `PROTOCOL_VERSION` 2 (`Ready`, damage rectangles, new clipboard messages): a version 1 peer gets the version mismatch error that names the install to update. An unknown `ErrorKind` reads as `other`. |
 | Display number in use | Find a free one with lock files; keep it stable for each host. |
 | Multi-user host | Sockets in a 0700 directory; xauth cookie; never `xhost +`. |
 | No cookie, or proot (nix-portable on old kernels) | Xwayland refuses `xwayland-xdg-shell` ("Authorization required"). The bridge always starts Xwayland with `-auth` through a wrapper first in `PATH`, and picks the display with `--display=N` so the cookie matches. Proven by `host-smoke.sh`. |
-| No `XDG_RUNTIME_DIR` | Private directory under `/tmp`. |
+| `XDG_RUNTIME_DIR` removed at logout (systemd) | Never used: the private directory is `/tmp/terminator-remote-<uid>` (0700), or `$TERMINATOR_REMOTE_DIR`. |
 | Xwayland missing | `Error{xwayland_missing}`: "Install the `xwayland` package". |
-| Unsupported CPU | `Error{unsupported}`. |
+| Bad private directory, no free display, wprsd does not start | `Error{host_setup}`; no retry. |
 | Home on NFS | Sockets never on NFS. |
 | Mosh terminals | Display traffic still uses the OpenSSH master. |
 | `sudo`/`su` lose `DISPLAY` | Documented; shell hook hint. |
@@ -101,7 +131,7 @@ windows has focus.
 | GL apps slow | Software rendering; documented. |
 | Clipboard leaks | Clipboard sync is opt-in for each host. |
 | Mac key mapping | Each host has a key mapping setting. |
-| Orphaned `wprsd` | Stops after the idle timeout. |
+| Orphaned `wprsd` | `wprsd.json` records it as soon as it answers, so a bridge that dies before `session.json` does not start a second one. |
 | Old local daemon | Feature hidden without `remote-apps-v1`. |
 | App starts before wprsd has an output | xwayland-xdg-shell never maps its window (upstream). The host launcher connects the bridge once (it sends the output) before it exports `DISPLAY`; wprsd keeps the output after the bridge leaves. |
 | Configure sends an unknown window-state bit | wprsd panics. The bridge sends only `TILED` and `ACTIVATED`. |
@@ -111,15 +141,24 @@ windows has focus.
 0. Spike: vendor wprs, protocol crate, Linux dev image. **Done.**
 1. Bridge: wprs client on the host that composites windows and speaks the
    protocol over stdio. Test in the dev image with `xclock`. **Done**
-   (`terminator-remote-bridge`; frames are full-window zstd BGRA for now,
-   cursor and clipboard come later).
+   (`terminator-remote-bridge`). A `Frame` carries the damaged rectangles of
+   the window (zstd BGRA). `compose::Damage` keeps up to 8 separate
+   rectangles and merges two only when their bounding box adds little area,
+   so a caret and a clock far apart do not resend the whole window; a new
+   size is one whole-window rectangle. Each rectangle is composited into a
+   canvas of its own size; the bridge keeps no window copies. Frames are
+   rendered only while the stdout writer is idle, so a slow link skips
+   frames instead of queueing them. After `Hello` and the window replay the
+   bridge sends `Ready`: wprsd marks the end of its replay with
+   `Request::ReplayDone` (a local change, see `vendor/wprs/UPSTREAM.md`); a
+   wprsd without it gets `Ready` after 3 s.
 2. Daemon session (`remote-apps-v1`): start the bridge through the SSH master,
    own the stream, detach and reattach. Host side done:
    `terminator-remote-bridge --ensure` finds or starts this user's wprsd
-   (private dir `$XDG_RUNTIME_DIR/terminator-remote` or
-   `/tmp/terminator-remote-<uid>`, own Xauthority cookie, `-auth` shim for
-   Xwayland, free display from `:100`, detached process group) and writes
-   `session.json` after wprsd has an output. Tools come from beside the
+   (private dir `/tmp/terminator-remote-<uid>` or `$TERMINATOR_REMOTE_DIR`,
+   own Xauthority cookie, `-auth` shim for Xwayland, free display from
+   `:100`, detached process group), records it in `wprsd.json`, and writes
+   `session.json` for shells after `Ready` (wprsd then has an output). Tools come from beside the
    bridge, else from `PATH`. Test: `dev/bridge-ensure-e2e.sh`.
    Daemon side done, tested end to end by `dev/daemon-e2e.sh` (local
    isolated daemon → SSH → Docker host from `dev/sshd.Dockerfile` → xclock:
@@ -134,6 +173,11 @@ windows has focus.
    `terminator-remote-bridge --ensure`. Each window's pixels are
    premultiplied RGBA in a `terminator_sys` shared-frame file
    (`remote-app-*.fb` in the runtime directory); a new size gets a new file.
+   `RemoteWindow.regions` lists what changed after the poll's `since`
+   (empty: read the whole window); the GUI patches only those areas of its
+   texture. `cursor` and `clipboard` come only when they changed after
+   `since`. The status is `connected` only after `Ready`, so the GUI closes
+   tabs of missing windows only against a full window list.
    Exit reasons: exit 127 or "not found" → `wprsd_missing` ("bridge is not
    installed on the host"), "server disconnected" → `wprsd_stopped`, SSH
    exit 255 → the classified SSH error. A bridge `Error` message wins over
@@ -141,8 +185,9 @@ windows has focus.
    are connected. Window IDs are wprsd surface IDs, so a new bridge keeps
    them. Temporary failures (SSH, network, wprsd stopped) retry after 1, 2,
    4 … 60 s while the status is `connecting` with `error`, `retry_attempt`
-   and `retry_in_seconds`; a missing bridge or Xwayland, a version mismatch
-   or no `ssh` end the session. With no viewer (no `RemoteAppsState` or
+   and `retry_in_seconds`; the backoff resets only on `Ready`. A missing
+   bridge or Xwayland, host setup errors, a version mismatch, a takeover or
+   no `ssh` end the session (`ErrorKind::permanent`). With no viewer (no `RemoteAppsState` or
    connect) for Settings → VNC detached timeout (default 30 min, 0 is
    never), the daemon stops the bridge; the apps stay in wprsd and the next
    connect shows them. **Phase 2 done.**
@@ -154,7 +199,11 @@ windows has focus.
    (not while reconnecting). Pixels 1:1 with physical pixels; the tab size
    in physical pixels is the window size (200 ms debounce); popups draw over
    their parent. Pointer, wheel (Wayland axis signs) and evdev keys by
-   physical position (Cmd acts as Ctrl). Closing a tab asks the app to close.
+   physical position (Cmd acts as Ctrl). Closing a tab asks the app to close;
+   a second close within 5 s closes the tab, and that window gets no new tab
+   while it exists. A focused tab that another tab covers releases its keys
+   and tells the app it lost focus; the pointer leaving sends a leave. When
+   one window shows in two panes, only the first sends input.
    Live check: `dev/gui-e2e.sh` (xclock fills its tab). A focused remote tab
    takes every key (F8 gives them back). The cursor comes from the app (CSS
    name → local cursor; image → drawn at the pointer). One app pixel is one
