@@ -163,6 +163,7 @@ pub fn retry_delay_seconds(attempt: u32) -> u64 {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::SHELL_ENV;
     use std::os::unix::net::UnixListener;
