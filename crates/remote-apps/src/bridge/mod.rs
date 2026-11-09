@@ -216,21 +216,7 @@ fn serve(
     rx: &mpsc::Receiver<Incoming>,
 ) -> Result<(), BridgeError> {
     spawn_stdin(tx.clone());
-    let mut serializer = Serializer::<Event, Request>::new_client(&target.socket).map_err(|e| {
-        BridgeError::WprsdMissing {
-            path: target.socket.display().to_string(),
-            reason: e.to_string(),
-        }
-    })?;
-    if let Some(reader) = serializer.reader() {
-        thread::spawn(move || {
-            while let Ok(request) = reader.recv() {
-                if tx.send(Incoming::Wprs(Box::new(request))).is_err() {
-                    break;
-                }
-            }
-        });
-    }
+    let serializer = connect_wprsd(&target.socket, tx)?;
     let wprs = serializer.writer();
     wprs.send(SendType::Object(Event::WprsClientConnect));
     wprs.send(SendType::Object(input::output()));
@@ -293,6 +279,30 @@ fn serve(
         }
         writer.send(batch);
     }
+}
+
+/// Connects to wprsd at `socket` and forwards its requests to `tx` from a
+/// reader thread.
+fn connect_wprsd(
+    socket: &std::path::Path,
+    tx: mpsc::Sender<Incoming>,
+) -> Result<Serializer<Event, Request>, BridgeError> {
+    let mut serializer = Serializer::<Event, Request>::new_client(socket).map_err(|e| {
+        BridgeError::WprsdMissing {
+            path: socket.display().to_string(),
+            reason: e.to_string(),
+        }
+    })?;
+    if let Some(reader) = serializer.reader() {
+        thread::spawn(move || {
+            while let Ok(request) = reader.recv() {
+                if tx.send(Incoming::Wprs(Box::new(request))).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    Ok(serializer)
 }
 
 /// What `serve` keeps between messages: the windows, input and clipboard

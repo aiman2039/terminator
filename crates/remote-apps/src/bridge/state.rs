@@ -17,7 +17,7 @@ use wprs::serialization::wayland::{
 use wprs::serialization::xdg_shell::{PopupRequestPayload, ToplevelRequestPayload};
 use wprs::serialization::{ClientId, RecvType, Request};
 
-use super::buffer::{Pixels, pixels, positioner};
+use super::buffer::{Pixels, cursor_pixels, named_cursor, pixels, positioner};
 use crate::compose::{self, Canvas, Damage};
 use crate::protocol::{FrameEncoding, Framed, HostMessage, Rect, WindowId, WindowRole};
 
@@ -185,23 +185,14 @@ impl State {
     }
 
     fn cursor_image(&mut self, image: CursorImage) {
-        let named = |name: Option<String>| {
-            Framed::new(HostMessage::Cursor {
-                width: 0,
-                height: 0,
-                hotspot_x: 0,
-                hotspot_y: 0,
-                name,
-            })
-        };
         match image.status {
             CursorImageStatus::Hidden => {
                 self.cursor = None;
-                self.control.push(named(None));
+                self.control.push(named_cursor(None));
             }
             CursorImageStatus::Named(name) => {
                 self.cursor = None;
-                self.control.push(named(Some(name)));
+                self.control.push(named_cursor(Some(name)));
             }
             CursorImageStatus::Surface {
                 client_surface,
@@ -214,27 +205,14 @@ impl State {
         }
     }
 
-    /// The cursor surface's pixels, as tightly packed BGRA rows.
+    /// Queues the cursor surface's pixels.
     fn queue_cursor_pixels(&mut self) {
-        let Some((key, (hotspot_x, hotspot_y))) = self.cursor else {
+        let Some((key, hotspot)) = self.cursor else {
             return;
         };
-        let Some(pixels) = self.surfaces.get(&key).and_then(|s| s.pixels.as_ref()) else {
-            return;
-        };
-        let mut canvas = Canvas::new(pixels.width, pixels.height);
-        canvas.draw(&pixels.layer(0, 0));
-        let (width, height) = (canvas.width(), canvas.height());
-        self.control.push(Framed::with_payload(
-            HostMessage::Cursor {
-                width,
-                height,
-                hotspot_x,
-                hotspot_y,
-                name: None,
-            },
-            canvas.into_pixels(),
-        ));
+        if let Some(pixels) = self.surfaces.get(&key).and_then(|s| s.pixels.as_ref()) {
+            self.control.push(cursor_pixels(pixels, hotspot));
+        }
     }
 
     /// The surface a window message names, for input routing.

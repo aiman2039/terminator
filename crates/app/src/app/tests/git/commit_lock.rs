@@ -567,7 +567,16 @@ impl GitPane {
     }
 
     /// Opens the context menu of the file row `file`, then clicks `item`.
+    /// Clicks `item` in the file's menu, then presses Escape in case it
+    /// stays open.
     fn menu_item(&mut self, run: &mut Committing, file: &str, item: &str) {
+        self.menu_pick(run, file, item);
+        self.paint(run, vec![key_press(egui::Key::Escape)]);
+    }
+
+    /// Clicks `item` in the file's menu and sends no Escape, which would
+    /// cancel a dialog that the item opens.
+    fn menu_pick(&mut self, run: &mut Committing, file: &str, item: &str) {
         let row = Self::target(run, &format!("git-file-{file}")).center();
         self.click(run, row, egui::PointerButton::Secondary);
         let mut rect = None;
@@ -579,7 +588,6 @@ impl GitPane {
             .unwrap_or_else(|| panic!("{item} is in the menu"))
             .center();
         self.click(run, item, egui::PointerButton::Primary);
-        self.paint(run, vec![key_press(egui::Key::Escape)]);
     }
 }
 
@@ -757,9 +765,17 @@ fn delete_file_in_the_git_panel_still_moves_the_file_to_trash_during_a_commit() 
     let mut pane = GitPane { time: 1.0 };
     pane.paint(&mut run, vec![]);
     // Like the Explorer's Delete, it writes no index, HEAD, or stash.
-    pane.menu_item(&mut run, "edited.rs", "Delete file");
+    // Escape would cancel the Move to Trash dialog.
+    pane.menu_pick(&mut run, "edited.rs", "Delete file");
     assert_eq!(run.app.pending_delete, [PathBuf::from("/a/edited.rs")]);
-    let trash = pane.text(&mut run, "Move to Trash") + egui::vec2(4.0, 4.0);
+    // The dialog heading has the same text; the button paints after it.
+    let trash = pane
+        .paint_at(&mut run, vec![])
+        .into_iter()
+        .rfind(|(_, text)| text == "Move to Trash")
+        .expect("Move to Trash is painted")
+        .0
+        + egui::vec2(4.0, 4.0);
     pane.click(&mut run, trash, egui::PointerButton::Primary);
     let sent = run.sent();
     assert!(

@@ -13,6 +13,7 @@ pub(super) const KEY_X: u32 = 45;
 
 /// The evdev code of a physical key, or `None` for keys the host cannot
 /// take (media keys, Fn) and modifiers (sent from [`modifier_changes`]).
+// sarah-allow(large_function): one key-to-code arm per key, a pure data table
 pub(super) fn evdev(key: Key) -> Option<u32> {
     Some(match key {
         Key::Escape => 1,

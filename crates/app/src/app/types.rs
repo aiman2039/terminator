@@ -106,49 +106,6 @@ pub(crate) struct PaneSource {
     pub group: String,
     pub path: egui_dock::TabPath,
 }
-impl Tab {
-    pub(crate) fn key(&self) -> String {
-        if let Self::Browser { id, .. } | Self::Vnc { id, .. } = self
-            && !id.is_empty()
-        {
-            return id.clone();
-        }
-        // The title changes; the window stays the same tab.
-        if let Self::RemoteApp {
-            project, window, ..
-        } = self
-        {
-            return format!("remote-app:{project}:{window}");
-        }
-        serde_json::to_string(self).unwrap_or_default()
-    }
-
-    pub(crate) fn browser_file(path: PathBuf) -> Self {
-        Self::Browser {
-            id: String::new(),
-            target: BrowserTarget::File(path),
-        }
-    }
-
-    pub(crate) fn layout_version(&self) -> u32 {
-        match self {
-            Self::RemoteApp { .. } => 12,
-            Self::ChangesDiff { .. } => 11,
-            Self::Merge { .. } => 10,
-            Self::RevisionDiff { .. } | Self::FileHistory { .. } => 9,
-            Self::Diff {
-                remote: Some(_), ..
-            } => 8,
-            Self::NativeEditor { .. } | Self::Vnc { .. } => 7,
-            Self::Browser { .. } => 6,
-            Self::Player => 5,
-            Self::Image { .. } => 3,
-            Self::Diff { .. } | Self::Terminal(_) | Self::CommitLog { .. } | Self::Blame { .. } => {
-                2
-            }
-        }
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RenameSurface {
     Workspace,
