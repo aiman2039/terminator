@@ -7,6 +7,7 @@ retained.
 
 ## Local changes
 
+- `Cargo.lock`: crates with security advisories are updated to fixed versions.
 - `serialization::Request::ReplayDone` (last variant, so the other
   variants keep their tags): wprsd sends it in `handle_connect` after the
   surfaces that already exist, so Terminator's bridge knows the window list

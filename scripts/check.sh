@@ -29,6 +29,7 @@ windows_toolchain() {
 }
 case "${1:-all}" in
     async-boundary) cargo xtask async-boundary ;;
+    # No --all: it also checks path dependencies, including vendored upstream code.
     fmt) cargo fmt --check ;;
     lint) cargo check --workspace --all-targets --all-features --locked ;;
     build) cargo build --workspace --all-targets --all-features --locked ;;
