@@ -55,6 +55,15 @@ a second close within 5 s closes the tab).
   "Unknown remote-apps session": pass.
 - `crates/sys`: `publish_packed` test (rectangles land in place; a bad
   rectangle writes nothing): pass.
+- Separate damage rectangles (`compose::Damage`) and wprsd's
+  `ReplayDone`: bridge 40 tests; `bridge-e2e.sh` trace shows
+  `wprs: ReplayDone` then `Ready`; ensure, wrapper, daemon and GUI e2e:
+  pass.
+- Host tools: `build-host.sh` now also builds static x86_64 `wprsd` and
+  `xwayland-xdg-shell`; all three are static-pie, and `wprsd --help` runs
+  in a `centos:7` container. With `TERMINATOR_WPRS_WRAPPER` giving only
+  Xwayland, the bridge starts the wprsd beside it (`bridge-ensure-e2e.sh`
+  with the tools copied next to the bridge): pass.
 - Root `Cargo.toml` excludes `.claude`: in a scratch copy of the layout
   (outer workspace, nested worktree with excluded vendored crates),
   `cargo fmt --all --check` fails without it and passes with it.

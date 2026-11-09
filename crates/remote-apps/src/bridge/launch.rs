@@ -197,11 +197,12 @@ fn wprsd_command(tools: &Tools, args: &[String], shim: PathBuf) -> Result<Comman
         command
             .arg("-c")
             .arg(format!(
-                "exec {wrapper} sh -c 'PATH=\"$TERMINATOR_SHIM_DIR:$PATH\"; export PATH; exec wprsd \"$@\"' wprsd \"$@\""
+                "exec {wrapper} sh -c 'PATH=\"$TERMINATOR_SHIM_DIR:$PATH\"; export PATH; exec \"$TERMINATOR_WPRSD\" \"$@\"' wprsd \"$@\""
             ))
             .arg("sh")
             .args(args)
-            .env("TERMINATOR_SHIM_DIR", shim);
+            .env("TERMINATOR_SHIM_DIR", shim)
+            .env("TERMINATOR_WPRSD", &tools.wprsd);
         return Ok(command);
     }
     let path = std::env::join_paths(std::iter::once(shim).chain(std::env::split_paths(
@@ -213,34 +214,42 @@ fn wprsd_command(tools: &Tools, args: &[String], shim: PathBuf) -> Result<Comman
     Ok(command)
 }
 
-/// Shell words that start a command with wprs on its PATH, for example
-/// `~/bin/nix-portable nix shell nixpkgs#wprs nixpkgs#xwayland -c`. wprsd
-/// then runs in its own wrapper process, so it outlives the bridge.
+/// Shell words that start a command with Xwayland (and wprs, when it is
+/// not next to the bridge) on its PATH, for example
+/// `~/bin/nix-portable nix shell nixpkgs#xwayland -c`. wprsd then runs in
+/// its own wrapper process, so it outlives the bridge.
 pub const WRAPPER_ENV: &str = "TERMINATOR_WPRS_WRAPPER";
 
 impl Tools {
-    /// With [`WRAPPER_ENV`], the wrapper provides the tools. Else wprsd and
-    /// xwayland-xdg-shell next to this binary (a Terminator install), else
-    /// on PATH.
+    /// wprsd and xwayland-xdg-shell next to this binary (a Terminator
+    /// install, so the same wprs as the bridge) come first. Else, with
+    /// [`WRAPPER_ENV`], the wrapper's PATH provides them (and Xwayland);
+    /// without it, PATH does.
     fn find() -> Result<Self, LaunchError> {
+        let beside_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        let beside = |name: &str| {
+            beside_dir
+                .as_ref()
+                .map(|dir| dir.join(name))
+                .filter(|path| path.is_file())
+        };
         if let Some(wrapper) = std::env::var(WRAPPER_ENV)
             .ok()
             .filter(|w| !w.trim().is_empty())
         {
             return Ok(Self {
                 wrapper: Some(wrapper),
-                wprsd: PathBuf::from("wprsd"),
-                xdg_shell: "xwayland-xdg-shell".to_owned(),
+                wprsd: beside("wprsd").unwrap_or_else(|| PathBuf::from("wprsd")),
+                xdg_shell: beside("xwayland-xdg-shell").map_or_else(
+                    || "xwayland-xdg-shell".to_owned(),
+                    |path| path.display().to_string(),
+                ),
             });
         }
-        let beside = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf));
         let find = |name: &'static str| {
-            beside
-                .as_ref()
-                .map(|dir| dir.join(name))
-                .filter(|path| path.is_file())
+            beside(name)
                 .or_else(|| on_path(name))
                 .ok_or(LaunchError::Missing(name))
         };

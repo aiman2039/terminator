@@ -42,14 +42,15 @@ host's packages (`xwayland`).
 ## Set up a host
 
 1. Check it: `ssh HOST sh -s < crates/remote-apps/dev/host-check.sh`.
-2. Build the bridge for x86_64 hosts (static, any glibc):
-   `sh crates/remote-apps/dev/build-host.sh`, then copy
-   `target/host-x86_64/terminator-remote-bridge` to the host, for example
-   `~/bin/`.
-3. wprsd, xwayland-xdg-shell and Xwayland:
-   - Packages or a Terminator install on the host: put them on `PATH` (or
-     beside the bridge). The default apps command,
-     `terminator-remote-bridge --ensure`, then works if the bridge is on the
+2. Build the host tools for x86_64 hosts (static, any glibc):
+   `sh crates/remote-apps/dev/build-host.sh`, then copy all of
+   `target/host-x86_64/` (`terminator-remote-bridge`, `wprsd`,
+   `xwayland-xdg-shell`) into one directory on the host, for example
+   `~/bin/`. The bridge uses the wprsd beside it first, so both speak the
+   same wprs protocol.
+3. Xwayland:
+   - From packages (`xwayland`) on `PATH`: the default apps command,
+     `terminator-remote-bridge --ensure`, works if the bridge is on the
      non-login `PATH`; else give its full path.
    - No root (for example CentOS 7): install
      [nix-portable](https://github.com/DavHau/nix-portable) in `~/bin`, set
@@ -57,15 +58,42 @@ host's packages (`xwayland`).
      Properties → **Remote apps command** to:
 
      ```sh
-     env NP_LOCATION=/local/disk TERMINATOR_WPRS_WRAPPER='~/bin/nix-portable nix shell nixpkgs#wprs nixpkgs#xwayland -c' ~/bin/terminator-remote-bridge --ensure
+     env NP_LOCATION=/local/disk TERMINATOR_WPRS_WRAPPER='~/bin/nix-portable nix shell nixpkgs#xwayland -c' ~/bin/terminator-remote-bridge --ensure
      ```
 
-     The wrapper starts wprsd in its own nix-portable process, so the apps
-     keep running when the bridge (the viewer) stops. The first start
-     downloads wprs; nixpkgs builds it with AVX2.
+     The wrapper starts wprsd (from beside the bridge) in its own
+     nix-portable process with Xwayland on its `PATH`, so the apps keep
+     running when the bridge (the viewer) stops. The first start downloads
+     Xwayland. Without the tools beside the bridge, add `nixpkgs#wprs` to
+     the wrapper (nixpkgs builds it with AVX2; it has no `ReplayDone`, so
+     `Ready` comes after 3 s).
 4. In Terminator: Hosts sidebar → the host's menu → **Show remote apps**.
    New terminals on the host get `DISPLAY`; run an X11 app there (for
    example `xclock`) and it opens as a tab.
+
+### Real-host test
+
+On this computer: build Terminator (`cargo build --workspace --bins
+--locked`) and the host tools (step 2). On the host, then in Terminator:
+
+1. `ldd ~/bin/terminator-remote-bridge` says "not a dynamic executable",
+   and `~/bin/wprsd --help` runs.
+2. Show remote apps: the status becomes connected; `/tmp/terminator-remote-$(id -u)/`
+   holds `wprsd.json`, `session.json`, `bridge.pid`, `wprsd.log`.
+3. New SSH terminal: `echo $DISPLAY` shows the display; `xclock &` opens a
+   tab; `xterm &` opens another.
+4. Type in xterm; click and scroll; open a menu (popup over the tab); resize
+   the tab; copy and paste both ways.
+5. Close Terminator and open it again: the tabs come back with the apps.
+6. Drop the network (sleep the laptop or `kill` the ssh master): the tab
+   says Reconnecting, then the apps come back.
+7. Show remote apps from a second computer (or a second Terminator data
+   dir): the first one says another Terminator shows them.
+8. Close a window from the app and with the tab's close button (twice
+   within 5 s closes an app that ignores it).
+
+On a failure, send `/tmp/terminator-remote-$(id -u)/wprsd.log` and the
+host's error text from the tab.
 
 Keys: a focused remote tab takes every key (Cmd works as Ctrl); F8 or a
 click elsewhere gives the keys back to Terminator. Copy and paste work for
