@@ -38,10 +38,8 @@ use crate::protocol::{
 };
 use launch::{LaunchError, Session};
 
-/// wprsd sends the windows that exist at once after a connect; this much
-/// quiet after the first of them means they all came.
-const REPLAY_QUIET: Duration = Duration::from_millis(150);
-/// `Ready` goes out after this even if wprsd keeps talking.
+/// `Ready` goes out after this when wprsd never sends `ReplayDone` (a
+/// wprsd started by an older bridge).
 const REPLAY_LIMIT: Duration = Duration::from_secs(3);
 /// How often a bridge checks that no newer bridge took over.
 const OWNER_CHECK: Duration = Duration::from_secs(1);
@@ -211,20 +209,6 @@ pub fn run(options: &Options) -> Result<(), BridgeError> {
     result
 }
 
-/// The bridge's progress after connecting to wprsd.
-enum Replay {
-    /// Waiting for wprsd's first message.
-    Waiting {
-        since: Instant,
-    },
-    /// Windows arriving; `Ready` after a quiet gap.
-    Arriving {
-        since: Instant,
-        last: Instant,
-    },
-    Done,
-}
-
 fn serve(
     target: Target,
     writer: &mut Writer,
@@ -254,12 +238,16 @@ fn serve(
     let send = |event: Event| wprs.send(SendType::Object(event));
     let trace = std::env::var_os("TERMINATOR_BRIDGE_TRACE").is_some();
     let mut peers = Peers::default();
-    let mut replay = Replay::Waiting {
-        since: Instant::now(),
-    };
+    // `Ready` is due when wprsd says its replay is done, or at this time
+    // (a wprsd without `ReplayDone`). `None` once sent.
+    let mut ready_by = Instant::now().checked_add(REPLAY_LIMIT);
     let mut owner_checked = Instant::now();
     loop {
-        let incoming = match rx.recv_timeout(next_wake(&replay)) {
+        let wake = ready_by.map_or(OWNER_CHECK, |at| {
+            at.saturating_duration_since(Instant::now())
+                .min(OWNER_CHECK)
+        });
+        let incoming = match rx.recv_timeout(wake) {
             Ok(incoming) => Some(incoming),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
@@ -271,7 +259,9 @@ fn serve(
                     if trace {
                         trace_request(&request);
                     }
-                    replay = replay.message();
+                    if matches!(*request, RecvType::Object(Request::ReplayDone)) {
+                        ready_by = ready_by.map(|_| Instant::now());
+                    }
                     peers.on_wprsd(*request, send);
                 }
                 Incoming::Client(framed) => peers.on_client(*framed, send)?,
@@ -290,12 +280,11 @@ fn serve(
                 return Err(BridgeError::TakenOver);
             }
         }
-        let ready = replay.due();
         // Controls always go; frames only when the last batch is out.
-        let state = &mut peers.state;
-        let mut batch = state.flush(!writer.busy && !matches!(replay, Replay::Waiting { .. }));
-        if ready {
-            replay = Replay::Done;
+        let mut batch = peers.state.flush(!writer.busy);
+        if ready_by.is_some_and(|at| Instant::now() >= at) {
+            ready_by = None;
+            // After the batch that opens the replayed windows.
             batch.push(Framed::new(HostMessage::Ready));
             // wprsd has our output now: shells may use the display.
             if let Some((dir, session)) = &target.managed {
@@ -354,38 +343,6 @@ impl Peers {
         );
         events.into_iter().for_each(send);
         Ok(())
-    }
-}
-
-impl Replay {
-    fn message(self) -> Self {
-        let now = Instant::now();
-        match self {
-            Self::Waiting { since } | Self::Arriving { since, .. } => {
-                Self::Arriving { since, last: now }
-            }
-            Self::Done => Self::Done,
-        }
-    }
-
-    /// Whether `Ready` is due now.
-    fn due(&self) -> bool {
-        match self {
-            Self::Waiting { since } => since.elapsed() >= REPLAY_LIMIT,
-            Self::Arriving { since, last } => {
-                last.elapsed() >= REPLAY_QUIET || since.elapsed() >= REPLAY_LIMIT
-            }
-            Self::Done => false,
-        }
-    }
-}
-
-/// How long the loop may sleep: short while the replay settles, else until
-/// the next ownership check.
-fn next_wake(replay: &Replay) -> Duration {
-    match replay {
-        Replay::Done => OWNER_CHECK,
-        _ => REPLAY_QUIET,
     }
 }
 

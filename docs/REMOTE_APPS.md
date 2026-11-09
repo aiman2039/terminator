@@ -114,10 +114,16 @@ windows has focus.
 1. Bridge: wprs client on the host that composites windows and speaks the
    protocol over stdio. Test in the dev image with `xclock`. **Done**
    (`terminator-remote-bridge`). A `Frame` carries the damaged rectangles of
-   the window (zstd BGRA, one rectangle per window per flush; a new size is
-   one whole-window rectangle). Frames are rendered only while the stdout
-   writer is idle, so a slow link skips frames instead of queueing them.
-   After `Hello` and the window replay the bridge sends `Ready`.
+   the window (zstd BGRA). `compose::Damage` keeps up to 8 separate
+   rectangles and merges two only when their bounding box adds little area,
+   so a caret and a clock far apart do not resend the whole window; a new
+   size is one whole-window rectangle. Each rectangle is composited into a
+   canvas of its own size; the bridge keeps no window copies. Frames are
+   rendered only while the stdout writer is idle, so a slow link skips
+   frames instead of queueing them. After `Hello` and the window replay the
+   bridge sends `Ready`: wprsd marks the end of its replay with
+   `Request::ReplayDone` (a local change, see `vendor/wprs/UPSTREAM.md`); a
+   wprsd without it gets `Ready` after 3 s.
 2. Daemon session (`remote-apps-v1`): start the bridge through the SSH master,
    own the stream, detach and reattach. Host side done:
    `terminator-remote-bridge --ensure` finds or starts this user's wprsd

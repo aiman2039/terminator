@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use terminator_core::remote_apps::protocol::Rect;
-use terminator_core::remote_apps::{RemoteWindow, frame_rect};
+use terminator_core::remote_apps::{Damage, RemoteWindow, frame_rect};
 use terminator_sys::{FrameRect, SharedFrameWriter};
 
 /// Damage kept per window.
@@ -87,16 +87,16 @@ impl Window {
         true
     }
 
-    /// The one area that changed after `since`, when the history covers
-    /// that; `None` means the viewer must read the whole window.
-    pub(super) fn changed_since(&self, since: u64) -> Option<Rect> {
+    /// The areas that changed after `since`, when the history covers that;
+    /// empty means the viewer must read the whole window.
+    pub(super) fn changed_since(&self, since: u64) -> Vec<Rect> {
         if since < self.damage_from || self.meta.revision <= since {
-            return None;
+            return Vec::new();
         }
-        self.damage
-            .iter()
-            .filter(|(at, _)| *at > since)
-            .map(|(_, rect)| *rect)
-            .reduce(terminator_core::remote_apps::union)
+        let mut changed = Damage::default();
+        for (_, rect) in self.damage.iter().filter(|(at, _)| *at > since) {
+            changed.add(*rect);
+        }
+        changed.take()
     }
 }

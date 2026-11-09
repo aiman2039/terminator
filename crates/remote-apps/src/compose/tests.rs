@@ -128,21 +128,38 @@ fn zstd_frame_decodes_each_rect_to_rgba_and_wrong_size_is_refused() {
     assert!(zstd_bgra_to_rgba(b"junk", &[rect(3)]).is_none());
 }
 
+fn rect(x: i32, y: i32, width: u32, height: u32) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
 #[test]
-fn redraw_in_a_rect_changes_only_that_rect_and_region_reads_it_back() {
-    let mut canvas = Canvas::new(3, 2);
-    canvas.draw(&layer((0, 0), (3, 2), &solid(3, 2, RED)));
-    let area = Rect {
-        x: 1,
-        y: 1,
-        width: 2,
-        height: 1,
-    };
-    canvas.clear(area);
-    canvas.draw_in(&layer((0, 0), (3, 2), &solid(3, 2, BLUE)), area);
-    assert_eq!(pixel_at(&canvas, 0, 1), RED);
-    assert_eq!(pixel_at(&canvas, 1, 0), RED);
-    assert_eq!(canvas.region(area), [BLUE, BLUE].concat());
+fn far_apart_damage_stays_separate_and_near_damage_merges() {
+    let mut damage = Damage::default();
+    damage.add(rect(0, 0, 10, 20));
+    damage.add(rect(300, 500, 100, 100));
+    assert_eq!(damage.rects().len(), 2, "a caret and a clock stay apart");
+    // Next to the caret: merged with it.
+    damage.add(rect(12, 0, 10, 20));
+    assert_eq!(damage.rects().len(), 2);
+    assert!(damage.rects().contains(&rect(0, 0, 22, 20)));
+    damage.add(rect(0, 0, 0, 5));
+    assert_eq!(damage.rects().len(), 2, "empty rectangles are ignored");
+    assert_eq!(damage.take().len(), 2);
+    assert!(damage.is_empty());
+}
+
+#[test]
+fn too_many_damage_rects_become_one_box() {
+    let mut damage = Damage::default();
+    for i in 0..=8 {
+        damage.add(rect(i * 1000, i * 1000, 1, 1));
+    }
+    assert_eq!(damage.rects(), [rect(0, 0, 8001, 8001)]);
 }
 
 #[test]

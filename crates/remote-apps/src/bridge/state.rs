@@ -1,9 +1,10 @@
 //! What the bridge knows about wprsd's surfaces, and the window messages
 //! they cause.
 //!
-//! Commits only record pixels and mark the changed area of their window.
-//! [`State::flush`] then renders each changed window once, only inside the
-//! changed area, so a burst of commits becomes one small frame per window
+//! Commits only record pixels and mark the changed areas of their window.
+//! [`State::flush`] then renders each changed window once, compositing
+//! only those areas (each into a canvas of its own size, so no full window
+//! copy is kept), so a burst of commits becomes one small frame per window
 //! and the output never runs ahead of the link (the caller flushes only
 //! when the writer is idle).
 
@@ -17,7 +18,7 @@ use wprs::serialization::xdg_shell::{PopupRequestPayload, ToplevelRequestPayload
 use wprs::serialization::{ClientId, RecvType, Request};
 
 use super::buffer::{Pixels, pixels, positioner};
-use crate::compose::{self, Canvas};
+use crate::compose::{self, Canvas, Damage};
 use crate::protocol::{FrameEncoding, Framed, HostMessage, Rect, WindowId, WindowRole};
 
 pub type SurfaceKey = (ClientId, WlSurfaceId);
@@ -51,10 +52,10 @@ struct Window {
     key: SurfaceKey,
     title: String,
     app_id: String,
-    /// The composited window, kept so a change redraws only its area.
-    canvas: Canvas,
-    /// Area changed since the last frame; the whole window after a resize.
-    damage: Option<Rect>,
+    /// The size of the last frame sent; a new size sends the whole window.
+    size: Option<(u32, u32)>,
+    /// Areas changed since the last frame.
+    damage: Damage,
 }
 
 #[derive(Default)]
@@ -87,8 +88,10 @@ impl State {
             },
             RecvType::Object(Request::ClientDisconnected(client)) => self.disconnect(client),
             RecvType::Object(Request::CursorImage(image)) => self.cursor_image(image),
-            // The clipboard is handled by the bridge loop, not here.
-            RecvType::Object(Request::Data(_) | Request::Capabilities(_)) => {}
+            // The clipboard and the replay end are handled by the bridge
+            // loop, not here.
+            RecvType::Object(Request::Data(_) | Request::Capabilities(_) | Request::ReplayDone) => {
+            }
         }
     }
 
@@ -100,7 +103,7 @@ impl State {
     /// Whether [`State::flush`] has frames to render.
     #[cfg(test)]
     pub fn has_frames(&self) -> bool {
-        self.windows.values().any(|w| w.damage.is_some())
+        self.windows.values().any(|w| !w.damage.is_empty())
     }
 
     /// Queued control messages, then (when `frames`) one frame per changed
@@ -113,7 +116,7 @@ impl State {
         let ids: Vec<WindowId> = self
             .windows
             .iter()
-            .filter(|(_, w)| w.damage.is_some())
+            .filter(|(_, w)| !w.damage.is_empty())
             .map(|(id, _)| *id)
             .collect();
         for id in ids {
@@ -124,48 +127,61 @@ impl State {
 
     fn render(&mut self, id: WindowId) -> Option<Framed<HostMessage>> {
         let window = self.windows.get_mut(&id)?;
-        let damage = window.damage.take()?;
+        let damage = window.damage.take();
         let key = window.key;
-        let mut canvas = std::mem::replace(&mut window.canvas, Canvas::new(0, 0));
         let (width, height) = self
             .surfaces
             .get(&key)?
             .pixels
             .as_ref()
             .map(|p| (p.width, p.height))?;
-        let damage = if (canvas.width(), canvas.height()) == (width, height) {
+        let damage = if window.size == Some((width, height)) {
             damage
         } else {
-            canvas = Canvas::new(width, height);
-            canvas.bounds()
-        };
-        let area = compose::clamp(damage, width, height);
-        if let Some(area) = area {
-            canvas.clear(area);
-            let top = Node {
-                key,
+            window.size = Some((width, height));
+            vec![Rect {
                 x: 0,
                 y: 0,
-                depth: 0,
-            };
-            self.draw_tree(&mut canvas, top, area);
+                width,
+                height,
+            }]
+        };
+        let areas: Vec<Rect> = damage
+            .into_iter()
+            .filter_map(|r| compose::clamp(r, width, height))
+            .collect();
+        if areas.is_empty() {
+            return None;
         }
-        let payload = area.map(|a| canvas.region(a));
-        if let Some(window) = self.windows.get_mut(&id) {
-            window.canvas = canvas;
+        let mut pixels = Vec::new();
+        for area in &areas {
+            pixels.extend_from_slice(&self.compose(key, *area));
         }
-        let area = area?;
-        let payload = zstd::bulk::compress(&payload?, ZSTD_LEVEL).ok()?;
+        let payload = zstd::bulk::compress(&pixels, ZSTD_LEVEL).ok()?;
         Some(Framed::with_payload(
             HostMessage::Frame {
                 id,
                 width,
                 height,
-                damage: vec![area],
+                damage: areas,
                 encoding: FrameEncoding::ZstdBgra,
             },
             payload,
         ))
+    }
+
+    /// The window whose root is `key`, composited inside `area` only, as
+    /// packed BGRA rows of `area`'s size.
+    fn compose(&self, key: SurfaceKey, area: Rect) -> Vec<u8> {
+        let mut canvas = Canvas::new(area.width, area.height);
+        let top = Node {
+            key,
+            x: 0_i32.saturating_sub(area.x),
+            y: 0_i32.saturating_sub(area.y),
+            depth: 0,
+        };
+        self.draw_tree(&mut canvas, top);
+        canvas.into_pixels()
     }
 
     fn cursor_image(&mut self, image: CursorImage) {
@@ -208,15 +224,16 @@ impl State {
         };
         let mut canvas = Canvas::new(pixels.width, pixels.height);
         canvas.draw(&pixels.layer(0, 0));
+        let (width, height) = (canvas.width(), canvas.height());
         self.control.push(Framed::with_payload(
             HostMessage::Cursor {
-                width: canvas.width(),
-                height: canvas.height(),
+                width,
+                height,
                 hotspot_x,
                 hotspot_y,
                 name: None,
             },
-            canvas.pixels().to_vec(),
+            canvas.into_pixels(),
         ));
     }
 
@@ -294,10 +311,7 @@ impl State {
         if let Some(id) = self.by_surface.get(&root)
             && let Some(window) = self.windows.get_mut(id)
         {
-            window.damage = Some(match window.damage {
-                Some(old) => compose::union(old, rect),
-                None => rect,
-            });
+            window.damage.add(rect);
         }
     }
 
@@ -402,8 +416,8 @@ impl State {
                 key: root,
                 title: title.clone(),
                 app_id: app_id.clone(),
-                canvas: Canvas::new(0, 0),
-                damage: None,
+                size: None,
+                damage: Damage::default(),
             },
         );
         self.control.push(Framed::new(HostMessage::WindowOpened {
@@ -443,14 +457,14 @@ impl State {
         }
     }
 
-    /// Draws the surface tree of `node` into `area` of `canvas`.
-    fn draw_tree(&self, canvas: &mut Canvas, node: Node, area: Rect) {
+    /// Draws the surface tree of `node` into `canvas`.
+    fn draw_tree(&self, canvas: &mut Canvas, node: Node) {
         let Node { key, x, y, depth } = node;
         let Some(surface) = self.surfaces.get(&key) else {
             return;
         };
         if let Some(pixels) = &surface.pixels {
-            canvas.draw_in(&pixels.layer(x, y), area);
+            canvas.draw(&pixels.layer(x, y));
         }
         if depth >= MAX_DEPTH {
             return;
@@ -463,7 +477,7 @@ impl State {
                     y: y.saturating_add(dy),
                     depth: depth.saturating_add(1),
                 };
-                self.draw_tree(canvas, child, area);
+                self.draw_tree(canvas, child);
             }
         }
     }

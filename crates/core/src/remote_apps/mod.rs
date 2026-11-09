@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-pub use terminator_remote_apps::compose::{union, zstd_bgra_to_rgba};
+pub use terminator_remote_apps::compose::{Damage, zstd_bgra_to_rgba};
 pub use terminator_remote_apps::protocol::{
     self, ClientMessage, ErrorKind, HostMessage, PointerButton, WindowId, WindowRole,
 };

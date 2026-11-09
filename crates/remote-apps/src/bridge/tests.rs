@@ -186,6 +186,27 @@ fn many_commits_before_a_flush_give_one_frame_with_the_union() {
 }
 
 #[test]
+fn far_apart_changes_go_as_separate_rects_in_one_frame() {
+    let mut state = State::default();
+    send_pixels(&mut state, RED, 100 * 100);
+    step(&mut state, commit(1, (100, 100), Some(toplevel("t")), &[]));
+    for corner in [0, 99] {
+        send_pixels(&mut state, BLUE, 100 * 100);
+        state.handle(with_damage(
+            commit(1, (100, 100), Some(toplevel("t")), &[]),
+            (corner, corner, 1, 1),
+        ));
+    }
+    let out = state.flush(true);
+    assert_eq!(out.len(), 1);
+    let HostMessage::Frame { damage, .. } = &out[0].message else {
+        panic!("not a frame: {:?}", out[0].message);
+    };
+    assert_eq!(damage.len(), 2, "{damage:?}");
+    assert_eq!(frame_pixels(&out[0]), BLUE.repeat(2));
+}
+
+#[test]
 fn resize_sends_the_whole_window_even_with_small_damage() {
     let mut state = State::default();
     send_pixels(&mut state, RED, 2 * 2);

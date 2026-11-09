@@ -76,6 +76,57 @@ pub fn clamp(rect: Rect, width: u32, height: u32) -> Option<Rect> {
     })
 }
 
+/// Most separate rectangles kept; more become one bounding box.
+const MAX_DAMAGE_RECTS: usize = 8;
+/// Pixels a merge may add before two rectangles stay apart (64 x 64).
+const MERGE_SLACK: u64 = 64 * 64;
+
+/// The changed areas of a window: a few rectangles, so a caret at the top
+/// and a clock at the bottom do not become the whole window. Two
+/// rectangles merge when their bounding box adds little area.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Damage {
+    rects: Vec<Rect>,
+}
+
+impl Damage {
+    pub fn add(&mut self, rect: Rect) {
+        if area(rect) == 0 {
+            return;
+        }
+        let mut rect = rect;
+        while let Some(i) = self.rects.iter().position(|r| worth_merging(*r, rect)) {
+            rect = union(self.rects.swap_remove(i), rect);
+        }
+        self.rects.push(rect);
+        if self.rects.len() > MAX_DAMAGE_RECTS {
+            let all = self.rects.drain(..).reduce(union);
+            self.rects.extend(all);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rects.is_empty()
+    }
+
+    pub fn rects(&self) -> &[Rect] {
+        &self.rects
+    }
+
+    /// The rectangles, leaving no damage.
+    pub fn take(&mut self) -> Vec<Rect> {
+        std::mem::take(&mut self.rects)
+    }
+}
+
+fn area(rect: Rect) -> u64 {
+    u64::from(rect.width).saturating_mul(u64::from(rect.height))
+}
+
+fn worth_merging(a: Rect, b: Rect) -> bool {
+    area(union(a, b)) <= area(a).saturating_add(area(b)).saturating_add(MERGE_SLACK)
+}
+
 /// One surface buffer drawn at `x`,`y` in window coordinates. `pixels` holds
 /// premultiplied BGRA rows (`ARGB8888` little-endian), `stride` bytes apart.
 #[derive(Debug, Clone, Copy)]
@@ -135,64 +186,15 @@ impl Canvas {
         }
     }
 
-    /// Makes `rect` fully transparent.
-    pub fn clear(&mut self, rect: Rect) {
-        let Some(rect) = clamp(rect, self.width, self.height) else {
-            return;
-        };
-        for row in self.rows_mut(rect) {
-            row.fill(0);
-        }
-    }
-
-    /// The pixels of `rect` (inside the canvas) as packed rows.
-    pub fn region(&self, rect: Rect) -> Vec<u8> {
-        clamp(rect, self.width, self.height)
-            .map(|rect| self.rows(rect).flatten().copied().collect())
-            .unwrap_or_default()
-    }
-
-    /// Row geometry of `rect` (inside the canvas): row bytes, skipped rows,
-    /// rows, and the byte range in each row.
-    fn row_span(&self, rect: Rect) -> (usize, usize, usize, std::ops::Range<usize>) {
-        let row = row_bytes(self.width).unwrap_or(0).max(1);
-        let x = usize::try_from(rect.x).unwrap_or(0).saturating_mul(BPP);
-        let bytes = row_bytes(rect.width).unwrap_or(0);
-        let y = usize::try_from(rect.y).unwrap_or(0);
-        let height = usize::try_from(rect.height).unwrap_or(0);
-        (row, y, height, x..x.saturating_add(bytes))
-    }
-
-    fn rows(&self, rect: Rect) -> impl Iterator<Item = &[u8]> {
-        let (row, y, height, span) = self.row_span(rect);
+    /// The pixels, as packed BGRA rows.
+    pub fn into_pixels(self) -> Vec<u8> {
         self.pixels
-            .chunks_exact(row)
-            .skip(y)
-            .take(height)
-            .filter_map(move |line| line.get(span.clone()))
-    }
-
-    fn rows_mut(&mut self, rect: Rect) -> impl Iterator<Item = &mut [u8]> {
-        let (row, y, height, span) = self.row_span(rect);
-        self.pixels
-            .chunks_exact_mut(row)
-            .skip(y)
-            .take(height)
-            .filter_map(move |line| line.get_mut(span.clone()))
     }
 
     /// Draws `layer` over the canvas (source-over), clipped to the canvas.
     /// A layer whose buffer is shorter than its size says is skipped.
     pub fn draw(&mut self, layer: &Layer<'_>) {
-        self.draw_in(layer, self.bounds());
-    }
-
-    /// [`Canvas::draw`] limited to `area`.
-    pub fn draw_in(&mut self, layer: &Layer<'_>, area: Rect) {
-        let Some(area) = clamp(area, self.width, self.height) else {
-            return;
-        };
-        let Some(clip) = clip(layer, area) else {
+        let Some(clip) = clip(layer, self.width, self.height) else {
             return;
         };
         let Some(dst_row) = row_bytes(self.width) else {
@@ -220,16 +222,10 @@ impl Canvas {
     }
 }
 
-/// Where `layer` overlaps `area` (already inside the canvas).
-fn clip(layer: &Layer<'_>, area: Rect) -> Option<Clip> {
-    let limits = |pos: i32, len: u32| {
-        let start = u32::try_from(pos).ok()?;
-        Some((start, start.checked_add(len)?))
-    };
-    let x_limits = limits(area.x, area.width)?;
-    let y_limits = limits(area.y, area.height)?;
-    let (src_x, dst_x, cols) = clip_axis(layer.x, layer.width, x_limits)?;
-    let (src_y, dst_y, rows) = clip_axis(layer.y, layer.height, y_limits)?;
+/// Where `layer` overlaps a `width` x `height` canvas.
+fn clip(layer: &Layer<'_>, width: u32, height: u32) -> Option<Clip> {
+    let (src_x, dst_x, cols) = clip_axis(layer.x, layer.width, (0, width))?;
+    let (src_y, dst_y, rows) = clip_axis(layer.y, layer.height, (0, height))?;
     Some(Clip {
         src_x,
         src_y,

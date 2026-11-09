@@ -211,7 +211,7 @@ impl Runtime {
             .values()
             .map(|w| {
                 let mut meta = w.meta.clone();
-                meta.regions = w.changed_since(since).into_iter().collect();
+                meta.regions = w.changed_since(since);
                 meta
             })
             .collect();

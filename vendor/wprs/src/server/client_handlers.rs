@@ -659,6 +659,10 @@ impl WprsServerState {
                 })));
         });
 
+        self.serializer
+            .writer()
+            .send(SendType::Object(Request::ReplayDone));
+
         Ok(())
     }
 
