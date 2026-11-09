@@ -4,8 +4,8 @@ use wprs::serialization::wayland::{Buffer, BufferData, BufferFormat};
 use wprs::serialization::xdg_shell::XdgPositioner;
 use wprs::vec4u8::Vec4u8s;
 
-use crate::compose::{Layer, Positioner};
-use crate::protocol::Rect;
+use crate::compose::{Canvas, Layer, Positioner};
+use crate::protocol::{Framed, HostMessage, Rect};
 
 /// A surface's BGRA pixels.
 pub(super) struct Pixels {
@@ -66,6 +66,37 @@ pub(super) fn pixels(buffer: Buffer, pending: Option<Vec<u8>>) -> Option<Pixels>
         opaque: matches!(meta.format, BufferFormat::Xrgb8888),
         data,
     })
+}
+
+/// A named system cursor, or a hidden cursor when `name` is `None`.
+pub(super) fn named_cursor(name: Option<String>) -> Framed<HostMessage> {
+    Framed::new(HostMessage::Cursor {
+        width: 0,
+        height: 0,
+        hotspot_x: 0,
+        hotspot_y: 0,
+        name,
+    })
+}
+
+/// A cursor image from a surface's pixels, as tightly packed BGRA rows.
+pub(super) fn cursor_pixels(
+    pixels: &Pixels,
+    (hotspot_x, hotspot_y): (i32, i32),
+) -> Framed<HostMessage> {
+    let mut canvas = Canvas::new(pixels.width, pixels.height);
+    canvas.draw(&pixels.layer(0, 0));
+    let (width, height) = (canvas.width(), canvas.height());
+    Framed::with_payload(
+        HostMessage::Cursor {
+            width,
+            height,
+            hotspot_x,
+            hotspot_y,
+            name: None,
+        },
+        canvas.into_pixels(),
+    )
 }
 
 pub(super) fn positioner(p: &XdgPositioner) -> Positioner {
