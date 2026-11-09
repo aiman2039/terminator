@@ -10,7 +10,8 @@ release commits all of them. Keep source files unchanged until checks finish.
 
 The Rust command requires host checks and a Windows runner unless Windows is
 explicitly skipped. Linux checks run in CI (the `linux-release-check` job in
-`.github/workflows/ci.yaml`, same image recipe); the local release does not
+`.github/workflows/ci.yaml`, same image recipe, `--only gui,package` because
+the Checks, E2E and Native GUI jobs run the other steps); the local release does not
 run them and does not wait for CI. Add `--with-linux` to also run them locally
 in Docker. `--skip-linux` is accepted for old scripts and changes nothing. The existing
 `scripts/git-release.sh` wrapper keeps its default `--skip-windows` setting.
@@ -225,7 +226,9 @@ includes doctests. CI and Docker install prebuilt nextest
 prebuilt binaries. Nextest runs tests across crates in parallel; it does not
 reduce compile time. The CI profile disables retries, collects all failures,
 and writes `target/nextest/ci/junit.xml`. Real-PTY and GUI xtasks remain separate.
-Coverage keeps its existing Cargo/llvm-cov checks and exclusions.
+On Linux, CI runs the tests once under cargo-llvm-cov (`sh scripts/check.sh
+coverage`: nextest CI profile, 50 percent line minimum), so one build gives
+both the test results and the coverage.
 
 ## Dependency security
 

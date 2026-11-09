@@ -37,7 +37,7 @@ Native builds retain their existing runner/architecture-specific Rust cache keys
 for registry and compiler reuse. The release helper dispatches on `master` with
 the exact tag as an input so successive releases share the default-branch cache
 scope. The workflow rejects that input if the tag differs from the selected
-workflow commit. Only checks, coverage, and native package jobs save Rust caches on master;
+workflow commit. Only checks and native package jobs save Rust caches on master;
 fixture jobs restore the checks cache without racing to save a smaller copy.
 The legacy `target/package` directory is removed
 after restore in the disposable runner checkout. All new package, inspection and

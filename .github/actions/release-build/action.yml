@@ -78,8 +78,16 @@ runs:
       run: |
         # #71: record the build time in the job summary beside the timing reports.
         start=$SECONDS
-        cargo run --locked --package xtask --timings -- \
-          package --timings --output "$RUNNER_TEMP/terminator-package"
+        # The dev xtask build used to run alone before the release build.
+        # Build both at once (xtask in its own target dir, so neither waits
+        # on the other's lock), then `xtask package` finds the release build
+        # fresh. Keep these flags equal to `cargo build` in xtask package.
+        cargo build --locked --release --timings \
+          -p terminator -p terminator-daemon -p terminator-hook &
+        release=$!
+        cargo build --locked --package xtask --target-dir target/xtask
+        wait "$release"
+        target/xtask/debug/xtask package --output "$RUNNER_TEMP/terminator-package"
         echo "Release build ($TARGET): $((SECONDS - start)) s. Compile and link detail: cargo-timings-$TARGET artifact." >> "$GITHUB_STEP_SUMMARY"
     - name: Archive and inspect package
       shell: bash
@@ -136,9 +144,9 @@ runs:
       if: inputs.target == 'aarch64-apple-darwin'
       shell: bash
       run: |
-        test -x target/debug/xtask
+        test -x target/xtask/debug/xtask
         # A tar preserves executable permissions across artifact upload/download.
-        tar -czf "$RUNNER_TEMP/terminator-assembly-tools.tar.gz" -C target/debug xtask
+        tar -czf "$RUNNER_TEMP/terminator-assembly-tools.tar.gz" -C target/xtask/debug xtask
     - uses: actions/upload-artifact@v7
       if: inputs.target == 'aarch64-apple-darwin'
       with:

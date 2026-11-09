@@ -78,13 +78,34 @@ jobs:
         with:
           neovim: true
           version: v0.11.6
+      # Windows: build on a ReFS Dev Drive. Defender scans it less, so
+      # compile and link writes are faster. Only the target dir moves.
+      - uses: samypr100/setup-dev-drive@v3
+        if: runner.os == 'Windows'
+        with:
+          drive-size: 40GB
+          env-mapping: |
+            CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+      # Windows: less debug info (smaller objects and PDBs), the bundled
+      # rust-lld linker, and one Clippy pass (scripts/check.sh).
+      - name: Windows build speed settings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          {
+            echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only"
+            echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld.exe"
+            echo "TERMINATOR_CLIPPY_ONE_PASS=1"
+          } >> "$GITHUB_ENV"
+      # Linux runs the tests under cargo-llvm-cov (scripts/check.sh coverage),
+      # so one test build gives both the results and the coverage.
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'
-          components: rustfmt, clippy
+          components: ${{ runner.os == 'Linux' && 'rustfmt, clippy, llvm-tools-preview' || 'rustfmt, clippy' }}
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.140
+          tool: ${{ runner.os == 'Linux' && 'cargo-nextest@0.9.140,cargo-llvm-cov' || 'cargo-nextest@0.9.140' }}
       - uses: Swatinem/rust-cache@v2
         with:
           # Only this job saves the shared dev cache. Faster fixture jobs
@@ -98,27 +119,48 @@ jobs:
       - uses: ./.github/actions/sccache
       - name: Formatting
         run: sh scripts/check.sh fmt
-      # No separate compiler-check or build step: clippy type-checks every
-      # target with --all-targets --all-features, and the test runner
-      # rebuilds what it needs, so either step only repeats work.
-      - name: Clippy
-        run: sh scripts/check.sh clippy
+      # Before Clippy: a limit failure shows in seconds, not after the build.
       - name: Size and structure limits (sarah.toml)
         if: runner.os == 'Linux'
         uses: aiman2039/sarah@v0.1.7
         with:
           path: .
           fail-on-warn: true
+      # No separate compiler-check or build step: clippy type-checks every
+      # target with --all-targets --all-features, and the test runner
+      # rebuilds what it needs, so either step only repeats work.
+      - name: Clippy
+        if: ${{ !cancelled() }}
+        run: sh scripts/check.sh clippy
+      # Runs after an earlier failed step too, so the test build still
+      # fills sccache and the test results stay visible.
       - name: Tests
+        if: ${{ !cancelled() && runner.os != 'Linux' }}
         env:
           TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-state
         run: sh scripts/check.sh test
+      - name: Tests with coverage
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        # An explicit bash adds pipefail, so a failure is not hidden by tee.
+        shell: bash
+        env:
+          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-state
+        run: sh scripts/check.sh coverage | tee "$RUNNER_TEMP/coverage.txt"
+      - name: Coverage summary
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: |
+          {
+            echo '### Code coverage'
+            echo '```'
+            cat "$RUNNER_TEMP/coverage.txt" 2>/dev/null || echo 'coverage run failed'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: tests-${{ matrix.os }}
-          path: target/nextest/ci/junit.xml
+          path: ${{ env.CARGO_TARGET_DIR || 'target' }}/nextest/ci/junit.xml
           if-no-files-found: warn
           retention-days: 14
 
@@ -277,7 +319,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # The full Linux release check (#145). The local release no longer runs it
+  # The Linux release check (#145) in the release image. Checks, E2E and
+  # Native GUI (ubuntu) already run Clippy, the tests, integration and
+  # idle-close, so this job runs only the steps they do not: the full GUI
+  # fixture set and the debug package. The local release no longer runs it
   # in Docker and does not wait for this job; it uses the same image recipe.
   linux-release-check:
     name: Linux release check
@@ -308,7 +353,12 @@ jobs:
             --mount "type=bind,src=$RUNNER_TEMP/linux-release-check,dst=/artifacts" \
             -e CARGO_TARGET_DIR=/build -e RUNNER_TEMP=/artifacts -e CARGO_TERM_COLOR \
             terminator-release-linux:ci \
-            bash -euo pipefail -c 'git config --global --add safe.directory /src; bash scripts/release-check.sh'
+            bash -euo pipefail -c 'git config --global --add safe.directory /src
+              status=0; bash scripts/release-check.sh --only gui,package || status=$?
+              # The sccache server in the container stops with it; the host
+              # post-step shows an empty server, so print the real stats here.
+              if command -v sccache >/dev/null; then sccache --show-stats; fi
+              exit "$status"'
       - name: Upload Linux release check logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -317,69 +367,3 @@ jobs:
           path: ${{ runner.temp }}/linux-release-check
           if-no-files-found: warn
           retention-days: 14
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      # apt and rustup touch disjoint state, so they overlap. The
-      # cargo-llvm-cov installer stays after: it probes the toolchain.
-      - name: Prepare apt cache directory
-        run: |
-          sudo mkdir -p /var/cache/apt/archives
-          sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
-      - name: Restore apt package cache
-        uses: actions/cache@v5
-        with:
-          # Glob skips the root-owned partial/ dir, which tar cannot read.
-          path: /var/cache/apt/archives/*.deb
-          key: apt-coverage-${{ hashFiles('.github/workflows/ci.yaml') }}
-          restore-keys: |
-            apt-coverage-
-      - parallel:
-          - name: Install Linux build dependencies
-            run: |
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends \
-                build-essential pkg-config libssl-dev libfontconfig1-dev \
-                libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-                libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
-                libasound2-dev libwebkit2gtk-4.1-dev
-          - uses: dtolnay/rust-toolchain@stable
-            with:
-              toolchain: '1.97.1'
-              components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: coverage
-          # sccache holds compiled crates; this cache keeps the registry only.
-          cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' }}
-      - uses: ./.github/actions/sccache
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
-      # The two skipped tests are environment-dependent (sandboxed sockets and
-      # process-group signals); they exercise nothing under coverage.
-      - name: Workspace line and function coverage
-        env:
-          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-coverage-state
-        run: |
-          cargo llvm-cov --workspace --all-features --locked --summary-only \
-            --fail-under-lines 50 \
-            -- --skip signals::tests::hangup_ends_a_spawned_process_group \
-               --skip navigation_tests::reconnect_clears_transport_errors_but_preserves_failed_operations \
-            | tee "$RUNNER_TEMP/coverage.txt"
-      - name: Coverage summary
-        if: always()
-        run: |
-          {
-            echo '### Code coverage'
-            echo '```'
-            cat "$RUNNER_TEMP/coverage.txt" 2>/dev/null || echo 'coverage run failed'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@ members = ["crates/*"]
 exclude = [".claude", "vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100", "vendor/egui_commonmark", "vendor/vnc-rs", "vendor/wprs"]
 resolver = "2"
 [workspace.package]
-version = "0.166.0"
+version = "0.167.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.97.1"

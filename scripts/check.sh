@@ -36,7 +36,23 @@ case "${1:-all}" in
     clippy)
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
         # Release builds have no test-support; keep that feature set lint-clean too.
-        cargo clippy --workspace --all-targets --locked -- -D warnings
+        # CI sets TERMINATOR_CLIPPY_ONE_PASS on Windows: Linux and macOS run it.
+        if [ -z "${TERMINATOR_CLIPPY_ONE_PASS:-}" ]; then
+            cargo clippy --workspace --all-targets --locked -- -D warnings
+        fi
+        ;;
+    coverage)
+        # The `test` step under cargo-llvm-cov: one build gives the test
+        # results and the line coverage. The skipped test depends on
+        # process-group signals in the environment and exercises nothing
+        # under coverage; `test` still runs it on macOS.
+        need_plugin nextest
+        need_plugin llvm-cov
+        # NEXTEST_PROFILE, not --profile: llvm-cov reads --profile as the
+        # Cargo build profile.
+        NEXTEST_PROFILE=ci cargo llvm-cov nextest --workspace --all-features --locked \
+            --summary-only --fail-under-lines 50 \
+            -- --skip signals::tests::hangup_ends_a_spawned_process_group
         ;;
     sarah)
         # Size and structure limits from sarah.toml (https://github.com/aiman2039/sarah).
@@ -69,5 +85,5 @@ case "${1:-all}" in
             sh "$0" "$check"
         done
         ;;
-    *) echo "Usage: $0 [all|async-boundary|fmt|lint|build|clippy|sarah|test|audit|deny|windows-check|windows-clippy]" >&2; exit 2 ;;
+    *) echo "Usage: $0 [all|async-boundary|fmt|lint|build|clippy|sarah|test|coverage|audit|deny|windows-check|windows-clippy]" >&2; exit 2 ;;
 esac

@@ -21,7 +21,11 @@ sccache="$(sh scripts/sccache-docker-args.sh)"
 # shellcheck disable=SC2086 # $cache and $sccache are docker arguments without spaces in paths.
 docker run --rm -v "$PWD":/src -v "$out":/out $cache $sccache \
     -e CARGO_TARGET_DIR=/target -e TERMINATOR_DATA_DIR=/tmp/terminator-data \
-    terminator-portable-build cargo run --locked -p xtask -- package --portable --output /out
+    terminator-portable-build sh -c '
+        status=0; cargo run --locked -p xtask -- package --portable --output /out || status=$?
+        # The container sccache server stops with the container; print its stats.
+        if command -v sccache >/dev/null; then sccache --show-stats; fi
+        exit "$status"'
 rm -rf "$out/verify"
 mkdir -p "$out/verify"
 tar -xzf "$out/terminator-linux.tar.gz" -C "$out/verify"
