@@ -12,6 +12,7 @@ pub(crate) struct RemoteAppsInput {
     pub(in crate::gui_services) project: String,
     pub(in crate::gui_services) session: Option<String>,
     pub(in crate::gui_services) since: u64,
+    pub(in crate::gui_services) readers: crate::remote_apps_ui::Readers,
     pub(in crate::gui_services) cancel: CancellationToken,
 }
 
@@ -25,6 +26,7 @@ impl Services {
             project,
             session,
             since,
+            readers,
             cancel,
         } = input;
         let client = self.client();
@@ -43,7 +45,7 @@ impl Services {
             Ok(Response::RemoteApps(state)) => self
                 .cpu()
                 .run(&cancel, move || {
-                    crate::remote_apps_ui::decode(*state, since, &runtime)
+                    crate::remote_apps_ui::decode(*state, since, (&runtime, &readers))
                 })
                 .await
                 .map(|frame| Some(Box::new(frame)))

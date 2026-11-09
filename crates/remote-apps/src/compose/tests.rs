@@ -107,16 +107,94 @@ fn huge_canvas_is_empty_instead_of_aborting() {
 }
 
 #[test]
-fn zstd_frame_decodes_to_rgba_and_wrong_size_is_refused() {
-    let bgra = [RED, BLUE].concat();
+fn zstd_frame_decodes_each_rect_to_rgba_and_wrong_size_is_refused() {
+    let bgra = [RED, BLUE, RED].concat();
     let payload = zstd::bulk::compress(&bgra, 1).unwrap();
+    let rect = |width| Rect {
+        x: 0,
+        y: 0,
+        width,
+        height: 1,
+    };
     assert_eq!(
-        zstd_bgra_to_rgba(&payload, 2, 1).unwrap(),
-        [[255, 0, 0, 255], [0, 0, 255, 255]].concat()
+        zstd_bgra_to_rgba(&payload, &[rect(2), rect(1)]).unwrap(),
+        [
+            [[255, 0, 0, 255], [0, 0, 255, 255]].concat(),
+            [255, 0, 0, 255].to_vec()
+        ]
     );
-    assert!(zstd_bgra_to_rgba(&payload, 3, 1).is_none());
-    assert!(zstd_bgra_to_rgba(&payload, 1, 1).is_none());
-    assert!(zstd_bgra_to_rgba(b"junk", 2, 1).is_none());
+    assert!(zstd_bgra_to_rgba(&payload, &[rect(2)]).is_none());
+    assert!(zstd_bgra_to_rgba(&payload, &[rect(4)]).is_none());
+    assert!(zstd_bgra_to_rgba(b"junk", &[rect(3)]).is_none());
+}
+
+fn rect(x: i32, y: i32, width: u32, height: u32) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn far_apart_damage_stays_separate_and_near_damage_merges() {
+    let mut damage = Damage::default();
+    damage.add(rect(0, 0, 10, 20));
+    damage.add(rect(300, 500, 100, 100));
+    assert_eq!(damage.rects().len(), 2, "a caret and a clock stay apart");
+    // Next to the caret: merged with it.
+    damage.add(rect(12, 0, 10, 20));
+    assert_eq!(damage.rects().len(), 2);
+    assert!(damage.rects().contains(&rect(0, 0, 22, 20)));
+    damage.add(rect(0, 0, 0, 5));
+    assert_eq!(damage.rects().len(), 2, "empty rectangles are ignored");
+    assert_eq!(damage.take().len(), 2);
+    assert!(damage.is_empty());
+}
+
+#[test]
+fn too_many_damage_rects_become_one_box() {
+    let mut damage = Damage::default();
+    for i in 0..=8 {
+        damage.add(rect(i * 1000, i * 1000, 1, 1));
+    }
+    assert_eq!(damage.rects(), [rect(0, 0, 8001, 8001)]);
+}
+
+#[test]
+fn union_covers_both_and_clamp_cuts_to_the_image() {
+    let a = Rect {
+        x: 0,
+        y: 0,
+        width: 2,
+        height: 2,
+    };
+    let b = Rect {
+        x: 5,
+        y: 1,
+        width: 1,
+        height: 4,
+    };
+    assert_eq!(
+        union(a, b),
+        Rect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 5
+        }
+    );
+    assert_eq!(
+        clamp(union(a, b), 4, 3),
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 3
+        })
+    );
+    assert_eq!(clamp(b, 4, 3), None);
 }
 
 fn menu(anchor: u32, gravity: u32) -> Positioner {

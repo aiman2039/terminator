@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-pub use terminator_remote_apps::compose::zstd_bgra_to_rgba;
+pub use terminator_remote_apps::compose::{Damage, zstd_bgra_to_rgba};
 pub use terminator_remote_apps::protocol::{
     self, ClientMessage, ErrorKind, HostMessage, PointerButton, WindowId, WindowRole,
 };
@@ -16,11 +16,18 @@ pub const CAPABILITY: &str = "remote-apps-v1";
 /// host puts the bridge on `PATH`.
 pub const DEFAULT_COMMAND: &str = "terminator-remote-bridge --ensure";
 /// Shell code (POSIX `sh`, safe under `set -eu`) that new SSH terminals run
-/// first: when this user's bridge recorded a session (`session.json`, see
-/// the bridge's `--ensure`) and its X socket exists, it exports `DISPLAY`,
-/// `XAUTHORITY` and `WAYLAND_DISPLAY`, so apps started in the terminal open
-/// as Terminator tabs. A dead session prints one line and exports nothing.
-pub const SHELL_ENV: &str = r#"for __t in "${XDG_RUNTIME_DIR:-/nonexistent}/terminator-remote" "/tmp/terminator-remote-$(id -u)"; do if [ -f "$__t/session.json" ]; then __d=$(sed -n 's/.*"display": *"\(:[0-9]*\)".*/\1/p' "$__t/session.json"); if [ -n "$__d" ] && [ -S "/tmp/.X11-unix/X${__d#:}" ]; then export DISPLAY="$__d" XAUTHORITY="$__t/Xauthority" WAYLAND_DISPLAY="$__t/wprs-0"; else echo "terminator: remote apps are not running on this host (use Show remote apps)" >&2; fi; break; fi; done; unset __t __d; "#;
+/// first: when this user's bridge recorded a session (`session.json` in
+/// `/tmp/terminator-remote-<uid>`, or `$TERMINATOR_REMOTE_DIR`; see the
+/// bridge's `--ensure`), its wprsd still runs and its X socket exists, it
+/// exports `DISPLAY`, `XAUTHORITY` and `WAYLAND_DISPLAY`, so apps started in
+/// the terminal open as Terminator tabs. A dead session prints one line and
+/// exports nothing.
+pub const SHELL_ENV: &str = r#"__t="${TERMINATOR_REMOTE_DIR:-/tmp/terminator-remote-$(id -u)}"; if [ -f "$__t/session.json" ]; then __d=$(sed -n 's/.*"display": *"\(:[0-9]*\)".*/\1/p' "$__t/session.json"); __p=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$__t/session.json"); if [ -n "$__d" ] && [ -n "$__p" ] && kill -0 "$__p" 2>/dev/null && [ -S "/tmp/.X11-unix/X${__d#:}" ]; then export DISPLAY="$__d" XAUTHORITY="$__t/Xauthority" WAYLAND_DISPLAY="$__t/wprs-0"; else echo "terminator: remote apps are not running on this host (use Show remote apps)" >&2; fi; fi; unset __t __d __p; "#;
+/// The daemon's error for a session it does not know (it restarted). Every
+/// daemon version sends this text; the GUI connects again when it sees it.
+pub const UNKNOWN_SESSION: &str = "Unknown remote-apps session";
+/// Overrides the bridge's private directory (tests).
+pub const REMOTE_DIR_ENV: &str = "TERMINATOR_REMOTE_DIR";
 /// Largest clipboard text carried either way.
 pub const MAX_CLIPBOARD: usize = 1024 * 1024;
 pub use terminator_remote_apps::protocol::TEXT_MIME_TYPES;
@@ -63,6 +70,10 @@ pub struct RemoteWindow {
     pub shm: Option<PathBuf>,
     #[serde(default)]
     pub sequence: u64,
+    /// The only areas that changed after the request's `since` revision.
+    /// Empty means "read the whole window" (new, resized, or too old).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<protocol::Rect>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -87,11 +98,13 @@ pub struct RemoteAppsState {
     pub retry_in_seconds: u64,
     /// All open windows, toplevels before their popups.
     pub windows: Vec<RemoteWindow>,
-    /// The pointer shape the apps ask for; `None` until one is set.
+    /// The pointer shape the apps ask for; sent only when it changed after
+    /// the request's `since`, so the GUI keeps the last one it got.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<RemoteCursor>,
-    /// The last text a remote app copied. The GUI puts it on the local
-    /// clipboard only while one of this host's windows has focus.
+    /// The last text a remote app copied, sent only when it changed after
+    /// `since`. The GUI puts it on the local clipboard only while one of
+    /// this host's windows has focus.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clipboard: Option<RemoteClipboard>,
 }
@@ -128,17 +141,16 @@ fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
 
-/// Failures that a retry cannot fix: the user must install or update
-/// something first.
+/// A protocol rectangle as a shared-frame rectangle; `None` when it does
+/// not fit in `u16` coordinates.
 #[must_use]
-pub fn permanent(kind: ErrorKind) -> bool {
-    matches!(
-        kind,
-        ErrorKind::WprsdMissing
-            | ErrorKind::XwaylandMissing
-            | ErrorKind::VersionMismatch
-            | ErrorKind::Unsupported
-    )
+pub fn frame_rect(rect: protocol::Rect) -> Option<terminator_sys::FrameRect> {
+    Some(terminator_sys::FrameRect {
+        x: u16::try_from(rect.x).ok()?,
+        y: u16::try_from(rect.y).ok()?,
+        width: u16::try_from(rect.width).ok()?,
+        height: u16::try_from(rect.height).ok()?,
+    })
 }
 
 /// Seconds before retry `attempt` (1-based): 1, 2, 4, … capped at 60.
@@ -164,7 +176,7 @@ mod tests {
         let out = Command::new("sh")
             .arg("-c")
             .arg(script)
-            .env("XDG_RUNTIME_DIR", runtime)
+            .env(super::REMOTE_DIR_ENV, runtime.join("terminator-remote"))
             .env_remove("DISPLAY")
             .env_remove("XAUTHORITY")
             .env_remove("WAYLAND_DISPLAY")
@@ -190,7 +202,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let session = dir.path().join("terminator-remote");
         std::fs::create_dir(&session).unwrap();
-        std::fs::write(session.join("session.json"), r#"{"display": ":4999"}"#).unwrap();
+        // A wprsd that is gone: no such process and no socket.
+        std::fs::write(
+            session.join("session.json"),
+            r#"{"display": ":4999", "pid": 999999999}"#,
+        )
+        .unwrap();
         let (out, err) = run(dir.path());
         assert_eq!(out, "D=none X=none W=none");
         assert!(err.contains("remote apps are not running"), "{err}");
@@ -213,7 +230,10 @@ mod tests {
         std::fs::create_dir(&session).unwrap();
         std::fs::write(
             session.join("session.json"),
-            format!("{{\n  \"display\": \":{number}\",\n  \"pid\": 1\n}}"),
+            format!(
+                "{{\n  \"display\": \":{number}\",\n  \"pid\": {}\n}}",
+                std::process::id()
+            ),
         )
         .unwrap();
         let (out, _) = run(dir.path());

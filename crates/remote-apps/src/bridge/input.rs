@@ -6,8 +6,8 @@ use rkyv::rancor::Error as RancorError;
 use wprs::serialization::Event;
 use wprs::serialization::geometry::{Point, Size};
 use wprs::serialization::wayland::{
-    AxisScroll, AxisSource, KeyInner, KeyState, KeyboardEvent, Mode, ModifierState, OutputEvent,
-    OutputInfo, PointerEvent, PointerEventKind, Subpixel, Transform, WlSurfaceId,
+    AxisScroll, AxisSource, KeyInner, KeyState, KeyboardEvent, Mode, OutputEvent, OutputInfo,
+    PointerEvent, PointerEventKind, Subpixel, Transform, WlSurfaceId,
 };
 use wprs::serialization::xdg_shell::{
     DecorationMode, ToplevelClose, ToplevelConfigure, ToplevelEvent,
@@ -78,28 +78,7 @@ impl Input {
             ClientMessage::Key {
                 keycode, pressed, ..
             } => vec![self.key(*keycode, *pressed)],
-            ClientMessage::Modifiers {
-                shift,
-                ctrl,
-                alt,
-                logo,
-                caps_lock,
-                num_lock,
-            } => vec![Event::KeyboardEvent(KeyboardEvent::Modifiers {
-                modifier_state: ModifierState {
-                    ctrl: *ctrl,
-                    alt: *alt,
-                    shift: *shift,
-                    caps_lock: *caps_lock,
-                    logo: *logo,
-                    num_lock: *num_lock,
-                },
-                layout_index: 0,
-            })],
-            ClientMessage::Hello { .. }
-            | ClientMessage::ClipboardOffer { .. }
-            | ClientMessage::ClipboardRead { .. }
-            | ClientMessage::ClipboardData { .. } => Vec::new(),
+            ClientMessage::Hello { .. } | ClientMessage::ClipboardOffer { .. } => Vec::new(),
         }
     }
 

@@ -123,6 +123,10 @@ pub enum Request {
     Data(wayland::DataRequest),
     ClientDisconnected(ClientId),
     Capabilities(Capabilities),
+    /// Terminator: sent after the surfaces that existed at connect, so the
+    /// client knows its window list is complete. Last, so older peers keep
+    /// the other variants' tags.
+    ReplayDone,
 }
 
 #[derive(Debug, Clone, PartialEq, Archive, Deserialize, Serialize)]

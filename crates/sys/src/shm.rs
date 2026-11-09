@@ -149,19 +149,14 @@ impl SharedFrameWriter {
         if frame.len() != pixel_bytes(self.width, self.height) {
             return Err(invalid("frame size does not match the shared buffer"));
         }
-        let start = sequence_mut(&mut self.map)
-            .ok_or_else(|| invalid("short map"))?
-            .fetch_add(1, Ordering::AcqRel);
         let (width, height) = (self.width, self.height);
-        let pixels = self
-            .map
-            .get_mut(HEADER..)
-            .ok_or_else(|| invalid("short map"))?;
-        if rects.is_empty() {
-            if let Some(dst) = pixels.get_mut(..frame.len()) {
-                dst.copy_from_slice(frame);
+        self.write(|pixels| {
+            if rects.is_empty() {
+                if let Some(dst) = pixels.get_mut(..frame.len()) {
+                    dst.copy_from_slice(frame);
+                }
+                return;
             }
-        } else {
             for rect in rects.iter().filter(|r| in_bounds(width, height, **r)) {
                 for (offset, _, len) in rect_rows(width, *rect) {
                     let range = offset..offset.saturating_add(len);
@@ -172,7 +167,45 @@ impl SharedFrameWriter {
                     }
                 }
             }
+        })
+    }
+
+    /// Copy packed RGBA rectangles (rows of `rect.width * 4` bytes) into
+    /// the frame, so the caller needs no full-frame copy. Fails, without a
+    /// write, when a rectangle is outside the frame or its bytes do not
+    /// match its size. Returns the new even sequence.
+    pub fn publish_packed(&mut self, rects: &[(FrameRect, &[u8])]) -> io::Result<u64> {
+        let (width, height) = (self.width, self.height);
+        if rects.iter().any(|(rect, src)| {
+            !in_bounds(width, height, *rect) || src.len() != pixel_bytes(rect.width, rect.height)
+        }) {
+            return Err(invalid("rectangle does not fit the shared buffer"));
         }
+        self.write(|pixels| {
+            for (rect, src) in rects {
+                for (offset, packed, len) in rect_rows(width, *rect) {
+                    if let (Some(dst), Some(src)) = (
+                        pixels.get_mut(offset..offset.saturating_add(len)),
+                        src.get(packed..packed.saturating_add(len)),
+                    ) {
+                        dst.copy_from_slice(src);
+                    }
+                }
+            }
+        })
+    }
+
+    /// Runs `copy` on the pixel bytes inside the seqlock (odd while
+    /// writing). Returns the new even sequence.
+    fn write(&mut self, copy: impl FnOnce(&mut [u8])) -> io::Result<u64> {
+        let start = sequence_mut(&mut self.map)
+            .ok_or_else(|| invalid("short map"))?
+            .fetch_add(1, Ordering::AcqRel);
+        let pixels = self
+            .map
+            .get_mut(HEADER..)
+            .ok_or_else(|| invalid("short map"))?;
+        copy(pixels);
         let end = start.wrapping_add(2) & !1;
         sequence_mut(&mut self.map)
             .ok_or_else(|| invalid("short map"))?
@@ -312,6 +345,31 @@ mod tests {
                 )
                 .is_none()
         );
+    }
+
+    #[test]
+    fn packed_rects_land_in_place_and_a_bad_rect_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("trm-shm-packed-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("packed.fb");
+        let mut writer = SharedFrameWriter::create(&path, 4, 3).unwrap();
+        let first = writer.publish(&frame(4, 3, 7), &[]).unwrap();
+        let rect = FrameRect {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 2,
+        };
+        let second = writer.publish_packed(&[(rect, &[9; 16])]).unwrap();
+        assert!(second > first);
+        let reader = SharedFrameReader::open(&path).unwrap();
+        let whole = reader.read(second, &[]).unwrap().remove(0).1;
+        let at = |x: usize, y: usize| whole[(y * 4 + x) * 4];
+        assert_eq!((at(1, 1), at(2, 2), at(0, 0), at(3, 1)), (9, 9, 7, 7));
+        let outside = FrameRect { x: 3, ..rect };
+        assert!(writer.publish_packed(&[(outside, &[1; 16])]).is_err());
+        assert!(writer.publish_packed(&[(rect, &[1; 4])]).is_err());
+        assert!(reader.read(second, &[]).is_some(), "nothing was written");
     }
 
     #[test]
