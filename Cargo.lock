@@ -7861,6 +7861,7 @@ dependencies = [
  "flate2",
  "fs2",
  "futures-util",
+ "hex",
  "image",
  "keyring",
  "notify",

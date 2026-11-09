@@ -18,7 +18,11 @@ pub(super) fn credential_account(profile: &VncProfile) -> Result<String> {
         &profile.options.tls_ca_file,
         &profile.options.ssh,
     ))?;
-    Ok(format!("{}:{:x}", profile.id, Sha256::digest(identity)))
+    Ok(format!(
+        "{}:{}",
+        profile.id,
+        hex::encode(Sha256::digest(identity))
+    ))
 }
 fn entry(paths: &Paths, profile: &VncProfile) -> Result<keyring::Entry> {
     let id = &profile.id;

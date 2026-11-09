@@ -31,6 +31,7 @@ rustls-platform-verifier = "0.7"
 openssh-sftp-client = "0.15"
 zeroize = "1"
 sha2 = "0.11"
+hex = "0.4"
 socket2 = "0.6"
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
