@@ -29,7 +29,7 @@ windows_toolchain() {
 }
 case "${1:-all}" in
     async-boundary) cargo xtask async-boundary ;;
-    fmt) cargo fmt --all --check ;;
+    fmt) cargo fmt --check ;;
     lint) cargo check --workspace --all-targets --all-features --locked ;;
     build) cargo build --workspace --all-targets --all-features --locked ;;
     clippy)
