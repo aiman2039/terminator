@@ -21,7 +21,7 @@ rayon = "1"
 fs2 = "0.4"
 semver = "1"
 sha2 = "0.10"
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 toml_edit = "0.25"
 uuid.workspace = true
 xshell = "0.2"
