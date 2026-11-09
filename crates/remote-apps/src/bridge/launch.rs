@@ -3,10 +3,14 @@
 //! only the bridge (the viewer) comes and goes.
 //!
 //! Files live in one private directory (0700, never on NFS):
-//! `$XDG_RUNTIME_DIR/terminator-remote`, else `/tmp/terminator-remote-<uid>`.
-//! `session.json` is written only after the first bridge connection gave
-//! wprsd an output, so a shell that reads it gets a display that maps
-//! windows (xwayland-xdg-shell ignores windows mapped before an output).
+//! `/tmp/terminator-remote-<uid>`. Not `$XDG_RUNTIME_DIR`: systemd removes
+//! it when the user's last session ends, and wprsd must outlive that.
+//!
+//! - `wprsd.json`: the running wprsd, written as soon as it answers, so a
+//!   bridge that dies early never leaves a wprsd nobody can find.
+//! - `session.json`: the same, for shells; written only after a bridge gave
+//!   wprsd an output, so a shell that reads it gets a display that maps
+//!   windows (xwayland-xdg-shell ignores windows mapped before an output).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -24,6 +28,8 @@ use serde::{Deserialize, Serialize};
 const FIRST_DISPLAY: u32 = 100;
 const LAST_DISPLAY: u32 = 999;
 const START_TIMEOUT: Duration = Duration::from_secs(20);
+/// With a wrapper the first start may download wprs (nix-portable).
+const WRAPPER_START_TIMEOUT: Duration = Duration::from_mins(10);
 const X11_DIR: &str = "/tmp/.X11-unix";
 
 /// What a shell needs to show apps in Terminator.
@@ -46,7 +52,7 @@ pub enum LaunchError {
     UnsafeDir(PathBuf, &'static str),
     #[error("no free X display between :{FIRST_DISPLAY} and :{LAST_DISPLAY}")]
     NoDisplay,
-    #[error("wprsd did not start in {secs} s; log: {log}", secs = START_TIMEOUT.as_secs())]
+    #[error("wprsd did not start in time; log: {log}")]
     StartTimeout { log: String },
     #[error("wprsd exited at start; log: {log}")]
     StartFailed { log: String },
@@ -57,10 +63,10 @@ pub enum LaunchError {
 /// The private directory, created when missing.
 pub fn runtime_dir() -> Result<PathBuf, LaunchError> {
     let uid = nix::unistd::getuid().as_raw();
-    let dir = match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
-        Some(base) if base.is_dir() => base.join("terminator-remote"),
-        _ => PathBuf::from(format!("/tmp/terminator-remote-{uid}")),
-    };
+    let dir = std::env::var_os("TERMINATOR_REMOTE_DIR").map_or_else(
+        || PathBuf::from(format!("/tmp/terminator-remote-{uid}")),
+        PathBuf::from,
+    );
     private_dir(&dir)?;
     let meta = fs::symlink_metadata(&dir)?;
     if !meta.is_dir() {
@@ -75,21 +81,36 @@ pub fn runtime_dir() -> Result<PathBuf, LaunchError> {
     Ok(dir)
 }
 
-/// The live session recorded in `dir`, if its wprsd still answers.
+/// The running wprsd recorded in `dir`, if it still answers.
 pub fn live_session(dir: &Path) -> Option<Session> {
-    let text = fs::read_to_string(dir.join("session.json")).ok()?;
+    let text = fs::read_to_string(dir.join(WPRSD_FILE)).ok()?;
     let session: Session = serde_json::from_str(&text).ok()?;
     UnixStream::connect(&session.socket).ok()?;
     Some(session)
 }
 
-pub fn record(dir: &Path, session: &Session) -> Result<(), LaunchError> {
-    let tmp = dir.join("session.json.tmp");
+/// Shells may use the display now (it has an output): writes
+/// `session.json` unless it already describes `session`.
+pub fn publish_for_shells(dir: &Path, session: &Session) -> Result<(), LaunchError> {
+    write_json(dir, SHELL_FILE, session)
+}
+
+const WPRSD_FILE: &str = "wprsd.json";
+const SHELL_FILE: &str = "session.json";
+
+fn write_json(dir: &Path, name: &str, session: &Session) -> Result<(), LaunchError> {
+    let json = serde_json::to_vec_pretty(session).map_err(io::Error::other)?;
+    Ok(write_private(dir, name, &json)?)
+}
+
+/// Replaces `dir/name` with `bytes` atomically (a 0600 temporary file, then
+/// a rename), so readers never see half a file.
+pub(super) fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    let tmp = dir.join(format!("{name}.tmp"));
     let mut file = private_file(&tmp)?;
-    file.write_all(&serde_json::to_vec_pretty(session).map_err(io::Error::other)?)?;
+    file.write_all(bytes)?;
     file.sync_all()?;
-    fs::rename(tmp, dir.join("session.json"))?;
-    Ok(())
+    fs::rename(tmp, dir.join(name))
 }
 
 /// Starts wprsd with Xwayland on a free display, detached from this process
@@ -124,7 +145,12 @@ pub fn start(dir: &Path) -> Result<Session, LaunchError> {
         .stderr(log)
         .process_group(0)
         .spawn()?;
-    let deadline = Instant::now().checked_add(START_TIMEOUT);
+    let timeout = if tools.wrapper.is_some() {
+        WRAPPER_START_TIMEOUT
+    } else {
+        START_TIMEOUT
+    };
+    let deadline = Instant::now().checked_add(timeout);
     loop {
         if child.try_wait()?.is_some() {
             return Err(LaunchError::StartFailed {
@@ -143,13 +169,15 @@ pub fn start(dir: &Path) -> Result<Session, LaunchError> {
         }
         thread::sleep(Duration::from_millis(100));
     }
-    Ok(Session {
+    let session = Session {
         display,
-        wayland_display: "wprs-0".to_owned(),
+        wayland_display: dir.join("wprs-0").display().to_string(),
         socket,
         xauthority,
         pid: child.id(),
-    })
+    };
+    write_json(dir, WPRSD_FILE, &session)?;
+    Ok(session)
 }
 
 struct Tools {

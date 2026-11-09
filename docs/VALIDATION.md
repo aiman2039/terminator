@@ -32,6 +32,42 @@ Not checked yet: mouse clicks and the cursor in a real app, the GUI's
 Cmd+C/V mapping in a live window, the static x86_64 bridge on the CentOS 7
 host, and wprsd under `nix-portable` outliving the bridge.
 
+### Review fixes — 2026-11-09
+
+Branch `worktree-remote-apps-fixes`: `Ready` after the window replay (the
+GUI closes tabs only then), bridge takeover (`bridge.pid`, `taken_over`),
+the private directory in `/tmp`, `wprsd.json`, the `host_setup` error,
+`PROTOCOL_VERSION` 2, backoff reset only on `Ready`, damage-rectangle
+frames end to end (bridge, daemon writes packed rectangles straight into
+shared memory, `regions`, GUI texture patches, cached shared-memory
+readers), cursor and clipboard sent only when changed, a
+stdout writer thread (frames only while it is idle), and GUI input fixes
+(pointer leave, key release for a covered tab, one input view per window,
+a second close within 5 s closes the tab).
+
+- Bridge, Linux container: 38 unit tests and clippy; `dev/bridge-e2e.sh`;
+  `dev/bridge-ensure-e2e.sh` now also holds one bridge, starts a second,
+  and sees the first end with `TakenOver` on the same wprsd; with
+  `TERMINATOR_WPRS_WRAPPER` too: pass.
+- Daemon over SSH, `dev/daemon-e2e.sh`: all earlier steps, plus a host-side
+  second bridge ends the session as `failed`/`taken_over`, connecting again
+  brings the same window ID back, and an unknown session answers
+  "Unknown remote-apps session": pass.
+- `crates/sys`: `publish_packed` test (rectangles land in place; a bad
+  rectangle writes nothing): pass.
+- Root `Cargo.toml` excludes `.claude`: in a scratch copy of the layout
+  (outer workspace, nested worktree with excluded vendored crates),
+  `cargo fmt --all --check` fails without it and passes with it.
+- GUI, `dev/gui-e2e.sh`: the seeded tab of a missing window closed after
+  `Ready`; xclock opened as a tab and its hands update through damage
+  patches (screenshot checked).
+- Workspace clippy (`--all-features`), daemon remote-apps (18) and GUI
+  remote-apps (12) tests: pass. sarah: the remote-apps files pass; three
+  items fail on master too (`app/types.rs`, `core/ipc/mod.rs`,
+  `remote_apps_ui/keys.rs::evdev`).
+- `delete_file_in_the_git_panel_still_moves_the_file_to_trash_during_a_commit`
+  fails on master too (unrelated).
+
 ## Empty pane focus at startup — 2026-11-07
 
 Removing the last dock pane now clears its focus. Loading a saved empty tree

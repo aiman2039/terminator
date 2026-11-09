@@ -16,6 +16,7 @@ fn window(id: u64, title: &str, role: WindowRole) -> RemoteWindow {
         revision: 1,
         shm: None,
         sequence: 0,
+        regions: Vec::new(),
     }
 }
 
@@ -137,11 +138,47 @@ fn closing_a_tab_asks_the_app_while_connected_and_closes_it_otherwise() {
 }
 
 #[test]
-fn a_forgotten_session_reconnects_after_a_poll_error() {
+fn a_session_the_daemon_forgot_connects_again_and_keeps_the_tabs() {
     let (mut app, ctx, _dir) = fixture();
     app.connect_remote_apps("a");
-    connected(&mut app, &ctx, Vec::new());
+    connected(
+        &mut app,
+        &ctx,
+        vec![window(7, "xclock", WindowRole::Toplevel)],
+    );
     assert!(app.remote_apps_connected("a"));
-    app.handle_remote_apps(&ctx, "a", Err("Unknown remote-apps session".into()));
+    let error = format!("{}: s1", terminator_core::remote_apps::UNKNOWN_SESSION);
+    app.handle_remote_apps(&ctx, "a", Err(error));
     assert!(!app.remote_apps_connected("a"));
+    assert_eq!(remote_tabs(&app), [(7, "xclock".to_owned())]);
+    // Not ended: the next tick connects again.
+    connected(
+        &mut app,
+        &ctx,
+        vec![window(7, "xclock", WindowRole::Toplevel)],
+    );
+    assert!(app.remote_apps_connected("a"));
+}
+
+#[test]
+fn a_second_close_closes_the_tab_and_the_window_gets_no_new_tab() {
+    let (mut app, ctx, _dir) = fixture();
+    app.connect_remote_apps("a");
+    let xclock = || vec![window(7, "xclock", WindowRole::Toplevel)];
+    connected(&mut app, &ctx, xclock());
+    assert!(app.remote_app_close_requested("a", 7));
+    assert!(!app.remote_app_close_requested("a", 7));
+    let key = Tab::RemoteApp {
+        project: "a".into(),
+        window: 7,
+        title: String::new(),
+    }
+    .key();
+    app.layouts.get_mut("a").unwrap().remove_key(&key);
+    connected(&mut app, &ctx, xclock());
+    assert!(remote_tabs(&app).is_empty());
+    // Once the window is gone, the ID may get a tab again.
+    connected(&mut app, &ctx, Vec::new());
+    connected(&mut app, &ctx, xclock());
+    assert_eq!(remote_tabs(&app), [(7, "xclock".to_owned())]);
 }

@@ -19,8 +19,9 @@ use std::io::{self, Read, Write};
 #[cfg(test)]
 mod tests;
 
-/// Bump only for changes that old peers cannot ignore.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Bump only for changes that old peers cannot ignore. 2: `Ready`, damage
+/// rectangles, and the new clipboard messages.
+pub const PROTOCOL_VERSION: u32 = 2;
 /// Clipboard text MIME types, preferred first. Clipboard text travels in
 /// the payload of `ClipboardOffer` (client to host, offered to the apps)
 /// and `ClipboardData` (host to client, what an app copied).
@@ -79,10 +80,25 @@ pub enum ErrorKind {
     WprsdStopped,
     /// Xwayland is not installed, so X11 apps cannot start.
     XwaylandMissing,
-    /// The host CPU or OS is not supported.
-    Unsupported,
-    /// Any other failure; the message has the detail.
+    /// The host cannot run wprsd as set up (unsafe private directory, no
+    /// free display, wprsd exits at start); the message has the detail.
+    HostSetup,
+    /// A newer bridge (another Terminator, or this one after a dropped
+    /// link) took the windows.
+    TakenOver,
+    /// Any other failure; the message has the detail. Kinds from a newer
+    /// peer read as this one.
+    #[serde(other)]
     Other,
+}
+
+impl ErrorKind {
+    /// Failures that a retry cannot fix: the user must install, update or
+    /// reconnect first.
+    #[must_use]
+    pub fn permanent(self) -> bool {
+        !matches!(self, Self::WprsdStopped | Self::Other)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,6 +114,10 @@ pub enum HostMessage {
         wayland_display: String,
         capabilities: Vec<String>,
     },
+    /// The bridge reached wprsd and sent every window that already exists.
+    /// Only now is the window list complete: a window missing from it is
+    /// closed.
+    Ready,
     WindowOpened {
         id: WindowId,
         role: WindowRole,
@@ -109,7 +129,9 @@ pub enum HostMessage {
         title: String,
         app_id: String,
     },
-    /// New pixels. The payload is encoded as `encoding` says.
+    /// New pixels of the `damage` rectangles of a `width` x `height`
+    /// window. The payload is encoded as `encoding` says. After a size
+    /// change the damage is the whole window.
     Frame {
         id: WindowId,
         width: u32,
@@ -131,11 +153,7 @@ pub enum HostMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
-    /// A remote app took the clipboard and offers these types.
-    ClipboardOffer {
-        mime_types: Vec<String>,
-    },
-    /// Answer to [`ClientMessage::ClipboardRead`]; the payload is the data.
+    /// Text a remote app copied; the payload is the text.
     ClipboardData {
         mime_type: String,
     },
@@ -202,25 +220,10 @@ pub enum ClientMessage {
         keycode: u32,
         pressed: bool,
     },
-    Modifiers {
-        shift: bool,
-        ctrl: bool,
-        alt: bool,
-        logo: bool,
-        caps_lock: bool,
-        num_lock: bool,
-    },
-    /// The local clipboard changed; these types can be read with a
-    /// [`HostMessage`] round trip later. Sent only when the host allows sync.
+    /// Local clipboard text for the remote apps (before a paste key); the
+    /// payload is the text.
     ClipboardOffer {
         mime_types: Vec<String>,
-    },
-    ClipboardRead {
-        mime_type: String,
-    },
-    /// Answer to a host read of the local clipboard; the payload is the data.
-    ClipboardData {
-        mime_type: String,
     },
 }
 

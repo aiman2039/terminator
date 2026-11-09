@@ -113,12 +113,14 @@ impl Services {
                 project,
                 session,
                 since,
+                readers,
             } => {
                 self.remote_apps(
                     crate::gui_services::jobs::remote_apps::RemoteAppsInput {
                         project,
                         session,
                         since,
+                        readers,
                         cancel,
                     },
                     updates,

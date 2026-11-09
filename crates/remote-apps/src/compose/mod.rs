@@ -4,22 +4,76 @@
 #[cfg(test)]
 mod tests;
 
+use crate::protocol::Rect;
+
 /// Bytes per BGRA pixel.
 const BPP: usize = 4;
 
-/// Decodes a [`crate::protocol::FrameEncoding::ZstdBgra`] payload of a full
-/// `width` x `height` frame into premultiplied RGBA. `None` when the payload
-/// is corrupt or not exactly that size.
-pub fn zstd_bgra_to_rgba(payload: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
-    let len = row_bytes(width)?.checked_mul(usize::try_from(height).ok()?)?;
-    let mut pixels = zstd::bulk::decompress(payload, len).ok()?;
-    if pixels.len() != len {
+/// Decodes a [`crate::protocol::FrameEncoding::ZstdBgra`] payload holding
+/// `rects` (in order, packed rows) into premultiplied RGBA, one buffer per
+/// rectangle. `None` when the payload is corrupt or not exactly that size.
+pub fn zstd_bgra_to_rgba(payload: &[u8], rects: &[Rect]) -> Option<Vec<Vec<u8>>> {
+    let lens: Vec<usize> = rects.iter().map(rect_bytes).collect::<Option<_>>()?;
+    let total = lens
+        .iter()
+        .try_fold(0_usize, |sum, len| sum.checked_add(*len))?;
+    let mut pixels = zstd::bulk::decompress(payload, total).ok()?;
+    if pixels.len() != total {
         return None;
     }
     for pixel in pixels.chunks_exact_mut(BPP) {
         pixel.swap(0, 2);
     }
-    Some(pixels)
+    if let [_] = lens.as_slice() {
+        // The usual case: one rectangle, no copy.
+        return Some(vec![pixels]);
+    }
+    let mut out = Vec::with_capacity(lens.len());
+    let mut rest = pixels.as_slice();
+    for len in lens {
+        let (head, tail) = rest.split_at_checked(len)?;
+        out.push(head.to_vec());
+        rest = tail;
+    }
+    Some(out)
+}
+
+fn rect_bytes(rect: &Rect) -> Option<usize> {
+    row_bytes(rect.width)?.checked_mul(usize::try_from(rect.height).ok()?)
+}
+
+/// The smallest rectangle holding both.
+pub fn union(a: Rect, b: Rect) -> Rect {
+    if a.width == 0 || a.height == 0 {
+        return b;
+    }
+    if b.width == 0 || b.height == 0 {
+        return a;
+    }
+    let right = |r: Rect| i64::from(r.x).saturating_add(i64::from(r.width));
+    let bottom = |r: Rect| i64::from(r.y).saturating_add(i64::from(r.height));
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let width = right(a).max(right(b)).saturating_sub(i64::from(x));
+    let height = bottom(a).max(bottom(b)).saturating_sub(i64::from(y));
+    Rect {
+        x,
+        y,
+        width: u32::try_from(width).unwrap_or(u32::MAX),
+        height: u32::try_from(height).unwrap_or(u32::MAX),
+    }
+}
+
+/// `rect` cut to a `width` x `height` image; `None` when nothing is left.
+pub fn clamp(rect: Rect, width: u32, height: u32) -> Option<Rect> {
+    let (_, x, w) = clip_axis(rect.x, rect.width, (0, width))?;
+    let (_, y, h) = clip_axis(rect.y, rect.height, (0, height))?;
+    Some(Rect {
+        x: i32::try_from(x).ok()?,
+        y: i32::try_from(y).ok()?,
+        width: u32::try_from(w).ok()?,
+        height: u32::try_from(h).ok()?,
+    })
 }
 
 /// One surface buffer drawn at `x`,`y` in window coordinates. `pixels` holds
@@ -71,10 +125,74 @@ impl Canvas {
         &self.pixels
     }
 
+    /// The whole canvas as a rectangle.
+    pub fn bounds(&self) -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width: self.width,
+            height: self.height,
+        }
+    }
+
+    /// Makes `rect` fully transparent.
+    pub fn clear(&mut self, rect: Rect) {
+        let Some(rect) = clamp(rect, self.width, self.height) else {
+            return;
+        };
+        for row in self.rows_mut(rect) {
+            row.fill(0);
+        }
+    }
+
+    /// The pixels of `rect` (inside the canvas) as packed rows.
+    pub fn region(&self, rect: Rect) -> Vec<u8> {
+        clamp(rect, self.width, self.height)
+            .map(|rect| self.rows(rect).flatten().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Row geometry of `rect` (inside the canvas): row bytes, skipped rows,
+    /// rows, and the byte range in each row.
+    fn row_span(&self, rect: Rect) -> (usize, usize, usize, std::ops::Range<usize>) {
+        let row = row_bytes(self.width).unwrap_or(0).max(1);
+        let x = usize::try_from(rect.x).unwrap_or(0).saturating_mul(BPP);
+        let bytes = row_bytes(rect.width).unwrap_or(0);
+        let y = usize::try_from(rect.y).unwrap_or(0);
+        let height = usize::try_from(rect.height).unwrap_or(0);
+        (row, y, height, x..x.saturating_add(bytes))
+    }
+
+    fn rows(&self, rect: Rect) -> impl Iterator<Item = &[u8]> {
+        let (row, y, height, span) = self.row_span(rect);
+        self.pixels
+            .chunks_exact(row)
+            .skip(y)
+            .take(height)
+            .filter_map(move |line| line.get(span.clone()))
+    }
+
+    fn rows_mut(&mut self, rect: Rect) -> impl Iterator<Item = &mut [u8]> {
+        let (row, y, height, span) = self.row_span(rect);
+        self.pixels
+            .chunks_exact_mut(row)
+            .skip(y)
+            .take(height)
+            .filter_map(move |line| line.get_mut(span.clone()))
+    }
+
     /// Draws `layer` over the canvas (source-over), clipped to the canvas.
     /// A layer whose buffer is shorter than its size says is skipped.
     pub fn draw(&mut self, layer: &Layer<'_>) {
-        let Some(clip) = self.clip(layer) else {
+        self.draw_in(layer, self.bounds());
+    }
+
+    /// [`Canvas::draw`] limited to `area`.
+    pub fn draw_in(&mut self, layer: &Layer<'_>, area: Rect) {
+        let Some(area) = clamp(area, self.width, self.height) else {
+            return;
+        };
+        let Some(clip) = clip(layer, area) else {
             return;
         };
         let Some(dst_row) = row_bytes(self.width) else {
@@ -100,19 +218,26 @@ impl Canvas {
             blend_row(dst, src, layer.opaque);
         }
     }
+}
 
-    fn clip(&self, layer: &Layer<'_>) -> Option<Clip> {
-        let (src_x, dst_x, cols) = clip_axis(layer.x, layer.width, self.width)?;
-        let (src_y, dst_y, rows) = clip_axis(layer.y, layer.height, self.height)?;
-        Some(Clip {
-            src_x,
-            src_y,
-            dst_x,
-            dst_y,
-            rows,
-            bytes: cols.checked_mul(BPP)?,
-        })
-    }
+/// Where `layer` overlaps `area` (already inside the canvas).
+fn clip(layer: &Layer<'_>, area: Rect) -> Option<Clip> {
+    let limits = |pos: i32, len: u32| {
+        let start = u32::try_from(pos).ok()?;
+        Some((start, start.checked_add(len)?))
+    };
+    let x_limits = limits(area.x, area.width)?;
+    let y_limits = limits(area.y, area.height)?;
+    let (src_x, dst_x, cols) = clip_axis(layer.x, layer.width, x_limits)?;
+    let (src_y, dst_y, rows) = clip_axis(layer.y, layer.height, y_limits)?;
+    Some(Clip {
+        src_x,
+        src_y,
+        dst_x,
+        dst_y,
+        rows,
+        bytes: cols.checked_mul(BPP)?,
+    })
 }
 
 struct Clip {
@@ -124,13 +249,13 @@ struct Clip {
     bytes: usize,
 }
 
-/// Where a layer of `len` pixels at `pos` overlaps `0..limit`:
+/// Where a layer of `len` pixels at `pos` overlaps `low..high`:
 /// (first source pixel, first destination pixel, count).
-fn clip_axis(pos: i32, len: u32, limit: u32) -> Option<(usize, usize, usize)> {
-    let start = i64::from(pos).max(0);
+fn clip_axis(pos: i32, len: u32, (low, high): (u32, u32)) -> Option<(usize, usize, usize)> {
+    let start = i64::from(pos).max(i64::from(low));
     let end = i64::from(pos)
         .checked_add(i64::from(len))?
-        .min(i64::from(limit));
+        .min(i64::from(high));
     if end <= start {
         return None;
     }

@@ -107,16 +107,77 @@ fn huge_canvas_is_empty_instead_of_aborting() {
 }
 
 #[test]
-fn zstd_frame_decodes_to_rgba_and_wrong_size_is_refused() {
-    let bgra = [RED, BLUE].concat();
+fn zstd_frame_decodes_each_rect_to_rgba_and_wrong_size_is_refused() {
+    let bgra = [RED, BLUE, RED].concat();
     let payload = zstd::bulk::compress(&bgra, 1).unwrap();
+    let rect = |width| Rect {
+        x: 0,
+        y: 0,
+        width,
+        height: 1,
+    };
     assert_eq!(
-        zstd_bgra_to_rgba(&payload, 2, 1).unwrap(),
-        [[255, 0, 0, 255], [0, 0, 255, 255]].concat()
+        zstd_bgra_to_rgba(&payload, &[rect(2), rect(1)]).unwrap(),
+        [
+            [[255, 0, 0, 255], [0, 0, 255, 255]].concat(),
+            [255, 0, 0, 255].to_vec()
+        ]
     );
-    assert!(zstd_bgra_to_rgba(&payload, 3, 1).is_none());
-    assert!(zstd_bgra_to_rgba(&payload, 1, 1).is_none());
-    assert!(zstd_bgra_to_rgba(b"junk", 2, 1).is_none());
+    assert!(zstd_bgra_to_rgba(&payload, &[rect(2)]).is_none());
+    assert!(zstd_bgra_to_rgba(&payload, &[rect(4)]).is_none());
+    assert!(zstd_bgra_to_rgba(b"junk", &[rect(3)]).is_none());
+}
+
+#[test]
+fn redraw_in_a_rect_changes_only_that_rect_and_region_reads_it_back() {
+    let mut canvas = Canvas::new(3, 2);
+    canvas.draw(&layer((0, 0), (3, 2), &solid(3, 2, RED)));
+    let area = Rect {
+        x: 1,
+        y: 1,
+        width: 2,
+        height: 1,
+    };
+    canvas.clear(area);
+    canvas.draw_in(&layer((0, 0), (3, 2), &solid(3, 2, BLUE)), area);
+    assert_eq!(pixel_at(&canvas, 0, 1), RED);
+    assert_eq!(pixel_at(&canvas, 1, 0), RED);
+    assert_eq!(canvas.region(area), [BLUE, BLUE].concat());
+}
+
+#[test]
+fn union_covers_both_and_clamp_cuts_to_the_image() {
+    let a = Rect {
+        x: 0,
+        y: 0,
+        width: 2,
+        height: 2,
+    };
+    let b = Rect {
+        x: 5,
+        y: 1,
+        width: 1,
+        height: 4,
+    };
+    assert_eq!(
+        union(a, b),
+        Rect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 5
+        }
+    );
+    assert_eq!(
+        clamp(union(a, b), 4, 3),
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 3
+        })
+    );
+    assert_eq!(clamp(b, 4, 3), None);
 }
 
 fn menu(anchor: u32, gravity: u32) -> Positioner {

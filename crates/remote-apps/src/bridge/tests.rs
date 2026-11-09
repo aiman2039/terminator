@@ -21,7 +21,7 @@ use wprs::sharding_compression::{CompressedShard, ShardingCompressor, ShardingDe
 
 use super::input::{Input, toplevel_configure};
 use super::state::State;
-use crate::protocol::{ClientMessage, HostMessage, WindowId, WindowRole};
+use crate::protocol::{ClientMessage, Framed, HostMessage, Rect, WindowId, WindowRole};
 
 const CLIENT: ClientId = ClientId(7);
 const RED: [u8; 4] = [0, 0, 255, 255];
@@ -107,9 +107,98 @@ fn commit(
     }))
 }
 
+/// One request, then everything it causes.
+fn step(state: &mut State, request: RecvType<Request>) -> Vec<Framed<HostMessage>> {
+    state.handle(request);
+    state.flush(true)
+}
+
 fn send_pixels(state: &mut State, pixel: [u8; 4], count: usize) {
-    let out = state.handle(RecvType::RawBuffer(filtered(&pixel.repeat(count))));
-    assert!(out.is_empty());
+    state.handle(RecvType::RawBuffer(filtered(&pixel.repeat(count))));
+}
+
+fn with_damage(mut request: RecvType<Request>, rect: (i32, i32, i32, i32)) -> RecvType<Request> {
+    if let RecvType::Object(Request::Surface(SurfaceRequest {
+        payload: SurfaceRequestPayload::Commit(state),
+        ..
+    })) = &mut request
+    {
+        state.damage = Some(vec![Rectangle {
+            loc: Point {
+                x: rect.0,
+                y: rect.1,
+            },
+            size: Size {
+                w: rect.2,
+                h: rect.3,
+            },
+        }]);
+    }
+    request
+}
+
+#[test]
+fn damaged_commit_sends_only_its_rect() {
+    let mut state = State::default();
+    send_pixels(&mut state, RED, 3 * 2);
+    step(&mut state, commit(1, (3, 2), Some(toplevel("t")), &[]));
+    send_pixels(&mut state, BLUE, 3 * 2);
+    let out = step(
+        &mut state,
+        with_damage(commit(1, (3, 2), Some(toplevel("t")), &[]), (1, 1, 2, 1)),
+    );
+    let HostMessage::Frame { damage, .. } = &out[0].message else {
+        panic!("{out:?}");
+    };
+    assert_eq!(
+        damage,
+        &[Rect {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 1
+        }]
+    );
+    assert_eq!(frame_pixels(&out[0]), BLUE.repeat(2));
+}
+
+#[test]
+fn many_commits_before_a_flush_give_one_frame_with_the_union() {
+    let mut state = State::default();
+    send_pixels(&mut state, RED, 4 * 4);
+    step(&mut state, commit(1, (4, 4), Some(toplevel("t")), &[]));
+    for x in 0..3 {
+        send_pixels(&mut state, BLUE, 4 * 4);
+        state.handle(with_damage(
+            commit(1, (4, 4), Some(toplevel("t")), &[]),
+            (x, 0, 1, 1),
+        ));
+    }
+    assert!(state.has_frames());
+    assert!(state.flush(false).is_empty(), "frames wait for the writer");
+    let out = state.flush(true);
+    assert_eq!(out.len(), 1);
+    assert!(matches!(
+        &out[0].message,
+        HostMessage::Frame { damage, .. } if damage == &[Rect { x: 0, y: 0, width: 3, height: 1 }]
+    ));
+    assert!(state.flush(true).is_empty());
+}
+
+#[test]
+fn resize_sends_the_whole_window_even_with_small_damage() {
+    let mut state = State::default();
+    send_pixels(&mut state, RED, 2 * 2);
+    step(&mut state, commit(1, (2, 2), Some(toplevel("t")), &[]));
+    send_pixels(&mut state, BLUE, 3 * 3);
+    let out = step(
+        &mut state,
+        with_damage(commit(1, (3, 3), Some(toplevel("t")), &[]), (0, 0, 1, 1)),
+    );
+    assert!(matches!(
+        &out[0].message,
+        HostMessage::Frame { width: 3, height: 3, damage, .. } if damage[0].width == 3 && damage[0].height == 3
+    ));
 }
 
 fn frame_pixels(framed: &crate::protocol::Framed<HostMessage>) -> Vec<u8> {
@@ -120,7 +209,7 @@ fn frame_pixels(framed: &crate::protocol::Framed<HostMessage>) -> Vec<u8> {
 fn first_toplevel_commit_opens_a_window_and_sends_its_pixels() {
     let mut state = State::default();
     send_pixels(&mut state, RED, 2 * 2);
-    let out = state.handle(commit(1, (2, 2), Some(toplevel("clock")), &[]));
+    let out = step(&mut state, commit(1, (2, 2), Some(toplevel("clock")), &[]));
     assert_eq!(out.len(), 2);
     assert_eq!(
         out[0].message,
@@ -146,12 +235,12 @@ fn first_toplevel_commit_opens_a_window_and_sends_its_pixels() {
 fn title_change_sends_window_changed_once() {
     let mut state = State::default();
     send_pixels(&mut state, RED, 1);
-    state.handle(commit(1, (1, 1), Some(toplevel("a")), &[]));
+    step(&mut state, commit(1, (1, 1), Some(toplevel("a")), &[]));
     send_pixels(&mut state, RED, 1);
-    let out = state.handle(commit(1, (1, 1), Some(toplevel("b")), &[]));
+    let out = step(&mut state, commit(1, (1, 1), Some(toplevel("b")), &[]));
     assert!(matches!(&out[0].message, HostMessage::WindowChanged { title, .. } if title == "b"));
     send_pixels(&mut state, RED, 1);
-    let out = state.handle(commit(1, (1, 1), Some(toplevel("b")), &[]));
+    let out = step(&mut state, commit(1, (1, 1), Some(toplevel("b")), &[]));
     assert!(matches!(out[0].message, HostMessage::Frame { .. }));
 }
 
@@ -159,14 +248,17 @@ fn title_change_sends_window_changed_once() {
 fn subsurface_commit_redraws_its_toplevel_with_the_child_on_top() {
     let mut state = State::default();
     send_pixels(&mut state, RED, 2 * 2);
-    state.handle(commit(1, (2, 2), Some(toplevel("t")), &[(2, 1, 1)]));
+    step(
+        &mut state,
+        commit(1, (2, 2), Some(toplevel("t")), &[(2, 1, 1)]),
+    );
     send_pixels(&mut state, BLUE, 1);
     let sub = Role::SubSurface(SubSurfaceState {
         parent: WlSurfaceId(1),
         location: Point { x: 1, y: 1 },
         sync: false,
     });
-    let out = state.handle(commit(2, (1, 1), Some(sub), &[]));
+    let out = step(&mut state, commit(2, (1, 1), Some(sub), &[]));
     let frame = out.last().unwrap();
     assert!(matches!(
         frame.message,
@@ -182,7 +274,7 @@ fn subsurface_commit_redraws_its_toplevel_with_the_child_on_top() {
 fn popup_opens_as_overlay_of_its_parent_window_at_the_anchor() {
     let mut state = State::default();
     send_pixels(&mut state, RED, 4);
-    state.handle(commit(1, (2, 2), Some(toplevel("t")), &[]));
+    step(&mut state, commit(1, (2, 2), Some(toplevel("t")), &[]));
     let positioner = XdgPositioner {
         width: 1,
         height: 1,
@@ -205,7 +297,7 @@ fn popup_opens_as_overlay_of_its_parent_window_at_the_anchor() {
         grab_requested: false,
     });
     send_pixels(&mut state, BLUE, 1);
-    let out = state.handle(commit(3, (1, 1), Some(popup), &[]));
+    let out = step(&mut state, commit(3, (1, 1), Some(popup), &[]));
     assert_eq!(
         out[0].message,
         HostMessage::WindowOpened {
@@ -225,7 +317,7 @@ fn popup_opens_as_overlay_of_its_parent_window_at_the_anchor() {
 fn toplevel_destroy_closes_the_window_and_unknown_destroy_is_ignored() {
     let mut state = State::default();
     send_pixels(&mut state, RED, 1);
-    state.handle(commit(1, (1, 1), Some(toplevel("t")), &[]));
+    step(&mut state, commit(1, (1, 1), Some(toplevel("t")), &[]));
     let destroy = |surface| {
         RecvType::Object(Request::Toplevel(ToplevelRequest {
             client: CLIENT,
@@ -233,12 +325,12 @@ fn toplevel_destroy_closes_the_window_and_unknown_destroy_is_ignored() {
             payload: ToplevelRequestPayload::Destroyed,
         }))
     };
-    let out = state.handle(destroy(1));
+    let out = step(&mut state, destroy(1));
     assert_eq!(
         out[0].message,
         HostMessage::WindowClosed { id: WindowId(1) }
     );
-    assert!(state.handle(destroy(1)).is_empty());
+    assert!(step(&mut state, destroy(1)).is_empty());
     assert!(state.surface_of(WindowId(1)).is_none());
 }
 
@@ -247,21 +339,22 @@ fn cursor_surface_pixels_go_out_with_the_hotspot_and_named_cursors_by_name() {
     use wprs::serialization::wayland::{ClientSurface, CursorImage, CursorImageStatus};
     let mut state = State::default();
     let set = |status| RecvType::Object(Request::CursorImage(CursorImage { serial: 1, status }));
-    let out = state.handle(set(CursorImageStatus::Surface {
-        client_surface: ClientSurface {
-            client: CLIENT,
-            surface: WlSurfaceId(5),
-        },
-        hotspot: Point { x: 1, y: 2 },
-    }));
+    let out = step(
+        &mut state,
+        set(CursorImageStatus::Surface {
+            client_surface: ClientSurface {
+                client: CLIENT,
+                surface: WlSurfaceId(5),
+            },
+            hotspot: Point { x: 1, y: 2 },
+        }),
+    );
     assert!(out.is_empty(), "no pixels yet");
     send_pixels(&mut state, BLUE, 4);
-    let out = state.handle(commit(
-        5,
-        (2, 2),
-        Some(Role::Cursor(Point { x: 1, y: 2 })),
-        &[],
-    ));
+    let out = step(
+        &mut state,
+        commit(5, (2, 2), Some(Role::Cursor(Point { x: 1, y: 2 })), &[]),
+    );
     assert!(matches!(
         out[0].message,
         HostMessage::Cursor {
@@ -273,7 +366,7 @@ fn cursor_surface_pixels_go_out_with_the_hotspot_and_named_cursors_by_name() {
         }
     ));
     assert_eq!(out[0].payload, BLUE.repeat(4));
-    let out = state.handle(set(CursorImageStatus::Named("text".into())));
+    let out = step(&mut state, set(CursorImageStatus::Named("text".into())));
     assert!(matches!(&out[0].message, HostMessage::Cursor { name: Some(n), .. } if n == "text"));
 }
 
@@ -282,7 +375,7 @@ fn window_id_is_the_surface_id_so_a_new_bridge_keeps_it() {
     for _ in 0..2 {
         let mut state = State::default();
         send_pixels(&mut state, RED, 1);
-        let out = state.handle(commit(42, (1, 1), Some(toplevel("t")), &[]));
+        let out = step(&mut state, commit(42, (1, 1), Some(toplevel("t")), &[]));
         assert!(matches!(
             out[0].message,
             HostMessage::WindowOpened {
@@ -296,19 +389,18 @@ fn window_id_is_the_surface_id_so_a_new_bridge_keeps_it() {
 #[test]
 fn commit_without_raw_pixels_keeps_the_window_closed_instead_of_panicking() {
     let mut state = State::default();
-    assert!(
-        state
-            .handle(commit(1, (2, 2), Some(toplevel("t")), &[]))
-            .is_empty()
-    );
+    assert!(step(&mut state, commit(1, (2, 2), Some(toplevel("t")), &[])).is_empty());
 }
 
 #[test]
 fn client_disconnect_closes_all_its_windows() {
     let mut state = State::default();
     send_pixels(&mut state, RED, 1);
-    state.handle(commit(1, (1, 1), Some(toplevel("t")), &[]));
-    let out = state.handle(RecvType::Object(Request::ClientDisconnected(CLIENT)));
+    step(&mut state, commit(1, (1, 1), Some(toplevel("t")), &[]));
+    let out = step(
+        &mut state,
+        RecvType::Object(Request::ClientDisconnected(CLIENT)),
+    );
     assert_eq!(
         out[0].message,
         HostMessage::WindowClosed { id: WindowId(1) }

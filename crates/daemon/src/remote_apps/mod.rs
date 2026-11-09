@@ -3,7 +3,9 @@
 //! running, and apps live on in the host's wprsd even when the bridge stops.
 //! See docs/REMOTE_APPS.md.
 
+mod pixels;
 mod runtime;
+mod window;
 mod worker;
 
 #[cfg(test)]
@@ -15,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, ensure};
 use terminator_core::remote_apps::{
     ClientMessage, HostMessage, MAX_CLIPBOARD, MAX_INPUT, MAX_WAIT_MS, RemoteAppsState,
-    TEXT_MIME_TYPES, protocol,
+    TEXT_MIME_TYPES, UNKNOWN_SESSION, protocol,
 };
 
 use crate::server::{Shared, relock};
@@ -44,7 +46,7 @@ impl Handle {
 
     /// Applies a bridge message; wakes waiting polls only when it changed
     /// something.
-    pub(crate) fn apply(&self, framed: protocol::Framed<HostMessage>, rgba: Option<Vec<u8>>) {
+    pub(crate) fn apply(&self, framed: protocol::Framed<HostMessage>, rgba: Option<Vec<Vec<u8>>>) {
         if relock(&self.runtime).apply(framed, rgba) {
             self.changed.notify_all();
         }
@@ -57,10 +59,7 @@ impl Handle {
     /// Stops the session: no more retries, and the bridge's stdin closes
     /// (it exits; the apps stay in wprsd).
     pub(crate) fn request_stop(&self) {
-        self.update(|r| {
-            r.stop_requested = true;
-            r.input = None;
-        });
+        self.update(Runtime::request_stop);
     }
 
     /// The runtime once `ready` holds, or after `wait` (then `ready` may
@@ -81,14 +80,16 @@ impl Handle {
         self.wait_until(wait, |r| r.stop_requested).stop_requested
     }
 
+    /// Everything, for a viewer that has nothing yet.
     fn snapshot(&self) -> RemoteAppsState {
-        relock(&self.runtime).snapshot()
+        relock(&self.runtime).snapshot(0)
     }
 
-    /// The state once its revision passes `since`, or `None` after `wait`.
+    /// What changed after `since`, once there is a change, or `None` after
+    /// `wait`.
     fn wait_newer(&self, since: u64, wait: Duration) -> Option<RemoteAppsState> {
         let runtime = self.wait_until(wait, |r| r.revision > since);
-        (runtime.revision > since).then(|| runtime.snapshot())
+        (runtime.revision > since).then(|| runtime.snapshot(since))
     }
 }
 
@@ -119,7 +120,7 @@ impl Shared {
             self.paths.runtime.clone(),
         )));
         // Ended sessions of this project are replaced.
-        sessions.retain(|_, h| h.read(|r| r.project_id != project_id || r.status.live()));
+        sessions.retain(|_, h| h.read(|r| r.project_id != project_id || r.status().live()));
         sessions.insert(id, Arc::clone(&handle));
         drop(sessions);
         let snapshot = handle.snapshot();
@@ -173,10 +174,7 @@ impl Shared {
     fn send_to_bridge(&self, session: &str, inputs: Vec<runtime::Input>) -> Result<()> {
         let handle = self.remote_apps_handle(session)?;
         let runtime = relock(&handle.runtime);
-        let input = runtime
-            .input
-            .as_ref()
-            .context("Remote apps are not connected")?;
+        let input = runtime.input().context("Remote apps are not connected")?;
         for item in inputs {
             input
                 .send(item)
@@ -203,7 +201,7 @@ impl Shared {
         relock(&self.remote_apps)
             .get(session)
             .cloned()
-            .context("Unknown remote-apps session")
+            .context(UNKNOWN_SESSION)
     }
 
     /// Whether a live remote-apps session uses `project`.
