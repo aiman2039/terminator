@@ -80,7 +80,7 @@ work merely to reload a build.
 ## Validation
 
 ```sh
-cargo fmt --all --check
+cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features --locked
 cargo build --workspace --bins --examples --features terminator/test-support --locked

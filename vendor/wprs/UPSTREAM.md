@@ -5,7 +5,8 @@ Vendored from https://github.com/wayland-transpositor/wprs (formerly
 (2026-08-31). Apache-2.0; `LICENSE` and the per-file copyright headers are
 retained.
 
-No source changes. The tree is upstream except `.git`.
+No source changes. The tree is upstream except `.git` and `Cargo.lock`, where
+crates with security advisories are updated to fixed versions.
 
 ## How Terminator uses it
 

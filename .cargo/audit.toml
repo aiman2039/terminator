@@ -13,4 +13,6 @@ ignore = [
     "RUSTSEC-2026-0370", # zvariant via Linux zbus 5/atspi; merged into zbus 6
     "RUSTSEC-2026-0371", # zbus_names via Linux zbus 5/atspi; merged into zbus 6
     "RUSTSEC-2026-0372", # zvariant_derive via Linux zbus 5/atspi; merged into zbus 6
+    "RUSTSEC-2026-0196", # cgmath via smithay; unmaintained, no fixed version
+    "RUSTSEC-2026-0197", # cgmath via smithay; unsound swap_columns not called, no fixed version
 ]

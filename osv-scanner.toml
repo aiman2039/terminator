@@ -50,3 +50,11 @@ reason = "zbus_names via Linux zbus 5/atspi; merged into zbus 6, transitive migr
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
 reason = "zvariant_derive via Linux zbus 5/atspi; merged into zbus 6, transitive migration pending"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0196"
+reason = "cgmath via smithay 0.7; unmaintained, no fixed version"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0197"
+reason = "cgmath via smithay 0.7; unsound swap_columns is not called by smithay or this repo, no fixed version"
