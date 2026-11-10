@@ -1,5 +1,36 @@
 # Validation evidence — 2026-09-08
 
+## Carbon appearance and compact tool bars — 2026-11-10
+
+- Carbon is the default for new appearance configurations and a selectable
+  preset. Explicit saved colors, font settings, and keyboard shortcuts remain
+  unchanged. Shared styles cover menus, dialogs, popups, fields, and tool tabs.
+- Tool bars show pinned and active tools; More keeps all ten tools available
+  on either side. Headless input tests open unpinned tools from both menus.
+  Preference tests check pin persistence, duplicate pins, and older files.
+- macOS app/core library suites: 1,696 app tests and 249 core tests passed;
+  five app tests ignored. The sandbox prevented filesystem watches and Git
+  hook IPC; the same serial command passed with native OS access.
+- After the narrow Settings layout fix, all 35 `settings_` tests passed,
+  including new checks that form controls, navigation, and footer stay inside
+  the card. Narrow forms stack labels above controls and put section choices
+  above the form.
+- Workspace binaries and examples built with test support. Workspace Clippy
+  with all targets/features and `-D warnings`, formatting for changed crates,
+  `git diff --check`, and Sarah size checks passed.
+- Native macOS `gui ui-cleanup` passed at normal 1x and narrow 2x sizes.
+  `gui popup` passed: close confirmation, all-tools menu, pin selection,
+  restart with the pinned tool, and unchanged fixture session PIDs.
+  Captures were inspected; the first narrow capture exposed Settings clipping,
+  which was fixed and captured again. Native capture required desktop access.
+- Screenshots: [tools menu](screenshots/carbon/more-tools.png),
+  [close dialog](screenshots/carbon/shell-close-dialog.png),
+  [Settings](screenshots/carbon/settings.png), and
+  [narrow Settings](screenshots/carbon/settings-narrow.png).
+
+Linux native rendering and live-provider behavior were not tested in this pass.
+The test fixtures used disposable data and did not replace the live daemon.
+
 ## Mermaid files and CSV/TSV table viewer — 2026-11-09
 
 Unit tests only; no GUI fixture or live daemon was run.

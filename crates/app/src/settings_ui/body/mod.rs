@@ -19,7 +19,7 @@ impl App {
         frame: &mut SettingsFrame,
     ) {
         ui.vertical(|ui| {
-            ui.set_min_width(ui.available_width().max(240.0));
+            ui.set_width(ui.available_width());
             egui::ScrollArea::vertical()
                 .id_salt(("settings-section", self.settings_section as u8))
                 .max_height(height)

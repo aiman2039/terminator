@@ -1,26 +1,20 @@
-//! Context and dropdown menus in the Orca recipe.
+//! Shared Carbon context and dropdown menus.
 use super::super::rows::{RowInput, row};
 use super::super::scale::{MENU_RADIUS, WIDGET_RADIUS, apply_menu_text_styles};
 use super::super::theme::{icon_color, menu_fill, menu_line, menu_muted, menu_text};
 use super::{TOOLBAR_BUTTON, TOOLBAR_ICON};
 use eframe::egui::{self, Color32, FontId};
 
-/// Orca dark menu recipe from `ui/context-menu.tsx` and `.dark` tokens in `main.css`.
+/// Menus share the same floating surface, border, and shadow as dialogs.
 pub fn menu_style(style: &mut egui::Style) {
     egui::menu::menu_style(style);
     apply_menu_text_styles(style);
-    style.spacing.menu_margin = egui::Margin::same(4);
+    style.spacing.menu_margin = egui::Margin::same(6);
     style.visuals.window_fill = menu_fill();
     style.visuals.override_text_color = Some(menu_text());
     style.visuals.weak_text_color = Some(menu_muted());
     style.visuals.window_stroke = egui::Stroke::new(1.0, menu_line());
     style.visuals.menu_corner_radius = egui::CornerRadius::same(MENU_RADIUS);
-    style.visuals.popup_shadow = egui::epaint::Shadow {
-        offset: [0, 16],
-        blur: 34,
-        spread: 0,
-        color: Color32::from_black_alpha(102),
-    };
     style.visuals.widgets.hovered.bg_fill = menu_line();
     style.visuals.widgets.hovered.weak_bg_fill = menu_line();
     style.visuals.widgets.open.bg_fill = menu_line();
@@ -219,7 +213,7 @@ fn menu_row(input: MenuItemInput<'_>, destructive: bool) -> egui::Response {
         label,
         icon,
         selected: false,
-        height: 26.0,
+        height: 28.0,
         trailing: shortcut,
         tint,
     });

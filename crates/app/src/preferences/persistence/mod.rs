@@ -178,6 +178,9 @@ pub struct UiPreferences {
     /// Projects list hosted by the right sidebar instead of `tool`.
     #[serde(default)]
     pub right_projects: bool,
+    /// Pinned tool captions on each edge. Unknown entries are ignored.
+    pub left_tool_pins: Vec<String>,
+    pub right_tool_pins: Vec<String>,
     pub width: f32,
     /// Selected Agents sidebar view.
     #[serde(default)]

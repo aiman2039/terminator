@@ -67,11 +67,12 @@ impl App {
             });
         });
         ui.add_space(6.0);
+        let search_width = (ui.available_width() - 32.0).clamp(40.0, 280.0);
         ui.horizontal(|ui| {
             ui.add(
                 appearance::singleline(&mut self.settings_search)
                     .hint_text("Search settings")
-                    .desired_width(280.0),
+                    .desired_width(search_width),
             );
             if !self.settings_search.is_empty()
                 && appearance::sidebar_action(ui, "X", "Clear search").clicked()
@@ -81,19 +82,28 @@ impl App {
         });
         ui.add_space(8.0);
         self.ensure_visible_section();
+        let narrow = ui.available_width() < 620.0;
+        if narrow {
+            self.paint_settings_tabs(ui);
+            ui.separator();
+        }
         let footer_h = 44.0;
         let body_h = (ui.available_height() - footer_h).max(80.0);
-        ui.horizontal_top(|ui| {
-            ui.set_min_height(body_h);
-            self.paint_settings_nav(ui, body_h);
-            let divider = ui.cursor().min;
-            ui.painter().line_segment(
-                [divider, egui::pos2(divider.x, divider.y + body_h)],
-                ui.visuals().widgets.noninteractive.bg_stroke,
-            );
-            ui.add_space(12.0);
+        if narrow {
             self.paint_settings_body(ui, body_h, frame);
-        });
+        } else {
+            ui.horizontal_top(|ui| {
+                ui.set_min_height(body_h);
+                self.paint_settings_nav(ui, body_h);
+                let divider = ui.cursor().min;
+                ui.painter().line_segment(
+                    [divider, egui::pos2(divider.x, divider.y + body_h)],
+                    ui.visuals().widgets.noninteractive.bg_stroke,
+                );
+                ui.add_space(12.0);
+                self.paint_settings_body(ui, body_h, frame);
+            });
+        }
         ui.separator();
         self.paint_settings_footer(ui, frame);
     }

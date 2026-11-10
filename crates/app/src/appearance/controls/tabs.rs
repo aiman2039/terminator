@@ -7,8 +7,7 @@ use eframe::egui;
 /// Horizontal text padding inside a [`text_tab`].
 const TAB_PADDING: f32 = 8.0;
 
-/// A text tab one toolbar square tall. The selected tab gets a frame in the
-/// selection color; any tab fills on hover.
+/// A text tab one toolbar square tall, with a thin accent at selection.
 pub fn text_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let galley = egui::WidgetText::from(label).into_galley(
         ui,
@@ -21,10 +20,13 @@ pub fn text_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Respons
     if ui.is_rect_visible(rect) {
         let visuals = ui.visuals();
         if selected {
-            let stroke = egui::Stroke::new(1.0, visuals.selection.stroke.color);
-            let fill = visuals.selection.bg_fill.gamma_multiply(0.35);
             ui.painter()
-                .rect(rect, WIDGET_RADIUS, fill, stroke, egui::StrokeKind::Inside);
+                .rect_filled(rect, WIDGET_RADIUS, visuals.selection.bg_fill);
+            ui.painter().hline(
+                (rect.left() + 6.0)..=(rect.right() - 6.0),
+                rect.bottom() - 1.0,
+                egui::Stroke::new(2.0, visuals.selection.stroke.color),
+            );
         } else if response.hovered() {
             ui.painter()
                 .rect_filled(rect, WIDGET_RADIUS, visuals.widgets.hovered.bg_fill);

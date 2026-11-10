@@ -402,5 +402,37 @@ fn popup(opts: &Options) -> Result<()> {
         ]),
         after: 3000,
     })?;
+    plain(CaptureInput {
+        h: &h,
+        opts,
+        name: "more-tools",
+        actions: json!([{"at_ms":1000,"target":"stripe-left-More"}]),
+        after: 2200,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts,
+        name: "pinned-tools",
+        actions: json!([
+            {"at_ms":1000,"target":"stripe-left-More"},
+            {"at_ms":1400,"target":"Pinned tools","hover":true},
+            {"at_ms":2000,"target":"stripe-pin:History"}
+        ]),
+        after: 2700,
+    })?;
+    ensure!(
+        prefs(&h)?
+            .get("left_tool_pins")
+            .and_then(Value::as_array)
+            .is_some_and(|pins| pins.iter().any(|pin| pin == "History")),
+        "Pin choice was not saved"
+    );
+    plain(CaptureInput {
+        h: &h,
+        opts,
+        name: "pinned-after-restart",
+        actions: json!([{"at_ms":1000,"target":"stripe-left-History"}]),
+        after: 2200,
+    })?;
     h.assert_pids(&originals)
 }

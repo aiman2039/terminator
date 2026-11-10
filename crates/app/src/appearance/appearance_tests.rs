@@ -928,7 +928,7 @@ mod row_tests {
         );
         assert!(style.visuals.popup_shadow.blur > 0);
         let frame = panel_frame(&theme);
-        assert_eq!(frame.fill, color(&theme.window));
+        assert_eq!(frame.fill, color(&theme.surface));
         // Abutting panels are flush: no outer gap, no rounded corners.
         assert_eq!(frame.corner_radius, egui::CornerRadius::ZERO);
         assert_eq!(frame.outer_margin, egui::Margin::ZERO);

@@ -2,10 +2,36 @@
 use super::{AppearanceConfig, Density};
 
 impl AppearanceConfig {
+    /// Carbon: warm charcoal, neutral selections, and a restrained red accent.
+    /// Explicit saved colors remain unchanged when the default changes.
+    #[must_use]
+    pub fn carbon() -> Self {
+        Self {
+            window: "#111113".into(),
+            surface: "#1A191B".into(),
+            hover: "#29282B".into(),
+            border: "#302E32".into(),
+            text: "#EEEDEB".into(),
+            secondary: "#A5A1A8".into(),
+            accent: "#EF625A".into(),
+            selection: "#343136".into(),
+            terminal_background: "#111113".into(),
+            terminal_foreground: "#EEEDEB".into(),
+            git_added: "#91C788".into(),
+            git_modified: "#DDB878".into(),
+            git_deleted: "#EF827A".into(),
+            git_untracked: "#91C788".into(),
+            git_ignored: "#969099".into(),
+            status_running: "#91C788".into(),
+            status_waiting: "#DDB878".into(),
+            status_failed: "#EF827A".into(),
+            ..Self::intellij_dark()
+        }
+    }
     /// `JetBrains` "Islands Dark" palette (IntelliJ 2025.2+, from
     /// `ManyIslandsDark.theme.json` and `IslandSchemeDark.xml`): near-black
     /// islands (editor and tool windows), a slightly lighter frame, Islands file-status
-    /// colors. The default; saved user themes load their explicit colors
+    /// colors. Saved user themes load their explicit colors
     /// and are never rewritten to this.
     #[must_use]
     pub fn islands_dark() -> Self {

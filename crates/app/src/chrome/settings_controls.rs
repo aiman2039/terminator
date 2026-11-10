@@ -28,6 +28,17 @@ pub fn settings_row(input: SettingsRowInput<'_, impl FnOnce(&mut egui::Ui)>) {
         description,
         add_control,
     } = input;
+    if ui.available_width() < 460.0 {
+        ui.vertical(|ui| {
+            ui.label(label);
+            if !description.is_empty() {
+                ui.add(egui::Label::new(egui::RichText::new(description).weak()).wrap());
+            }
+            add_control(ui);
+        });
+        ui.add_space(8.0);
+        return;
+    }
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_width(LABEL_COL);
@@ -84,7 +95,7 @@ pub fn path_field(input: PathFieldInput<'_>) -> egui::Response {
     } = input;
     ui.horizontal(|ui| {
         let browse_width = 88.0;
-        let width = (ui.available_width() - browse_width - ui.spacing().item_spacing.x).max(120.0);
+        let width = (ui.available_width() - browse_width - ui.spacing().item_spacing.x).max(40.0);
         let edit = ui.add(appearance::singleline(value).desired_width(width));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), browse_id, edit.rect);
@@ -197,7 +208,8 @@ pub fn combo_or_custom(input: ComboOrCustomInput<'_>) -> bool {
         .map(|option| option.label.as_str())
         .unwrap_or("Custom");
     let combo = egui::ComboBox::from_id_salt(id)
-        .width(ui.available_width().clamp(180.0, 320.0))
+        .width(ui.available_width().clamp(60.0, 320.0))
+        .truncate()
         .selected_text(selected)
         .show_ui(ui, |ui| {
             for option in options {
@@ -234,6 +246,35 @@ pub use terminator_core::agents::find_installed as agent_binary;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrow_settings_rows_put_the_control_below_the_label() {
+        let ctx = egui::Context::default();
+        let mut control = egui::Rect::NOTHING;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(280.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                settings_row(SettingsRowInput {
+                    ui,
+                    label: "Shell override",
+                    description: "Choose the shell for new terminals.",
+                    add_control: |ui| {
+                        control = ui.button("Browse…").rect;
+                    },
+                })
+            },
+        );
+        output.textures_delta.clear();
+        assert!(control.top() > 25.0);
+        assert!(control.right() <= 280.0);
+        assert!(control.left() < 20.0);
+    }
 
     #[test]
     fn search_matches_labels_and_keywords() {

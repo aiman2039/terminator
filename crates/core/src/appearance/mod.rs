@@ -77,7 +77,7 @@ impl FontPrefs {
 }
 impl Default for AppearanceConfig {
     fn default() -> Self {
-        Self::islands_dark()
+        Self::carbon()
     }
 }
 impl AppearanceConfig {

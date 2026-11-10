@@ -5,6 +5,41 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "test-support")]
+    fn narrow_settings_keep_navigation_fields_and_footer_inside_the_card() {
+        let (mut app, ctx, _dir) = app();
+        app.settings_section = SettingsSection::Terminal;
+        for width in [340.0, 600.0, 1100.0] {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 700.0));
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |ui| app.settings_center(ui),
+                );
+                output.textures_delta.clear();
+            }
+            let card = appearance::center_card_rect(screen);
+            for name in [
+                "settings-section:Appearance",
+                "settings-section:Terminal & Editor",
+                "settings-cancel",
+            ] {
+                let rect = diagnostics::current_rect(&ctx, name).unwrap();
+                assert!(card.contains_rect(rect), "width={width}: {name}: {rect:?}");
+            }
+            let shell = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(egui::Id::unique(("shell-override", "combo")))
+                })
+                .unwrap();
+            assert!(card.contains_rect(shell), "width={width}: {shell:?}");
+        }
+    }
+
+    #[test]
     fn older_daemons_cannot_edit_unsupported_settings() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();

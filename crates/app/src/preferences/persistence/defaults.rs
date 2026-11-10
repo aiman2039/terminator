@@ -23,6 +23,10 @@ impl Default for UiPreferences {
             left_agents: false,
             left_tool: None,
             right_projects: false,
+            left_tool_pins: ["Projects", "Explorer", "Agents", "Git"]
+                .map(str::to_owned)
+                .to_vec(),
+            right_tool_pins: Vec::new(),
             width: DEFAULT_SIDEBAR_WIDTH,
             agents_tab: AgentsTab::NeedsAttention,
             agents_search: String::new(),

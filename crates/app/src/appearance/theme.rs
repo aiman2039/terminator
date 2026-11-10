@@ -130,12 +130,10 @@ pub fn color(value: &str) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// Flush island panel: same fill as the main pane (`window`), as in JetBrains
-/// Islands; `surface` stays on the frame. Rounding lives on widgets and menus.
+/// Quiet sidebar surface; splitters provide the edge without a boxed outline.
 pub fn panel_frame(theme: &AppearanceConfig) -> egui::Frame {
     egui::Frame::new()
-        .fill(color(&theme.window))
-        .stroke(egui::Stroke::new(theme.border_width, color(&theme.border)))
+        .fill(color(&theme.surface))
         .inner_margin(egui::Margin::same(8))
 }
 /// Split panes sit flush with a 1px-style splitter and no per-pane outline.
@@ -149,6 +147,17 @@ pub fn dock_style(ui_style: &egui::Style, theme: &AppearanceConfig) -> egui_dock
     style.main_surface_border_rounding = egui::CornerRadius::ZERO;
     style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
     style.tab.tab_body.stroke = egui::Stroke::NONE;
+    style.tab.tab_body.bg_fill = color(&theme.window);
+    style.tab_bar.bg_fill = color(&theme.surface);
+    style.tab_bar.hline_color = color(&theme.border);
+    for tab in [&mut style.tab.active, &mut style.tab.focused] {
+        tab.bg_fill = color(&theme.window);
+        tab.outline_color = color(&theme.border);
+        tab.text_color = color(&theme.text);
+    }
+    style.tab.inactive.bg_fill = color(&theme.surface);
+    style.tab.inactive.text_color = color(&theme.secondary);
+    style.tab.hovered.bg_fill = color(&theme.hover);
     style
 }
 
@@ -256,17 +265,19 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
 }
 
 fn apply_visuals(visuals: &mut egui::Visuals, theme: &AppearanceConfig) {
+    let [_, popup, _, _, popup_border] = chrome_for(theme);
     visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     visuals.panel_fill = color(&theme.surface);
-    visuals.window_fill = color(&theme.window);
-    visuals.extreme_bg_color = color(&theme.surface);
+    // egui windows, modal frames, tooltips and plain popup frames share this layer.
+    visuals.window_fill = popup;
+    visuals.extreme_bg_color = color(&theme.window);
     visuals.faint_bg_color = color(&theme.hover);
     visuals.override_text_color = Some(color(&theme.text));
     visuals.error_fg_color = color(&theme.status_failed);
     visuals.weak_text_color = Some(color(&theme.secondary));
     visuals.selection.bg_fill = color(&theme.selection);
     visuals.selection.stroke = egui::Stroke::new(1.0, color(&theme.accent));
-    visuals.window_stroke = egui::Stroke::new(theme.border_width, color(&theme.border));
+    visuals.window_stroke = egui::Stroke::new(theme.border_width, popup_border);
     visuals.window_corner_radius = egui::CornerRadius::same(PANEL_RADIUS);
     for widget in [
         &mut visuals.widgets.noninteractive,
@@ -283,12 +294,17 @@ fn apply_visuals(visuals: &mut egui::Visuals, theme: &AppearanceConfig) {
     }
     visuals.widgets.hovered.bg_fill = color(&theme.hover);
     visuals.widgets.hovered.weak_bg_fill = color(&theme.hover);
+    visuals.widgets.hovered.bg_stroke.color = color(&theme.secondary).gamma_multiply(0.45);
+    visuals.widgets.active.bg_fill = color(&theme.selection);
+    visuals.widgets.active.weak_bg_fill = color(&theme.selection);
     visuals.widgets.active.bg_stroke.color = color(&theme.accent);
+    visuals.widgets.open.bg_fill = color(&theme.selection);
+    visuals.widgets.open.weak_bg_fill = color(&theme.selection);
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 8],
-        blur: 24,
+        offset: [0, 12],
+        blur: 32,
         spread: 0,
-        color: Color32::from_black_alpha(if theme.is_light() { 30 } else { 80 }),
+        color: Color32::from_black_alpha(if theme.is_light() { 30 } else { 110 }),
     };
     visuals.popup_shadow = visuals.window_shadow;
     visuals.indent_has_left_vline = false;
@@ -317,6 +333,8 @@ fn overlay_scroll() -> egui::style::ScrollStyle {
 }
 
 fn apply_spacing(spacing: &mut egui::Spacing, compact: bool) {
+    spacing.window_margin = egui::Margin::same(14);
+    spacing.menu_margin = egui::Margin::same(6);
     spacing.button_padding = if compact {
         egui::vec2(6.0, 4.0)
     } else {

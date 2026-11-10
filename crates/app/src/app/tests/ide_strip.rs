@@ -41,6 +41,7 @@ fn ide_sidebar_toggles_reclaim_layout_space_and_restore_it() {
 #[cfg(feature = "test-support")]
 fn ide_stripes_switch_views_and_toggle_tools() {
     let (mut app, ctx, _dir) = fixture();
+    app.preferences.right_tool_pins = ["Projects", "Explorer", "Git"].map(str::to_owned).to_vec();
     app.preferences.ide_mode = true;
     let draw = |app: &mut App, events: &[egui::Event]| {
         let mut output = ctx.run_ui(

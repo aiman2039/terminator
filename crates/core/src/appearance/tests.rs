@@ -59,17 +59,16 @@ fn invalid_external_values_are_rejected() {
     );
 }
 #[test]
-fn islands_dark_is_default_and_older_presets_are_preserved() {
+fn carbon_is_default_and_older_presets_are_preserved() {
     let default = AppearanceConfig::default();
-    assert_eq!(default, AppearanceConfig::islands_dark());
+    assert_eq!(default, AppearanceConfig::carbon());
     default.validate().unwrap();
-    // `JetBrains` Islands Dark: islands `#191A1C`, frame `#212326`.
-    assert_eq!(default.window, "#191A1C");
-    assert_eq!(default.surface, "#212326");
-    assert_eq!(default.selection, "#2A4371");
-    assert_eq!(default.git_modified, "#70AEFF");
-    assert_eq!(default.git_ignored, "#D69A6B");
+    assert_eq!(default.window, "#111113");
+    assert_eq!(default.surface, "#1A191B");
+    assert_eq!(default.selection, "#343136");
+    assert_eq!(default.accent, "#EF625A");
     for older in [
+        AppearanceConfig::islands_dark(),
         AppearanceConfig::intellij_dark(),
         AppearanceConfig::terminator_dark(),
     ] {

@@ -17,7 +17,7 @@ pub fn popup_frame(style: &egui::Style) -> egui::Frame {
         .fill(menu_fill())
         .stroke(egui::Stroke::new(1.0, menu_line()))
         .corner_radius(egui::CornerRadius::same(MENU_RADIUS))
-        .inner_margin(egui::Margin::same(4))
+        .inner_margin(egui::Margin::same(6))
 }
 
 /// Text colors inside a popup list: popup text and muted secondary text.

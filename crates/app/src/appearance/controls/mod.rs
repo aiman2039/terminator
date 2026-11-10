@@ -1,6 +1,6 @@
-use super::scale::{FONT_MINI, WIDGET_RADIUS};
+use super::scale::{RADIUS_XSMALL, WIDGET_RADIUS};
 use super::theme::icon_color;
-use eframe::egui::{self, Color32, FontId};
+use eframe::egui::{self, Color32};
 
 mod menus;
 mod popup_list;
@@ -307,7 +307,7 @@ pub fn selectable_icon(input: SelectableIconInput<'_>) -> egui::Response {
     response
 }
 
-/// Tool-window stripe button: icon over a tiny label, pill when selected.
+/// Tool-window stripe button: one quiet square, with an accent at selection.
 /// `tip` is the hover text (the tool name and its key).
 /// `badge` paints a waiting dot in the top-right corner (agent attention).
 pub(crate) struct StripeButtonInput<'a> {
@@ -329,7 +329,7 @@ pub fn stripe_button(input: StripeButtonInput<'_>) -> egui::Response {
         badge,
     } = input;
     let response = ui
-        .allocate_response(egui::vec2(40.0, 46.0), egui::Sense::click())
+        .allocate_response(egui::vec2(40.0, 40.0), egui::Sense::click())
         .on_hover_text(tip);
     if response.hovered() || selected {
         ui.painter().rect_filled(
@@ -342,29 +342,25 @@ pub fn stripe_button(input: StripeButtonInput<'_>) -> egui::Response {
             },
         );
     }
+    if selected {
+        let marker = egui::Rect::from_min_max(
+            egui::pos2(response.rect.left(), response.rect.top() + 7.0),
+            egui::pos2(response.rect.left() + 2.0, response.rect.bottom() - 7.0),
+        );
+        ui.painter()
+            .rect_filled(marker, RADIUS_XSMALL, ui.visuals().selection.stroke.color);
+    }
     paint_centered_icon(PaintCenteredIconInput {
         ui,
-        rect: egui::Rect::from_min_size(
-            egui::pos2(response.rect.left(), response.rect.top() + 3.0),
-            egui::vec2(40.0, 20.0),
-        ),
+        rect: response.rect,
         icon,
-        size: 16.0,
-        tint: icon_color(),
+        size: TOOLBAR_ICON,
+        tint: if selected || response.hovered() {
+            icon_color()
+        } else {
+            ui.visuals().weak_text_color()
+        },
     });
-    ui.painter()
-        .with_clip_rect(ui.clip_rect().intersect(response.rect))
-        .text(
-            egui::pos2(response.rect.center().x, response.rect.bottom() - 11.0),
-            egui::Align2::CENTER_CENTER,
-            label,
-            FontId::proportional(FONT_MINI),
-            if selected {
-                icon_color()
-            } else {
-                ui.visuals().weak_text_color()
-            },
-        );
     if let Some(dot) = badge {
         ui.painter().circle_filled(
             egui::pos2(response.rect.right() - 7.0, response.rect.top() + 7.0),
@@ -373,6 +369,7 @@ pub fn stripe_button(input: StripeButtonInput<'_>) -> egui::Response {
         );
     }
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+    paint_focus(ui, &response);
     response
 }
 

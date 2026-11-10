@@ -31,6 +31,15 @@
 - **Terminal search and history** — find text in terminal output and revisit past sessions.
 - **Make it yours** — customize colors, fonts, shortcuts, and your shell.
 
+The Carbon theme uses dark gray surfaces and small red accents across the
+workspace, dialogs, menus, and popups. New configurations use Carbon. To use it
+with an existing configuration, select **Settings → Appearance → Carbon**, then
+**Apply**. Saved custom colors stay unchanged.
+
+The side tool bars show pinned tools and the active tool. Click **More (…)** for
+all tools, then **Pinned tools** to choose which icons stay visible on that side.
+Right-click an icon to pin or unpin it. All tool shortcuts remain available.
+
 ## Get started
 
 1. Follow the [installation and build guide](docs/REFERENCE.md#build-and-run).

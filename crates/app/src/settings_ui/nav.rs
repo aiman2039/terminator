@@ -2,6 +2,28 @@ use super::state::SettingsSection;
 use crate::*;
 
 impl App {
+    /// Narrow cards put section choices above the form instead of beside it.
+    pub(super) fn paint_settings_tabs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for section in SettingsSection::ALL {
+                if !self.section_visible(section) {
+                    continue;
+                }
+                let row =
+                    appearance::text_tab(ui, section.title(), self.settings_section == section);
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("settings-section:{}", section.title()),
+                    row.rect,
+                );
+                if row.clicked() {
+                    self.request_settings_section(section);
+                }
+            }
+        });
+    }
+
     pub(super) fn ensure_visible_section(&mut self) {
         if !self.section_visible(self.settings_section)
             && let Some(section) = SettingsSection::ALL

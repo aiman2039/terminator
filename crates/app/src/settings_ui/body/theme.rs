@@ -7,7 +7,8 @@ const CUSTOM: usize = PRESETS.len() + 1;
 /// Built-in presets in control order; slot `index + 1` picks `PRESETS[index]`.
 type Preset = (&'static str, fn() -> AppearanceConfig);
 
-const PRESETS: [Preset; 5] = [
+const PRESETS: [Preset; 6] = [
+    ("Carbon", AppearanceConfig::carbon),
     ("Islands dark", AppearanceConfig::islands_dark),
     ("IntelliJ dark", AppearanceConfig::intellij_dark),
     ("High contrast", AppearanceConfig::high_contrast),
