@@ -15,9 +15,33 @@ pub struct Table {
     pub delimiter: u8,
     /// Rows past `MAX_ROWS`, or bytes past the read cap, were left out.
     pub truncated: bool,
+    /// Per column: every non-empty body cell is a number (right-aligned).
+    pub numeric: Vec<bool>,
 }
 
 impl Table {
+    /// Whether `column` holds only numbers; the view right-aligns it.
+    pub fn is_numeric(&self, column: usize) -> bool {
+        self.numeric.get(column).copied().unwrap_or(false)
+    }
+
+    /// Columns where each non-empty body cell parses as a number and at
+    /// least one cell is not empty.
+    fn numeric_columns(&self) -> Vec<bool> {
+        (0..self.columns())
+            .map(|column| {
+                let mut cells = self
+                    .rows
+                    .iter()
+                    .filter_map(|row| row.get(column))
+                    .map(|cell| cell.trim())
+                    .filter(|cell| !cell.is_empty())
+                    .peekable();
+                cells.peek().is_some() && cells.all(|cell| cell.parse::<f64>().is_ok())
+            })
+            .collect()
+    }
+
     pub fn columns(&self) -> usize {
         self.rows
             .iter()
@@ -102,6 +126,7 @@ pub fn parse(bytes: &[u8], delimiter: u8, truncated: bool) -> Table {
         };
         table.rows.push(cells(&record));
     }
+    table.numeric = table.numeric_columns();
     table
 }
 

@@ -30,6 +30,8 @@ pub(super) struct Document {
     pub(super) mermaid: Vec<super::mermaid::Diagram>,
     /// The document is one Mermaid diagram: paint it zoomable.
     pub(super) single_diagram: bool,
+    /// A `.mmd`/`.mermaid` file: the status shows no word or heading counts.
+    pub(super) diagram_file: bool,
     pub(super) words: usize,
     pub(super) headings: usize,
     pub(super) status: &'static str,
@@ -349,6 +351,7 @@ pub(super) fn prepare(mut snapshot: Snapshot) -> Document {
         text,
         mermaid,
         single_diagram,
+        diagram_file,
         words,
         headings,
         status: snapshot_status(snapshot.revision, snapshot.paused),

@@ -245,6 +245,9 @@ pub struct UiPreferences {
     pub typography_migrated: bool,
     pub attention_migrated: bool,
     pub keymap_migrated: bool,
+    /// Rename terminal's move off Cmd+Shift+R ran (or needed no move).
+    #[serde(default)]
+    pub keymap_rename_migrated: bool,
     pub markdown_modes: HashMap<String, crate::markdown::Mode>,
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,

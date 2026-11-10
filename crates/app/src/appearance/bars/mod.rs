@@ -124,8 +124,16 @@ pub struct TerminalBarSpec<'a> {
     pub unread: bool,
     /// Weak text after the title where room allows (a window title).
     pub subtitle: Option<&'a str>,
-    /// Tip of the Resume chip before the Git button; None hides the chip.
-    pub resume_tip: Option<&'a str>,
+    /// The Resume chip before the Git button; None hides the chip.
+    pub resume_tip: Option<ResumeChip<'a>>,
+}
+
+/// The pane caption's Resume chip.
+#[derive(Clone, Copy)]
+pub struct ResumeChip<'a> {
+    pub tip: &'a str,
+    /// No verified presence: the chip shows a `?` marker.
+    pub unsure: bool,
 }
 
 /// Width of one leading caption icon slot; the glyph itself is 13pt.
@@ -184,7 +192,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     );
     let git_width = TERMINAL_BUTTON + branch_width(ui, branch);
     let slots = BarSlots::layout(rect, git_width, (stack_tip.is_some(), zoom_tip.is_some()));
-    let resume_rect = resume_tip.map(|_| resume_chip_rect(ui, slots.git));
+    let resume_rect = resume_tip.map(|chip| resume_chip_rect(ui, slots.git, chip.unsure));
     let tint = title_tint.unwrap_or_else(|| default_title_tint(ui, active));
     let lead = paint_leading_icons(
         ui,
@@ -213,7 +221,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     );
     let resume = resume_rect
         .zip(resume_tip)
-        .map(|(chip, tip)| resume_chip(ui, bar.id, chip, tip));
+        .map(|(rect, chip)| resume_chip(ui, bar.id, rect, chip));
     bar.widget_info(|| {
         egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, title)
     });

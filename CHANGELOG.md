@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Mermaid edge labels fill with the pane color (no gray box; dark panes use the dark theme), Mermaid files show no word counts, numeric CSV/TSV columns are right-aligned, the status bar says "1 session running", and the Resume chip shows "Resume ?" (no Enter) when presence is unverified.
 - Sessions, tabs and projects: multi-select session rows (tile, move, close),
   Open in split and drag a session onto a pane, Next/Previous tab keys,
   middle-click and Close editor tabs, pinned projects, Manual project order,
@@ -39,8 +40,9 @@
   Everywhere, the editor menu and Explorer folders. They have keyboard control,
   a preview, results that stream in, file masks and Exclude globs. Replace in
   Files shows each change before it writes, with a checkbox per file and per
-  line, and `$1` groups in regex mode. A focused terminal keeps ⇧⌘R for Rename
-  terminal; on Linux it also keeps Ctrl+Shift+F for terminal find.
+  line, and `$1` groups in regex mode. Rename terminal moved to ⌥⌘R, so ⇧⌘R
+  is only Replace in Files; a saved binding still at ⇧⌘R moves once. On Linux
+  a focused terminal keeps Ctrl+Shift+F for terminal find.
 - Explorer Contents search hits open at their line. Go to File accepts
   `file:line` and `file:line:column`, and lists dotfiles that Git does not
   ignore. Find in Files and Go to File skip version control folders such as

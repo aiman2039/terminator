@@ -289,6 +289,13 @@ impl Previews {
         self.refresh = true;
         self.images.clear(ctx);
     }
+    /// Prepare every document again, so diagrams take the new pane colour.
+    pub fn restyle_diagrams(&mut self) {
+        self.refresh = true;
+        for preview in self.entries.values_mut() {
+            preview.snapshot_source = None;
+        }
+    }
     pub fn end_frame(&mut self, ctx: &egui::Context) {
         let previous_count = self.entries.len();
         self.entries.retain(|sid, _| self.retained.contains(sid));

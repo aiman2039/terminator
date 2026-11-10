@@ -50,7 +50,7 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 - Single-click anywhere on an Explorer file row to open a new editor tab. Right-click a file path to open the editor, a new editor split, or an external editor. The Explorer, Git, and Perforce file menus show no shortcut next to **Open file** or **Open in editor split**, because no shortcut does these actions. `command+O` uses the native file picker (Cmd+O on macOS, Ctrl+Shift+O on Linux). Change it in Settings → Shortcuts. Settings shortcuts and JetBrains keymap chords are consumed by the GUI and are not typed into the terminal; on Linux a focused terminal keeps Alt+letter and Alt+digit. Other Command/Ctrl chords go to the focused terminal as kitty CSI u (Command is Super, so Neovim `<D-u>` works); Ctrl+A–Z stay control characters, and Cmd/Ctrl+C/V copy and paste. Drag selects terminal text even in nvim or a full-screen agent. Scrolling during that drag extends the selection by the lines the viewport actually moved through local history, including when the terminal is not full screen; a scroll that cannot move leaves the selection where it is. On the alternate screen the wheel goes to the agent and the selection grows by that line count until the pointer moves. Holding the pointer outside the pane keeps scrolling. Then Cmd+C (macOS) or Ctrl+Shift+C (Linux) copies it. Empty copy does not clear the clipboard. A wheel that is not part of a selection still goes to the app when it enables mouse reporting. On the alternate screen, a wheel that is not a mouse report is sent as cursor keys.
 - Settings → Terminal & Editor retains embedded Neovim, terminal-editor, and external-editor modes. External presets include System default, VS Code, Cursor, RustRover, Zed, and Custom. Named presets use macOS application launching or Linux CLI launchers. Custom takes an executable and one literal argument per row; the absolute file path is appended without shell evaluation. **Choose file and test…** launches the draft without saving. Missing launchers and failed exits appear in the status bar; long-running editors remain independent of the GUI.
 - The default editor is real Neovim, rendered inside the native terminal widget and controlled through Neovim RPC for save/compare actions. Your Neovim configuration and plugins load normally. An editor-side tree can therefore come from your own configuration.
-- Closing a tab with live shells or agents asks whether to terminate or background them. Clean file-only tabs close directly. Closing the GUI leaves the daemon and sessions running.
+- Closing a tab with live shells or agents asks whether to terminate or background them. Clean file-only tabs close directly. Closing the GUI leaves the daemon and sessions running. The status bar counts them ("1 session running", "2 sessions running").
 - After a reboot or daemon loss, historical tabs show retained output and known resume commands. Agents are never restarted automatically.
 
 ## Agent setup
@@ -449,9 +449,11 @@ refine it. Remote projects are not searched; a note tells you so.
 
 **Replace in Files** is the same window in replace mode. Press Cmd+Shift+R on
 macOS or Ctrl+Shift+R on Linux, use Search Everywhere, or click the pencil icon
-in the window. A terminal with keyboard focus keeps that key for Rename
-terminal. Everywhere else, the key opens Replace in Files. If Settings gives
-Rename terminal another key, both keys work everywhere. In a native editor,
+in the window. Rename terminal is Cmd+Alt+R on macOS (Ctrl+Shift+Alt+R on
+Linux). A saved Rename terminal binding still at the old Cmd/Ctrl+Shift+R
+default moves once, unless another action uses the new key. If Settings gives
+both actions the same key, a terminal with keyboard focus keeps it for Rename
+terminal and every other place opens Replace in Files. In a native editor,
 Cmd/Ctrl+Shift+R opens it with the selected text; Cmd/Ctrl+R still replaces in
 the file. The folder menu item **Replace in Folder…** limits it to that folder.
 Type the replacement under the query. With regex on, `$1` inserts group 1 and
@@ -539,7 +541,10 @@ Top-level ```` ```mermaid ```` fences render as diagrams (up to 8 per document,
 show it alone with pan/zoom, **Fit** and **100%**; **Back** returns to the
 document. `.mmd` and `.mermaid` files open with the same Edit / Preview / Split
 modes: the whole file is one diagram (up to 256 KiB of source), shown with
-pan/zoom. A Markdown file that holds only one diagram also opens zoomable.
+pan/zoom, and its status shows no word or heading counts. A Markdown file that
+holds only one diagram also opens zoomable. Edge labels fill with the pane
+color, so no gray box shows and the edge stops at the label text. A dark pane
+renders diagrams with the Mermaid dark theme.
 Custom terminal editors without Neovim RPC show a clearly labeled **Saved file**
 preview. Ordinary Neovim configuration and Git review profiles are unchanged.
 
@@ -579,7 +584,8 @@ CSV and TSV files (`.csv`, `.tsv`, `.tab`) open as a read-only, GUI-only
 first rows into more, steady columns than `,` does. The first row is the
 header. Click a header to sort ascending, descending, then unsorted (numbers by
 value, then text, then empty cells). The filter box keeps rows with a
-case-insensitive match in any cell. The header row has Reload, Open as text and
+case-insensitive match in any cell. A column whose non-empty cells are all
+numbers is right-aligned, header included. The header row has Reload, Open as text and
 Open externally. Up to 64 MiB and 100,000 rows load; a larger file shows a
 **showing the first N rows** note. Up to 8 tables stay loaded at once. Table
 tabs save only the path and the viewer, in layout version 13.
@@ -743,10 +749,13 @@ tab the user named (Rename, or Name tab… on its group) keeps its label and sho
 no title. Titles are display only: they never change agent lifecycle and never
 make notices or notifications. A completed agent with unread notices shows a
 small dot on its tab and caption status icon. When a live shell's agent hook
-reports Stopped or Failed, that agent left a resume command, and process
-presence verifies that no agent runs there, the pane caption shows a Resume chip.
-A click types the resume command and Enter into that shell; nothing resumes
-automatically.
+reports Stopped or Failed and that agent left a resume command, the pane caption
+shows a Resume chip. When process presence verifies that no agent runs there, a
+click types the resume command and Enter into that shell. When presence cannot
+be verified (for example with an older daemon), the chip shows **Resume ?** and
+a click types the command without Enter; the tooltip says "Cannot confirm the
+agent stopped. Press Enter to run." When presence verifies a live agent, the
+chip is hidden. Nothing resumes automatically.
 
 External-browser automation stays outside the native application. Use
 `terminator-hook ctl browser open URL` for the system browser. For an existing

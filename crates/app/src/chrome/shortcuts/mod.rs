@@ -9,7 +9,9 @@ mod tool_focus;
 
 pub use jetbrains::{JetBrainsCommand, jetbrains_app_chords, mark_terminal, terminal_has_focus};
 pub use meta::terminal_keeps;
-pub use migrate::{fill_moved_defaults, migrate_moved_defaults};
+pub use migrate::{
+    CMD_E_MOVES, RENAME_TERMINAL_MOVES, fill_moved_defaults, migrate_moved_defaults,
+};
 pub use tool_focus::*;
 
 use eframe::egui::{self, Key, Modifiers};

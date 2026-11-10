@@ -38,8 +38,7 @@ impl Preview {
         }
         StatusBar {
             sid,
-            words: document.words,
-            headings: document.headings,
+            counts: (!document.diagram_file).then_some((document.words, document.headings)),
             status,
         }
         .show(ui);
@@ -214,8 +213,8 @@ fn mermaid_textures(
 /// Word and heading counts plus the preview status, bottom right.
 struct StatusBar<'a> {
     sid: &'a str,
-    words: usize,
-    headings: usize,
+    /// `(words, headings)`; `None` for a Mermaid file.
+    counts: Option<(usize, usize)>,
     status: &'a str,
 }
 
@@ -223,18 +222,13 @@ impl StatusBar<'_> {
     fn show(self, ui: &mut egui::Ui) {
         let StatusBar {
             sid,
-            words,
-            headings,
+            counts,
             status,
         } = self;
         egui::Panel::bottom(egui::Id::unique(("markdown-status", sid)))
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 4)))
             .show(ui, |ui| {
-                let label = if ui.available_width() < 360.0 {
-                    status.to_owned()
-                } else {
-                    format!("{words} words  ·  {headings} headings  ·  {status}")
-                };
+                let label = status_label(counts, status, ui.available_width());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::Frame::new()
                         .fill(ui.visuals().panel_fill)
@@ -245,6 +239,16 @@ impl StatusBar<'_> {
                         });
                 });
             });
+    }
+}
+
+/// The status text: counts first when there is room and `counts` is set.
+pub(super) fn status_label(counts: Option<(usize, usize)>, status: &str, width: f32) -> String {
+    match counts {
+        Some((words, headings)) if width >= 360.0 => {
+            format!("{words} words  ·  {headings} headings  ·  {status}")
+        }
+        _ => status.to_owned(),
     }
 }
 
@@ -365,4 +369,23 @@ impl PreviewBody<'_> {
             .enable_scroll_to_heading(true)
             .show(ui, self.cache, text);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn a_mermaid_file_status_has_no_word_or_heading_counts() {
+    let snapshot = super::super::source::Snapshot {
+        path: crate::test_path("/docs/flow.mmd"),
+        text: "flowchart LR\n  A -->|Yes| B\n".into(),
+        revision: None,
+        paused: false,
+    };
+    let document = super::super::html::prepare(snapshot);
+    assert!(document.diagram_file);
+    let counts = (!document.diagram_file).then_some((document.words, document.headings));
+    assert_eq!(status_label(counts, "Live preview", 800.0), "Live preview");
+    assert_eq!(
+        status_label(Some((21, 0)), "Live preview", 800.0),
+        "21 words  ·  0 headings  ·  Live preview"
+    );
 }

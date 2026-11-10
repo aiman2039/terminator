@@ -82,10 +82,9 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    /// Two pairs share a chord on purpose, and the GUI picks one by
-    /// keyboard focus: Rename terminal and Replace in Files, and on Linux
-    /// (where stored `command` already means Ctrl+Shift) Find in terminal
-    /// and Find in Files.
+    /// Every chord is unique, except on Linux (where stored `command`
+    /// already means Ctrl+Shift): Find in terminal and Find in Files share
+    /// Ctrl+Shift+F, and the GUI picks one by keyboard focus.
     fn default_keybindings() -> std::collections::BTreeMap<String, String> {
         [
             ("new_terminal".into(), "command+T".into()),
@@ -103,9 +102,9 @@ impl Settings {
             ("find_in_files".into(), "command+shift+F".into()),
             ("search_scrollback".into(), "command+alt+F".into()),
             ("copy_working_directory".into(), "command+alt+C".into()),
-            ("rename_terminal".into(), "command+shift+R".into()),
-            // JetBrains Replace in Path shares Rename terminal's chord: a
-            // focused terminal keeps it, every other place replaces.
+            // Was command+shift+R (see the GUI keymap migration).
+            ("rename_terminal".into(), "command+alt+R".into()),
+            // JetBrains Replace in Path.
             ("replace_in_files".into(), "command+shift+R".into()),
             ("close_session".into(), "command+W".into()),
             ("clear_scrollback".into(), "command+shift+K".into()),

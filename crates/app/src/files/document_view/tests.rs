@@ -33,6 +33,18 @@ fn first_record_is_the_header_and_quoted_cells_keep_delimiters() {
 }
 
 #[test]
+fn columns_with_only_numbers_are_right_aligned() {
+    let parsed = table::parse(
+        b"name,qty,price,note,blank\nA,1,2.5,x,\nB,,-3e2,7,\nC,10,4,y,\n",
+        b',',
+        false,
+    );
+    let numeric: Vec<bool> = (0..6).map(|column| parsed.is_numeric(column)).collect();
+    // Empty cells do not count; one text cell or no cell at all does.
+    assert_eq!(numeric, [false, true, true, false, false, false]);
+}
+
+#[test]
 fn rows_past_the_cap_are_left_out_and_marked() {
     let mut text = String::from("n\n");
     for index in 0..=MAX_ROWS {

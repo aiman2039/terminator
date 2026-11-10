@@ -44,9 +44,16 @@ fn session_actions_need_a_focused_session_everywhere() {
 }
 
 #[test]
-fn cmd_shift_r_renames_a_focused_terminal_and_replaces_in_files_elsewhere() {
+fn a_saved_shared_cmd_shift_r_renames_a_focused_terminal_and_replaces_in_files_elsewhere() {
     let (mut app, ctx, _dir) = fixture();
     app.state.sessions = vec![session_fixture("live", SessionKind::Shell)];
+    // A saved keymap that kept Rename terminal on Replace in Files' chord
+    // (the default moved to Cmd+Alt+R).
+    let replace = shortcuts::binding(&app.state.settings.keybindings, "replace_in_files");
+    app.state
+        .settings
+        .keybindings
+        .insert("rename_terminal".into(), replace);
     let keys = &app.state.settings.keybindings;
     let chord = shortcuts::binding(keys, Action::ReplaceInFiles.id());
     assert_eq!(chord, shortcuts::binding(keys, Action::RenameTerminal.id()));

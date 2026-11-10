@@ -168,10 +168,10 @@ impl Viewer<'_> {
         let zoom_tip = (self.window.is_none() && frame.pane.is_some())
             .then(|| self.app.action_tip("Zoom pane", Action::ZoomPane));
         let leading = self.app.tab_leading(sid);
-        let resume_tip = self
+        let resume = self
             .app
             .resume_chip_command(sid)
-            .map(|command| format!("Resume conversation in this shell:\n{command}"));
+            .map(|chip| (chip.tip(), !chip.confirmed));
         appearance::terminal_bar(
             ui,
             appearance::TerminalBarSpec {
@@ -202,7 +202,10 @@ impl Viewer<'_> {
                 },
                 unread: leading.unread,
                 subtitle: self.app.terminal_program_title(sid),
-                resume_tip: resume_tip.as_deref(),
+                resume_tip: resume.as_ref().map(|(tip, unsure)| appearance::ResumeChip {
+                    tip,
+                    unsure: *unsure,
+                }),
             },
         )
     }

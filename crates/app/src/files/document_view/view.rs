@@ -116,8 +116,8 @@ fn paint_table(ui: &mut egui::Ui, state: &mut TableState, table: &table::Table, 
                                 _ => "",
                             };
                             let label = egui::RichText::new(format!("{name}{arrow}")).strong();
-                            if ui
-                                .add(egui::Label::new(label).sense(egui::Sense::click()))
+                            let label = egui::Label::new(label).sense(egui::Sense::click());
+                            if cell_ui(ui, table.is_numeric(column), label)
                                 .on_hover_text("Sort by this column")
                                 .clicked()
                             {
@@ -136,7 +136,8 @@ fn paint_table(ui: &mut egui::Ui, state: &mut TableState, table: &table::Table, 
                                 let text = cells
                                     .and_then(|cells| cells.get(column))
                                     .map_or("", String::as_str);
-                                ui.add(egui::Label::new(text).truncate());
+                                let label = egui::Label::new(text).truncate();
+                                cell_ui(ui, table.is_numeric(column), label);
                             });
                         }
                     });
@@ -144,5 +145,17 @@ fn paint_table(ui: &mut egui::Ui, state: &mut TableState, table: &table::Table, 
         });
     if let Some(column) = clicked {
         state.toggle_sort(column);
+    }
+}
+
+/// Adds `label` to a table cell, right-aligned in a numeric column.
+fn cell_ui(ui: &mut egui::Ui, numeric: bool, label: egui::Label) -> egui::Response {
+    if numeric {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(label)
+        })
+        .inner
+    } else {
+        ui.add(label)
     }
 }

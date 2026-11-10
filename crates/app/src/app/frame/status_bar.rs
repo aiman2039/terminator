@@ -205,15 +205,14 @@ impl App {
     }
 
     fn running_sessions_label(&self, ui: &mut egui::Ui) {
-        ui.weak(format!(
-            "{} sessions running",
+        ui.weak(running_sessions_text(
             self.state
                 .sessions
                 .iter()
                 .filter(|s| {
                     s.lifecycle.live() && daemon_connection::session_owner_available(&self.state, s)
                 })
-                .count()
+                .count(),
         ));
     }
 
@@ -397,4 +396,18 @@ impl App {
             diagnostics::record(ui.ctx(), "status-lsp", _lsp.rect);
         }
     }
+}
+
+/// "1 session running", "2 sessions running".
+fn running_sessions_text(count: usize) -> String {
+    let noun = if count == 1 { "session" } else { "sessions" };
+    format!("{count} {noun} running")
+}
+
+#[cfg(test)]
+#[test]
+fn running_sessions_text_uses_singular_for_one() {
+    assert_eq!(running_sessions_text(0), "0 sessions running");
+    assert_eq!(running_sessions_text(1), "1 session running");
+    assert_eq!(running_sessions_text(2), "2 sessions running");
 }
