@@ -69,6 +69,7 @@ impl Shared {
             rec.exit_code = exit_code;
             rec.pid = None;
         }
+        s.terminal_titles.remove(sid);
         for a in &mut s.agents {
             if a.session_id == sid {
                 a.state = AgentState::Stopped;

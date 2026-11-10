@@ -24,6 +24,7 @@ pub(crate) struct OpenFileModeInput<'a> {
 fn same_file_view(left: &Tab, right: &Tab) -> bool {
     match (left, right) {
         (Tab::Image { path: left }, Tab::Image { path: right })
+        | (Tab::Document { path: left, .. }, Tab::Document { path: right, .. })
         | (Tab::NativeEditor { path: left }, Tab::NativeEditor { path: right }) => {
             left.components().eq(right.components())
         }
@@ -185,22 +186,7 @@ impl App {
             }
             return;
         }
-        if !external && !text && image_preview::supported(&path) {
-            if let Some(project) = self.selected.clone() {
-                self.open_image(&project, path, split);
-            }
-            return;
-        }
-        if !external && !text && crate::browser::supported_file(&path) {
-            if let Some(project) = self.selected.clone() {
-                self.open_html(&project, path, split);
-            }
-            return;
-        }
-        if !external && !text && player::supported(&path) {
-            if let Some(project) = self.selected.clone() {
-                self.open_audio(&project, path, split);
-            }
+        if !external && !text && self.open_default_viewer(&path, split) {
             return;
         }
         if external || self.state.settings.editor_mode == EditorMode::External {
@@ -269,6 +255,51 @@ impl App {
             after,
         ));
     }
+    /// Opens `path` in its GUI-only default viewer (image, table, browser or
+    /// player). False when it has none and opens as text.
+    fn open_default_viewer(&mut self, path: &std::path::Path, split: Option<&str>) -> bool {
+        let document = crate::document_view::DocumentKind::for_path(path);
+        if !(image_preview::supported(path)
+            || document.is_some()
+            || crate::browser::supported_file(path)
+            || player::supported(path))
+        {
+            return false;
+        }
+        let Some(project) = self.selected.clone() else {
+            return true;
+        };
+        let path = path.to_path_buf();
+        if image_preview::supported(&path) {
+            self.open_image(&project, path, split);
+        } else if document.is_some() {
+            self.open_document(&project, path, split);
+        } else if crate::browser::supported_file(&path) {
+            self.open_html(&project, path, split);
+        } else {
+            self.open_audio(&project, path, split);
+        }
+        true
+    }
+
+    /// Opens `path` in its `Tab::Document` viewer; no-op without one.
+    pub(crate) fn open_document(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
+        let Some(kind) = crate::document_view::DocumentKind::for_path(&path) else {
+            return;
+        };
+        self.hide_center_overlay();
+        let origin = self
+            .active_session
+            .as_ref()
+            .map(|sid| Tab::Terminal(sid.clone()));
+        let after = self.editor_target(project, origin.as_ref(), split);
+        let path = std::path::absolute(&path).unwrap_or(path);
+        let _ = self.update_tx.send(Update::OpenDocument(
+            project.into(),
+            Tab::Document { path, kind },
+            after,
+        ));
+    }
     pub(crate) fn open_html(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
         self.hide_center_overlay();
         let origin = self
@@ -308,6 +339,8 @@ impl App {
                 .filter_map(|layer| memory.area_rect(layer.id))
                 .collect()
         });
+        self.browser_host
+            .set_devtools(self.preferences.browser.devtools);
         self.browser_host.sync(browser_host::SyncInput {
             ctx,
             frame,
@@ -436,15 +469,21 @@ impl App {
 
     pub(crate) fn reconcile_gui_resources(&mut self) {
         let mut browsers = HashSet::new();
-        for workspace in self.layouts.values() {
+        let mut open = std::collections::HashMap::new();
+        for (project, workspace) in &self.layouts {
             for group in &workspace.tabs {
                 for (_, tab) in group.layout.iter_all_tabs() {
-                    if let Tab::Browser { .. } = tab {
+                    if let Tab::Browser { target, .. } = tab {
                         browsers.insert(tab.key());
+                        open.insert(tab.key(), (project.clone(), target.clone()));
                     }
                 }
             }
         }
+        self.browser_extras.closed.track(open);
+        self.browser_extras
+            .find
+            .retain(|key, _| browsers.contains(key));
         self.browser_host.retain(&browsers);
         self.browser_urls.retain(|key, _| browsers.contains(key));
         self.visible_browsers
@@ -453,12 +492,6 @@ impl App {
         // holds no Player pane, so it never rebuilds or re-identifies one.
         for workspace in self.layouts.values_mut() {
             workspace.strip_player();
-        }
-    }
-    /// Drop the scrollback-search page; another page stays.
-    pub(crate) fn close_scrollback_search(&mut self) {
-        if self.search_session().is_some() {
-            self.hide_center_overlay();
         }
     }
 }

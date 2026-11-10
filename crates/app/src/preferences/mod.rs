@@ -6,8 +6,8 @@ mod type_ahead;
 
 pub use editor_state::{EditorState, EditorStates};
 pub use persistence::{
-    AgentsTab, ExplorerSearchMode, ExplorerView, LeftContent, ProjectStyle, RadioStation,
-    SidebarTool, UiPreferences, VncPasteShortcut, clamp_left_width,
+    AgentPreset, AgentStateFilter, AgentsTab, ExplorerSearchMode, ExplorerView, LeftContent,
+    ProjectStyle, RadioStation, SidebarTool, UiPreferences, VncPasteShortcut, clamp_left_width,
 };
 pub use type_ahead::TypeAhead;
 // `Playlist` is only named by `lib.rs` tests; keep its old path for them
@@ -15,6 +15,6 @@ pub use type_ahead::TypeAhead;
 #[cfg(test)]
 pub use persistence::Playlist;
 pub(crate) use sorting::{
-    HistoryGroup, HistoryInput, HistorySort, ProjectSort, VisibleProjects, sort_history,
-    sort_visible_projects,
+    HistoryGroup, HistoryInput, HistorySort, ProjectSort, VisibleProjects, reorder_projects,
+    sort_history, sort_visible_projects,
 };

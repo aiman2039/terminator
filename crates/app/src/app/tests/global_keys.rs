@@ -338,3 +338,38 @@ fn keymap_save_waits_for_the_older_settings_migrations() {
     assert!(settings_saves(&requests).is_empty());
     assert!(!app.preferences.keymap_migrated);
 }
+
+#[test]
+fn a_rename_terminal_binding_at_the_old_default_moves_once_after_the_cmd_e_move() {
+    // The Cmd+E move already ran in an earlier launch.
+    let (mut app, _dir, requests) = migrating_app();
+    app.preferences.keymap_migrated = true;
+    let old = [("rename_terminal", "command+shift+R")];
+    publish(&mut app, &old);
+    let saves = settings_saves(&requests);
+    assert_eq!(saves.len(), 1);
+    let moved = &saves[0].keybindings;
+    assert_eq!(moved["rename_terminal"], "command+alt+R");
+    assert_eq!(moved["replace_in_files"], "command+shift+R");
+    assert!(!app.preferences.keymap_rename_migrated);
+    publish(&mut app, &[("rename_terminal", "command+alt+R")]);
+    assert!(app.preferences.keymap_rename_migrated);
+    // Later the user puts Rename terminal back on the old chord: it stays.
+    publish(&mut app, &old);
+    assert!(settings_saves(&requests).is_empty());
+}
+
+#[test]
+fn a_rename_terminal_move_never_takes_a_chord_another_action_uses() {
+    let (mut app, _dir, requests) = migrating_app();
+    app.preferences.keymap_migrated = true;
+    publish(
+        &mut app,
+        &[
+            ("rename_terminal", "command+shift+R"),
+            ("new_browser", "command+alt+R"),
+        ],
+    );
+    assert!(settings_saves(&requests).is_empty());
+    assert!(app.preferences.keymap_rename_migrated);
+}

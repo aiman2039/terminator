@@ -253,3 +253,18 @@ fn compiler_and_url_locations_resolve_to_files() {
     assert!(matches!(target, Target::File(_, Some(7), None)));
     assert!(resolve_target("missing.rs:3", tmp.path()).is_err());
 }
+
+#[test]
+fn osc8_file_uris_with_a_host_open_the_local_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("my file.rs"), "x").unwrap();
+    let path = tmp.path().canonicalize().unwrap().join("my file.rs");
+    let encoded = url::Url::from_file_path(&path).unwrap();
+    let with_host = encoded
+        .as_str()
+        .replacen("file://", "file://my-mac.local", 1);
+    let target = resolve_target(&with_host, Path::new("/")).unwrap();
+    assert!(matches!(&target, Target::File(found, None, None) if *found == path));
+    let target = resolve_target(&format!("{with_host}#L7"), Path::new("/")).unwrap();
+    assert!(matches!(&target, Target::File(found, Some(7), None) if *found == path));
+}

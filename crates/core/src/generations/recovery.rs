@@ -12,6 +12,7 @@ pub fn clear_owned(state: &mut State) {
     state.notifications.clear();
     state.terminal_notices.clear();
     state.presence.clear();
+    state.terminal_titles.clear();
     state.recent_events.clear();
     state.generations.clear();
 }
@@ -245,6 +246,7 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         aggregate.agents.extend(state.agents);
         aggregate.notifications.extend(state.notifications);
         aggregate.terminal_notices.extend(state.terminal_notices);
+        aggregate.terminal_titles.extend(state.terminal_titles);
         if present {
             aggregate.presence.extend(state.presence);
         }

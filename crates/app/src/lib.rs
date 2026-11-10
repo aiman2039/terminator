@@ -21,7 +21,8 @@ pub(crate) use daemon_link::{
     metadata_refresh, native_jobs, nvim_rpc, refresh, services, ui_control,
 };
 pub(crate) use files::{
-    editor_close, external_editor, file_actions, image_preview, search, workspace_ops,
+    document_view, editor_close, external_editor, file_actions, image_preview, search,
+    workspace_ops,
 };
 pub(crate) use git::git_log;
 pub(crate) use git::local_history;
@@ -49,6 +50,7 @@ mod workspace_ui;
 use workspace_ui::Viewer;
 mod sidebar_ui;
 use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
+mod agent_launch;
 mod agent_presence;
 mod appearance;
 pub(crate) use browser::{BrowserTarget, rewrite_html_tabs};

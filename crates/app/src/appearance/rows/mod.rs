@@ -451,3 +451,13 @@ pub fn paint_status_icon(input: PaintStatusIconInput<'_>) {
     }
     image.paint_at(ui, rect);
 }
+
+/// Unread badge on a status icon: a small accent dot at its top-right
+/// corner, ringed with the panel color so it reads over the glyph.
+pub fn paint_unread_dot(ui: &egui::Ui, icon: egui::Rect) {
+    let center = egui::pos2(icon.right() - 1.0, icon.top() + 1.0);
+    ui.painter()
+        .circle_filled(center, 3.5, ui.visuals().panel_fill);
+    ui.painter()
+        .circle_filled(center, 2.5, ui.visuals().selection.stroke.color);
+}

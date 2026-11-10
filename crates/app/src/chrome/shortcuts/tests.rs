@@ -89,6 +89,63 @@ fn alt_variants_do_not_trigger_the_plain_shortcut() {
 }
 
 #[test]
+fn tab_step_defaults_take_no_chord_another_action_uses() {
+    let defaults = terminator_core::Settings::default().keybindings;
+    for tab in ["next_tab", "prev_tab"] {
+        let chord = parse(&defaults[tab]).unwrap_or_else(|| panic!("{tab}"));
+        let mac = cfg!(target_os = "macos");
+        assert_eq!(chord.modifiers.shift, mac, "{tab}");
+        for (action, value) in &defaults {
+            if action != tab {
+                assert_ne!(parse(value), Some(chord), "{tab} and {action}");
+            }
+        }
+        // Every JetBrains app-wide chord stays free as well.
+        for &(keymap, command, _) in jetbrains_app_chords() {
+            assert_ne!(parse(keymap), Some(chord), "{tab} and {command:?}");
+        }
+    }
+    // egui ignores an extra Shift, so the Shift chord is checked first.
+    let at = |action: Action| Action::ALL.iter().position(|a| *a == action);
+    assert!(at(Action::NextTab) < at(Action::NextPane));
+    assert!(at(Action::PrevTab) < at(Action::NextPane));
+}
+
+#[test]
+fn a_shift_bracket_chord_also_takes_the_curly_bracket_key() {
+    let ctx = egui::Context::default();
+    let chord = parse("command+shift+]").unwrap();
+    let press = |key: Key| egui::RawInput {
+        events: vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: chord.modifiers,
+        }],
+        ..Default::default()
+    };
+    for key in [Key::CloseBracket, Key::CloseCurlyBracket] {
+        let mut fired = None;
+        let mut output = ctx.run_ui(press(key), |ui| {
+            fired = Some(consume(ui.ctx(), "command+shift+]"));
+        });
+        output.textures_delta.clear();
+        assert_eq!(fired, Some(true), "{key:?}");
+    }
+    // On Linux stored `command` already holds Shift, so this is macOS only.
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let mut fired = None;
+    let mut output = ctx.run_ui(press(Key::CloseCurlyBracket), |ui| {
+        fired = Some(consume(ui.ctx(), "command+]"));
+    });
+    output.textures_delta.clear();
+    assert_eq!(fired, Some(false), "a plain bracket chord ignores `}}`");
+}
+
+#[test]
 fn fills_missing_default_actions() {
     let mut map = BTreeMap::new();
     fill_defaults(&mut map);
@@ -129,6 +186,11 @@ fn every_menu_action_has_a_unique_default_chord() {
     // unless focus picks one of them (see `shared`).
     let mut seen = HashMap::<String, String>::new();
     for (action, value) in &defaults {
+        // Next/Previous tab use Cmd+Shift+]/[ only on macOS; Linux has its
+        // own Ctrl+PageDown/PageUp defaults (see the tab-step test).
+        if cfg!(target_os = "macos") && matches!(action.as_str(), "next_tab" | "prev_tab") {
+            continue;
+        }
         let id = linux_chord_id(value);
         if let Some(other) = seen.insert(id.clone(), action.clone())
             && !shared::partners(action, &other)
@@ -214,26 +276,57 @@ fn find_in_files_shares_ctrl_shift_f_with_find_in_terminal_on_linux() {
 }
 
 #[test]
-fn rename_terminal_and_replace_in_files_share_a_chord_by_focus() {
+fn rename_terminal_has_its_own_default_and_a_saved_shared_chord_still_splits_by_focus() {
     let defaults = terminator_core::Settings::default().keybindings;
-    assert_eq!(defaults["replace_in_files"], defaults["rename_terminal"]);
-    // The shared pair is no conflict; a third action on the chord is.
-    assert_eq!(invalid(&defaults), None);
-    let mut clash = defaults.clone();
-    clash.insert("open_file".into(), defaults["rename_terminal"].clone());
+    assert_eq!(defaults["replace_in_files"], "command+shift+R");
+    assert_eq!(defaults["rename_terminal"], "command+alt+R");
+    assert!(!editor_owns(&defaults["rename_terminal"], true));
+    // Apart (the defaults): both work everywhere.
+    for focus in [true, false] {
+        assert!(!yields(&defaults, Action::RenameTerminal, focus));
+        assert!(!yields(&defaults, Action::ReplaceInFiles, focus));
+    }
+    // A saved keymap that still binds both to Cmd+Shift+R: the pair is no
+    // conflict, a third action on the chord is.
+    let mut shared = defaults.clone();
+    shared.insert("rename_terminal".into(), "command+shift+R".into());
+    assert_eq!(invalid(&shared), None);
+    let mut clash = shared.clone();
+    clash.insert("open_file".into(), "command+shift+R".into());
     assert!(invalid(&clash).unwrap().contains("same keys"));
     // A focused terminal keeps the chord; every other place replaces.
-    assert!(yields(&defaults, Action::ReplaceInFiles, true));
-    assert!(!yields(&defaults, Action::RenameTerminal, true));
-    assert!(yields(&defaults, Action::RenameTerminal, false));
-    assert!(!yields(&defaults, Action::ReplaceInFiles, false));
-    assert!(!yields(&defaults, Action::OpenFile, true));
-    // A custom Rename terminal chord ends the sharing: both work anywhere.
-    let mut custom = defaults.clone();
-    custom.insert("rename_terminal".into(), "command+alt+R".into());
-    for focus in [true, false] {
-        assert!(!yields(&custom, Action::RenameTerminal, focus));
-        assert!(!yields(&custom, Action::ReplaceInFiles, focus));
+    assert!(yields(&shared, Action::ReplaceInFiles, true));
+    assert!(!yields(&shared, Action::RenameTerminal, true));
+    assert!(yields(&shared, Action::RenameTerminal, false));
+    assert!(!yields(&shared, Action::ReplaceInFiles, false));
+    assert!(!yields(&shared, Action::OpenFile, true));
+}
+
+#[test]
+fn every_default_chord_is_unique_and_free_of_jetbrains_app_chords() {
+    let defaults = terminator_core::Settings::default().keybindings;
+    let mut seen = Vec::<(Chord, &str)>::new();
+    for (action, value) in &defaults {
+        let Some(chord) = parse(value) else {
+            continue;
+        };
+        let earlier = seen
+            .iter()
+            .find(|(bound, _)| *bound == chord)
+            .map(|(_, a)| *a);
+        seen.push((chord, action));
+        if let Some(other) = earlier {
+            // Only Linux Ctrl+Shift+F is shared, by focus.
+            let find = shared::partners(action, other) && action.starts_with("find_in_");
+            assert!(
+                find && !cfg!(target_os = "macos"),
+                "{action} and {other} share {value}"
+            );
+        }
+    }
+    let rename = parse(&defaults["rename_terminal"]);
+    for &(keymap, command, _) in jetbrains_app_chords() {
+        assert_ne!(parse(keymap), rename, "rename_terminal and {command:?}");
     }
 }
 
@@ -249,10 +342,12 @@ fn filling_defaults_never_takes_a_chord_the_user_bound() {
     assert_eq!(map["replace_in_files"], "");
     assert_eq!(map["clear_scrollback"], "command+shift+R");
     assert_eq!(invalid(&map), None);
-    // Saved defaults: Replace in Files joins Rename terminal's chord.
+    // Saved at Rename terminal's old default: Replace in Files joins the
+    // chord, and the keymap migration then moves Rename terminal.
     let mut saved = BTreeMap::from([("rename_terminal".to_owned(), "command+shift+R".to_owned())]);
     fill_defaults(&mut saved);
     assert_eq!(saved["replace_in_files"], "command+shift+R");
+    assert!(migrate_moved_defaults(&mut saved, RENAME_TERMINAL_MOVES));
     assert_eq!(saved, terminator_core::Settings::default().keybindings);
     // Find in terminal saved before Find in Files existed: on Linux both
     // are Ctrl+Shift+F, and focus picks one.
@@ -493,11 +588,11 @@ fn old_default_bindings() -> BTreeMap<String, String> {
 #[test]
 fn old_default_bindings_move_to_the_new_defaults_once() {
     let mut map = old_default_bindings();
-    assert!(migrate_moved_defaults(&mut map));
+    assert!(migrate_moved_defaults(&mut map, CMD_E_MOVES));
     assert_eq!(map, terminator_core::Settings::default().keybindings);
-    assert!(!migrate_moved_defaults(&mut map));
+    assert!(!migrate_moved_defaults(&mut map, CMD_E_MOVES));
     let mut missing = BTreeMap::new();
-    assert!(!migrate_moved_defaults(&mut missing));
+    assert!(!migrate_moved_defaults(&mut missing, CMD_E_MOVES));
     assert!(missing.is_empty());
 }
 
@@ -505,14 +600,14 @@ fn old_default_bindings_move_to_the_new_defaults_once() {
 fn customized_bindings_stay_while_old_defaults_move() {
     let mut map = old_default_bindings();
     map.insert("toggle_ide_mode".into(), "command+I".into());
-    assert!(migrate_moved_defaults(&mut map));
+    assert!(migrate_moved_defaults(&mut map, CMD_E_MOVES));
     assert_eq!(binding(&map, "toggle_ide_mode"), "command+I");
     assert_eq!(binding(&map, "recent_files"), "command+E");
     // A changed or unbound Recent files stays; Toggle IDE mode still moves.
     for custom in ["command+R", ""] {
         let mut map = old_default_bindings();
         map.insert("recent_files".into(), custom.into());
-        assert!(migrate_moved_defaults(&mut map));
+        assert!(migrate_moved_defaults(&mut map, CMD_E_MOVES));
         assert_eq!(binding(&map, "toggle_ide_mode"), "command+alt+E");
         assert_eq!(binding(&map, "recent_files"), custom);
     }
@@ -520,7 +615,7 @@ fn customized_bindings_stay_while_old_defaults_move() {
     map.insert("toggle_ide_mode".into(), "command+I".into());
     map.insert("recent_files".into(), "command+R".into());
     let before = map.clone();
-    assert!(!migrate_moved_defaults(&mut map));
+    assert!(!migrate_moved_defaults(&mut map, CMD_E_MOVES));
     assert_eq!(map, before);
 }
 
@@ -531,13 +626,13 @@ fn a_moved_default_never_takes_a_chord_another_action_uses() {
     map.insert("toggle_ide_mode".into(), "command+I".into());
     map.insert("new_browser".into(), "command+E".into());
     let before = map.clone();
-    assert!(!migrate_moved_defaults(&mut map));
+    assert!(!migrate_moved_defaults(&mut map, CMD_E_MOVES));
     assert_eq!(map, before);
     // Recent files kept the new IDE-mode chord in another spelling.
     let mut map = old_default_bindings();
     map.insert("recent_files".into(), "alt+command+E".into());
     let before = map.clone();
-    assert!(!migrate_moved_defaults(&mut map));
+    assert!(!migrate_moved_defaults(&mut map, CMD_E_MOVES));
     assert_eq!(map, before);
 }
 

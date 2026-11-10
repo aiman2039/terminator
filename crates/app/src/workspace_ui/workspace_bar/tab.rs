@@ -1,6 +1,6 @@
 use super::super::super::*;
 use super::super::tab_menu::WorkspaceTabMenuSpec;
-use super::super::tabs::{TabFace, tab_attention_text, tab_label_job, tab_tooltip};
+use super::super::tabs::{TabFace, tab_attention_text, tab_label_job};
 use super::close_slot::CloseSlot;
 use super::{StripActions, StripFrame};
 use crate::agent_presence::AttentionCounts;
@@ -69,7 +69,8 @@ impl App {
             actions,
         } = input;
         let mut face = self.tab_face(Self::group_primary(group));
-        face.hint = hint.map(str::to_owned);
+        // A same-name folder hint wins over a terminal's window title.
+        face.hint = hint.map(str::to_owned).or(face.hint.take());
         let badge = tab_attention_text(attention);
         let active = *active_id == group.id;
         let (rect, response) =
@@ -229,6 +230,9 @@ impl App {
                 tint,
                 spin: state == AgentState::Running,
             });
+            if face.unread {
+                appearance::paint_unread_dot(ui, icon_rect);
+            }
         } else if let Some(image) = &face.image {
             egui::Image::new(image.clone()).paint_at(ui, icon_rect.shrink(1.0));
         } else {
@@ -401,7 +405,9 @@ impl App {
             close_clicked,
             editing,
         } = hits;
-        if close_clicked {
+        // Middle-click closes like the close button; a pinned tab stays.
+        let middle = response.middle_clicked() && !editing && !group.pinned;
+        if close_clicked || middle {
             actions.close = Some(group.id.clone());
         }
         if response.clicked()
@@ -428,16 +434,7 @@ impl App {
             .clone()
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_ui(|ui| {
-                let mut tooltip = tab_tooltip(
-                    &face.label,
-                    face.sid.as_ref().and_then(|sid| {
-                        self.state
-                            .sessions
-                            .iter()
-                            .find(|s| &s.id == sid)
-                            .map(|s| s.cwd.as_path())
-                    }),
-                );
+                let mut tooltip = self.strip_tooltip_head(face);
                 if let Some(sid) = &face.sid
                     && let Some(first) = self.present_session(sid).diagnostics(now()).lines().next()
                 {
@@ -477,6 +474,9 @@ impl App {
             }
             if action.close_all {
                 actions.close_all = true;
+            }
+            if action.close_editors {
+                actions.close_editors = true;
             }
             if action.close_left {
                 actions.close_left = Some(group.id.clone());

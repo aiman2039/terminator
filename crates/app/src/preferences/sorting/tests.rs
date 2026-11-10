@@ -1,5 +1,7 @@
 use super::*;
 
+static NO_PINS: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
+
 fn project(id: &str, name: &str) -> Project {
     Project {
         id: id.into(),
@@ -52,6 +54,8 @@ fn name_sort_is_case_insensitive_and_omits_hidden_projects() {
         projects: &projects,
         hidden: &hidden,
         sort,
+        pinned: &NO_PINS,
+        manual: &[],
         filter: "",
         activity: &empty,
         sessions: &[],
@@ -77,6 +81,8 @@ fn project_filter_matches_name_or_path_case_insensitively() {
             projects: &projects,
             hidden: &hidden,
             sort: ProjectSort::NameAsc,
+            pinned: &NO_PINS,
+            manual: &[],
             filter,
             activity: &empty,
             sessions: &[],
@@ -115,6 +121,8 @@ fn latest_activity_uses_max_timestamp_and_name_tie_break() {
             projects: &projects,
             hidden: &hidden,
             sort: ProjectSort::LatestActivity,
+            pinned: &NO_PINS,
+            manual: &[],
             filter: "",
             activity,
             sessions: &sessions,
@@ -164,6 +172,8 @@ fn latest_activity_includes_notice_timestamps() {
             projects: &[project("a", "a"), project("b", "b")],
             hidden: &hidden,
             sort: ProjectSort::LatestActivity,
+            pinned: &NO_PINS,
+            manual: &[],
             filter: "",
             activity: &empty,
             sessions: &sessions,
@@ -173,6 +183,69 @@ fn latest_activity_includes_notice_timestamps() {
         }),
         ["b", "a"]
     );
+}
+
+#[test]
+fn pinned_projects_come_first_and_manual_order_follows_drags() {
+    let hidden = HashSet::new();
+    let projects = vec![
+        project("a", "alpha"),
+        project("b", "beta"),
+        project("c", "gamma"),
+        project("d", "delta"),
+    ];
+    let empty = HashMap::new();
+    let sorted = |sort: ProjectSort, pinned: &HashSet<String>, manual: &[String]| {
+        ids(VisibleProjects {
+            projects: &projects,
+            hidden: &hidden,
+            sort,
+            pinned,
+            manual,
+            filter: "",
+            activity: &empty,
+            sessions: &[],
+            agents: &[],
+            notifications: &[],
+            terminal_notices: &[],
+        })
+    };
+    let pinned = HashSet::from(["c".to_string()]);
+    assert_eq!(
+        sorted(ProjectSort::NameAsc, &pinned, &[]),
+        ["c", "a", "b", "d"]
+    );
+    assert_eq!(
+        sorted(ProjectSort::NameDesc, &pinned, &[]),
+        ["c", "d", "b", "a"]
+    );
+    // Projects never dragged follow the dragged ones, by name.
+    let manual = ["d".to_string(), "b".to_string()];
+    assert_eq!(
+        sorted(ProjectSort::Manual, &NO_PINS, &manual),
+        ["d", "b", "a", "c"]
+    );
+    assert_eq!(
+        sorted(ProjectSort::Manual, &pinned, &manual),
+        ["c", "d", "b", "a"]
+    );
+}
+
+#[test]
+fn reorder_starts_from_the_shown_list_and_lands_on_the_target() {
+    let shown: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+    let mut order = Vec::new();
+    reorder_projects(&mut order, &shown, "a", "c");
+    assert_eq!(order, ["b", "c", "a", "d"], "dragging down lands after");
+    let shown = order.clone();
+    reorder_projects(&mut order, &shown, "d", "b");
+    assert_eq!(order, ["d", "b", "c", "a"], "dragging up lands before");
+    // A project hidden by the filter keeps its place at the end.
+    let mut order: Vec<String> = ["x", "a", "b"].map(String::from).to_vec();
+    reorder_projects(&mut order, &["a".into(), "b".into()], "b", "a");
+    assert_eq!(order, ["b", "a", "x"]);
+    reorder_projects(&mut order, &["a".into()], "a", "a");
+    assert_eq!(order, ["b", "a", "x"], "a drop on itself changes nothing");
 }
 
 struct HistorySessionInput<'a> {

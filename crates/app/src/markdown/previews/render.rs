@@ -38,8 +38,7 @@ impl Preview {
         }
         StatusBar {
             sid,
-            words: document.words,
-            headings: document.headings,
+            counts: (!document.diagram_file).then_some((document.words, document.headings)),
             status,
         }
         .show(ui);
@@ -51,6 +50,14 @@ impl Preview {
                 self.preview_rect,
             );
         }
+        // A one-diagram document, or an inline diagram picked by a click,
+        // paints alone with pan and zoom.
+        if let Some((texture, single)) = zoom_target(document, self.zoomed, &self.mermaid_textures)
+        {
+            self.diagram_view(ui, &texture, single);
+            return None;
+        }
+        self.zoomed = None;
         // A link to a `#heading` scrolls when the heading paints: paint
         // every block until it did.
         let heading_scroll = egui_commonmark::heading_scroll_pending(&mut self.cache);
@@ -62,21 +69,70 @@ impl Preview {
                 heights: &mut self.block_heights,
                 generation: self.applied_generation,
                 paint_all: heading_scroll,
+                zoom: &mut self.zoomed,
             }
             .show(ui);
         });
+        if self.zoomed.is_some() {
+            self.diagram_scene = egui::Rect::NOTHING;
+            ui.ctx().request_repaint();
+        }
         self.cache_scroll_height = output.content_size.y;
-        let scroll_range = (output.content_size.y - output.inner_rect.height()).max(0.0);
-        self.scroll_fraction = if scroll_range > 0.0 {
-            (output.state.unclamped_offset().y / scroll_range).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        self.scroll_fraction = scrolled_fraction(&output);
         document.links.iter().find_map(|(url, target)| {
             (self.cache.get_link_hook(url) == Some(true))
                 .then(|| target.clone())
                 .flatten()
         })
+    }
+
+    /// One diagram in a pan/zoom scene, with Fit and 100% like an image tab.
+    /// `single` hides Back: the document has nothing else to go back to.
+    fn diagram_view(&mut self, ui: &mut egui::Ui, texture: &egui::TextureHandle, single: bool) {
+        let size = texture.size_vec2();
+        let mut fit = false;
+        let mut actual = false;
+        let mut back = false;
+        ui.horizontal(|ui| {
+            if !single {
+                back = crate::appearance::sidebar_action(ui, "ArrowLeft", "Back to document")
+                    .clicked();
+            }
+            fit = crate::appearance::sidebar_action(ui, "Maximize", "Fit to pane").clicked();
+            actual =
+                crate::appearance::sidebar_action(ui, "ZoomIn", "Actual size (100%)").clicked();
+            ui.weak(format!(
+                "{} × {} pixels",
+                texture.size()[0],
+                texture.size()[1]
+            ));
+        });
+        if back {
+            self.zoomed = None;
+            return;
+        }
+        if fit || !self.diagram_scene.is_finite() || !self.diagram_scene.is_positive() {
+            self.diagram_scene = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        }
+        if actual {
+            self.diagram_scene = egui::Rect::from_center_size(
+                egui::pos2(size.x * 0.5, size.y * 0.5),
+                ui.available_size(),
+            );
+        }
+        let available = ui.available_size_before_wrap();
+        if !available.is_finite() || available.x <= 0.0 || available.y <= 0.0 {
+            return;
+        }
+        let response =
+            egui::Scene::new()
+                .zoom_range(0.01..=16.0)
+                .show(ui, &mut self.diagram_scene, |ui| {
+                    ui.add(egui::Image::new(texture).fit_to_exact_size(size));
+                });
+        #[cfg(feature = "test-support")]
+        crate::diagnostics::record(ui.ctx(), "mermaid-diagram", response.response.rect);
+        let _ = response;
     }
 
     fn status_text<'a>(&self, document: &'a Document, status_override: Option<&'a str>) -> &'a str {
@@ -111,6 +167,30 @@ impl Preview {
     }
 }
 
+/// How far down the preview is scrolled, from 0 to 1.
+fn scrolled_fraction(output: &egui::scroll_area::ScrollAreaOutput<()>) -> f32 {
+    let scroll_range = (output.content_size.y - output.inner_rect.height()).max(0.0);
+    if scroll_range > 0.0 {
+        (output.state.unclamped_offset().y / scroll_range).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// The diagram to paint alone, and whether it is the whole document.
+fn zoom_target(
+    document: &Document,
+    zoomed: Option<usize>,
+    textures: &[egui::TextureHandle],
+) -> Option<(egui::TextureHandle, bool)> {
+    let single = document.single_diagram;
+    let index = if single { Some(0) } else { zoomed }?;
+    textures
+        .get(index)
+        .cloned()
+        .map(|texture| (texture, single))
+}
+
 fn mermaid_textures(
     ctx: &egui::Context,
     document: &Document,
@@ -133,8 +213,8 @@ fn mermaid_textures(
 /// Word and heading counts plus the preview status, bottom right.
 struct StatusBar<'a> {
     sid: &'a str,
-    words: usize,
-    headings: usize,
+    /// `(words, headings)`; `None` for a Mermaid file.
+    counts: Option<(usize, usize)>,
     status: &'a str,
 }
 
@@ -142,18 +222,13 @@ impl StatusBar<'_> {
     fn show(self, ui: &mut egui::Ui) {
         let StatusBar {
             sid,
-            words,
-            headings,
+            counts,
             status,
         } = self;
         egui::Panel::bottom(egui::Id::unique(("markdown-status", sid)))
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 4)))
             .show(ui, |ui| {
-                let label = if ui.available_width() < 360.0 {
-                    status.to_owned()
-                } else {
-                    format!("{words} words  ·  {headings} headings  ·  {status}")
-                };
+                let label = status_label(counts, status, ui.available_width());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::Frame::new()
                         .fill(ui.visuals().panel_fill)
@@ -164,6 +239,16 @@ impl StatusBar<'_> {
                         });
                 });
             });
+    }
+}
+
+/// The status text: counts first when there is room and `counts` is set.
+pub(super) fn status_label(counts: Option<(usize, usize)>, status: &str, width: f32) -> String {
+    match counts {
+        Some((words, headings)) if width >= 360.0 => {
+            format!("{words} words  ·  {headings} headings  ·  {status}")
+        }
+        _ => status.to_owned(),
     }
 }
 
@@ -178,6 +263,8 @@ struct PreviewBody<'a> {
     generation: u64,
     /// Paint every block (a heading scroll is pending).
     paint_all: bool,
+    /// Set to a diagram's index when a click asks to zoom it.
+    zoom: &'a mut Option<usize>,
 }
 
 impl PreviewBody<'_> {
@@ -221,12 +308,19 @@ impl PreviewBody<'_> {
     fn content(&mut self, ui: &mut egui::Ui) {
         let document = self.document;
         let mut position = 0;
-        for (diagram, texture) in document.mermaid.iter().zip(self.textures) {
+        for (index, (diagram, texture)) in document.mermaid.iter().zip(self.textures).enumerate() {
             self.show_range(ui, position..diagram.range.start);
-            ui.add(
-                egui::Image::from_texture(texture)
-                    .max_size(egui::vec2(ui.available_width(), 1200.0)),
-            );
+            let response = ui
+                .add(
+                    egui::Image::from_texture(texture)
+                        .max_size(egui::vec2(ui.available_width(), 1200.0))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::ZoomIn)
+                .on_hover_text("Click to zoom");
+            if response.clicked() {
+                *self.zoom = Some(index);
+            }
             position = diagram.range.end;
         }
         self.show_range(ui, position..document.text.len());
@@ -275,4 +369,23 @@ impl PreviewBody<'_> {
             .enable_scroll_to_heading(true)
             .show(ui, self.cache, text);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn a_mermaid_file_status_has_no_word_or_heading_counts() {
+    let snapshot = super::super::source::Snapshot {
+        path: crate::test_path("/docs/flow.mmd"),
+        text: "flowchart LR\n  A -->|Yes| B\n".into(),
+        revision: None,
+        paused: false,
+    };
+    let document = super::super::html::prepare(snapshot);
+    assert!(document.diagram_file);
+    let counts = (!document.diagram_file).then_some((document.words, document.headings));
+    assert_eq!(status_label(counts, "Live preview", 800.0), "Live preview");
+    assert_eq!(
+        status_label(Some((21, 0)), "Live preview", 800.0),
+        "21 words  ·  0 headings  ·  Live preview"
+    );
 }

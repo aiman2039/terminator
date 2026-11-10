@@ -85,7 +85,8 @@ fn manual_check_runs_once_while_automatic_checks_are_off() {
     assert!(check.finish(release((
         "v9999.0.0".into(),
         "https://example.com/release".into(),
-        Vec::new()
+        Vec::new(),
+        String::new()
     ))));
     assert!(matches!(&check.status, Status::Available { version, .. }
             if version == "v9999.0.0"));
@@ -116,18 +117,24 @@ fn newer_release_is_offered_once() {
     assert!(check.finish(release((
         "v9999.0.0".into(),
         "https://example.com/release".into(),
-        assets
+        assets,
+        String::new()
     ))));
-    assert!(matches!(&check.status, Status::Available { version, url }
-            if version == "v9999.0.0" && url == "https://example.com/win.zip"));
+    assert!(
+        matches!(&check.status, Status::Available { version, url, .. }
+            if version == "v9999.0.0" && url == "https://example.com/win.zip")
+    );
     // Same version again: no duplicate offer, first URL kept.
     assert!(check.finish(release((
         "v9999.0.0".into(),
         "https://example.com/release".into(),
-        Vec::new()
+        Vec::new(),
+        String::new()
     ))));
-    assert!(matches!(&check.status, Status::Available { version, url }
-            if version == "v9999.0.0" && url == "https://example.com/win.zip"));
+    assert!(
+        matches!(&check.status, Status::Available { version, url, .. }
+            if version == "v9999.0.0" && url == "https://example.com/win.zip")
+    );
     assert_eq!(check.offered.len(), 1);
     // A repeat sighting after a new poll parks at Checking while probing,
     // then restores the download offer when the check completes.
@@ -135,7 +142,8 @@ fn newer_release_is_offered_once() {
     assert!(check.finish(release((
         "v9999.0.0".into(),
         "https://example.com/release".into(),
-        Vec::new()
+        Vec::new(),
+        String::new()
     ))));
     assert!(matches!(&check.status, Status::Available { version, .. }
             if version == "v9999.0.0"));
@@ -147,7 +155,8 @@ fn older_release_marks_current_and_errors_mark_failed() {
     assert!(check.finish(release((
         "v0.0.0".into(),
         "https://example.com/release".into(),
-        Vec::new()
+        Vec::new(),
+        String::new()
     ))));
     assert!(matches!(check.status, Status::Current));
     assert!(check.finish(failure(None)));
@@ -160,7 +169,8 @@ fn failed_recheck_keeps_download_offer() {
     assert!(check.finish(release((
         "v9999.0.0".into(),
         "https://example.com/release".into(),
-        Vec::new()
+        Vec::new(),
+        String::new()
     ))));
     assert!(check.finish(failure(None)));
     assert!(matches!(&check.status, Status::Available { version, .. }
@@ -174,7 +184,8 @@ fn not_modified_reuses_cached_release() {
         latest: (
             "v0.0.0".into(),
             "https://example.com/release".into(),
-            Vec::new()
+            Vec::new(),
+            String::new()
         ),
         etag: Some("\"abc\"".into()),
     })));
@@ -202,7 +213,8 @@ fn rate_limit_backs_off_beyond_one_minute() {
     assert!(check.finish(release((
         "v0.0.0".into(),
         "https://example.com/release".into(),
-        Vec::new()
+        Vec::new(),
+        String::new()
     ))));
     assert_eq!(check.rate_limit_streak, 0);
 }
@@ -241,4 +253,39 @@ fn rate_limit_replies_are_told_apart_from_other_failures() {
         feed::rate_limit_wait(429, &headers(&[]), SystemTime::now()),
         Some(Duration::ZERO)
     );
+}
+
+#[test]
+fn skipped_version_hides_the_chip_for_that_version_only() {
+    assert_eq!(chip_version(None, None), None);
+    assert_eq!(chip_version(Some("v2.0.0"), None), Some("v2.0.0"));
+    assert_eq!(chip_version(Some("v2.0.0"), Some("v2.0.0")), None);
+    // A newer release than the skipped one shows the chip again.
+    assert_eq!(chip_version(Some("v2.1.0"), Some("v2.0.0")), Some("v2.1.0"));
+}
+
+#[test]
+fn available_release_keeps_its_notes_and_version() {
+    let mut check = WindowsUpdateCheck::new();
+    assert_eq!(check.available_version(), None);
+    assert!(check.finish(release((
+        "v9999.0.0".into(),
+        "https://example.com/release".into(),
+        Vec::new(),
+        "## Fixed\n- crash".into()
+    ))));
+    assert_eq!(check.available_version(), Some("v9999.0.0"));
+    assert!(
+        matches!(&check.status, Status::Available { notes, .. } if notes == "## Fixed\n- crash")
+    );
+}
+
+#[test]
+fn release_feed_body_becomes_release_notes() {
+    let (tag, _, _, notes) =
+        feed::parse_latest(r#"{"tag_name":"v1.2.3","body":"* one"}"#).expect("parse");
+    assert_eq!(tag, "v1.2.3");
+    assert_eq!(notes, "* one");
+    let (_, _, _, notes) = feed::parse_latest(r#"{"tag_name":"v1.2.3"}"#).expect("parse");
+    assert!(notes.is_empty());
 }

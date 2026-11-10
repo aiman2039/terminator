@@ -142,6 +142,8 @@ impl App {
             .map(|name| name.to_string_lossy().into_owned());
         let hint = if let Some(name) = scope_name {
             format!("File structure of {name}…")
+        } else if self.palette.filters == FILTER_LAUNCH {
+            "New agent session…".to_string()
         } else if project_name.is_empty() {
             "Search…".to_string()
         } else {
@@ -383,7 +385,11 @@ impl App {
             }
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
+            PaletteItem::AgentLaunch(launcher) => self.launch_agent(&launcher),
             PaletteItem::CheckForUpdates => self.check_for_updates(),
+            PaletteItem::OpenLogsFolder => self.open_logs_folder(),
+            PaletteItem::CopyDiagnostics => self.copy_diagnostics(ctx),
+            PaletteItem::ReportProblem => self.report_problem(ctx),
             PaletteItem::ToggleIdeSidebarHeight => self.toggle_ide_sidebar_height(),
             PaletteItem::SaveLayout => self.save_layout_dialog(),
             PaletteItem::ApplyLayout(name) => {

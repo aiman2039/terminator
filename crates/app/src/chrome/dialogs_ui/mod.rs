@@ -51,6 +51,7 @@ impl App {
             self.idle_close_fallback = None;
         }
         self.poll_workspace_close(ctx);
+        self.advance_session_close_queue();
         self.close_session_modal(ctx);
         self.open_terminal_notice_detail();
         self.notice_detail_modal(ctx);

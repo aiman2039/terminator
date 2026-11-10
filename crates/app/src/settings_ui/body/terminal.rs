@@ -27,6 +27,7 @@ impl App {
         self.external_custom_row(ui, &mut browse);
         self.test_draft_row(ui);
         self.folder_access_row(ui, grant_folder);
+        self.browser_settings_rows(ui);
         browse
     }
 

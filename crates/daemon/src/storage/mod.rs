@@ -85,6 +85,7 @@ impl Store {
         }
         // Presence is live-only; nothing persisted may claim it.
         state.presence.clear();
+        state.terminal_titles.clear();
         Ok((Self { conn, owner: None }, state))
     }
     pub fn bind_owner(&mut self, owner: String) {

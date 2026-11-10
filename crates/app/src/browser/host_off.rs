@@ -44,6 +44,18 @@ impl BrowserHost {
         self.errors.retain(|key, _| keys.contains(key));
     }
 
+    pub fn zoom(&self, _key: &str) -> f64 {
+        1.0
+    }
+
+    pub fn set_zoom(&mut self, _key: &str, _level: f64) {}
+
+    pub fn run_script(&self, _key: &str, _script: &str) {}
+
+    pub fn set_devtools(&mut self, _enabled: bool) {}
+
+    pub fn open_devtools(&self, _key: &str) {}
+
     pub fn nav(&self, _key: &str) -> NavState {
         NavState::default()
     }

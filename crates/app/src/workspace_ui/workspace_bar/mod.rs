@@ -12,6 +12,8 @@ struct StripActions {
     switch: Option<String>,
     close: Option<String>,
     close_all: bool,
+    /// Close every unpinned tab that holds only editors.
+    close_editors: bool,
     close_left: Option<String>,
     close_right: Option<String>,
     toggle_pin: Option<String>,

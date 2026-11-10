@@ -432,5 +432,6 @@ impl App {
                 },
             );
         self.finish_pane_drop(ui, dock);
+        self.finish_session_drop(ui, project, dock);
     }
 }

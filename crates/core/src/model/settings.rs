@@ -10,6 +10,19 @@ fn tool_window_key(digit: char) -> String {
     }
 }
 
+/// Next/previous top-level tab: Cmd+Shift+] / [ on macOS (Safari,
+/// `JetBrains`), Ctrl+PageDown / PageUp on Linux, where stored `command`
+/// already means Ctrl+Shift and Ctrl+Shift+] is Next pane.
+fn tab_step_key(forward: bool) -> String {
+    match (cfg!(target_os = "macos"), forward) {
+        (true, true) => "command+shift+]",
+        (true, false) => "command+shift+[",
+        (false, true) => "ctrl+PageDown",
+        (false, false) => "ctrl+PageUp",
+    }
+    .into()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -69,10 +82,9 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    /// Two pairs share a chord on purpose, and the GUI picks one by
-    /// keyboard focus: Rename terminal and Replace in Files, and on Linux
-    /// (where stored `command` already means Ctrl+Shift) Find in terminal
-    /// and Find in Files.
+    /// Every chord is unique, except on Linux (where stored `command`
+    /// already means Ctrl+Shift): Find in terminal and Find in Files share
+    /// Ctrl+Shift+F, and the GUI picks one by keyboard focus.
     fn default_keybindings() -> std::collections::BTreeMap<String, String> {
         [
             ("new_terminal".into(), "command+T".into()),
@@ -81,6 +93,8 @@ impl Settings {
             ("split_down".into(), "command+alt+D".into()),
             ("split_left".into(), "command+shift+Left".into()),
             ("split_right".into(), "command+shift+D".into()),
+            ("next_tab".into(), tab_step_key(true)),
+            ("prev_tab".into(), tab_step_key(false)),
             ("next_pane".into(), "command+]".into()),
             ("select_all".into(), "command+A".into()),
             ("find_in_terminal".into(), "command+F".into()),
@@ -88,9 +102,9 @@ impl Settings {
             ("find_in_files".into(), "command+shift+F".into()),
             ("search_scrollback".into(), "command+alt+F".into()),
             ("copy_working_directory".into(), "command+alt+C".into()),
-            ("rename_terminal".into(), "command+shift+R".into()),
-            // JetBrains Replace in Path shares Rename terminal's chord: a
-            // focused terminal keeps it, every other place replaces.
+            // Was command+shift+R (see the GUI keymap migration).
+            ("rename_terminal".into(), "command+alt+R".into()),
+            // JetBrains Replace in Path.
             ("replace_in_files".into(), "command+shift+R".into()),
             ("close_session".into(), "command+W".into()),
             ("clear_scrollback".into(), "command+shift+K".into()),
@@ -126,6 +140,9 @@ impl Settings {
             ("tool_git".into(), tool_window_key('9')),
             ("tool_terminal".into(), "alt+F12".into()),
             ("select_in".into(), "alt+F1".into()),
+            ("reopen_browser_tab".into(), "command+alt+T".into()),
+            // Free in both keymaps; New terminal is command+T.
+            ("new_agent_session".into(), "command+alt+N".into()),
         ]
         .into()
     }

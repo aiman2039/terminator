@@ -89,7 +89,7 @@ impl App {
                 .find(|s| &s.id == sid)
                 .map(|s| s.label.clone())
                 .unwrap_or_else(|| "Terminal".into()),
-            Tab::Diff { path, .. } | Tab::Image { path } => path
+            Tab::Diff { path, .. } | Tab::Image { path } | Tab::Document { path, .. } => path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()

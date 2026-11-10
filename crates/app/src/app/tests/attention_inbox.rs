@@ -962,6 +962,29 @@ fn unread_selection_survives_marking_read_without_touching_lifecycle() {
 }
 
 #[test]
+fn mark_all_read_empties_unread_without_resolving_or_dismissing() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
+    app.state.notifications = ["n1", "n2"]
+        .into_iter()
+        .map(|id| {
+            notice_fixture(NoticeFixtureInput {
+                id,
+                session: "s",
+                state: AgentState::WaitingInput,
+                created: 1,
+            })
+        })
+        .collect();
+    assert_eq!(app.unread_notices().len(), 2);
+    app.mark_all_read();
+    assert!(app.unread_notices().is_empty());
+    for notice in &app.state.notifications {
+        assert!(notice.read && !notice.resolved && !notice.dismissed);
+    }
+}
+
+#[test]
 #[cfg(feature = "test-support")]
 fn all_live_groups_verified_agents_with_an_unverified_section() {
     use terminator_core::agents::{DetectedAgent, PresenceOutcome, ProcessIdentity};

@@ -107,6 +107,7 @@ impl Services {
             Job::MigrateAttention => self.migrate_settings(true, updates).await,
             Job::MigrateTypography => self.migrate_settings(false, updates).await,
             Job::HookStatus => self.hook_status(cancel, updates).await,
+            Job::Fonts(op) => self.font_job(op, cancel, updates).await,
             Job::Install(kind, remove) => {
                 self.install(InstallInput {
                     kind,

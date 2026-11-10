@@ -119,13 +119,13 @@ impl Services {
         updates: &mut Vec<Update>,
     ) -> Result<()> {
         let client = self.client();
-        let status = client
+        let (status, installed) = client
             .catalog
             .run(&cancel, move || {
                 let home = std::env::var_os("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_default();
-                anyhow::Ok(
+                anyhow::Ok((
                     terminator_integrations::AGENTS
                         .iter()
                         .map(|kind| {
@@ -135,10 +135,12 @@ impl Services {
                             )
                         })
                         .collect(),
-                )
+                    crate::agent_launch::installed_agents(),
+                ))
             })
             .await?;
         updates.push(Update::HookStatus(status));
+        updates.push(Update::InstalledAgents(installed));
         Ok(())
     }
 

@@ -86,6 +86,7 @@ impl App {
             pending_delete: Vec::new(),
             explorer_selection: Vec::new(),
             explorer_anchor: None,
+            session_selection: crate::sidebar_ui::SessionSelection::default(),
             explorer_clipboard: None,
             explorer_speed: String::new(),
             explorer_speed_at: std::time::Instant::now(),
@@ -104,9 +105,9 @@ impl App {
             updater: updater::Updater::new(ctx),
             #[cfg(any(not(target_os = "macos"), test))]
             windows_updates: windows_updates::WindowsUpdateCheck::new(),
-            #[cfg(all(not(test), target_os = "macos"))]
+            #[cfg(all(not(test), any(target_os = "macos", target_os = "linux")))]
             status_waiting_shown: None,
-            #[cfg(any(test, target_os = "macos"))]
+            #[cfg(any(test, target_os = "macos", target_os = "linux"))]
             status_menu_index: None,
             installation_error: None,
             service_op: ServiceOp::Idle,
@@ -156,6 +157,7 @@ impl App {
             browser_urls: HashMap::new(),
             favicons: HashMap::new(),
             browser_submit: None,
+            browser_extras: Default::default(),
             remote_ui: crate::remote_ui::RemoteUi::default(),
             vnc_fullscreen: None,
             vnc_views: HashMap::new(),
@@ -167,6 +169,7 @@ impl App {
             visible_images: HashSet::new(),
             image_generation: 0,
             image_jobs,
+            tables: crate::document_view::Tables::default(),
             backends: HashMap::new(),
             visible_sessions: HashSet::new(),
             backend_ids: HashMap::new(),
@@ -247,7 +250,9 @@ impl App {
             theme_draft: AppearanceConfig::default(),
             theme_source: String::new(),
             theme_conflict: false,
+            fonts: crate::appearance::fonts::FontState::default(),
             hook_status: HashMap::new(),
+            installed_agents: Vec::new(),
             detail: None,
             close_session: None,
             popups: popup::Popups::default(),

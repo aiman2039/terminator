@@ -4,22 +4,22 @@
 use crate::app::LandStripShellOnLeafInput;
 use crate::*;
 
-struct PaintLandingPreviewInput<'a> {
-    ui: &'a mut egui::Ui,
-    dock: &'a Workspace,
-    pane: &'a Tab,
-    target: Option<egui_dock::NodePath>,
-    zone: Option<PaneDropZone>,
+pub(super) struct PaintLandingPreviewInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) dock: &'a Workspace,
+    pub(super) pane: &'a Tab,
+    pub(super) target: Option<egui_dock::NodePath>,
+    pub(super) zone: Option<PaneDropZone>,
 }
 
 /// Where a dragged pane would land under the pointer this frame.
-struct PaneDrop {
-    pane: Tab,
+pub(super) struct PaneDrop {
+    pub(super) pane: Tab,
     /// The hovered split leaf and its rect.
-    target: Option<(egui_dock::NodePath, egui::Rect)>,
+    pub(super) target: Option<(egui_dock::NodePath, egui::Rect)>,
     /// Caption slot when hovering a leaf's tab bar.
-    tab_insert: Option<egui_dock::TabIndex>,
-    zone: Option<PaneDropZone>,
+    pub(super) tab_insert: Option<egui_dock::TabIndex>,
+    pub(super) zone: Option<PaneDropZone>,
 }
 
 impl PaneDrop {
@@ -35,7 +35,12 @@ impl PaneDrop {
 
     /// Moves a pane dragged within the dock (no view source, not from the
     /// strip) into leaf `path` of `group`.
-    fn move_within(&self, dock: &mut Workspace, group: &str, path: egui_dock::NodePath) -> bool {
+    pub(super) fn move_within(
+        &self,
+        dock: &mut Workspace,
+        group: &str,
+        path: egui_dock::NodePath,
+    ) -> bool {
         let pane = &self.pane;
         match self.zone {
             Some(PaneDropZone::Center) | None => {
@@ -67,7 +72,7 @@ impl App {
     /// Drop zone within a hovered split leaf: the middle swaps or joins,
     /// while a band near an edge opens the dragged pane in a new split
     /// beside that leaf.
-    fn pane_drop_zone(rect: egui::Rect, pos: egui::Pos2) -> PaneDropZone {
+    pub(super) fn pane_drop_zone(rect: egui::Rect, pos: egui::Pos2) -> PaneDropZone {
         let band = (rect.width().min(rect.height()) * 0.25).clamp(20.0, 96.0);
         let top = pos.y - rect.top();
         let bottom = rect.bottom() - pos.y;
@@ -251,7 +256,7 @@ impl App {
 
     /// Focus follows a landed pane, whether its drag started on a caption
     /// or a tab. [`Self::end_pane_drag`] then saves the layout.
-    fn pane_drop_landed(&mut self, dock: &Workspace, pane: &Tab) {
+    pub(super) fn pane_drop_landed(&mut self, dock: &Workspace, pane: &Tab) {
         if let Some(project) = self.selected.clone() {
             self.focus_moved_view(pane, &project, dock);
         }
@@ -267,7 +272,7 @@ impl App {
     /// edge half a split drop would open), with a divider on the future
     /// split boundary. A center drop between two single panes exchanges
     /// them, so the source leaf is outlined as well.
-    fn paint_landing_preview(&self, input: PaintLandingPreviewInput<'_>) {
+    pub(super) fn paint_landing_preview(&self, input: PaintLandingPreviewInput<'_>) {
         let PaintLandingPreviewInput {
             ui,
             dock,

@@ -35,6 +35,8 @@ pub struct App {
     /// Explorer tree selection, in click order, plus its range anchor.
     pub(crate) explorer_selection: Vec<PathBuf>,
     pub(crate) explorer_anchor: Option<PathBuf>,
+    /// Project sidebar session-row selection and its bulk close queue.
+    pub(crate) session_selection: crate::sidebar_ui::SessionSelection,
     /// Explorer file clipboard: paths and whether paste moves them.
     pub(crate) explorer_clipboard: Option<(Vec<PathBuf>, bool)>,
     /// Type-to-search text in the focused tree and when it was last typed.
@@ -66,10 +68,10 @@ pub struct App {
     #[cfg(any(not(target_os = "macos"), test))]
     pub(crate) windows_updates: windows_updates::WindowsUpdateCheck,
     /// Last waiting count painted on the macOS menu-bar icon.
-    #[cfg(all(not(test), target_os = "macos"))]
+    #[cfg(all(not(test), any(target_os = "macos", target_os = "linux")))]
     pub(crate) status_waiting_shown: Option<usize>,
     /// Sidebar index the macOS status menu was last built from.
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     pub(crate) status_menu_index: Option<std::sync::Arc<crate::chrome::sidebar_cache::Index>>,
     #[cfg(feature = "test-support")]
     pub(crate) diagnostics: diagnostics::Diagnostics,
@@ -125,6 +127,8 @@ pub struct App {
     /// Browser tab icons by icon URL; never evicted (one entry per site).
     pub(crate) favicons: HashMap<String, crate::browser::favicon::Favicon>,
     pub(crate) browser_submit: Option<(String, BrowserTarget)>,
+    /// Find bars and the closed Browser tab stack.
+    pub(crate) browser_extras: crate::browser::extras::BrowserExtras,
     pub(crate) remote_ui: crate::remote_ui::RemoteUi,
     pub(crate) vnc_fullscreen: Option<Tab>,
     pub(crate) vnc_views: HashMap<String, crate::vnc_ui::VncViewState>,
@@ -138,6 +142,8 @@ pub struct App {
     pub(crate) visible_images: HashSet<PathBuf>,
     pub(crate) image_generation: u64,
     pub(crate) image_jobs: gui_services::ImageJobs,
+    /// CSV/TSV tables of `Tab::Document` panes painted this frame.
+    pub(crate) tables: crate::document_view::Tables,
     pub(crate) backends: HashMap<String, TerminalBackend>,
     pub(crate) visible_sessions: HashSet<String>,
     pub(crate) backend_ids: HashMap<u64, String>,
@@ -244,7 +250,11 @@ pub struct App {
     pub(crate) theme_draft: AppearanceConfig,
     pub(crate) theme_source: String,
     pub(crate) theme_conflict: bool,
+    /// System terminal and CJK font choices.
+    pub(crate) fonts: crate::appearance::fonts::FontState,
     pub(crate) hook_status: HashMap<String, bool>,
+    /// Catalog agents on PATH, for the agent launchers.
+    pub(crate) installed_agents: Vec<crate::agent_launch::InstalledAgent>,
     pub(crate) detail: Option<String>,
     pub(crate) close_session: Option<String>,
     pub(crate) popups: popup::Popups,

@@ -48,8 +48,13 @@ pub(super) fn task_name(ui: &mut egui::Ui, draft: &mut WorktreeDraft, source: Op
     });
 }
 
-/// Agent command (only with a terminal) and Browser URL rows.
-pub(super) fn task_extras(ui: &mut egui::Ui, draft: &mut WorktreeDraft) {
+/// Agent command (only with a terminal) and Browser URL rows. The combo box
+/// fills the command from a preset or an installed agent.
+pub(super) fn task_extras(
+    ui: &mut egui::Ui,
+    draft: &mut WorktreeDraft,
+    launchers: &[crate::agent_launch::AgentLauncher],
+) {
     if draft.open_terminal {
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
@@ -61,6 +66,7 @@ pub(super) fn task_extras(ui: &mut egui::Ui, draft: &mut WorktreeDraft) {
                         .hint_text("claude")
                         .desired_width(260.0),
                 );
+                agent_choice(ui, &mut draft.agent_command, launchers);
             },
         });
     }
@@ -76,6 +82,36 @@ pub(super) fn task_extras(ui: &mut egui::Ui, draft: &mut WorktreeDraft) {
             );
         },
     });
+}
+
+/// Presets and installed agents; a pick replaces the command text.
+fn agent_choice(
+    ui: &mut egui::Ui,
+    command: &mut String,
+    launchers: &[crate::agent_launch::AgentLauncher],
+) {
+    if launchers.is_empty() {
+        return;
+    }
+    let shown = launchers
+        .iter()
+        .find(|launcher| launcher.command == command.trim())
+        .map_or("Choose an agent…", |launcher| launcher.name.as_str());
+    egui::ComboBox::from_id_salt("task-agent-choice")
+        .selected_text(shown)
+        .width(260.0)
+        .show_ui(ui, |ui| {
+            for launcher in launchers {
+                let picked = launcher.command == command.trim();
+                if ui
+                    .selectable_label(picked, &launcher.name)
+                    .on_hover_text(&launcher.command)
+                    .clicked()
+                {
+                    command.clone_from(&launcher.command);
+                }
+            }
+        });
 }
 
 impl App {

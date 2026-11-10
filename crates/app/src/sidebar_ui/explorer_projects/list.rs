@@ -5,6 +5,10 @@ use terminator_core::Project;
 
 impl App {
     pub(crate) fn projects(&mut self, ui: &mut egui::Ui) {
+        let sessions = &self.state.sessions;
+        self.session_selection.begin_frame();
+        self.session_selection
+            .retain(|sid| sessions.iter().any(|s| s.id == sid && s.lifecycle.live()));
         // Pin the row height so the filter field shares one baseline with
         // the icon buttons.
         ui.spacing_mut().interact_size.y = appearance::TOOLBAR_BUTTON;
@@ -19,7 +23,7 @@ impl App {
         let projects = self.cached_projects();
         let visible_ids: std::collections::HashSet<_> =
             projects.iter().map(|p| p.id.as_str()).collect();
-        appearance::sidebar_scroll("projects").show(ui, |ui| {
+        let list = appearance::sidebar_scroll("projects").show(ui, |ui| {
             for p in projects.iter() {
                 // Worktrees of a listed project draw under it, not on their own.
                 if index.parents.get(&p.id).is_some_and(|parents| {
@@ -37,6 +41,7 @@ impl App {
                 self.projects_empty_hint(ui);
             }
         });
+        self.project_folder_drop(ui, list.inner_rect);
     }
 
     /// Removed, sort, worktrees, SSH, new project, and the filter field
@@ -172,6 +177,7 @@ impl App {
             self.select_project(p.id.clone());
         }
         appearance::context_menu(&response, |ui| self.project_menu(ui, p));
+        self.project_row_dnd(ui, &response, &p.id);
         response.rect.left()
     }
 

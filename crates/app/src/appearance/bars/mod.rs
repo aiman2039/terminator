@@ -92,6 +92,8 @@ pub struct TerminalBar {
     pub split_horizontal: egui::Response,
     pub zoom: Option<egui::Response>,
     pub close: egui::Response,
+    /// The Resume chip, when `TerminalBarSpec::resume_tip` asked for it.
+    pub resume: Option<egui::Response>,
 }
 
 pub struct TerminalBarSpec<'a> {
@@ -118,6 +120,20 @@ pub struct TerminalBarSpec<'a> {
     /// Session-kind glyph shown when no lifecycle status is known, so every
     /// terminal caption carries an icon like the workspace strip does.
     pub kind: Option<&'a str>,
+    /// Unread notices from a completed agent: a dot on the status icon.
+    pub unread: bool,
+    /// Weak text after the title where room allows (a window title).
+    pub subtitle: Option<&'a str>,
+    /// The Resume chip before the Git button; None hides the chip.
+    pub resume_tip: Option<ResumeChip<'a>>,
+}
+
+/// The pane caption's Resume chip.
+#[derive(Clone, Copy)]
+pub struct ResumeChip<'a> {
+    pub tip: &'a str,
+    /// No verified presence: the chip shows a `?` marker.
+    pub unsure: bool,
 }
 
 /// Width of one leading caption icon slot; the glyph itself is 13pt.
@@ -166,6 +182,9 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         status_tint,
         spin,
         kind,
+        unread,
+        subtitle,
+        resume_tip,
     } = spec;
     let (rect, bar) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), TERMINAL_BAR_HEIGHT),
@@ -173,6 +192,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     );
     let git_width = TERMINAL_BUTTON + branch_width(ui, branch);
     let slots = BarSlots::layout(rect, git_width, (stack_tip.is_some(), zoom_tip.is_some()));
+    let resume_rect = resume_tip.map(|chip| resume_chip_rect(ui, slots.git, chip.unsure));
     let tint = title_tint.unwrap_or_else(|| default_title_tint(ui, active));
     let lead = paint_leading_icons(
         ui,
@@ -184,49 +204,71 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
             spin,
             kind,
             title_tint: Some(tint),
+            unread,
         },
     );
     paint_title(
         ui,
         BarTitle {
             rect,
-            git_left: slots.git.left(),
+            git_left: resume_rect.map_or(slots.git.left(), |chip| chip.left() - 2.0),
             lead,
             title,
+            subtitle: subtitle.filter(|_| !title.is_empty()),
             tint,
             status,
         },
     );
+    let resume = resume_rect
+        .zip(resume_tip)
+        .map(|(rect, chip)| resume_chip(ui, bar.id, rect, chip));
     bar.widget_info(|| {
         egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, title)
     });
-    let tips = BarTips {
-        branch,
-        git: git_tip,
-        stack: stack_tip,
-        zoom: zoom_tip,
-        vertical: vertical_tip,
-        horizontal: horizontal_tip,
-    };
     let actions = bar_actions(BarActionsInput {
         ui,
         bar_id: bar.id,
         slots: &slots,
-        tips,
-    });
-    let bar = bar.on_hover_cursor(egui::CursorIcon::Grab);
-    TerminalBar {
-        bar: if title.is_empty() {
-            bar
-        } else {
-            bar.on_hover_text(title)
+        tips: BarTips {
+            branch,
+            git: git_tip,
+            stack: stack_tip,
+            zoom: zoom_tip,
+            vertical: vertical_tip,
+            horizontal: horizontal_tip,
         },
-        git: actions.git,
-        stack: actions.stack,
-        split_vertical: actions.split_vertical,
-        split_horizontal: actions.split_horizontal,
-        zoom: actions.zoom,
-        close: actions.close,
+    });
+    let bar = bar_hover(bar.on_hover_cursor(egui::CursorIcon::Grab), title, subtitle);
+    TerminalBar::new(bar, actions, resume)
+}
+
+impl TerminalBar {
+    fn new(bar: egui::Response, actions: BarActions, resume: Option<egui::Response>) -> Self {
+        Self {
+            bar,
+            git: actions.git,
+            stack: actions.stack,
+            split_vertical: actions.split_vertical,
+            split_horizontal: actions.split_horizontal,
+            zoom: actions.zoom,
+            close: actions.close,
+            resume,
+        }
+    }
+}
+
+/// The bar tooltip: the title, then the subtitle on its own line.
+fn bar_hover(bar: egui::Response, title: &str, subtitle: Option<&str>) -> egui::Response {
+    let hover = [Some(title), subtitle]
+        .into_iter()
+        .flatten()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if hover.is_empty() {
+        bar
+    } else {
+        bar.on_hover_text(hover)
     }
 }
 

@@ -72,7 +72,8 @@ impl Services {
             | Job::MigrateTypography
             | Job::HookStatus
             | Job::Install(..)
-            | Job::TestNtfy { .. }) => self.settings_job(job, cancel, updates).await,
+            | Job::TestNtfy { .. }
+            | Job::Fonts(..)) => self.settings_job(job, cancel, updates).await,
             job @ (Job::ResolveTarget(..)
             | Job::OpenProject(..)
             | Job::Workspace(..)
@@ -109,24 +110,35 @@ impl Services {
             | Job::VncTransferPoll { .. }
             | Job::VncConnectTab { .. }
             | Job::VncFrame { .. }) => self.vnc_job(job, cancel, updates).await,
-            Job::RemoteApps {
+            job @ Job::RemoteApps { .. } => self.remote_apps_job(job, cancel, updates).await,
+        }
+    }
+
+    async fn remote_apps_job(
+        &self,
+        job: Job,
+        cancel: CancellationToken,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let Job::RemoteApps {
+            project,
+            session,
+            since,
+            readers,
+        } = job
+        else {
+            anyhow::bail!(MISROUTED)
+        };
+        self.remote_apps(
+            crate::gui_services::jobs::remote_apps::RemoteAppsInput {
                 project,
                 session,
                 since,
                 readers,
-            } => {
-                self.remote_apps(
-                    crate::gui_services::jobs::remote_apps::RemoteAppsInput {
-                        project,
-                        session,
-                        since,
-                        readers,
-                        cancel,
-                    },
-                    updates,
-                )
-                .await
-            }
-        }
+                cancel,
+            },
+            updates,
+        )
+        .await
     }
 }

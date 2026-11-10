@@ -82,7 +82,9 @@ impl Viewer<'_> {
         match tab {
             // Unsaved changes show as a dot in the close button's place
             // (`tab_modified`), not in the title.
-            Tab::Image { path } | Tab::NativeEditor { path } => self.file_title(path),
+            Tab::Image { path } | Tab::NativeEditor { path } | Tab::Document { path, .. } => {
+                self.file_title(path)
+            }
             Tab::Browser { id, target } => self.app.browser_title(id, target).into(),
             Tab::Player => "Player".into(),
             Tab::Terminal(sid) => self.terminal_tab_title(sid),
@@ -150,26 +152,31 @@ impl Viewer<'_> {
         let leading = self.app.tab_leading(sid);
         let mut cursor = rect.left();
         let mut paint = |icon: &str, tint: egui::Color32, spin: bool| {
+            let icon_rect = egui::Rect::from_center_size(
+                egui::pos2(
+                    cursor + appearance::TERMINAL_LEADING_SLOT / 2.0,
+                    rect.center().y,
+                ),
+                egui::vec2(13.0, 13.0),
+            );
             appearance::paint_status_icon(appearance::PaintStatusIconInput {
                 ui,
-                rect: egui::Rect::from_center_size(
-                    egui::pos2(
-                        cursor + appearance::TERMINAL_LEADING_SLOT / 2.0,
-                        rect.center().y,
-                    ),
-                    egui::vec2(13.0, 13.0),
-                ),
+                rect: icon_rect,
                 icon,
                 tint,
                 spin,
             });
             cursor += appearance::TERMINAL_LEADING_SLOT;
+            icon_rect
         };
         if let Some(brand) = leading.brand {
             paint(brand, appearance::icon_color(), false);
         }
         if let Some((icon, tint, spin)) = leading.status {
-            paint(icon, tint, spin);
+            let icon_rect = paint(icon, tint, spin);
+            if leading.unread {
+                appearance::paint_unread_dot(ui, icon_rect);
+            }
         } else if let Some(kind) = leading.kind {
             paint(kind, self.app.terminal_title_color(sid), false);
         }

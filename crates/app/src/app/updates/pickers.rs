@@ -80,6 +80,10 @@ impl App {
             && let Some(project) = &project
         {
             self.open_image(project, path, None);
+        } else if crate::document_view::DocumentKind::for_path(&path).is_some()
+            && let Some(project) = &project
+        {
+            self.open_document(project, path, None);
         } else if crate::browser::supported_file(&path)
             && let Some(project) = &project
         {

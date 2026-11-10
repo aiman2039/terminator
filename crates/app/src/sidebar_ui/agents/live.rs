@@ -9,10 +9,11 @@ impl App {
         let rows = self.cached_live_rows();
         let query_empty = self.preferences.agents_search.trim().is_empty();
         let kind_filter = self.preferences.agents_filter.clone();
+        let any_state = self.preferences.agents_state == AgentStateFilter::All;
         let unverified = &rows.unverified;
         appearance::sidebar_scroll("agents-live").show(ui, |ui| {
             if rows.groups.is_empty() && unverified.is_empty() {
-                ui.weak(if query_empty && kind_filter.is_empty() {
+                ui.weak(if query_empty && kind_filter.is_empty() && any_state {
                     "No live agents"
                 } else {
                     "No matching agents"
@@ -195,11 +196,15 @@ impl App {
         ui.spacing_mut().interact_size.y = 22.0;
         ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
         let current = self.preferences.agents_filter.clone();
-        let label = if current.is_empty() {
+        let mut label = if current.is_empty() {
             "All agents".to_string()
         } else {
             terminator_core::agents::display_name(&current).to_string()
         };
+        let state = self.preferences.agents_state;
+        if state != AgentStateFilter::All {
+            label = format!("{label} · {}", state.label());
+        }
         let menu = appearance::text_menu_button(ui, &label, |ui| {
             let mut kinds: Vec<String> = self
                 .state
@@ -242,11 +247,33 @@ impl App {
                     ui.close();
                 }
             }
+            ui.separator();
+            self.agents_state_items(ui, state);
         })
         .response
-        .on_hover_text("Filter by agent");
+        .on_hover_text("Filter by agent and state");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "agents-filter", menu.rect);
         let _ = menu;
+    }
+
+    /// State choices of the All-live filter menu.
+    fn agents_state_items(&mut self, ui: &mut egui::Ui, current: AgentStateFilter) {
+        for state in AgentStateFilter::ALL {
+            let response = appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: state.label(),
+                icon: match state {
+                    AgentStateFilter::All => "List",
+                    AgentStateFilter::Working => "LoaderCircle",
+                    AgentStateFilter::Done => "CircleCheck",
+                },
+                shortcut: if current == state { "✓" } else { "" },
+            });
+            if response.clicked() {
+                self.preferences.agents_state = state;
+                ui.close();
+            }
+        }
     }
 }

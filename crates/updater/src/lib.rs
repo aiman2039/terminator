@@ -2,7 +2,8 @@
 //! never consult the production feed. `NSApplication`'s delegate remains winit's.
 //! The application menu always has Check for Updates…; Sparkle is not required
 //! for that item to exist. The macOS menu-bar status item lives in this crate
-//! too, because the app crate forbids unsafe.
+//! too, because the app crate forbids unsafe. On Linux the same API drives a
+//! StatusNotifierItem tray icon (`linux_tray`).
 //!
 //! `AppKit` method swizzling keeps `unsafe` in this crate. Other Terminator crates forbid it.
 #[cfg(any(target_os = "macos", test))]
@@ -55,13 +56,31 @@ pub use status_item::{
     sync_status_item, sync_status_menu, take_status_click, take_status_selection,
 };
 
+/// The badge already shows the count on macOS.
+#[cfg(target_os = "macos")]
+pub fn sync_status_waiting(_waiting: usize) {}
+
+#[cfg(target_os = "linux")]
+mod linux_tray;
+#[cfg(any(target_os = "linux", test))]
+mod tray_menu;
+#[cfg(target_os = "linux")]
+pub use linux_tray::{
+    sync_status_item, sync_status_menu, sync_status_waiting, take_status_click,
+    take_status_selection,
+};
+
 #[cfg(not(target_os = "macos"))]
 mod other {
     use eframe::egui;
     pub struct Updater;
     impl Updater {
         pub fn poll(&self) {}
-        pub fn new(_: &egui::Context) -> Self {
+        pub fn new(ctx: &egui::Context) -> Self {
+            #[cfg(target_os = "linux")]
+            super::linux_tray::set_repaint(ctx);
+            #[cfg(not(target_os = "linux"))]
+            let _ = ctx;
             Self
         }
         #[cfg(feature = "test-support")]
@@ -93,18 +112,21 @@ mod other {
 #[cfg(not(target_os = "macos"))]
 pub use other::*;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn sync_status_item(_png: &[u8], _width_pt: f32, _height_pt: f32) {}
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn sync_status_waiting(_waiting: usize) {}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn take_status_click() -> bool {
     false
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn sync_status_menu(_items: &[StatusMenuItem]) {}
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn take_status_selection() -> Option<String> {
     None
 }

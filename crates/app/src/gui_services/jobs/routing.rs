@@ -109,6 +109,7 @@ impl JobRouting {
                 Policy::ReplaceableRead,
             ),
             Job::LocalHistory(op) => crate::local_history::route(op),
+            Job::Fonts(op) => crate::appearance::fonts::route(op),
             Job::LinePreviews(..) => ("files", "line-previews".into(), Policy::ReplaceableRead),
             Job::WorktreeProbe(path, _) => (
                 "git",

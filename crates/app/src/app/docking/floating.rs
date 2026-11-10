@@ -106,7 +106,7 @@ impl App {
                 path.file_name().unwrap_or_default().to_string_lossy(),
                 if self.native_dirty(path) { " ●" } else { "" }
             ),
-            Tab::Image { path } => path
+            Tab::Image { path } | Tab::Document { path, .. } => path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
@@ -167,6 +167,7 @@ impl App {
                     Tab::Image { path } => {
                         self.visible_images.insert(path.clone());
                     }
+                    Tab::Document { path, .. } => self.tables.mark_visible(path),
                     _ => {}
                 }
             }

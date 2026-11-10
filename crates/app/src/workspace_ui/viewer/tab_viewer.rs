@@ -62,7 +62,9 @@ impl TabViewer for Viewer<'_> {
     fn tab_leading_width(&self, tab: &Tab) -> f32 {
         match tab {
             Tab::Terminal(sid) => self.app.tab_leading(sid).width(),
-            Tab::NativeEditor { .. } | Tab::Image { .. } => appearance::TERMINAL_LEADING_SLOT,
+            Tab::NativeEditor { .. } | Tab::Image { .. } | Tab::Document { .. } => {
+                appearance::TERMINAL_LEADING_SLOT
+            }
             _ => 0.0,
         }
     }
@@ -102,6 +104,7 @@ impl TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Image { path } => self.app.image_view(ui, path),
+            Tab::Document { path, kind } => self.app.document_view(ui, path, *kind),
             Tab::Browser { id, target } => {
                 let key = id.clone();
                 self.app.browser_view(ui, key, target);

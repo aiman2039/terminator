@@ -84,8 +84,11 @@ pub(crate) struct TabFace {
     pub(crate) sid: Option<String>,
     pub(crate) brand: Option<&'static str>,
     pub(crate) status: Option<(AgentState, &'static str, Color32)>,
-    /// Weak folder text after a file name that another strip tab shows.
+    /// Weak text after the label: a folder when another strip tab shows
+    /// the same file name, or a terminal program's window title.
     pub(crate) hint: Option<String>,
+    /// Unread notices from a completed agent: a dot on the status icon.
+    pub(crate) unread: bool,
 }
 
 /// Leading icons for one terminal tab, shared by the main-canvas caption,
@@ -94,6 +97,8 @@ pub(crate) struct TabFace {
 /// replaces the session-kind glyph once status exists. Plain shells keep the
 /// kind glyph so every terminal tab carries an icon.
 pub(super) struct TabLeading {
+    /// Unread notices from a completed agent: a dot on the status icon.
+    pub(super) unread: bool,
     pub(super) brand: Option<&'static str>,
     pub(super) status: Option<(&'static str, Color32, bool)>,
     pub(super) kind: Option<&'static str>,

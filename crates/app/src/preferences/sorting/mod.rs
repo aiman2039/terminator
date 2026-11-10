@@ -25,6 +25,8 @@ pub enum ProjectSort {
     NameAsc,
     NameDesc,
     LatestActivity,
+    /// The order the user dragged the projects into.
+    Manual,
 }
 
 impl ProjectSort {
@@ -33,6 +35,7 @@ impl ProjectSort {
             Self::NameAsc => "Name A → Z",
             Self::NameDesc => "Name Z → A",
             Self::LatestActivity => "Latest activity",
+            Self::Manual => "Manual (drag to reorder)",
         }
     }
 }
@@ -60,6 +63,10 @@ pub struct VisibleProjects<'a> {
     pub projects: &'a [Project],
     pub hidden: &'a HashSet<String>,
     pub sort: ProjectSort,
+    /// Pinned project ids: they come first, in the chosen order.
+    pub pinned: &'a HashSet<String>,
+    /// Project ids in drag order, for [`ProjectSort::Manual`].
+    pub manual: &'a [String],
     pub filter: &'a str,
     pub activity: &'a HashMap<String, u64>,
     pub sessions: &'a [Session],
@@ -73,6 +80,8 @@ pub fn sort_visible_projects(input: VisibleProjects<'_>) -> Vec<&Project> {
         projects,
         hidden,
         sort,
+        pinned,
+        manual,
         filter,
         activity,
         sessions,
@@ -107,7 +116,45 @@ pub fn sort_visible_projects(input: VisibleProjects<'_>) -> Vec<&Project> {
         HashMap::new()
     };
     apply_sort(sort, &mut projects, &times);
+    if sort == ProjectSort::Manual {
+        let rank: HashMap<&str, usize> = manual
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.as_str(), index))
+            .collect();
+        // Stable: projects never dragged keep their name order at the end.
+        projects
+            .sort_by_key(|project| rank.get(project.id.as_str()).copied().unwrap_or(usize::MAX));
+    }
+    // Stable: pinned projects first, each part in the chosen order.
+    projects.sort_by_key(|project| !pinned.contains(&project.id));
     projects
+}
+
+/// Moves `dragged` to the place of `target` in the manual order. The
+/// order starts from `shown` (the list as the user sees it), so the first
+/// drag keeps every other project where it was.
+pub fn reorder_projects(order: &mut Vec<String>, shown: &[String], dragged: &str, target: &str) {
+    if dragged == target {
+        return;
+    }
+    let mut next: Vec<String> = shown.to_vec();
+    for id in order.iter() {
+        if !next.contains(id) {
+            next.push(id.clone());
+        }
+    }
+    let Some(from) = next.iter().position(|id| id == dragged) else {
+        return;
+    };
+    let Some(to) = next.iter().position(|id| id == target) else {
+        return;
+    };
+    let moved = next.remove(from);
+    // `to` is the target's place before the removal: dragging down lands
+    // after the target, dragging up before it.
+    next.insert(to.min(next.len()), moved);
+    *order = next;
 }
 
 struct ProjectTimes<'a> {
@@ -120,7 +167,9 @@ struct ProjectTimes<'a> {
 
 fn apply_sort(sort: ProjectSort, projects: &mut [&Project], times: &HashMap<String, u64>) {
     match sort {
-        ProjectSort::NameAsc => projects.sort_by(|left, right| name_order(left, right)),
+        ProjectSort::NameAsc | ProjectSort::Manual => {
+            projects.sort_by(|left, right| name_order(left, right));
+        }
         ProjectSort::NameDesc => projects.sort_by(|left, right| name_order(right, left)),
         ProjectSort::LatestActivity => projects.sort_by(|left, right| {
             times

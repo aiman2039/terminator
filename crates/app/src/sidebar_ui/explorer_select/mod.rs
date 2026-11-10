@@ -312,7 +312,9 @@ impl App {
                     .map(|(_, pane)| pane)
                     .chain(group.primary.as_mut());
                 for pane in panes {
-                    if let Tab::NativeEditor { path } | Tab::Image { path } = pane
+                    if let Tab::NativeEditor { path }
+                    | Tab::Image { path }
+                    | Tab::Document { path, .. } = pane
                         && let Some(next) = moved(path, from, to)
                     {
                         *path = next;

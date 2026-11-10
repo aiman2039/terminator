@@ -77,6 +77,10 @@ pub(crate) struct BrowserHost {
     opens: Arc<Mutex<Vec<(String, String)>>>,
     navigations: Arc<Mutex<Vec<(String, BrowserTarget)>>>,
     nav: NavStates,
+    /// Page zoom per tab key, applied again when a view is rebuilt.
+    zoom: HashMap<String, f64>,
+    /// Web inspector for views built from now on.
+    devtools: bool,
 }
 
 pub(crate) struct SyncInput<'a> {
@@ -99,6 +103,44 @@ impl BrowserHost {
             opens: Arc::new(Mutex::new(Vec::new())),
             navigations: Arc::new(Mutex::new(Vec::new())),
             nav: NavStates::default(),
+            zoom: HashMap::new(),
+            devtools: false,
+        }
+    }
+
+    /// Page zoom of a tab; 1.0 until changed.
+    pub fn zoom(&self, key: &str) -> f64 {
+        self.zoom.get(key).copied().unwrap_or(1.0)
+    }
+
+    pub fn set_zoom(&mut self, key: &str, level: f64) {
+        self.zoom.insert(key.to_owned(), level);
+        if let Some(hosted) = self.views.get(key) {
+            let _ = hosted.view.zoom(level);
+        }
+    }
+
+    /// Runs a GUI-made script (find in page) in the tab's view. The page
+    /// gets no way to call back into the app.
+    pub fn run_script(&self, key: &str, script: &str) {
+        if let Some(hosted) = self.views.get(key) {
+            let _ = hosted.view.evaluate_script(script);
+        }
+    }
+
+    /// A change rebuilds the views, so the inspector setting applies at once.
+    pub fn set_devtools(&mut self, enabled: bool) {
+        if self.devtools != enabled {
+            self.devtools = enabled;
+            self.views.clear();
+        }
+    }
+
+    pub fn open_devtools(&self, key: &str) {
+        if self.devtools
+            && let Some(hosted) = self.views.get(key)
+        {
+            hosted.view.open_devtools();
         }
     }
 
@@ -115,6 +157,7 @@ impl BrowserHost {
     pub fn retain(&mut self, keys: &HashSet<String>) {
         self.views.retain(|key, _| keys.contains(key));
         self.errors.retain(|key, _| keys.contains(key));
+        self.zoom.retain(|key, _| keys.contains(key));
         self.nav.retain(|key| keys.contains(key));
     }
 
@@ -329,7 +372,11 @@ impl BrowserHost {
             nav: &self.nav,
             navigations: &self.navigations,
             opens: &self.opens,
+            devtools: self.devtools,
         })?;
+        if let Some(level) = self.zoom.get(&pane.key) {
+            let _ = view.zoom(*level);
+        }
         self.views.insert(
             pane.key.clone(),
             Hosted {
@@ -438,33 +485,5 @@ fn bounds(rect: egui::Rect) -> Rect {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{covered, egui, eviction_victim};
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn popups_hide_only_the_panes_they_overlap() {
-        let pane = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(400.0, 300.0));
-        let menu = egui::Rect::from_min_size(egui::pos2(300.0, 40.0), egui::vec2(200.0, 120.0));
-        let elsewhere = egui::Rect::from_min_size(egui::pos2(600.0, 0.0), egui::vec2(100.0, 80.0));
-        assert!(covered(pane, &[menu]));
-        assert!(!covered(pane, &[elsewhere]));
-        assert!(!covered(pane, &[]));
-    }
-
-    #[test]
-    fn eviction_only_removes_hidden_views() {
-        let t0 = Instant::now();
-        let t1 = t0 + Duration::from_secs(1);
-        let t2 = t1 + Duration::from_secs(1);
-        let mounted = [("keep", t0), ("old", t1), ("newer", t2)];
-        assert_eq!(
-            eviction_victim(mounted.iter().copied(), &["keep", "newer"]).as_deref(),
-            Some("old")
-        );
-        assert_eq!(
-            eviction_victim(mounted.iter().copied(), &["keep", "old", "newer"]).as_deref(),
-            None
-        );
-    }
-}
+#[path = "host_tests.rs"]
+mod tests;

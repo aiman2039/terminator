@@ -20,6 +20,8 @@ impl App {
                 self.player_status_row(ui);
             }
             self.notification_status_badge(ui);
+            #[cfg(any(not(target_os = "macos"), test))]
+            self.update_status_chip(ui);
             let flow_end = ui.cursor().left();
             // Single right-aligned block (see status_right_end): resource
             // readout, sidebar-height toggle, then the strip collapse.
@@ -203,15 +205,14 @@ impl App {
     }
 
     fn running_sessions_label(&self, ui: &mut egui::Ui) {
-        ui.weak(format!(
-            "{} sessions running",
+        ui.weak(running_sessions_text(
             self.state
                 .sessions
                 .iter()
                 .filter(|s| {
                     s.lifecycle.live() && daemon_connection::session_owner_available(&self.state, s)
                 })
-                .count()
+                .count(),
         ));
     }
 
@@ -236,14 +237,46 @@ impl App {
             let _ = self.jobs.send(Job::Browser(pr.url));
         }
         for port in metadata.ports.iter().take(3) {
-            if ui
+            let link = ui
                 .link(format!(":{}", port.port))
-                .on_hover_text(&port.address)
-                .clicked()
-            {
+                .on_hover_text(&port.address);
+            if link.clicked() {
                 let _ = self.jobs.send(Job::Browser(port.url()));
             }
+            self.port_menu(&link, &port.url());
         }
+    }
+
+    /// Right click on a port link: a Browser tab or the system browser.
+    fn port_menu(&mut self, link: &egui::Response, url: &str) {
+        appearance::context_menu(link, |ui| {
+            let project = self.selected.clone();
+            if let Some(project) = project
+                && appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: "Open in Browser tab",
+                    icon: "Globe",
+                    shortcut: "",
+                })
+                .clicked()
+            {
+                if let Err(error) = self.open_browser_url(&project, url, None) {
+                    self.error.set(format!("Could not open {url}: {error:#}"));
+                }
+                ui.close();
+            }
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Open in system browser",
+                icon: "ExternalLink",
+                shortcut: "",
+            })
+            .clicked()
+            {
+                let _ = self.jobs.send(Job::Browser(url.to_owned()));
+                ui.close();
+            }
+        });
     }
 
     /// Status-bar context after the branch block: breadcrumb (project ›
@@ -291,7 +324,7 @@ impl App {
     /// The active file relative to the project, or the terminal's label.
     fn breadcrumb_leaf(&self, project: &Project, pane: Option<&Tab>) -> Option<String> {
         match pane {
-            Some(Tab::NativeEditor { path } | Tab::Image { path }) => {
+            Some(Tab::NativeEditor { path } | Tab::Image { path } | Tab::Document { path, .. }) => {
                 Some(self.remote_file_label(path).unwrap_or_else(|| {
                     path.strip_prefix(&project.path).map_or_else(
                         |_| path.display().to_string(),
@@ -363,4 +396,18 @@ impl App {
             diagnostics::record(ui.ctx(), "status-lsp", _lsp.rect);
         }
     }
+}
+
+/// "1 session running", "2 sessions running".
+fn running_sessions_text(count: usize) -> String {
+    let noun = if count == 1 { "session" } else { "sessions" };
+    format!("{count} {noun} running")
+}
+
+#[cfg(test)]
+#[test]
+fn running_sessions_text_uses_singular_for_one() {
+    assert_eq!(running_sessions_text(0), "0 sessions running");
+    assert_eq!(running_sessions_text(1), "1 session running");
+    assert_eq!(running_sessions_text(2), "2 sessions running");
 }

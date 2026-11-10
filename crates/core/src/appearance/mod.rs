@@ -38,6 +38,42 @@ pub struct AppearanceConfig {
     pub density: Density,
     #[serde(flatten)]
     pub editor: crate::editor_prefs::EditorPrefs,
+    #[serde(flatten)]
+    pub fonts: FontPrefs,
+}
+
+/// System font choices for terminal and editor text. `None` keeps the
+/// bundled `JetBrains Mono` chain; a missing key is never written.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FontPrefs {
+    /// Monospace family placed before `JetBrains Mono`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_font: Option<String>,
+    /// Family appended to the fallback chain for CJK text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cjk_font: Option<String>,
+}
+
+impl FontPrefs {
+    /// Optional keys; saving removes each one that is unset.
+    pub const KEYS: [&'static str; 2] = ["terminal_font", "cjk_font"];
+
+    /// The terminal family, or `None` when unset or blank.
+    #[must_use]
+    pub fn terminal(&self) -> Option<&str> {
+        Self::named(self.terminal_font.as_deref())
+    }
+
+    /// The CJK fallback family, or `None` when unset or blank.
+    #[must_use]
+    pub fn cjk(&self) -> Option<&str> {
+        Self::named(self.cjk_font.as_deref())
+    }
+
+    fn named(value: Option<&str>) -> Option<&str> {
+        value.map(str::trim).filter(|name| !name.is_empty())
+    }
 }
 impl Default for AppearanceConfig {
     fn default() -> Self {
@@ -242,6 +278,11 @@ impl AppearanceFile {
                 *value.decor_mut() = old.decor().clone();
             }
             table.insert(key, new);
+        }
+        for key in FontPrefs::KEYS {
+            if !values.contains_key(key) {
+                table.remove(key);
+            }
         }
         fs::create_dir_all(path.parent().ok_or_else(|| AppearanceError::NoParent {
             path: path.to_path_buf(),

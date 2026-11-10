@@ -102,6 +102,8 @@ impl App {
         }
         if ui.button("Cancel").clicked() {
             self.close_session = None;
+            // Cancel stops the rest of a bulk close too.
+            self.session_selection.close_queue.clear();
         }
     }
 

@@ -3,6 +3,7 @@ pub(super) struct WorkspaceTabMenu {
     pub(super) toggle_pin: bool,
     pub(super) close: bool,
     pub(super) close_all: bool,
+    pub(super) close_editors: bool,
     pub(super) close_left: bool,
     pub(super) close_right: bool,
     pub(super) add_left: bool,

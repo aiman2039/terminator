@@ -38,6 +38,10 @@ pub(crate) struct Preview {
     pub(super) cache_scroll_height: f32,
     /// Painted heights of the document's blocks (virtualized paint).
     pub(super) block_heights: super::blocks::BlockHeights,
+    /// Inline diagram shown alone with pan/zoom, by index.
+    pub(super) zoomed: Option<usize>,
+    /// Pan/zoom of the diagram view.
+    pub(super) diagram_scene: egui::Rect,
 }
 impl Default for Preview {
     fn default() -> Self {
@@ -54,6 +58,8 @@ impl Default for Preview {
             scroll_fraction: 0.0,
             cache_scroll_height: 0.0,
             block_heights: super::blocks::BlockHeights::default(),
+            zoomed: None,
+            diagram_scene: egui::Rect::NOTHING,
         }
     }
 }
@@ -282,6 +288,13 @@ impl Previews {
     pub fn refresh(&mut self, ctx: &egui::Context) {
         self.refresh = true;
         self.images.clear(ctx);
+    }
+    /// Prepare every document again, so diagrams take the new pane colour.
+    pub fn restyle_diagrams(&mut self) {
+        self.refresh = true;
+        for preview in self.entries.values_mut() {
+            preview.snapshot_source = None;
+        }
     }
     pub fn end_frame(&mut self, ctx: &egui::Context) {
         let previous_count = self.entries.len();

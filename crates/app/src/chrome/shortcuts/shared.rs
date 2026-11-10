@@ -1,10 +1,11 @@
-//! Chords two actions share by keyboard focus: a terminal with the
+//! Chords two actions may share by keyboard focus: a terminal with the
 //! keyboard keeps the chord, and the other action takes it everywhere
-//! else. `JetBrains` Replace in Path is Cmd+Shift+R (Ctrl+Shift+R on
-//! Linux), the Rename terminal default too. Find in Path is Cmd+Shift+F;
-//! on Linux, stored `command` already means Ctrl+Shift, so it is Find in
-//! terminal's Ctrl+Shift+F there. Each action can still be rebound alone;
-//! then both chords work everywhere, as before.
+//! else. `JetBrains` Find in Path is Cmd+Shift+F; on Linux, stored
+//! `command` already means Ctrl+Shift, so it is Find in terminal's
+//! Ctrl+Shift+F there. Rename terminal and Replace in Files (Cmd+Shift+R)
+//! no longer share a default, but a saved keymap may still bind both to
+//! one chord. Each action can still be rebound alone; then both chords
+//! work everywhere.
 use super::{Action, binding, parse};
 use std::collections::BTreeMap;
 
@@ -53,7 +54,8 @@ fn same_chord(map: &BTreeMap<String, String>, a: Action, b: Action) -> bool {
 /// Give each action the map lacks its default chord. A default chord the
 /// map already gives another action stays unbound: a new action never
 /// takes a chord the user picked. A shared partner on its own default
-/// chord shares it instead.
+/// chord, or on an old default the keymap migration moves, shares it
+/// instead.
 pub fn fill_defaults(map: &mut BTreeMap<String, String>) {
     let defaults = terminator_core::Settings::default().keybindings;
     for (action, value) in &defaults {
@@ -64,9 +66,10 @@ pub fn fill_defaults(map: &mut BTreeMap<String, String>) {
         let taken = chord.is_some()
             && map.iter().any(|(other, bound)| {
                 let sharing = partners(action, other)
-                    && defaults
+                    && (defaults
                         .get(other)
-                        .is_some_and(|own| parse(own) == parse(bound));
+                        .is_some_and(|own| parse(own) == parse(bound))
+                        || super::migrate::old_default(other, bound));
                 !sharing && parse(bound) == chord
             });
         let value = if taken { String::new() } else { value.clone() };

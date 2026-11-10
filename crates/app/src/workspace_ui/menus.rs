@@ -39,6 +39,7 @@ impl App {
             self.open_new_browser_tab(None);
             ui.close();
         }
+        self.agent_launcher_menu_items(ui);
         let profiles = self.state.vnc_profiles.clone();
         if !profiles.is_empty() {
             ui.separator();
@@ -82,6 +83,7 @@ impl App {
             label: "Close all tabs…",
             icon: "X",
         });
+        let close_editors = click_menu_item(ui, "Close editor tabs…", "FileCode");
         let close_left = click_enabled_menu_item(ClickEnabledMenuItemInput {
             ui,
             enabled: index > 0,
@@ -101,6 +103,7 @@ impl App {
             toggle_pin,
             close,
             close_all,
+            close_editors,
             close_left,
             close_right,
             add_left,

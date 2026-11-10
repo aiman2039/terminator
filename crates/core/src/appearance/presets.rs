@@ -59,6 +59,7 @@ impl AppearanceConfig {
             pane_divider_width: 1.0,
             density: Density::Comfortable,
             editor: crate::editor_prefs::EditorPrefs::default(),
+            fonts: super::FontPrefs::default(),
         }
     }
     /// Pre-IDE palette, kept as a selectable preset.

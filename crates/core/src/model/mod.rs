@@ -308,6 +308,11 @@ pub struct State {
     /// lifecycle source; absent on older daemons.
     #[serde(default)]
     pub presence: Vec<agents::TerminalPresence>,
+    /// Last OSC 0/2 window title per live session id
+    /// (`terminal_title::CAPABILITY`). Display only: never a lifecycle,
+    /// notice or notification source. Live-only; absent on older daemons.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub terminal_titles: std::collections::BTreeMap<String, String>,
     pub settings: Settings,
     pub recent_events: Vec<String>,
     pub selected_project: Option<String>,
@@ -357,6 +362,7 @@ impl State {
     pub fn compact_history(&mut self) {
         self.recent_events.clear();
         self.presence.clear();
+        self.terminal_titles.clear();
         let len = self.notifications.len();
         if len > MAX_NOTIFICATIONS {
             let cutoff = len.saturating_sub(MAX_NOTIFICATIONS);

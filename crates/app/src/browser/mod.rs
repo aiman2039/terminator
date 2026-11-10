@@ -1,4 +1,5 @@
 //! GUI-owned browser tab identity. The native view is mounted later.
+pub(crate) mod extras;
 pub(crate) mod favicon;
 #[cfg(feature = "webview")]
 pub(crate) mod host;
@@ -44,12 +45,27 @@ impl BrowserTarget {
 }
 
 /// Address bar input: an http(s) URL, or a bare host such as `example.com`
-/// (https) or `localhost:3000` (http). Other text is an error to show.
-pub(crate) fn address_target(input: &str) -> Result<BrowserTarget, &'static str> {
+/// (https) or `localhost:3000` (http). Other text searches with `search`
+/// (an https template, see [`extras::search_url`]). Empty text and URLs
+/// with another scheme are an error to show.
+pub(crate) fn address_target(input: &str, search: &str) -> Result<BrowserTarget, &'static str> {
+    const ERROR: &str = "Enter a web address, such as example.com or https://example.com.";
     let input = input.trim();
     if let Ok(target) = BrowserTarget::from_http_url(input) {
         return Ok(target);
     }
+    if let Some(target) = host_target(input) {
+        return Ok(target);
+    }
+    // `mailto:x` or `javascript:x` has a scheme: never a search.
+    let other_scheme = !input.contains(char::is_whitespace) && url::Url::parse(input).is_ok();
+    if input.is_empty() || other_scheme || input.contains("://") {
+        return Err(ERROR);
+    }
+    extras::search_target(search, input).ok_or(ERROR)
+}
+
+fn host_target(input: &str) -> Option<BrowserTarget> {
     let host = input.split(['/', '?', '#']).next().unwrap_or_default();
     let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
     let local = matches!(name, "localhost" | "127.0.0.1");
@@ -60,7 +76,6 @@ pub(crate) fn address_target(input: &str) -> Result<BrowserTarget, &'static str>
     host_like
         .then(|| BrowserTarget::from_http_url(&format!("{scheme}://{input}")).ok())
         .flatten()
-        .ok_or("Enter a web address, such as example.com or https://example.com.")
 }
 
 pub(crate) fn supported_file(path: &Path) -> bool {
@@ -268,7 +283,8 @@ mod tests {
 
     #[test]
     fn address_bar_completes_bare_hosts_and_rejects_other_text() {
-        let url = |input| match super::address_target(input) {
+        let search = super::extras::DEFAULT_SEARCH_URL;
+        let url = |input| match super::address_target(input, search) {
             Ok(BrowserTarget::Url(url)) => Some(url),
             _ => None,
         };
@@ -286,15 +302,40 @@ mod tests {
             Some("http://a.example/")
         );
         for rejected in [
-            "rust docs",
-            "word",
             "",
             "file:///etc/passwd",
             "javascript:alert(1)",
-            "user@example.com",
+            "mailto:a@b.c",
         ] {
-            assert!(super::address_target(rejected).is_err(), "{rejected}");
+            assert!(
+                super::address_target(rejected, search).is_err(),
+                "{rejected}"
+            );
         }
+    }
+
+    #[test]
+    fn address_bar_searches_text_that_is_not_an_address() {
+        let search = "https://search.example/?q=%s";
+        for (input, expected) in [
+            ("rust docs", "https://search.example/?q=rust+docs"),
+            ("word", "https://search.example/?q=word"),
+            (
+                "user@example.com",
+                "https://search.example/?q=user%40example.com",
+            ),
+        ] {
+            assert_eq!(
+                super::address_target(input, search),
+                Ok(BrowserTarget::Url(expected.into())),
+                "{input}"
+            );
+        }
+        // An unusable template falls back to the default search.
+        assert_eq!(
+            super::address_target("word", "http://insecure/?q=%s"),
+            Ok(BrowserTarget::Url("https://duckduckgo.com/?q=word".into()))
+        );
     }
 
     #[test]

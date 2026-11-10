@@ -360,6 +360,7 @@ impl App {
                 .any(|s| &s.id == sid && s.lifecycle.live()),
             Tab::Diff { .. }
             | Tab::Image { .. }
+            | Tab::Document { .. }
             | Tab::Browser { .. }
             | Tab::Player
             | Tab::NativeEditor { .. }

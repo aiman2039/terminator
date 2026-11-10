@@ -1,5 +1,6 @@
 //! Pieces of the terminal pane bar: slots, icons, title, and buttons.
 use super::*;
+use crate::appearance::{paint_focus, paint_unread_dot};
 
 /// Branch label and button tooltips.
 pub(super) struct BarTips<'a> {
@@ -148,6 +149,7 @@ pub(super) struct LeadingIcons<'a> {
     pub(super) spin: bool,
     pub(super) kind: Option<&'a str>,
     pub(super) title_tint: Option<Color32>,
+    pub(super) unread: bool,
 }
 
 /// Leading identity icons mirror the workspace strip: stable brand plus
@@ -165,26 +167,32 @@ pub(super) fn paint_leading_icons(
         spin,
         kind,
         title_tint,
+        unread,
     } = icons;
     let mut lead = rect.left() + 8.0;
     let mut paint_lead = |ui: &mut egui::Ui, icon: &str, tint: Color32, spin: bool| {
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(lead + 6.5, rect.center().y),
+            egui::vec2(13.0, 13.0),
+        );
         paint_status_icon(PaintStatusIconInput {
             ui,
-            rect: egui::Rect::from_center_size(
-                egui::pos2(lead + 6.5, rect.center().y),
-                egui::vec2(13.0, 13.0),
-            ),
+            rect: icon_rect,
             icon,
             tint,
             spin,
         });
         lead += TERMINAL_LEADING_SLOT;
+        icon_rect
     };
     if let Some(brand) = brand {
         paint_lead(ui, brand, icon_color(), false);
     }
     if let Some(icon) = status_icon {
-        paint_lead(ui, icon, status_tint.unwrap_or(icon_color()), spin);
+        let icon_rect = paint_lead(ui, icon, status_tint.unwrap_or(icon_color()), spin);
+        if unread {
+            paint_unread_dot(ui, icon_rect);
+        }
     } else if let Some(kind) = kind {
         paint_lead(ui, kind, title_tint.unwrap_or(icon_color()), false);
     }
@@ -196,6 +204,8 @@ pub(super) struct BarTitle<'a> {
     pub(super) git_left: f32,
     pub(super) lead: f32,
     pub(super) title: &'a str,
+    /// Weak text after the title, cut first when room runs out.
+    pub(super) subtitle: Option<&'a str>,
     pub(super) tint: Color32,
     pub(super) status: Option<Color32>,
 }
@@ -207,6 +217,7 @@ pub(super) fn paint_title(ui: &egui::Ui, input: BarTitle<'_>) {
         git_left,
         lead,
         title,
+        subtitle,
         tint,
         status,
     } = input;
@@ -218,6 +229,16 @@ pub(super) fn paint_title(ui: &egui::Ui, input: BarTitle<'_>) {
         tint,
         title_width,
     );
+    if let Some(subtitle) = subtitle {
+        job.append(
+            subtitle,
+            8.0,
+            egui::TextFormat::simple(
+                FontId::proportional(FONT_SMALL),
+                ui.visuals().weak_text_color(),
+            ),
+        );
+    }
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     let galley = ui.painter().layout_job(job);
@@ -294,4 +315,80 @@ pub(super) fn paint_branch(ui: &egui::Ui, git_rect: egui::Rect, branch: &str) {
         galley,
         ui.visuals().weak_text_color(),
     );
+}
+
+const RESUME_LABEL: &str = "Resume";
+/// The chip's label when presence could not confirm the agent stopped.
+const RESUME_UNSURE_LABEL: &str = "Resume ?";
+
+const fn resume_label(unsure: bool) -> &'static str {
+    if unsure {
+        RESUME_UNSURE_LABEL
+    } else {
+        RESUME_LABEL
+    }
+}
+
+/// The Resume chip sits just left of the Git button.
+pub(super) fn resume_chip_rect(ui: &egui::Ui, git: egui::Rect, unsure: bool) -> egui::Rect {
+    let text = ui
+        .painter()
+        .layout_no_wrap(
+            resume_label(unsure).into(),
+            FontId::proportional(FONT_SMALL),
+            icon_color(),
+        )
+        .size()
+        .x;
+    let width = 6.0 + super::super::TOOLBAR_ICON + 4.0 + text + 8.0;
+    egui::Rect::from_min_max(
+        egui::pos2(git.left() - 4.0 - width, git.top()),
+        egui::pos2(git.left() - 4.0, git.bottom()),
+    )
+}
+
+/// An outlined `▷ Resume` chip (`▷ Resume ?` when unsure). Only a click
+/// acts on it.
+pub(super) fn resume_chip(
+    ui: &egui::Ui,
+    bar_id: egui::Id,
+    rect: egui::Rect,
+    chip: ResumeChip<'_>,
+) -> egui::Response {
+    let label = resume_label(chip.unsure);
+    let response = ui
+        .interact(rect, bar_id.with("resume-chip"), egui::Sense::click())
+        .on_hover_text(chip.tip)
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    let visuals = ui.visuals();
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, WIDGET_RADIUS, visuals.widgets.hovered.bg_fill);
+    }
+    ui.painter().rect_stroke(
+        rect,
+        WIDGET_RADIUS,
+        visuals.widgets.inactive.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(
+            rect.left() + 6.0 + super::super::TOOLBAR_ICON / 2.0,
+            rect.center().y,
+        ),
+        egui::Vec2::splat(super::super::TOOLBAR_ICON),
+    );
+    egui::Image::new(crate::icons::source("Play"))
+        .tint(icon_color())
+        .paint_at(ui, icon);
+    ui.painter().text(
+        egui::pos2(icon.right() + 4.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(FONT_SMALL),
+        visuals.text_color(),
+    );
+    paint_focus(ui, &response);
+    response
 }

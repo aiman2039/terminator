@@ -5,7 +5,7 @@ mod model;
 mod query;
 mod views;
 
-pub(crate) use layout::{AddAtFromInput, MovePaneToSplitInput};
+pub(crate) use layout::{AddAtFromInput, MovePaneToSplitInput, TILE_MAX};
 pub(crate) use model::Workspace;
 pub(crate) use model::WorkspaceTab;
 pub(crate) use model::group_display_name;

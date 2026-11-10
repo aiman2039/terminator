@@ -106,3 +106,48 @@ fn high_contrast_and_density_round_trip() {
     assert_eq!(compact.accent, "#3871E1");
     assert!(compact.selection.starts_with('#'));
 }
+#[test]
+fn config_without_font_keys_keeps_bundled_font_and_writes_no_key() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("config.toml");
+    fs::write(&p, "[appearance]\ntext = '#FFFFFF'\n").unwrap();
+    let file = AppearanceFile::load(&p).unwrap();
+    assert_eq!(file.config.fonts, FontPrefs::default());
+    assert_eq!(file.config.fonts.terminal(), None);
+    let saved = AppearanceFile::save(&p, &file.config, &file.source).unwrap();
+    assert!(!saved.source.contains("terminal_font"));
+    assert!(!saved.source.contains("cjk_font"));
+}
+#[test]
+fn font_choice_round_trips_and_clearing_removes_the_key() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("config.toml");
+    fs::write(&p, "[appearance]\nother = 1 # keep\n").unwrap();
+    let mut file = AppearanceFile::load(&p).unwrap();
+    file.config.fonts.terminal_font = Some("Hack Nerd Font Mono".into());
+    file.config.fonts.cjk_font = Some("PingFang SC".into());
+    let saved = AppearanceFile::save(&p, &file.config, &file.source).unwrap();
+    assert!(
+        saved
+            .source
+            .contains("terminal_font = \"Hack Nerd Font Mono\"")
+    );
+    assert!(saved.source.contains("# keep"));
+    let again = AppearanceFile::load(&p).unwrap();
+    assert_eq!(again.config.fonts.terminal(), Some("Hack Nerd Font Mono"));
+    assert_eq!(again.config.fonts.cjk(), Some("PingFang SC"));
+    let mut cleared = again.config.clone();
+    cleared.fonts = FontPrefs::default();
+    let saved = AppearanceFile::save(&p, &cleared, &again.source).unwrap();
+    assert!(!saved.source.contains("terminal_font"));
+    assert!(!saved.source.contains("cjk_font"));
+    assert!(saved.source.contains("other = 1"));
+}
+#[test]
+fn blank_font_name_means_bundled() {
+    let prefs = FontPrefs {
+        terminal_font: Some("  ".into()),
+        cjk_font: None,
+    };
+    assert_eq!(prefs.terminal(), None);
+}

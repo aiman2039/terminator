@@ -139,6 +139,12 @@ impl Viewer<'_> {
             );
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        // An OSC 8 link shows other text than its target: show the URI.
+        if target.hyperlink && self.app.hover_popup.is_none() {
+            let _ = response
+                .clone()
+                .on_hover_text_at_pointer(resolved.display());
+        }
         if self.app.hover_popup.is_none()
             && !self.app.text_input_focused(ui.ctx())
             && (response.clicked() || frame.modifier_pressed)

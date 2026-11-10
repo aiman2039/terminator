@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 mod cleanup;
 mod moves;
+mod tile;
+pub(crate) use tile::TILE_MAX;
 
 pub struct AddAtFromInput<'a> {
     pub index: usize,
@@ -68,7 +70,7 @@ impl Workspace {
             let mut workspace: Self =
                 serde_json::from_value(value).context("Invalid project tabs")?;
             ensure!(
-                matches!(workspace.version, 2..=12),
+                matches!(workspace.version, 2..=13),
                 "Unsupported project tab layout version"
             );
             if contains_browser(&workspace) {

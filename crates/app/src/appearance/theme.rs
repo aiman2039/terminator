@@ -153,6 +153,13 @@ pub fn dock_style(ui_style: &egui::Style, theme: &AppearanceConfig) -> egui_dock
 }
 
 pub fn install(ctx: &egui::Context) {
+    ctx.set_fonts(bundled_fonts());
+    egui_extras::install_image_loaders(ctx);
+    apply(ctx, &AppearanceConfig::default());
+}
+
+/// The bundled font chain: Inter, `JetBrains Mono`, then the Noto fallbacks.
+pub(super) fn bundled_fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     for (name, bytes, family) in [
         (
@@ -212,9 +219,7 @@ pub fn install(ctx: &egui::Context) {
         ),
         terminal.into_iter().chain([semibold()]),
     );
-    ctx.set_fonts(fonts);
-    egui_extras::install_image_loaders(ctx);
-    apply(ctx, &AppearanceConfig::default());
+    fonts
 }
 /// Append a font as the last fallback of each family.
 fn push_fallback(

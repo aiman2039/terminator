@@ -23,19 +23,21 @@ pub(crate) enum SettingsSection {
     Notifications,
     History,
     Shortcuts,
+    Agents,
     AgentHooks,
     Ssh,
     Updates,
 }
 
 impl SettingsSection {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Appearance,
         Self::Terminal,
         Self::Editor,
         Self::Notifications,
         Self::History,
         Self::Shortcuts,
+        Self::Agents,
         Self::AgentHooks,
         Self::Ssh,
         Self::Updates,
@@ -49,6 +51,7 @@ impl SettingsSection {
             Self::Notifications => "Notifications",
             Self::History => "History",
             Self::Shortcuts => "Shortcuts",
+            Self::Agents => "Agents",
             Self::AgentHooks => "Agent Hooks",
             Self::Ssh => "SSH",
             Self::Updates => "Updates",
@@ -63,6 +66,7 @@ impl SettingsSection {
             Self::Notifications => "PanelsTopLeft",
             Self::History => "FileText",
             Self::Shortcuts => "SquareDashed",
+            Self::Agents => "AgentGeneric",
             Self::AgentHooks => "GitBranch",
             Self::Ssh => "Globe",
         }
@@ -79,6 +83,7 @@ impl SettingsSection {
             Self::Notifications => "alert os desktop dismiss sound ntfy channel machine test",
             Self::History => "days mib scrollback disk",
             Self::Shortcuts => "keymap command shortcut chord palette",
+            Self::Agents => "preset launcher program arguments new agent session terminal",
             Self::AgentHooks => "claude codex opencode muse grok cursor install hook test hello",
             Self::Ssh => "ssh remote host keep-alive keepalive reuse connection timeout",
             Self::Updates => "sparkle install repair session service",

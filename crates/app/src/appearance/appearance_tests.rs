@@ -275,6 +275,9 @@ mod row_tests {
                                 status_tint: None,
                                 spin: false,
                                 kind: None,
+                                unread: false,
+                                subtitle: None,
+                                resume_tip: None,
                             },
                         );
                     }
@@ -336,6 +339,9 @@ mod row_tests {
                         status_tint: Some(Color32::GREEN),
                         spin: false,
                         kind,
+                        unread: false,
+                        subtitle: None,
+                        resume_tip: None,
                     },
                 );
             });

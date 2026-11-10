@@ -1,6 +1,11 @@
 use super::super::super::*;
-use super::super::tabs::{TabFace, TabLeading};
+use super::super::tabs::{TabFace, TabLeading, tab_tooltip};
 use crate::workspace::WorkspaceTab;
+
+/// A completed agent left notices the user has not read yet.
+pub(in super::super) fn unread_completion(lifecycle: Option<AgentState>, unread: usize) -> bool {
+    unread > 0 && lifecycle == Some(AgentState::Completed)
+}
 
 impl TabFace {
     /// A face with no session, brand, or status: just a label and icon.
@@ -13,6 +18,7 @@ impl TabFace {
             brand: None,
             status: None,
             hint: None,
+            unread: false,
         }
     }
 
@@ -58,7 +64,7 @@ impl App {
         match primary {
             Some(Tab::Terminal(sid)) => self.terminal_tab_face(sid),
             Some(Tab::Diff { path, .. }) => TabFace::plain(TabFace::file_name(path), "FileDiff"),
-            Some(Tab::Image { path } | Tab::NativeEditor { path }) => {
+            Some(Tab::Image { path } | Tab::NativeEditor { path } | Tab::Document { path, .. }) => {
                 TabFace::plain(TabFace::file_name(path), icons::file_icon(path))
             }
             Some(Tab::Browser { id, target }) => TabFace {
@@ -98,6 +104,7 @@ impl App {
                 brand: None,
                 status: self.vnc_tab_status(session),
                 hint: None,
+                unread: false,
             },
             Some(Tab::RemoteApp { title, .. }) => {
                 TabFace::plain(crate::remote_apps_ui::tab_title(title), "AppWindow")
@@ -126,7 +133,9 @@ impl App {
                             crate::sidebar_ui::state_color(lifecycle, &self.theme),
                         )
                     }),
-                    hint: None,
+                    // The program's window title reads as a weak subtitle.
+                    hint: self.terminal_program_title(sid).map(str::to_owned),
+                    unread: unread_completion(presented.lifecycle, presented.unread),
                 }
             })
             .unwrap_or(TabFace::plain("Terminal".into(), "Terminal"))
@@ -186,6 +195,7 @@ impl App {
             )
         });
         TabLeading {
+            unread: unread_completion(presented.lifecycle, presented.unread),
             brand: presented.brand_icon,
             kind: status
                 .is_none()
@@ -193,5 +203,19 @@ impl App {
                 .flatten(),
             status,
         }
+    }
+
+    /// Strip tab tooltip head: the label, the session folder, then the
+    /// program's window title.
+    pub(super) fn strip_tooltip_head(&self, face: &TabFace) -> String {
+        let session = face
+            .sid
+            .as_ref()
+            .and_then(|sid| self.state.sessions.iter().find(|s| &s.id == sid));
+        let mut tooltip = tab_tooltip(&face.label, session.map(|s| s.cwd.as_path()));
+        if let Some(title) = session.and_then(|s| self.terminal_program_title(&s.id)) {
+            tooltip.push_str(&format!("\n{title}"));
+        }
+        tooltip
     }
 }

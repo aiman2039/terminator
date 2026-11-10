@@ -1,4 +1,7 @@
+mod agents;
+mod browser;
 mod editor;
+mod fonts;
 mod hooks;
 mod notifications;
 mod ssh;
@@ -32,6 +35,7 @@ impl App {
                     SettingsSection::Notifications => self.notification_settings(ui),
                     SettingsSection::History => self.history_settings(ui),
                     SettingsSection::Shortcuts => self.shortcut_settings(ui),
+                    SettingsSection::Agents => self.agent_settings(ui),
                     SettingsSection::AgentHooks => self.hook_settings(ui),
                     SettingsSection::Ssh => self.ssh_settings(ui),
                     SettingsSection::Updates => {
@@ -39,8 +43,11 @@ impl App {
                         ui.add_space(12.0);
                         ui.separator();
                         #[cfg(any(not(target_os = "macos"), test))]
-                        self.windows_updates
-                            .settings(ui, &mut self.settings_draft.automatic_update_checks);
+                        self.windows_updates.settings(
+                            ui,
+                            &mut self.settings_draft.automatic_update_checks,
+                            &mut self.preferences.skipped_update_version,
+                        );
                         #[cfg(target_os = "macos")]
                         self.updater.settings(ui);
                     }

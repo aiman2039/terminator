@@ -102,6 +102,10 @@ impl App {
             Update::OpenImage(project, path, after) => {
                 self.open_gui_tab(project, Tab::Image { path }, after);
             }
+            Update::OpenDocument(project, tab, after) => self.open_gui_tab(project, tab, after),
+            Update::Table(path, generation, result) => {
+                self.tables.loaded(&path, generation, result);
+            }
             Update::FocusViewport(viewport) => Self::handle_focus_viewport(ctx, viewport),
             Update::RevealFileSession(session, project) => {
                 self.handle_reveal_file_session(ctx, session, project);
@@ -150,6 +154,7 @@ impl App {
             ),
             Update::TestPickerClosed => self.picker.close(),
             Update::HookStatus(status) => self.hook_status = status,
+            Update::InstalledAgents(installed) => self.installed_agents = installed,
             Update::Appearance(file) => self.handle_appearance(ctx, *file),
             Update::Activation(notice) => self.handle_activation(ctx, notice),
             Update::AttentionMigrated(result) => self.handle_attention_migrated(result),
@@ -224,6 +229,7 @@ impl App {
             Update::Workspace(root, op, result) => self.handle_workspace(&root, op, result),
             Update::GitView(key, view) => self.handle_git_view(&key, view),
             Update::LocalHistory(reply) => self.handle_local_history(reply),
+            Update::Fonts(reply) => self.handle_fonts(ctx, reply),
             Update::WorktreeProbe(draft, git) => self.apply_worktree_probe(draft, git),
             Update::CommitFiles(hash, files) => {
                 self.commit_files.insert(hash, Some(files));
@@ -259,21 +265,41 @@ impl App {
         }
     }
 
-    /// Moves saved bindings still at an old default once
-    /// ([`shortcuts::migrate_moved_defaults`]). The marker is set when the
-    /// daemon's bindings need no move, so a lost save retries at the next
-    /// launch. The save waits for the older settings migrations and shares
-    /// their one-save-per-launch flag. It also skips a launch that ran the
-    /// Attention migration: this save copies the last published settings,
-    /// so it must not race a save made from a fresh snapshot.
+    /// Moves saved bindings still at an old default once per batch
+    /// ([`shortcuts::migrate_moved_defaults`]). A batch's marker is set when
+    /// the daemon's bindings need no move, so a lost save retries at the
+    /// next launch. The save waits for the older settings migrations and
+    /// shares their one-save-per-launch flag. It also skips a launch that
+    /// ran the Attention migration: this save copies the last published
+    /// settings, so it must not race a save made from a fresh snapshot.
     pub(crate) fn migrate_keymap(&mut self) {
-        if !self.preferences_writable || self.preferences.keymap_migrated {
+        if !self.preferences_writable {
             return;
         }
         let mut settings = self.state.settings.clone();
-        if !shortcuts::migrate_moved_defaults(&mut settings.keybindings) {
-            self.preferences.keymap_migrated = true;
-        } else if self.preferences.typography_migrated
+        let mut changed = false;
+        let batches = [
+            (
+                shortcuts::CMD_E_MOVES,
+                &mut self.preferences.keymap_migrated,
+            ),
+            (
+                shortcuts::RENAME_TERMINAL_MOVES,
+                &mut self.preferences.keymap_rename_migrated,
+            ),
+        ];
+        for (moves, done) in batches {
+            if *done {
+                continue;
+            }
+            if shortcuts::migrate_moved_defaults(&mut settings.keybindings, moves) {
+                changed = true;
+            } else {
+                *done = true;
+            }
+        }
+        if changed
+            && self.preferences.typography_migrated
             && self.preferences.attention_migrated
             && self.attention_requested.is_none()
             && !self.migration_requested
