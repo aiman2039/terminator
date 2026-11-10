@@ -382,9 +382,13 @@ impl App {
                 .state
                 .remote_projects
                 .iter()
-                .any(|p| p.id != project.id && p.same_connection(project))
+                .any(|p| p.id != project.id && p.same_variant(project))
         {
-            return Err("Another SSH host already uses this host and path.".into());
+            return Err(
+                "Another SSH host already uses this host, path and terminal settings. \
+                 Change Mosh or a command to save a variant."
+                    .into(),
+            );
         }
         Ok(())
     }
