@@ -2,7 +2,7 @@ use super::super::blocks::BlockHeights;
 use super::super::html::{Document, Link, usize_from_f32};
 use super::{Preview, ShowSyncedInput};
 use eframe::egui;
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer, newline};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 /// Blocks painted beyond the visible part, above and below.
 const PAINT_MARGIN: f32 = 1200.0;
@@ -333,8 +333,8 @@ impl PreviewBody<'_> {
         let visible = ui.clip_rect().expand2(egui::vec2(0.0, PAINT_MARGIN));
         let mut first = true;
         for block in &document.blocks {
-            let start = block.start.max(range.start);
-            let end = block.end.min(range.end);
+            let start = block.range.start.max(range.start);
+            let end = block.range.end.min(range.end);
             let Some(text) = document
                 .text
                 .get(start..end)
@@ -342,11 +342,26 @@ impl PreviewBody<'_> {
             else {
                 continue;
             };
+            // The viewer turns leading blank lines into breaks and, in one
+            // whole-document call, does not count the first one: the block
+            // boundary gives it. Drop it here so a slice matches.
+            let text = if first {
+                text
+            } else {
+                let after_break = document
+                    .text
+                    .get(..start)
+                    .is_none_or(|before| before.ends_with('\n'));
+                boundary_trimmed(text, after_break)
+            };
             // Separate viewer calls drop the blank line the viewer puts
-            // between blocks: one ends a block, one starts the next.
+            // between blocks. With the item spacing, this gap puts two
+            // paragraphs as far apart as a GitHub-style preview does (a 1em
+            // margin at 1.5 line height), and a heading a little further
+            // from the block above it.
             if !first {
-                newline(ui);
-                newline(ui);
+                let lines = if block.heading { 1.0 } else { 0.6 };
+                ui.add_space(ui.text_style_height(&egui::TextStyle::Body) * lines);
             }
             first = false;
             let top = ui.cursor().min.y;
@@ -357,7 +372,9 @@ impl PreviewBody<'_> {
                 ui.add_space(height);
                 continue;
             }
-            self.show_text(ui, text);
+            // Each viewer call numbers its tables from zero: a per-block ID
+            // scope keeps two blocks' tables from sharing one ID and state.
+            ui.push_id(start, |ui| self.show_text(ui, text));
             self.heights.set(start, ui.cursor().min.y - top);
         }
     }
@@ -368,6 +385,22 @@ impl PreviewBody<'_> {
             .max_image_width(Some(usize_from_f32(ui.available_width().max(1.0))))
             .enable_scroll_to_heading(true)
             .show(ui, self.cache, text);
+    }
+}
+
+/// `text` without the line break that ends the previous block (when the
+/// previous text does not end with one) and without one blank line.
+fn boundary_trimmed(text: &str, after_line_break: bool) -> &str {
+    let mut text = text;
+    if !after_line_break {
+        text = text
+            .strip_prefix("\r\n")
+            .or_else(|| text.strip_prefix('\n'))
+            .unwrap_or(text);
+    }
+    match text.split_once('\n') {
+        Some((line, rest)) if line.trim().is_empty() => rest,
+        _ => text,
     }
 }
 

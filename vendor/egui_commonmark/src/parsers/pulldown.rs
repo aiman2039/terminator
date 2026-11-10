@@ -124,6 +124,129 @@ impl CommonMarkViewerInternal {
     }
 }
 
+type TableCell<'e> = Vec<(pulldown_cmark::Event<'e>, Range<usize>)>;
+
+/// Space between two table columns. The viewer sets no item spacing
+/// between labels, so the gap is added explicitly.
+fn table_column_gap(ui: &Ui) -> f32 {
+    (ui.text_style_height(&TextStyle::Body) * 0.75).round()
+}
+
+/// The face for bold text (`**strong**`, table headers): the `Heading`
+/// family, a bold face when the app sets one.
+fn bold_family(ui: &Ui) -> Option<egui::FontFamily> {
+    ui.style()
+        .text_styles
+        .get(&TextStyle::Heading)
+        .map(|font| font.family.clone())
+}
+
+/// The text runs of a table cell as `(text, code, bold)`.
+fn cell_runs<'a>(
+    cell: &'a TableCell<'_>,
+    is_header: bool,
+) -> impl Iterator<Item = (&'a str, bool, bool)> {
+    let mut bold = is_header;
+    cell.iter().filter_map(move |(event, _)| match event {
+        pulldown_cmark::Event::Start(pulldown_cmark::Tag::Strong) => {
+            bold = true;
+            None
+        }
+        pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Strong) => {
+            bold = is_header;
+            None
+        }
+        pulldown_cmark::Event::Text(text) => Some((text.as_ref(), false, bold)),
+        pulldown_cmark::Event::Code(text) => Some((text.as_ref(), true, bold)),
+        _ => None,
+    })
+}
+
+/// Whole-point column widths that fit a table into `available`, and whether
+/// they do, close to the CSS automatic table layout: when the unwrapped
+/// cells do not fit, each column gets its longest word, and the rest of the
+/// width goes to the columns in proportion to how much they would need to
+/// stay unwrapped. When even the longest words do not fit, the columns keep
+/// them and the table scrolls.
+fn table_column_widths(
+    ui: &Ui,
+    header: &[TableCell<'_>],
+    rows: &[Vec<TableCell<'_>>],
+    available: f32,
+) -> (Vec<f32>, bool) {
+    let columns = header.len();
+    let bold_family = bold_family(ui);
+    // A little room for rounding to whole points.
+    let measure = |text: &str, code: bool, bold: bool| {
+        let mut text = egui::RichText::new(text);
+        if code {
+            text = text.code();
+        } else if bold && let Some(family) = &bold_family {
+            text = text.family(family.clone());
+        }
+        egui::WidgetText::from(text)
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                TextStyle::Body,
+            )
+            .size()
+            .x
+            + 2.0
+    };
+    let all_rows = || {
+        let body = rows.iter().map(|row| (false, row.as_slice()));
+        std::iter::once((true, header)).chain(body)
+    };
+    let available = available - table_column_gap(ui) * columns.saturating_sub(1) as f32;
+    let whole = |widths: Vec<f32>| widths.into_iter().map(f32::ceil).collect::<Vec<_>>();
+
+    let mut natural = vec![0.0_f32; columns];
+    for (is_header, row) in all_rows() {
+        for (index, cell) in row.iter().enumerate().take(columns) {
+            let width = cell_runs(cell, is_header)
+                .map(|(text, code, bold)| measure(text, code, bold))
+                .sum::<f32>();
+            natural[index] = natural[index].max(width);
+        }
+    }
+    let natural = whole(natural);
+    let natural_sum: f32 = natural.iter().sum();
+    if natural_sum <= available {
+        return (natural, true);
+    }
+
+    // Only a table that overflows measures its words.
+    let mut minimum = vec![0.0_f32; columns];
+    for (is_header, row) in all_rows() {
+        for (index, cell) in row.iter().enumerate().take(columns) {
+            for (text, code, bold) in cell_runs(cell, is_header) {
+                for word in text.split_whitespace() {
+                    minimum[index] = minimum[index].max(measure(word, code, bold));
+                }
+            }
+        }
+    }
+    let minimum: Vec<f32> = whole(minimum)
+        .into_iter()
+        .zip(&natural)
+        .map(|(word, natural)| word.min(*natural))
+        .collect();
+    let minimum_sum: f32 = minimum.iter().sum();
+    if minimum_sum >= available {
+        return (minimum, false);
+    }
+    let extra = available - minimum_sum;
+    let flexible = natural_sum - minimum_sum;
+    let widths = natural
+        .iter()
+        .zip(&minimum)
+        .map(|(natural, minimum)| (minimum + extra * (natural - minimum) / flexible).floor())
+        .collect();
+    (widths, true)
+}
+
 /// Heading text in the `Heading` text style family (a bold face when the
 /// app sets one) at clearly stepped sizes between `Body` and `Heading`.
 /// The backend only colors levels 2-6 strong, at sizes close to H1.
@@ -394,7 +517,28 @@ impl CommonMarkViewerInternal {
         options: &CommonMarkOptions,
         max_width: f32,
     ) {
+        let ends_list = matches!(
+            event,
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::List(_))
+        );
         self.event(ui, event, src_span, cache, options, max_width);
+
+        // Item content after a nested list (such as a second paragraph)
+        // starts a new row at the item's text indent and wraps there, like
+        // the content before the nested list.
+        if ends_list
+            && self.list.is_inside_a_list()
+            && !matches!(
+                events.peek(),
+                None | Some((
+                    _,
+                    (pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Item), _)
+                ))
+            )
+        {
+            self.list.continue_item(ui, options);
+            self.is_list_item = true;
+        }
 
         self.def_list_def_wrapping(events, max_width, cache, options, ui);
         self.item_list_wrapping(events, max_width, cache, options, ui);
@@ -554,49 +698,52 @@ impl CommonMarkViewerInternal {
             let id = ui.scope_id().with("_table").with(self.curr_table);
             self.curr_table += 1;
 
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                let Table { header, rows } = parse_table(events);
+            let Table { header, rows } = parse_table(events);
+            // Measured outside the scroll area: inside it the width is unbounded.
+            let frame = egui::Frame::group(ui.style());
+            let available = ui.available_width().min(max_width) - frame.total_margin().sum().x;
+            let (widths, fits) = table_column_widths(ui, &header, &rows, available);
 
-                egui::Grid::new(id).striped(true).show(ui, |ui| {
-                    for col in header {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.set_max_width(max_width);
-                            for (e, src_span) in col {
-                                let tmp_start =
-                                    std::mem::replace(&mut self.line.should_start_newline, false);
-                                let tmp_end =
-                                    std::mem::replace(&mut self.line.should_end_newline, false);
-                                self.event(ui, e, src_span, cache, options, max_width);
-                                self.line.should_start_newline = tmp_start;
-                                self.line.should_end_newline = tmp_end;
+            let draw = |ui: &mut Ui| {
+                // The document flows in a wrapping row layout; rows of a
+                // table stack top to bottom.
+                frame.show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        let gap = ui.spacing().item_spacing.y;
+                        let stripe = ui.visuals().faint_bg_color;
+                        let header = std::iter::once((true, header));
+                        // `parse_table` ends with an empty row.
+                        let body = rows
+                            .into_iter()
+                            .filter(|row| !row.is_empty())
+                            .map(|row| (false, row));
+                        for (row_index, (is_header, row)) in header.chain(body).enumerate() {
+                            let background = ui.painter().add(egui::Shape::Noop);
+                            let row_rect = self
+                                .table_row(ui, row, &widths, is_header, cache, options, max_width);
+                            if row_index % 2 == 1 {
+                                let rect = row_rect.expand2(egui::vec2(2.0, 0.5 * gap));
+                                ui.painter().set(
+                                    background,
+                                    egui::epaint::RectShape::filled(rect, 2.0, stripe),
+                                );
                             }
-                        });
-                    }
-
-                    ui.end_row();
-
-                    for row in rows {
-                        for col in row {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.set_max_width(max_width);
-                                for (e, src_span) in col {
-                                    let tmp_start = std::mem::replace(
-                                        &mut self.line.should_start_newline,
-                                        false,
-                                    );
-                                    let tmp_end =
-                                        std::mem::replace(&mut self.line.should_end_newline, false);
-                                    self.event(ui, e, src_span, cache, options, max_width);
-                                    self.line.should_start_newline = tmp_start;
-                                    self.line.should_end_newline = tmp_end;
-                                }
-                            });
                         }
-
-                        ui.end_row();
-                    }
+                    })
                 });
-            });
+            };
+            // Long cells wrap so the table fits the text column, as in a
+            // browser. A table that still does not fit (long unbreakable
+            // words) scrolls sideways instead of being clipped. Only then:
+            // the scroll area keeps room for its bar below the table.
+            if fits {
+                draw(ui);
+            } else {
+                egui::ScrollArea::horizontal()
+                    .id_salt(id.with("_scroll"))
+                    .auto_shrink([false, true])
+                    .show(ui, draw);
+            }
 
             self.is_table = false;
             if events.peek().is_none() {
@@ -605,6 +752,75 @@ impl CommonMarkViewerInternal {
 
             self.line.try_insert_end(ui);
         }
+    }
+
+    /// One table row, laid out directly rather than with `egui::Grid`: a
+    /// Grid places cells by the previous frame's row heights, so a wrapped
+    /// cell overlapped the next row. Here the row is as tall as its tallest
+    /// cell. Returns the row's rectangle.
+    #[allow(clippy::too_many_arguments)]
+    fn table_row(
+        &mut self,
+        ui: &mut Ui,
+        row: Vec<TableCell<'_>>,
+        widths: &[f32],
+        is_header: bool,
+        cache: &mut CommonMarkCache,
+        options: &CommonMarkOptions,
+        max_width: f32,
+    ) -> egui::Rect {
+        let column_gap = table_column_gap(ui);
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(0, 4))
+            .show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    for (index, cell) in row.into_iter().enumerate() {
+                        if index > 0 {
+                            ui.add_space(column_gap);
+                        }
+                        let width = widths.get(index).copied().unwrap_or(max_width);
+                        self.table_cell(ui, cell, width, is_header, cache, options, max_width);
+                    }
+                });
+            })
+            .response
+            .rect
+    }
+
+    /// One table cell: exactly `width` wide (so the columns line up), its
+    /// content wrapping inside. Header cells are bold, as in GitHub.
+    #[allow(clippy::too_many_arguments)]
+    fn table_cell(
+        &mut self,
+        ui: &mut Ui,
+        cell: TableCell<'_>,
+        width: f32,
+        is_header: bool,
+        cache: &mut CommonMarkCache,
+        options: &CommonMarkOptions,
+        max_width: f32,
+    ) {
+        let row_height = ui.text_style_height(&TextStyle::Body);
+        let layout = egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true);
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), layout, |ui| {
+            ui.set_max_width(width);
+            ui.set_row_height(row_height);
+            let strong = self.text_style.strong;
+            self.text_style.strong |= is_header;
+            for (e, src_span) in cell {
+                let tmp_start = std::mem::replace(&mut self.line.should_start_newline, false);
+                let tmp_end = std::mem::replace(&mut self.line.should_end_newline, false);
+                self.event(ui, e, src_span, cache, options, max_width);
+                self.line.should_start_newline = tmp_start;
+                self.line.should_end_newline = tmp_end;
+            }
+            self.text_style.strong = strong;
+            // The full column width, after the content: a minimum width set
+            // first counts as an earlier item (the first label then starts
+            // one item spacing in), and `set_min_width` here would measure
+            // from the cursor instead of the cell's left edge.
+            ui.expand_to_include_x(ui.max_rect().left() + width);
+        });
     }
 
     fn event(
@@ -683,6 +899,12 @@ impl CommonMarkViewerInternal {
             && !self.text_style.code
         {
             rich_text = heading_text(ui, level, rich_text);
+        } else if self.text_style.strong
+            && !self.text_style.code
+            && let Some(family) = bold_family(ui)
+        {
+            // The backend only gives strong text the strong color.
+            rich_text = rich_text.family(family);
         }
         if let Some(image) = &mut self.image {
             image.alt_text.push(rich_text);
@@ -724,9 +946,13 @@ impl CommonMarkViewerInternal {
                         .take();
                 }
 
-                // Headings should always insert a newline even if it is at the start.
-                // Whether this is okay in all scenarios is a different question.
-                newline(ui);
+                // A heading starts a new row. As the first event of a show
+                // call (a document, or one block of Terminator's virtualized
+                // preview) there is no row to end, and the newline would
+                // only add an empty row above the heading.
+                if !self.line.should_not_start_newline_forced {
+                    newline(ui);
+                }
                 self.heading_rect = None;
                 self.text_style.heading = Some(match level {
                     HeadingLevel::H1 => 0,
@@ -892,10 +1118,8 @@ impl CommonMarkViewerInternal {
             pulldown_cmark::TagEnd::Table => {}
             pulldown_cmark::TagEnd::TableHead => {}
             pulldown_cmark::TagEnd::TableRow => {}
-            pulldown_cmark::TagEnd::TableCell => {
-                // Ensure space between cells
-                ui.label("  ");
-            }
+            // The table row layout spaces the columns.
+            pulldown_cmark::TagEnd::TableCell => {}
             pulldown_cmark::TagEnd::Emphasis => {
                 self.text_style.emphasis = false;
             }

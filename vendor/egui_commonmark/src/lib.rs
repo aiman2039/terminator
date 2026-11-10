@@ -78,9 +78,6 @@ pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};
 pub use egui_commonmark_backend::misc::CommonMarkCache;
-/// Terminator: the blank line the viewer puts between blocks, for hosts
-/// that show a document one block per call.
-pub use egui_commonmark_backend::elements::newline;
 
 /// Terminator: true while a `#heading` link waits for its heading to paint
 /// (default viewer id). A host that skips painting far blocks paints them
@@ -385,6 +382,20 @@ impl List {
             unreachable!();
         }
 
+        ui.add_space(4.0);
+    }
+
+    /// A new row at the current item's text indent, for item content that
+    /// follows a nested list: the marker's place stays empty.
+    pub fn continue_item(&mut self, ui: &mut egui::Ui, options: &CommonMarkOptions) {
+        newline(ui);
+        let len = self.items.len();
+        ui.label(" ".repeat(len.saturating_sub(1) * options.indentation_spaces));
+        // The marker size from the backend's `bullet_point`.
+        let body = egui::TextStyle::Body.resolve(ui.style());
+        let space = ui.fonts_mut(|fonts| fonts.glyph_width(&body, ' '));
+        let height = ui.text_style_height(&egui::TextStyle::Body);
+        ui.allocate_exact_size(egui::vec2(space * 4.0, height), egui::Sense::hover());
         ui.add_space(4.0);
     }
 

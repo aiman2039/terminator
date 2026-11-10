@@ -6275,3 +6275,37 @@ mouse drag in the session tree, and the `open_link` failure path.
 Not verified: no native GUI fixture or manual run. Not tested: the real PTY
 resize when the zoom opens and closes, the floating corner button in a real
 second OS window, and a WKWebView pane under the zoom backdrop.
+
+## Markdown preview compared with MarkEdit (2026-11-10)
+
+Compared with MarkEdit's (GitHub-style) preview on four real documents (a
+README, a long report, a plain-line checklist and a table-heavy status file).
+
+- Block gaps: each block slice started with the boundary blank line, which the
+  viewer turned into an extra break, and the host added two `"\n"` labels (two
+  rows each in a vertical layout). A one-blank-line gap was 163 px against a
+  19 px row. Now 21.6 px between blocks and 29.4 px before a heading; a
+  heading at the start of a viewer call adds no empty row.
+- Tables: laid out row by row instead of `egui::Grid` (wrapped cells
+  overlapped the next row), with CSS-like column widths, a column gap, bold
+  headers and a horizontal scroll area only for tables that cannot fit. Each
+  block has its own ID scope (blocks' tables shared one Grid ID and widths).
+- `**bold**` uses the bold face; a paragraph after a nested list starts its
+  own row at the item's text indent.
+- New tests: `one_blank_line_between_blocks_adds_no_extra_break`,
+  `a_paragraph_after_a_nested_list_starts_its_own_row_at_the_item_text`,
+  `long_table_cells_wrap_inside_the_column_and_rows_never_overlap`,
+  `bold_text_and_table_headers_use_the_bold_face`.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test -p terminator --locked` (1564 passed, 5 ignored) and
+  `sh scripts/check.sh sarah` passed. A temporary headless dump of every
+  painted row of the four documents showed no clipped or overlapping rows
+  except the 5-column step table, whose longest words exceed the column; it
+  scrolls, as in MarkEdit. A debug package (`cargo xtask package --debug`)
+  against an isolated daemon was compared with MarkEdit by screenshot.
+
+Not verified on screen: pages below the first screen (the isolated app could
+not take focus to scroll); they were checked only in the headless dump.
+Remaining differences: line height (19 px rows against MarkEdit's 24 px),
+loose lists keep tight item spacing, and extra source blank lines stay
+visible (MarkEdit collapses them).

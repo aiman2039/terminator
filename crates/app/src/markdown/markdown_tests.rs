@@ -306,6 +306,157 @@ mod tests {
         }
     }
 
+    /// A painted text row: where its glyphs are, its text, and its font
+    /// family.
+    type PaintedRow = (egui::Rect, String, egui::FontFamily);
+
+    /// Every painted text row of `source` in a `width` wide preview.
+    fn painted_rows(source: &str, width: f32) -> Vec<PaintedRow> {
+        fn collect(shape: &egui::Shape, out: &mut Vec<PaintedRow>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+                egui::Shape::Text(text) => {
+                    for row in &text.galley.rows {
+                        let (Some(first), Some(last)) = (row.glyphs.first(), row.glyphs.last())
+                        else {
+                            continue;
+                        };
+                        let x = text.pos.x + row.pos.x;
+                        let y = text.pos.y + row.pos.y;
+                        let rect = egui::Rect::from_x_y_ranges(
+                            x + first.pos.x..=x + last.pos.x + last.advance_width,
+                            y..=y + row.rect().height(),
+                        );
+                        // The viewer paints each run of styled text as its
+                        // own label: one section per galley.
+                        let family = text
+                            .galley
+                            .job
+                            .sections
+                            .first()
+                            .map(|section| section.format.font_id.family.clone())
+                            .unwrap_or_default();
+                        let chars = row.glyphs.iter().map(|glyph| glyph.chr).collect();
+                        out.push((rect, chars, family));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut preview = Preview::default();
+        preview.apply(Ok(prepare(snapshot(source))));
+        let mut shapes = Vec::new();
+        // A few frames, so nothing depends on a size from a frame before.
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 2000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    preview.show(ui, "painted-rows");
+                },
+            );
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        let mut rows = Vec::new();
+        for clipped in &shapes {
+            collect(&clipped.shape, &mut rows);
+        }
+        rows
+    }
+
+    fn painted<'a>(rows: &'a [PaintedRow], word: &str) -> &'a PaintedRow {
+        rows.iter()
+            .find(|(_, text, _)| text.contains(word))
+            .unwrap_or_else(|| panic!("{word:?} is not painted: {rows:?}"))
+    }
+
+    #[test]
+    fn one_blank_line_between_blocks_adds_no_extra_break() {
+        let gap = |source: &str| {
+            let rows = painted_rows(source, 800.0);
+            painted(&rows, "Beta").0.min.y - painted(&rows, "Alpha").0.min.y
+        };
+        // A source line break inside one block is the baseline row step.
+        let row = gap("Alpha  \nBeta");
+        for source in [
+            "Alpha\n\nBeta",
+            "# Alpha\n\nBeta",
+            "- Alpha\n\nBeta",
+            "Alpha\n\n## Beta",
+        ] {
+            let gap = gap(source);
+            assert!(gap <= row * 3.0, "{source:?}: gap {gap} vs row {row}");
+        }
+    }
+
+    #[test]
+    fn a_paragraph_after_a_nested_list_starts_its_own_row_at_the_item_text() {
+        let rows = painted_rows(
+            "- Parent item\n  - Nested item\n\n  After the nested list.\n",
+            800.0,
+        );
+        let parent = painted(&rows, "Parent item").0;
+        let nested = painted(&rows, "Nested item").0;
+        let after = painted(&rows, "After the nested").0;
+        assert!(
+            after.min.y >= nested.max.y,
+            "{nested:?} and {after:?} share a row"
+        );
+        assert!(
+            (after.min.x - parent.min.x).abs() < 1.0,
+            "not at the item text: parent {parent:?}, after {after:?}"
+        );
+    }
+
+    #[test]
+    fn long_table_cells_wrap_inside_the_column_and_rows_never_overlap() {
+        let long = "words that need several lines in a narrow column ".repeat(3);
+        let source = format!(
+            "| Item | Data? | Notes |\n|---|---|---|\n| one | Partial | {long} |\n| two | Yes | {long} |\n"
+        );
+        let width = 500.0;
+        let rows = painted_rows(&source, width);
+        let table: Vec<_> = rows
+            .iter()
+            .filter(|(_, text, _)| !text.contains("headings"))
+            .collect();
+        for (index, (rect, text, _)) in table.iter().enumerate() {
+            assert!(rect.max.x <= width, "{text:?} runs past the pane: {rect:?}");
+            for (other, other_text, _) in table.iter().skip(index.saturating_add(1)) {
+                assert!(
+                    !rect.shrink(0.5).intersects(other.shrink(0.5)),
+                    "{text:?} {rect:?} overlaps {other_text:?} {other:?}"
+                );
+            }
+        }
+        // A short cell starts on its row's first line.
+        assert_eq!(
+            painted(&rows, "Partial").0.min.y,
+            painted(&rows, "one").0.min.y
+        );
+        // Columns do not touch.
+        let gap = painted(&rows, "Data?").0.min.x - painted(&rows, "Item").0.max.x;
+        assert!(gap >= 8.0, "column gap {gap}");
+    }
+
+    #[test]
+    fn bold_text_and_table_headers_use_the_bold_face() {
+        let rows = painted_rows("Plain **Bold** text.\n\n| Head |\n|---|\n| cell |\n", 800.0);
+        let bold = egui::FontFamily::Name("Semibold".into());
+        assert_eq!(painted(&rows, "Bold").2, bold);
+        assert_eq!(painted(&rows, "Head").2, bold);
+        assert_ne!(painted(&rows, "Plain").2, bold);
+        assert_ne!(painted(&rows, "cell").2, bold);
+    }
+
     #[test]
     fn line_break_conversion_preserves_code_and_table_structure() {
         let code =

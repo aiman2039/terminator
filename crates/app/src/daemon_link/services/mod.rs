@@ -356,7 +356,15 @@ fn without_file_host(text: &str) -> Option<String> {
         return None;
     }
     let fragment = url.fragment().map(|f| format!("#{f}")).unwrap_or_default();
-    Some(format!("file://{}{fragment}", url.path()))
+    let path = url.path();
+    // Windows: `/C:/x` is not absolute; `C:/x` is.
+    let path = match path.as_bytes() {
+        [b'/', drive, b':', ..] if cfg!(windows) && drive.is_ascii_alphabetic() => {
+            path.get(1..).unwrap_or(path)
+        }
+        _ => path,
+    };
+    Some(format!("file://{path}{fragment}"))
 }
 fn target_path(text: &str, cwd: &Path) -> PathBuf {
     let text = text.trim_matches(['\'', '"', '`']);

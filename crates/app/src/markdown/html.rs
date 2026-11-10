@@ -26,7 +26,7 @@ fn resolve_link(path: &Path, target: &str) -> Option<Link> {
 pub(super) struct Document {
     pub(super) text: String,
     /// Top-level Markdown blocks of `text` (see `blocks::split_blocks`).
-    pub(super) blocks: Vec<std::ops::Range<usize>>,
+    pub(super) blocks: Vec<super::blocks::Block>,
     pub(super) mermaid: Vec<super::mermaid::Diagram>,
     /// The document is one Mermaid diagram: paint it zoomable.
     pub(super) single_diagram: bool,

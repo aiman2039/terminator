@@ -7,45 +7,66 @@ use pulldown_cmark::{Event, Options, Parser, Tag};
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// One top-level block of a document.
+pub(super) struct Block {
+    pub(super) range: Range<usize>,
+    /// The block is a heading (it gets more space above it).
+    pub(super) heading: bool,
+}
+
 /// Top-level blocks of `text` as contiguous byte ranges that cover it all
 /// (blank lines go with the block after them). One block for the whole
 /// text when blocks cannot render apart: reference-style link definitions
 /// and footnotes resolve across the document.
-pub(super) fn split_blocks(text: &str) -> Vec<Range<usize>> {
-    let whole = || std::iter::once(0..text.len()).collect::<Vec<_>>();
+pub(super) fn split_blocks(text: &str) -> Vec<Block> {
+    let whole = || {
+        vec![Block {
+            range: 0..text.len(),
+            heading: false,
+        }]
+    };
     let mut parser = Parser::new_ext(text, Options::all()).into_offset_iter();
     let mut ends = Vec::new();
     let mut depth = 0usize;
+    let mut heading = false;
     for (event, range) in parser.by_ref() {
         match event {
             Event::Start(Tag::FootnoteDefinition(_)) | Event::FootnoteReference(_) => {
                 return whole();
             }
-            Event::Start(_) => depth = depth.saturating_add(1),
+            Event::Start(tag) => {
+                if depth == 0 {
+                    heading = matches!(tag, Tag::Heading { .. });
+                }
+                depth = depth.saturating_add(1);
+            }
             Event::End(_) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    ends.push(range.end);
+                    ends.push((range.end, heading));
                 }
             }
             // A top-level leaf such as a rule.
-            _ if depth == 0 => ends.push(range.end),
+            _ if depth == 0 => ends.push((range.end, false)),
             _ => {}
         }
     }
     if parser.reference_definitions().iter().next().is_some() {
         return whole();
     }
-    let mut blocks = Vec::with_capacity(ends.len());
+    let mut blocks: Vec<Block> = Vec::with_capacity(ends.len());
     let mut start = 0;
-    for end in ends {
+    for (end, heading) in ends {
         if end > start {
-            blocks.push(start..end);
+            blocks.push(Block {
+                range: start..end,
+                heading,
+            });
             start = end;
         }
     }
     match blocks.last_mut() {
-        Some(last) => last.end = text.len(),
+        Some(last) => last.range.end = text.len(),
         None => return whole(),
     }
     blocks
@@ -85,8 +106,18 @@ mod tests {
     fn pieces(text: &str) -> Vec<&str> {
         split_blocks(text)
             .into_iter()
-            .map(|range| text.get(range).unwrap_or_default())
+            .map(|block| text.get(block.range).unwrap_or_default())
             .collect()
+    }
+
+    #[test]
+    fn atx_and_setext_headings_are_marked() {
+        let text = "# One\n\nText.\n\nTwo\n===\n\n- item\n";
+        let headings: Vec<bool> = split_blocks(text)
+            .iter()
+            .map(|block| block.heading)
+            .collect();
+        assert_eq!(headings, [true, false, true, false]);
     }
 
     #[test]
