@@ -72,6 +72,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
         egui::include_image!("../../assets/icons/zoom-in.svg"),
     ),
     (
+        "ZoomOut",
+        egui::include_image!("../../assets/icons/zoom-out.svg"),
+    ),
+    (
         "ExternalLink",
         egui::include_image!("../../assets/icons/external-link.svg"),
     ),

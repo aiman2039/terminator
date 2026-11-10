@@ -38,6 +38,7 @@ struct CaptionClicks {
     split_vertical: bool,
     split_horizontal: bool,
     zoom: bool,
+    resume: bool,
     on_control: bool,
 }
 
@@ -46,8 +47,10 @@ impl CaptionClicks {
         close: Option<&egui::Response>,
         zoom: Option<&egui::Response>,
         actions: Option<&CaptionActions>,
+        resume: Option<&egui::Response>,
     ) -> Self {
         Self {
+            resume: resume.is_some_and(eframe::egui::Response::clicked),
             zoom: zoom.is_some_and(eframe::egui::Response::clicked),
             closing: close.is_some_and(eframe::egui::Response::clicked),
             git: actions.is_some_and(|(git, _, _, _)| git.clicked()),
@@ -58,6 +61,7 @@ impl CaptionClicks {
             split_horizontal: actions.is_some_and(|(_, _, _, split)| split.clicked()),
             on_control: close.is_some_and(eframe::egui::Response::hovered)
                 || zoom.is_some_and(eframe::egui::Response::hovered)
+                || resume.is_some_and(eframe::egui::Response::hovered)
                 || actions.is_some_and(|(git, stack, vertical, horizontal)| {
                     git.hovered()
                         || stack.as_ref().is_some_and(eframe::egui::Response::hovered)
@@ -114,9 +118,9 @@ impl Viewer<'_> {
     }
 
     fn paint_caption(&mut self, ui: &mut egui::Ui, frame: &CaptionFrame<'_>) -> Caption {
-        let (response, close, zoom, actions) = if frame.is_markdown {
+        let (response, close, zoom, actions, resume) = if frame.is_markdown {
             let header = self.markdown_header(ui, frame.session, frame.editing);
-            (header.0, header.1, None, None)
+            (header.0, header.1, None, None, None)
         } else {
             let bar = self.terminal_caption_bar(ui, frame);
             (
@@ -124,9 +128,15 @@ impl Viewer<'_> {
                 Some(bar.close),
                 bar.zoom,
                 Some((bar.git, bar.stack, bar.split_vertical, bar.split_horizontal)),
+                bar.resume,
             )
         };
-        let clicks = CaptionClicks::read(close.as_ref(), zoom.as_ref(), actions.as_ref());
+        let clicks = CaptionClicks::read(
+            close.as_ref(),
+            zoom.as_ref(),
+            actions.as_ref(),
+            resume.as_ref(),
+        );
         #[cfg(feature = "test-support")]
         if let Some(zoom) = &zoom {
             let sid = &frame.session.id;
@@ -158,6 +168,10 @@ impl Viewer<'_> {
         let zoom_tip = (self.window.is_none() && frame.pane.is_some())
             .then(|| self.app.action_tip("Zoom pane", Action::ZoomPane));
         let leading = self.app.tab_leading(sid);
+        let resume_tip = self
+            .app
+            .resume_chip_command(sid)
+            .map(|command| format!("Resume conversation in this shell:\n{command}"));
         appearance::terminal_bar(
             ui,
             appearance::TerminalBarSpec {
@@ -186,6 +200,9 @@ impl Viewer<'_> {
                 } else {
                     None
                 },
+                unread: leading.unread,
+                subtitle: self.app.terminal_program_title(sid),
+                resume_tip: resume_tip.as_deref(),
             },
         )
     }
@@ -308,6 +325,9 @@ impl Viewer<'_> {
         let clicks = caption.clicks;
         if clicks.closing {
             self.app.close_session = Some(sid.clone());
+        }
+        if clicks.resume {
+            self.app.resume_in_shell(sid);
         }
         if clicks.git {
             self.app.focus_terminal(sid.clone());

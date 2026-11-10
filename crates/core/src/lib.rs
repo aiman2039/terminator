@@ -25,6 +25,7 @@ mod runtime_dir;
 pub mod signals;
 pub mod snapshot;
 pub mod ssh;
+pub mod terminal_title;
 pub mod transport;
 pub mod ui_control;
 pub mod vnc;

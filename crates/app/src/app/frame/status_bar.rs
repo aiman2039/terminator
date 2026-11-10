@@ -20,6 +20,8 @@ impl App {
                 self.player_status_row(ui);
             }
             self.notification_status_badge(ui);
+            #[cfg(any(not(target_os = "macos"), test))]
+            self.update_status_chip(ui);
             let flow_end = ui.cursor().left();
             // Single right-aligned block (see status_right_end): resource
             // readout, sidebar-height toggle, then the strip collapse.
@@ -236,14 +238,46 @@ impl App {
             let _ = self.jobs.send(Job::Browser(pr.url));
         }
         for port in metadata.ports.iter().take(3) {
-            if ui
+            let link = ui
                 .link(format!(":{}", port.port))
-                .on_hover_text(&port.address)
-                .clicked()
-            {
+                .on_hover_text(&port.address);
+            if link.clicked() {
                 let _ = self.jobs.send(Job::Browser(port.url()));
             }
+            self.port_menu(&link, &port.url());
         }
+    }
+
+    /// Right click on a port link: a Browser tab or the system browser.
+    fn port_menu(&mut self, link: &egui::Response, url: &str) {
+        appearance::context_menu(link, |ui| {
+            let project = self.selected.clone();
+            if let Some(project) = project
+                && appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: "Open in Browser tab",
+                    icon: "Globe",
+                    shortcut: "",
+                })
+                .clicked()
+            {
+                if let Err(error) = self.open_browser_url(&project, url, None) {
+                    self.error.set(format!("Could not open {url}: {error:#}"));
+                }
+                ui.close();
+            }
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Open in system browser",
+                icon: "ExternalLink",
+                shortcut: "",
+            })
+            .clicked()
+            {
+                let _ = self.jobs.send(Job::Browser(url.to_owned()));
+                ui.close();
+            }
+        });
     }
 
     /// Status-bar context after the branch block: breadcrumb (project ›
@@ -291,7 +325,7 @@ impl App {
     /// The active file relative to the project, or the terminal's label.
     fn breadcrumb_leaf(&self, project: &Project, pane: Option<&Tab>) -> Option<String> {
         match pane {
-            Some(Tab::NativeEditor { path } | Tab::Image { path }) => {
+            Some(Tab::NativeEditor { path } | Tab::Image { path } | Tab::Document { path, .. }) => {
                 Some(self.remote_file_label(path).unwrap_or_else(|| {
                     path.strip_prefix(&project.path).map_or_else(
                         |_| path.display().to_string(),

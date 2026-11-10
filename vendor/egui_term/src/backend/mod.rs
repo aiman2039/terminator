@@ -235,6 +235,8 @@ pub struct TerminalBackend {
     drag_anchor: Option<Point>,
     /// Local echo prediction for slow links (Terminator #83).
     type_ahead: typeahead::TypeAhead,
+    /// URI of the hovered OSC 8 hyperlink; `None` for a regex match.
+    hovered_uri: Option<String>,
 }
 
 impl TerminalBackend {
@@ -344,6 +346,7 @@ impl TerminalBackend {
             selection_hold: false,
             drag_anchor: None,
             type_ahead: typeahead::TypeAhead::default(),
+            hovered_uri: None,
         })
     }
 
@@ -662,11 +665,19 @@ impl TerminalBackend {
     ) {
         match link_action {
             LinkAction::Hover => {
-                self.last_content.hovered_hyperlink =
-                    self.regex_match_at(terminal, point, &mut self.url_regex.clone());
+                // An OSC 8 hyperlink cell wins over the URL regex.
+                if let Some((range, uri)) = hyperlink_at(terminal.grid(), point) {
+                    self.last_content.hovered_hyperlink = Some(range);
+                    self.hovered_uri = Some(uri);
+                } else {
+                    self.last_content.hovered_hyperlink =
+                        self.regex_match_at(terminal, point, &mut self.url_regex.clone());
+                    self.hovered_uri = None;
+                }
             }
             LinkAction::Clear => {
                 self.last_content.hovered_hyperlink = None;
+                self.hovered_uri = None;
             }
             LinkAction::Open => {
                 self.open_link();
@@ -678,18 +689,23 @@ impl TerminalBackend {
         let Some(range) = &self.last_content.hovered_hyperlink else {
             return;
         };
-        let start = *range.start();
-        let end = *range.end();
-        let term = self.term.clone();
-        let term = term.lock();
-        let grid = term.grid();
-        let mut url = String::from(grid.index(start).c);
-        for indexed in grid.iter_from(start) {
-            url.push(indexed.c);
-            if indexed.point == end {
-                break;
+        let url = if let Some(uri) = &self.hovered_uri {
+            uri.clone()
+        } else {
+            let start = *range.start();
+            let end = *range.end();
+            let term = self.term.clone();
+            let term = term.lock();
+            let grid = term.grid();
+            let mut url = String::from(grid.index(start).c);
+            for indexed in grid.iter_from(start) {
+                url.push(indexed.c);
+                if indexed.point == end {
+                    break;
+                }
             }
-        }
+            url
+        };
 
         // A link that no app can open must not crash the GUI.
         if let Err(error) = open::that(&url) {
@@ -1801,6 +1817,31 @@ fn selected_text(content: &RenderableContent) -> String {
     }
     output
 }
+/// The OSC 8 hyperlink at `point`: its cells on that row and its URI.
+fn hyperlink_at(grid: &Grid<Cell>, point: Point) -> Option<(RangeInclusive<Point>, String)> {
+    if point.line < grid.topmost_line()
+        || point.line > grid.bottommost_line()
+        || point.column > grid.last_column()
+    {
+        return None;
+    }
+    let link = grid[point].hyperlink()?;
+    let same = |column: usize| {
+        grid[Point::new(point.line, Column(column))]
+            .hyperlink()
+            .as_ref()
+            == Some(&link)
+    };
+    let start = (0..=point.column.0).rev().take_while(|c| same(*c)).last()?;
+    let end = (point.column.0..=grid.last_column().0)
+        .take_while(|c| same(*c))
+        .last()?;
+    Some((
+        Point::new(point.line, Column(start))..=Point::new(point.line, Column(end)),
+        link.uri().to_owned(),
+    ))
+}
+
 fn target_at_content(content: &RenderableContent, x: f32, y: f32) -> Option<LinkTarget> {
     use alacritty_terminal::term::cell::Flags;
     let size = &content.terminal_size;
@@ -1858,9 +1899,28 @@ fn target_at_content(content: &RenderableContent, x: f32, y: f32) -> Option<Link
             }
         }
     }
-    let range = token_range(&chars, hit?)?;
+    let hit = hit?;
+    // An OSC 8 hyperlink under the pointer wins over the text: its target
+    // is the URI, and its cells are the underlined range.
+    let link = points.get(hit).and_then(|p| grid[*p].hyperlink());
+    let hyperlink = link.is_some();
+    let (range, text) = match link {
+        Some(link) => {
+            let same = |p: &Point| grid[*p].hyperlink().as_ref() == Some(&link);
+            let start = (0..=hit).rev().take_while(|i| same(&points[*i])).last()?;
+            let end = (hit..points.len())
+                .take_while(|i| same(&points[*i]))
+                .last()?;
+            (start..end + 1, link.uri().to_owned())
+        }
+        None => {
+            let range = token_range(&chars, hit)?;
+            let text = chars[range.clone()].iter().collect();
+            (range, text)
+        }
+    };
     let mut rects = Vec::<egui::Rect>::new();
-    for p in &points[range.clone()] {
+    for p in &points[range] {
         let row = p.line.0 + grid.display_offset() as i32;
         if row < 0 || row >= size.num_lines as i32 {
             continue;
@@ -1888,8 +1948,9 @@ fn target_at_content(content: &RenderableContent, x: f32, y: f32) -> Option<Link
         }
     }
     Some(LinkTarget {
-        text: chars[range].iter().collect(),
+        text,
         rects,
+        hyperlink,
     })
 }
 /// Renderer-neutral target text with local-coordinate underline rectangles.
@@ -1897,6 +1958,8 @@ fn target_at_content(content: &RenderableContent, x: f32, y: f32) -> Option<Link
 pub struct LinkTarget {
     pub text: String,
     pub rects: Vec<egui::Rect>,
+    /// `text` is an OSC 8 hyperlink URI, not the text on screen.
+    pub hyperlink: bool,
 }
 fn token_range(chars: &[char], hit: usize) -> Option<std::ops::Range<usize>> {
     let mut start = 0;
@@ -2131,6 +2194,42 @@ mod target_tests {
         content.grid.scroll_display(Scroll::Delta(1));
         let target = target_at_content(&content, 25.0, 25.0).unwrap();
         assert!(target.text.ends_with("ile.rs:12"));
+    }
+    #[test]
+    fn osc8_hyperlink_target_is_its_uri_not_the_text() {
+        use alacritty_terminal::term::cell::Hyperlink;
+        let mut content = RenderableContent {
+            grid: Grid::new(2, 20, 0),
+            terminal_size: TerminalSize {
+                cell_width: 10,
+                cell_height: 20,
+                num_cols: 20,
+                num_lines: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for (i, c) in "see docs here".chars().enumerate() {
+            content.grid[Point::new(Line(0), Column(i))].c = c;
+        }
+        let link = Hyperlink::new(Some("a"), "https://example.com/docs".into());
+        for column in 4..8 {
+            content.grid[Point::new(Line(0), Column(column))].set_hyperlink(Some(link.clone()));
+        }
+        let target = target_at_content(&content, 55.0, 5.0).unwrap();
+        assert_eq!(target.text, "https://example.com/docs");
+        assert!(target.hyperlink);
+        assert_eq!(target.rects.len(), 1);
+        assert_eq!(target.rects[0].left(), 40.0);
+        assert_eq!(target.rects[0].right(), 80.0);
+        let plain = target_at_content(&content, 5.0, 5.0).unwrap();
+        assert_eq!(plain.text, "see");
+        assert!(!plain.hyperlink);
+        let (range, uri) = hyperlink_at(&content.grid, Point::new(Line(0), Column(6))).unwrap();
+        assert_eq!(uri, "https://example.com/docs");
+        assert_eq!(range.start().column, Column(4));
+        assert_eq!(range.end().column, Column(7));
+        assert!(hyperlink_at(&content.grid, Point::new(Line(0), Column(9))).is_none());
     }
     #[test]
     fn quoted_spaces_and_punctuation() {

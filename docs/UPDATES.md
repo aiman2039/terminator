@@ -251,13 +251,31 @@ There is no signed installer yet: the zip is a portable install (unzip
 anywhere, run `terminator.exe`). A signed MSIX can replace the zip later; the
 updater below only depends on the asset name.
 
-Windows has no Sparkle. Settings → Updates shows a notify-only checker backed
-by the GitHub Releases API (`releases/latest` for `aiman2039/terminator`):
-once a minute and on demand via **Check for Updates…**, a worker thread
-compares the latest `vMAJOR.MINOR.PATCH` tag against the build and offers a
-download link for the Windows zip asset (release page as fallback). Nothing
-downloads or installs automatically; the toggle persists as
+Windows and Linux have no Sparkle. Settings → Updates shows a notify-only
+checker backed by the GitHub Releases API (`releases/latest` for
+`aiman2039/terminator`): once a minute and on demand via **Check for
+Updates…**, a worker thread compares the latest `vMAJOR.MINOR.PATCH` tag
+against the build and offers a download link for this platform's asset (the
+Windows zip or the `ARCH-unknown-linux-gnu.tar.gz` archive; release page as
+fallback). Nothing downloads or installs automatically; the toggle persists as
 `automatic_update_checks` (default on) next to `notification_sound`.
 Development and isolated launches (`TERMINATOR_DATA_DIR`, `--data-dir`,
 `TERMINATOR_CONFIG_DIR`, `TERMINATOR_RUNTIME_DIR`, debug builds) never touch
-the feed. Linux keeps the releases link.
+the feed.
+
+When a newer release is available, the status bar shows an **Update vX** chip;
+a click opens Settings → Updates. There, the release `body` from the same feed
+reply renders as Markdown under **Release notes**, and **Skip this version**
+hides the chip for that tag only (`skipped_update_version` in
+`ui-preferences.json`; **Show again** clears it). A newer tag shows the chip
+again. macOS keeps the Sparkle flow and has no chip: Sparkle does not tell the
+GUI that a release is available.
+
+Settings → Updates → Installation details has **Open logs folder** (the
+`crashes/` folder when it exists, else the data folder with `daemon.log`),
+**Copy diagnostics** and **Report a problem…**. The diagnostics hold the GUI
+and daemon versions, OS and architecture, the daemon generation and
+capabilities, and the helper paths, with paths under the home folder shown as
+`~`. They hold no scrollback and no settings. **Report a problem…** copies the
+same text, shows it, and opens the GitHub new-issue page only when you click
+**Open GitHub issue**. All three are also in Find Action.

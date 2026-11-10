@@ -67,12 +67,37 @@ impl App {
             return;
         }
         let name = rename.text.trim();
+        if !name.is_empty() {
+            self.mark_group_labels_manual(&rename.project, &rename.tab);
+        }
         self.set_tab_group_name(
             &rename.project,
             &rename.tab,
             (!name.is_empty()).then(|| name.chars().take(64).collect()),
         );
         self.save_layouts();
+    }
+
+    /// A named tab group keeps its terminals' labels over program titles.
+    fn mark_group_labels_manual(&mut self, project: &str, tab: &str) {
+        let sids: Vec<String> = self
+            .layouts
+            .get(project)
+            .and_then(|w| w.tabs.iter().find(|g| g.id == tab))
+            .map(|group| {
+                group
+                    .layout
+                    .iter_all_tabs()
+                    .filter_map(|(_, tab)| match tab {
+                        Tab::Terminal(sid) => Some(sid.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for sid in sids {
+            self.mark_label_manual(&sid);
+        }
     }
 
     /// Terminals, shortcuts, and browser panes stay live unless the rename
@@ -170,6 +195,7 @@ impl App {
             && !title.trim().is_empty()
             && title.trim().len() <= 256
         {
+            self.mark_label_manual(&sid);
             self.send(Request::Rename {
                 session: sid,
                 label: title.trim().into(),

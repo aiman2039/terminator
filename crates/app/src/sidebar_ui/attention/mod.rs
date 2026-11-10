@@ -7,11 +7,11 @@ use super::explorer_rows::{
 };
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 use crate::updater;
 use crate::{
     App, appearance, icons,
-    preferences::{AgentsTab, SidebarTool},
+    preferences::{AgentStateFilter, AgentsTab, SidebarTool},
     session_info,
 };
 pub(crate) use card::attention_card;
@@ -110,7 +110,7 @@ impl App {
     /// Pending agent notices as menu-bar items, in inbox order (waiting
     /// first). Titles are single-line and capped so the native menu stays
     /// readable. Same list the Agents inbox renders.
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     pub(crate) fn status_menu_items(&self) -> Vec<updater::StatusMenuItem> {
         const MAX_ITEMS: usize = 12;
         const MAX_TITLE: usize = 90;

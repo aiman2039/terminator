@@ -66,6 +66,15 @@ impl App {
         }
     }
 
+    /// An http(s) link: a Browser tab in `project`, else the system browser.
+    fn open_link_url(&mut self, project: &str, url: &str, action: FileAction) {
+        if action != FileAction::BrowserTab {
+            let _ = self.jobs.send(Job::Browser(url.to_owned()));
+        } else if let Err(error) = self.open_browser_url(project, url, None) {
+            self.error.set(format!("Could not open {url}: {error:#}"));
+        }
+    }
+
     pub(crate) fn terminal_action(&mut self, input: TerminalActionInput<'_>) {
         let TerminalActionInput {
             ctx,
@@ -78,9 +87,7 @@ impl App {
             return;
         }
         match target {
-            services::Target::Url(url) => {
-                let _ = self.jobs.send(Job::Browser(url.clone()));
-            }
+            services::Target::Url(url) => self.open_link_url(&session.project_id, url, action),
             services::Target::File(path, line, column) => {
                 if action == FileAction::Browser {
                     self.open_in_browser(path);
@@ -151,7 +158,8 @@ impl App {
             line,
         } = input;
         match action {
-            FileAction::Open => self.open_file(OpenFileInput {
+            // Browser tab is offered for URLs only; a file keeps its default viewer.
+            FileAction::Open | FileAction::BrowserTab => self.open_file(OpenFileInput {
                 path: path.into(),
                 line,
                 split: None,

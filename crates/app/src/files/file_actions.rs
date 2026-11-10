@@ -11,6 +11,8 @@ pub enum FileAction {
     Here,
     External,
     Browser,
+    /// An http(s) link in a GUI Browser tab.
+    BrowserTab,
     Copy,
     StagedDiff,
     WorkingDiff,
@@ -31,6 +33,8 @@ pub struct FileMenu {
     pub browser: bool,
     pub git: Option<terminator_git::GitGroup>,
     pub neovim: bool,
+    /// The target is an http(s) link: Browser tab, system browser, Copy link.
+    pub url: bool,
 }
 
 pub fn browser_document(path: &Path) -> bool {
@@ -59,6 +63,7 @@ pub fn target_menu(target: &Target) -> FileMenu {
         },
         git: None,
         neovim: false,
+        url: matches!(target, Target::Url(_)),
     }
 }
 
@@ -68,6 +73,7 @@ pub fn items(
         browser,
         git,
         neovim,
+        url,
     }: FileMenu,
 ) -> Vec<(&'static str, FileAction)> {
     let review = git.and_then(review_action);
@@ -87,8 +93,11 @@ pub fn items(
         (file, "Open in editor split", FileAction::Split),
         (file, "Open in current split", FileAction::Here),
         (file, "Open externally", FileAction::External),
-        (browser, "Open in browser", FileAction::Browser),
-        (true, "Copy target", FileAction::Copy),
+        (url, "Open in browser tab", FileAction::BrowserTab),
+        (url, "Open in system browser", FileAction::Browser),
+        (browser && !url, "Open in browser", FileAction::Browser),
+        (url, "Copy link", FileAction::Copy),
+        (!url, "Copy target", FileAction::Copy),
     ]
     .into_iter()
     .filter(|(available, _, _)| *available)
@@ -119,6 +128,7 @@ pub fn menu(ui: &mut egui::Ui, spec: FileMenu) -> Option<FileAction> {
             FileAction::Split => "PanelRightClose",
             FileAction::Here => "PanelsTopLeft",
             FileAction::External | FileAction::Browser => "ExternalLink",
+            FileAction::BrowserTab => "Globe",
             FileAction::Copy => "Copy",
             FileAction::StagedDiff
             | FileAction::WorkingDiff
@@ -187,6 +197,7 @@ mod tests {
             browser: false,
             git: Some(GitGroup::Changes),
             neovim: false,
+            url: false,
         });
         assert_eq!(entries[0], ("Native diff", FileAction::NativeWorkingDiff));
         assert!(!entries.iter().any(|(label, _)| *label == "Neovim diff"));
@@ -199,6 +210,7 @@ mod tests {
             browser: false,
             git: Some(GitGroup::Staged),
             neovim: false,
+            url: false,
         });
         assert_eq!(
             entries[0],
@@ -213,6 +225,7 @@ mod tests {
             browser: false,
             git: Some(GitGroup::Untracked),
             neovim: true,
+            url: false,
         });
         assert_eq!(entries[0], ("Native diff", FileAction::NativeWorkingDiff));
         assert!(entries.contains(&("Neovim diff", FileAction::WorkingDiff)));
@@ -229,6 +242,7 @@ mod tests {
             browser: browser_document(Path::new("page.html")),
             git: None,
             neovim: false,
+            url: false,
         });
         assert!(entries.contains(&("Open in browser", FileAction::Browser)));
     }
@@ -255,5 +269,30 @@ mod tests {
         let rust = target_menu(&Target::File(Path::new("main.rs").into(), None, None));
         assert!(!rust.browser);
         assert!(rust.file);
+    }
+
+    #[test]
+    fn link_menu_offers_browser_tab_beside_system_browser_and_copy_link() {
+        let entries = items(target_menu(&Target::Url("https://example.com".into())));
+        assert_eq!(
+            entries,
+            vec![
+                ("Open in browser tab", FileAction::BrowserTab),
+                ("Open in system browser", FileAction::Browser),
+                ("Copy link", FileAction::Copy),
+            ]
+        );
+        let html = items(target_menu(&Target::File(
+            Path::new("index.html").into(),
+            None,
+            None,
+        )));
+        assert!(html.contains(&("Open in browser", FileAction::Browser)));
+        assert!(html.contains(&("Copy target", FileAction::Copy)));
+        assert!(
+            !html
+                .iter()
+                .any(|(_, action)| *action == FileAction::BrowserTab)
+        );
     }
 }

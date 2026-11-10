@@ -103,19 +103,147 @@ impl App {
         }
     }
 
+    /// Agent counts as separate segments: waiting (always, as the bell),
+    /// then unread, working and done when there are any. Each opens the
+    /// Agents view that lists what it counts.
     pub(crate) fn notification_status_badge(&mut self, ui: &mut egui::Ui) {
-        let label = self.agents_summary();
-        let response = appearance::icon_label_button(appearance::IconLabelButtonInput {
-            ui,
-            icon: "Bell",
-            label: &label,
-            height: appearance::TOOLBAR_BUTTON,
-        })
-        .on_hover_text("Pending agent notifications. Click to open the Agents inbox.");
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "status-attention-bell", response.rect);
-        if response.clicked() {
-            self.open_agents_inbox();
+        let (waiting, unread) = self.attention_counts();
+        let (working, done) = self.activity_counts();
+        for segment in status_segments([waiting, unread, working, done]) {
+            let response = appearance::icon_label_button(appearance::IconLabelButtonInput {
+                ui,
+                icon: segment.kind.icon(),
+                label: &segment.label,
+                height: appearance::TOOLBAR_BUTTON,
+            })
+            .on_hover_text(segment.kind.tooltip());
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), segment.kind.target(), response.rect);
+            if response.clicked() {
+                self.open_agents_segment(segment.kind);
+            }
         }
+    }
+
+    /// Show the Agents view behind a status-bar segment.
+    fn open_agents_segment(&mut self, kind: AgentSegment) {
+        self.open_agents_inbox();
+        self.preferences.agents_tab = match kind {
+            AgentSegment::Waiting => AgentsTab::NeedsAttention,
+            AgentSegment::Unread => AgentsTab::Unread,
+            AgentSegment::Working | AgentSegment::Done => AgentsTab::AllLive,
+        };
+        match kind {
+            AgentSegment::Working => self.preferences.agents_state = AgentStateFilter::Working,
+            AgentSegment::Done => self.preferences.agents_state = AgentStateFilter::Done,
+            AgentSegment::Waiting | AgentSegment::Unread => {}
+        }
+    }
+}
+
+/// One count in the status-bar agent summary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentSegment {
+    Waiting,
+    Unread,
+    Working,
+    Done,
+}
+
+impl AgentSegment {
+    const ALL: [Self; 4] = [Self::Waiting, Self::Unread, Self::Working, Self::Done];
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Waiting => "Bell",
+            Self::Unread => "Circle",
+            Self::Working => "LoaderCircle",
+            Self::Done => "CircleCheck",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Unread => "unread",
+            Self::Working => "working",
+            Self::Done => "done",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Waiting => "Agents waiting for you. Click to open Needs attention.",
+            Self::Unread => "Unread agent events. Click to open Unread.",
+            Self::Working => "Working agents. Click to list them in All live.",
+            Self::Done => "Agents that are done. Click to list them in All live.",
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn target(self) -> &'static str {
+        match self {
+            Self::Waiting => "status-attention-bell",
+            Self::Unread => "status-agents-unread",
+            Self::Working => "status-agents-working",
+            Self::Done => "status-agents-done",
+        }
+    }
+}
+
+pub(crate) struct StatusSegment {
+    pub(crate) kind: AgentSegment,
+    pub(crate) label: String,
+}
+
+/// Segments for `[waiting, unread, working, done]`. The waiting bell is
+/// always there (with no count at zero) so the inbox stays one click away.
+pub(crate) fn status_segments(counts: [usize; 4]) -> Vec<StatusSegment> {
+    AgentSegment::ALL
+        .into_iter()
+        .zip(counts)
+        .filter(|(kind, count)| *kind == AgentSegment::Waiting || *count > 0)
+        .map(|(kind, count)| StatusSegment {
+            kind,
+            label: if count == 0 {
+                String::new()
+            } else {
+                format!("{count} {}", kind.noun())
+            },
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_segments_show_the_bell_and_only_nonzero_counts() {
+        let labels = |counts| {
+            status_segments(counts)
+                .into_iter()
+                .map(|segment| (segment.kind, segment.label))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels([0, 0, 0, 0]),
+            [(AgentSegment::Waiting, String::new())]
+        );
+        assert_eq!(
+            labels([2, 0, 3, 1]),
+            [
+                (AgentSegment::Waiting, "2 waiting".to_string()),
+                (AgentSegment::Working, "3 working".to_string()),
+                (AgentSegment::Done, "1 done".to_string()),
+            ]
+        );
+        assert_eq!(
+            labels([0, 4, 0, 0]),
+            [
+                (AgentSegment::Waiting, String::new()),
+                (AgentSegment::Unread, "4 unread".to_string()),
+            ]
+        );
     }
 }

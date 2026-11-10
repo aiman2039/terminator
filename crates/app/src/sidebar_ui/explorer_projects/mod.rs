@@ -1,8 +1,10 @@
 mod init_command;
 mod list;
+mod project_dnd;
 mod style;
 mod tab_tree;
 mod tree_dnd;
+pub(crate) use tree_dnd::TreeDrag;
 
 #[cfg(test)]
 pub(crate) use style::RenameDraft;
@@ -48,6 +50,7 @@ impl App {
                         "History",
                         "sort-latest-activity",
                     ),
+                    (ProjectSort::Manual, "ChevronsUpDown", "sort-manual"),
                 ] {
                     let check = if current == sort { "✓" } else { "" };
                     let response = appearance::menu_item(appearance::MenuItemInput {

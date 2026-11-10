@@ -124,8 +124,11 @@ impl App {
 
     pub(super) fn handle_remote_asset(&mut self, project: String, path: PathBuf, after: After) {
         self.images.remove(&path);
+        self.tables.invalidate(&path);
         let tab = if crate::image_preview::supported(&path) {
             Tab::Image { path }
+        } else if let Some(kind) = crate::document_view::DocumentKind::for_path(&path) {
+            Tab::Document { path, kind }
         } else if crate::browser::supported_file(&path) {
             Tab::browser_file(path)
         } else if crate::player::supported(&path) {

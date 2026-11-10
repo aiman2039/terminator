@@ -34,6 +34,7 @@ impl App {
         self.seed_floating_visibility();
         self.images
             .retain(|path, _| self.visible_images.contains(path));
+        self.tables.prune();
         // View state and remote sessions both follow the tabs now that the
         // dock is checked back in and every copy has had its say.
         self.prune_vnc_views();

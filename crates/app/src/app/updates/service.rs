@@ -65,6 +65,7 @@ impl App {
                     preview.cancellation = None;
                 }
             }
+            crate::document_view::SUBSYSTEM => self.tables.cancelled(context.generation),
             // Its view still waits: answer it as a failure.
             _ => self.service_ready.extend(owed),
         }
@@ -236,6 +237,11 @@ pub(crate) fn service_failure_update(
         )),
         "files" => Some(Update::ResolvedTarget(context.resource.clone(), None)),
         "images" => Some(Update::Image(
+            std::path::PathBuf::from(&context.resource),
+            context.generation,
+            Err(error.to_string()),
+        )),
+        crate::document_view::SUBSYSTEM => Some(Update::Table(
             std::path::PathBuf::from(&context.resource),
             context.generation,
             Err(error.to_string()),

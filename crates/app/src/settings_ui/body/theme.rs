@@ -24,6 +24,7 @@ impl App {
         self.theme_preset_row(ui);
         self.accent_row(ui);
         self.density_row(ui);
+        self.font_rows(ui);
         if ui.button("Reset appearance").clicked() {
             self.theme_draft = AppearanceConfig::default();
         }
@@ -90,6 +91,7 @@ impl App {
         let divider = self.theme_draft.pane_divider_width;
         let border = self.theme_draft.border_width;
         let editor = self.theme_draft.editor;
+        let fonts = std::mem::take(&mut self.theme_draft.fonts);
         self.theme_draft = choice
             .checked_sub(1)
             .and_then(|index| PRESETS.get(index))
@@ -98,6 +100,7 @@ impl App {
         self.theme_draft.pane_divider_width = divider;
         self.theme_draft.border_width = border;
         self.theme_draft.editor = editor;
+        self.theme_draft.fonts = fonts;
     }
 
     fn accent_row(&mut self, ui: &mut egui::Ui) {

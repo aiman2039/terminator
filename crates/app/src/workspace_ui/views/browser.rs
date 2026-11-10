@@ -1,6 +1,7 @@
 //! Browser pane: Chrome-style toolbar above the native webview overlay.
 use super::super::super::*;
 use crate::app::OpenFileModeInput;
+use crate::browser::extras::{self, ZoomChange};
 use crate::browser::nav::{self, NavState};
 
 const BAR_HEIGHT: f32 = 28.0;
@@ -16,6 +17,9 @@ struct BrowserBar {
     back: bool,
     forward: bool,
     go: bool,
+    find: bool,
+    zoom: Option<ZoomChange>,
+    devtools: bool,
 }
 
 struct ToolbarInput<'a> {
@@ -24,6 +28,9 @@ struct ToolbarInput<'a> {
     href: &'a str,
     target: &'a BrowserTarget,
     nav: &'a NavState,
+    /// Page zoom and whether the inspector is on, for the menu.
+    zoom: f64,
+    devtools: bool,
 }
 
 impl App {
@@ -62,10 +69,13 @@ impl App {
             href: &href,
             target,
             nav: &nav,
+            zoom: self.browser_host.zoom(&key),
+            devtools: self.preferences.browser.devtools,
         });
         Self::progress_line(ui, nav.loading);
         let address = self.apply_browser_bar(&key, target, (draft, bar));
         address_error(ui, &key, address);
+        self.browser_find_bar(ui, &key);
         if let Some(url) = nav.blocked_download {
             self.download_notice(ui, &key, url);
         }
@@ -90,6 +100,8 @@ impl App {
             href,
             target,
             nav,
+            zoom,
+            devtools,
         } = input;
         let mut bar = BrowserBar::default();
         let size = egui::vec2(ui.available_width(), BAR_HEIGHT);
@@ -115,7 +127,15 @@ impl App {
                     bar.reload = appearance::sidebar_action(ui, "RefreshCw", "Reload").clicked();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    Self::browser_menu(ui, target, &mut bar);
+                    Self::browser_menu(ui, target, &mut bar, devtools);
+                    if (zoom - 1.0).abs() > 0.001
+                        && ui
+                            .small_button(extras::zoom_label(zoom))
+                            .on_hover_text("Reset zoom")
+                            .clicked()
+                    {
+                        bar.zoom = Some(ZoomChange::Reset);
+                    }
                     bar.go = address_bar(ui, draft, href);
                 });
             },
@@ -124,10 +144,43 @@ impl App {
     }
 
     /// Secondary actions live behind one menu, as in Chrome.
-    fn browser_menu(ui: &mut egui::Ui, target: &BrowserTarget, bar: &mut BrowserBar) {
+    fn browser_menu(
+        ui: &mut egui::Ui,
+        target: &BrowserTarget,
+        bar: &mut BrowserBar,
+        devtools: bool,
+    ) {
+        let command = if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "Ctrl+"
+        };
         let menu = appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
             if ui.button("Open in system browser").clicked() {
                 bar.system = true;
+                ui.close();
+            }
+            ui.separator();
+            for (label, icon, key, action) in [
+                ("Find in page", "Search", "F", None),
+                ("Zoom in", "ZoomIn", "=", Some(ZoomChange::In)),
+                ("Zoom out", "ZoomOut", "-", Some(ZoomChange::Out)),
+                ("Actual size", "Maximize", "0", Some(ZoomChange::Reset)),
+            ] {
+                let item = appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label,
+                    icon,
+                    shortcut: &format!("{command}{key}"),
+                });
+                if item.clicked() {
+                    bar.find |= action.is_none();
+                    bar.zoom = action.or(bar.zoom);
+                    ui.close();
+                }
+            }
+            if devtools && ui.button("Developer tools").clicked() {
+                bar.devtools = true;
                 ui.close();
             }
             if target.file().is_some() && ui.button("Open as text").clicked() {
@@ -193,7 +246,18 @@ impl App {
         target: &BrowserTarget,
         (draft, bar): (String, BrowserBar),
     ) -> Option<Result<(), &'static str>> {
-        let address = bar.go.then(|| crate::browser::address_target(&draft));
+        let address = bar
+            .go
+            .then(|| crate::browser::address_target(&draft, &self.preferences.browser.search_url));
+        if let Some(change) = bar.zoom {
+            self.zoom_browser(key, change);
+        }
+        if bar.find {
+            self.open_browser_find(key);
+        }
+        if bar.devtools {
+            self.browser_host.open_devtools(key);
+        }
         if let Some(Ok(next)) = &address
             && next != target
         {

@@ -9,8 +9,9 @@ use super::FEED_REPO;
 use reqwest::header::HeaderMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Latest release: `(tag, page URL, [(asset name, download URL)])`.
-pub(super) type Latest = (String, String, Vec<(String, String)>);
+/// Latest release: `(tag, page URL, [(asset name, download URL)], notes)`.
+/// Notes are the release `body` (Markdown), empty when the feed has none.
+pub(super) type Latest = (String, String, Vec<(String, String)>, String);
 
 #[derive(Debug)]
 pub(super) enum Fetched {
@@ -120,7 +121,7 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
-fn parse_latest(body: &str) -> Result<Latest, String> {
+pub(super) fn parse_latest(body: &str) -> Result<Latest, String> {
     let response: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("update feed: {e}"))?;
     let tag = response
@@ -146,5 +147,10 @@ fn parse_latest(body: &str) -> Result<Latest, String> {
             }
         }
     }
-    Ok((tag, html_url, assets))
+    let notes = response
+        .get("body")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Ok((tag, html_url, assets, notes))
 }

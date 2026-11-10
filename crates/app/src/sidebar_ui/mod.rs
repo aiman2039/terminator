@@ -9,12 +9,14 @@ mod explorer_file_menu;
 mod explorer_projects;
 #[cfg(test)]
 pub(crate) use explorer_projects::RenameDraft;
-pub(crate) use explorer_projects::{ProjectNames, apply_project_names};
+pub(crate) use explorer_projects::{ProjectNames, TreeDrag, apply_project_names};
 mod explorer_prompts;
 mod explorer_rows;
 pub(crate) use explorer_rows::ExplorerToggleInput;
 mod explorer_select;
 pub(crate) use explorer_select::ExplorerKeysInput;
+mod session_select;
+pub(crate) use session_select::SessionSelection;
 mod git_panel;
 mod perforce_panel;
 mod problems;

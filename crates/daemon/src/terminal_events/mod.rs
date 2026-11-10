@@ -43,6 +43,34 @@ pub struct Events {
     chunks: BTreeMap<String, Notice>,
     extra_modes: BTreeMap<u16, bool>,
     escape_pending: bool,
+    title: Title,
+}
+/// Last OSC 0/2 window title. Display only; never a notice or lifecycle
+/// source. Publication is throttled so spinner titles do not flood snapshots.
+#[derive(Default)]
+struct Title {
+    text: String,
+    dirty: bool,
+    published: Option<std::time::Instant>,
+}
+/// Minimum time between two published title changes of one session.
+pub const TITLE_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+impl Events {
+    /// The pending title change, when one is due. `force` ignores the
+    /// throttle so a periodic flush publishes the final title.
+    pub fn take_title(&mut self, now: std::time::Instant, force: bool) -> Option<String> {
+        let title = &mut self.title;
+        let due = force
+            || title
+                .published
+                .is_none_or(|at| now.saturating_duration_since(at) >= TITLE_PUBLISH_INTERVAL);
+        if !title.dirty || !due {
+            return None;
+        }
+        title.dirty = false;
+        title.published = Some(now);
+        Some(title.text.clone())
+    }
 }
 /// Feed the existing vt100 parser, clearing extension modes in stream order on
 /// RIS. vt100 handles RIS internally without a callback. ESC starts an escape
@@ -356,6 +384,13 @@ impl vt100::Callbacks for Events {
                 params,
                 c,
             }),
+        }
+    }
+    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
+        let text = terminator_core::terminal_title::sanitize(title);
+        if text != self.title.text {
+            self.title.text = text;
+            self.title.dirty = true;
         }
     }
     fn paste_from_clipboard(&mut self, _: &mut vt100::Screen, selector: &[u8]) {

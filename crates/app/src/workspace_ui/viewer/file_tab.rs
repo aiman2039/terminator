@@ -44,13 +44,15 @@ impl Viewer<'_> {
     }
 
     /// A session tab's `text` in its title color, then the folder hint when
-    /// it is an editor named after a file that another tab shows.
+    /// it is an editor named after a file that another tab shows, else the
+    /// program's window title.
     pub(super) fn session_title(&self, sid: &str, text: String) -> egui::WidgetText {
         let color = self.app.terminal_title_color(sid);
         let hint = self
             .app
             .named_editor_file(sid)
-            .and_then(|file| self.dock_folder_hint(file));
+            .and_then(|file| self.dock_folder_hint(file))
+            .or_else(|| self.app.terminal_program_title(sid).map(str::to_owned));
         match hint {
             Some(hint) => hinted_title(&text, &hint, color, self.weak_text()).into(),
             None => egui::RichText::new(text).color(color).into(),
@@ -60,7 +62,8 @@ impl Viewer<'_> {
     /// The file-type icon before a file tab's title, sized and placed like
     /// the terminal identity glyphs.
     pub(super) fn paint_file_leading(&self, ui: &egui::Ui, rect: egui::Rect, tab: &Tab) {
-        let (Tab::NativeEditor { path } | Tab::Image { path }) = tab else {
+        let (Tab::NativeEditor { path } | Tab::Image { path } | Tab::Document { path, .. }) = tab
+        else {
             return;
         };
         appearance::paint_status_icon(appearance::PaintStatusIconInput {

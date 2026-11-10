@@ -21,6 +21,26 @@ fn now_ms() -> u64 {
         })
 }
 
+/// Stores a live session's window title (`terminal-title-v1`); an empty
+/// title clears it. Display only: no notice, lifecycle or persist call.
+pub(crate) fn publish_title(state: &mut State, sid: &str, title: String) {
+    let live = state
+        .sessions
+        .iter()
+        .any(|s| s.id == sid && s.lifecycle.live());
+    let changed = if !live || title.is_empty() {
+        state.terminal_titles.remove(sid).is_some()
+    } else if state.terminal_titles.get(sid) != Some(&title) {
+        state.terminal_titles.insert(sid.to_owned(), title);
+        true
+    } else {
+        false
+    };
+    if changed {
+        state.revision = state.revision.saturating_add(1);
+    }
+}
+
 /// Pending query replies per session; more are dropped, never waited for.
 const REPLY_QUEUE: usize = 64;
 
@@ -125,6 +145,7 @@ impl Shared {
         let _finished = rt.commands.process(data, now_ms());
         let replies = std::mem::take(&mut rt.parser.callbacks_mut().replies);
         let notices = std::mem::take(&mut rt.parser.callbacks_mut().notices);
+        let title = rt.parser.callbacks_mut().take_title(Instant::now(), false);
         let frame = Response::Data(B64.encode(data));
         let mut blocked = Vec::new();
         rt.subscribers
@@ -143,7 +164,36 @@ impl Shared {
         for notice in notices {
             self.raise_terminal_notice(sid, &notice.title, &notice.body);
         }
+        if let Some(title) = title {
+            publish_title(&mut relock(&self.state), sid, title);
+        }
         replies
+    }
+
+    /// Publishes throttled title changes the PTY reader has not sent yet, so
+    /// the final title shows even when output stops right after it.
+    pub(crate) fn flush_terminal_titles(&self) {
+        let runtimes: Vec<(String, Arc<Mutex<Runtime>>)> = relock(&self.sessions)
+            .iter()
+            .map(|(id, rt)| (id.clone(), Arc::clone(rt)))
+            .collect();
+        let titles: Vec<(String, String)> = runtimes
+            .into_iter()
+            .filter_map(|(id, rt)| {
+                let title = relock(&rt)
+                    .parser
+                    .callbacks_mut()
+                    .take_title(Instant::now(), true)?;
+                Some((id, title))
+            })
+            .collect();
+        if titles.is_empty() {
+            return;
+        }
+        let mut state = relock(&self.state);
+        for (id, title) in titles {
+            publish_title(&mut state, &id, title);
+        }
     }
 
     fn raise_terminal_notice(&self, sid: &str, title: &str, body: &str) {
@@ -188,6 +238,29 @@ mod tests {
         let replies = (0..10).map(|i| format!("\x1b[{i};1R"));
         enqueue_replies(&tx, replies);
         assert_eq!(rx.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn published_title_bumps_revision_only_on_change_and_only_for_live_sessions() {
+        let mut state: State = serde_json::from_value(serde_json::json!({
+            "sessions": [{
+                "id": "s", "project_id": "p", "label": "zsh", "cwd": "/",
+                "kind": "shell", "file": null, "lifecycle": "running", "created": 0,
+                "exit_code": null, "rows": 24, "cols": 80, "generation": "g",
+                "pid": 1, "truncated": false, "cwd_confirmed": true
+            }]
+        }))
+        .unwrap();
+        publish_title(&mut state, "s", "vim".into());
+        assert_eq!(state.revision, 1);
+        publish_title(&mut state, "s", "vim".into());
+        assert_eq!(state.revision, 1);
+        publish_title(&mut state, "gone", "x".into());
+        assert!(!state.terminal_titles.contains_key("gone"));
+        publish_title(&mut state, "s", String::new());
+        assert!(state.terminal_titles.is_empty());
+        assert_eq!(state.revision, 2);
+        assert!(state.notifications.is_empty() && state.terminal_notices.is_empty());
     }
 
     #[test]

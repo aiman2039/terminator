@@ -11,6 +11,7 @@ use crate::*;
 mod floating;
 mod ops;
 mod pane_drop;
+mod session_drop;
 mod zoom;
 
 pub(crate) use ops::{DockOp, DockOps, DockTarget};
@@ -210,7 +211,7 @@ impl App {
                     .find(|s| &s.id == id)
                     .map(|s| s.cwd.clone()),
                 Tab::Diff { cwd, .. } => Some(cwd.clone()),
-                Tab::Image { path } | Tab::NativeEditor { path } => {
+                Tab::Image { path } | Tab::NativeEditor { path } | Tab::Document { path, .. } => {
                     path.parent().map(PathBuf::from)
                 }
                 Tab::Browser { target, .. } => {

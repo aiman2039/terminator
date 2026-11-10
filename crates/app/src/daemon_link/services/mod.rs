@@ -340,9 +340,23 @@ pub fn resolve_target(text: &str, cwd: &Path) -> Result<Target> {
         !cwd.starts_with("/__terminator_remote__"),
         "Remote paths must be opened through the SSH project explorer"
     );
+    let local = without_file_host(text);
+    let text = local.as_deref().unwrap_or(text);
     let (path, line, column) = resolve_location(text, cwd)?;
     ensure!(path.is_file(), "Target is not a file");
     Ok(Target::File(path, line, column))
+}
+
+/// A `file://host/path` URI, such as an OSC 8 link from `ls --hyperlink`,
+/// as `file:///path`: the host part (often the machine name) is ignored.
+/// The link filter then decodes escapes and a `#L7` line suffix.
+fn without_file_host(text: &str) -> Option<String> {
+    let url = url::Url::parse(text).ok()?;
+    if url.scheme() != "file" || matches!(url.host_str(), None | Some("" | "localhost")) {
+        return None;
+    }
+    let fragment = url.fragment().map(|f| format!("#{f}")).unwrap_or_default();
+    Some(format!("file://{}{fragment}", url.path()))
 }
 fn target_path(text: &str, cwd: &Path) -> PathBuf {
     let text = text.trim_matches(['\'', '"', '`']);

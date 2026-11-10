@@ -1,8 +1,13 @@
+mod agent_presets;
+mod agents;
+mod defaults;
 mod expanded;
 mod explorer;
 mod left_content;
 mod playlists;
 mod styles;
+pub use agent_presets::AgentPreset;
+pub use agents::AgentStateFilter;
 pub use explorer::{ExplorerSearchMode, ExplorerView};
 pub use left_content::LeftContent;
 pub use styles::{ProjectStyle, TerminalStyle};
@@ -183,6 +188,9 @@ pub struct UiPreferences {
     /// All-live agent filter: "" for all kinds, else a hook `agent_kind`.
     #[serde(default)]
     pub agents_filter: String,
+    /// All-live agent state filter (Working, Done).
+    #[serde(default)]
+    pub agents_state: AgentStateFilter,
     /// Collapsed All-live project groups (project ids + "unverified").
     #[serde(default)]
     pub agents_collapsed: HashSet<String>,
@@ -240,6 +248,9 @@ pub struct UiPreferences {
     pub markdown_modes: HashMap<String, crate::markdown::Mode>,
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,
+    /// Project ids in the order the user dragged them (Manual sort).
+    #[serde(default)]
+    pub project_order: Vec<String>,
     #[serde(default)]
     pub project_filter: String,
     pub project_activity: HashMap<String, u64>,
@@ -249,6 +260,10 @@ pub struct UiPreferences {
     /// Last agent command typed in the New task form.
     #[serde(default)]
     pub task_agent_command: String,
+    /// Settings → Agents presets, shown with the installed agents.
+    pub agent_presets: Vec<AgentPreset>,
+    /// Agent launcher keys (`preset:<name>`, `agent:<kind>`), newest first.
+    pub agent_launch_recent: Vec<String>,
     /// Hosts sidebar search text.
     #[serde(default)]
     pub hosts_filter: String,
@@ -258,6 +273,10 @@ pub struct UiPreferences {
     /// Hosts sidebar lists the most recently connected projects first.
     #[serde(default)]
     pub hosts_recent_first: bool,
+    /// Release tag the user chose to skip: the status-bar update chip
+    /// stays hidden for this version only.
+    #[serde(default)]
+    pub skipped_update_version: Option<String>,
     /// Most recently opened native editor files, newest first.
     #[serde(default)]
     pub recent_native_files: Vec<PathBuf>,
@@ -279,6 +298,9 @@ pub struct UiPreferences {
     pub player_chrome_collapsed: bool,
     pub player_radio_mode: bool,
     pub radio_stations: Vec<RadioStation>,
+    /// Browser tab search URL and developer tools.
+    #[serde(default)]
+    pub browser: crate::browser::extras::BrowserPrefs,
     pub editor_states: super::EditorStates,
     /// IDE strip dock layouts per project (shell terminals). GUI-local view
     /// state; validated on load, invalid docks dropped. Kept last so the
@@ -286,84 +308,6 @@ pub struct UiPreferences {
     /// fields first. The dock compare itself is structural: see [`StripDocks`].
     #[serde(default)]
     pub ide_strip_docks: StripDocks,
-}
-impl Default for UiPreferences {
-    fn default() -> Self {
-        Self {
-            version: 2,
-            setup_completed: false,
-            expanded: HashMap::new(),
-            history_expanded: HashMap::new(),
-            terminal_styles: HashMap::new(),
-            project_styles: HashMap::new(),
-            vnc_paste_shortcut: VncPasteShortcut::default(),
-            type_ahead: super::TypeAhead::default(),
-            tool: SidebarTool::Explorer,
-            visible: true,
-            ide_mode: true,
-            ide_terminal_collapsed: false,
-            ide_sidebars_full_height: true,
-            named_layouts: HashMap::new(),
-            active_layout: None,
-            left_visible: true,
-            left_agents: false,
-            left_tool: None,
-            right_projects: false,
-            width: DEFAULT_SIDEBAR_WIDTH,
-            agents_tab: AgentsTab::NeedsAttention,
-            agents_search: String::new(),
-            agents_filter: String::new(),
-            agents_collapsed: HashSet::new(),
-            show_ignored: false,
-            explorer_autoreveal: false,
-            explorer_flat_folders: false,
-            explorer_view: ExplorerView::default(),
-            explorer_bookmarks: Vec::new(),
-            explorer_search_mode: ExplorerSearchMode::Names,
-            explorer_include: String::new(),
-            explorer_exclude: String::new(),
-            explorer_match_case: false,
-            explorer_whole_word: false,
-            explorer_regex: false,
-            git_view_list: false,
-            diff_options: crate::diff::DiffOptions::default(),
-            diff_file_tree: false,
-            commit_messages: Vec::new(),
-            info_process_open: true,
-            info_resources_open: true,
-            info_show_system: true,
-            typography_migrated: false,
-            attention_migrated: false,
-            keymap_migrated: false,
-            markdown_modes: HashMap::new(),
-            hidden_projects: HashSet::new(),
-            project_sort: ProjectSort::NameAsc,
-            project_filter: String::new(),
-            project_activity: HashMap::new(),
-            history_sort: HistorySort::LatestActivity,
-            history_filter: String::new(),
-            task_agent_command: String::new(),
-            hosts_filter: String::new(),
-            hosts_collapsed: HashSet::new(),
-            hosts_recent_first: false,
-            recent_native_files: Vec::new(),
-            pinned_native_files: HashSet::new(),
-            lsp_trust: HashMap::new(),
-            playlists: Vec::new(),
-            selected_playlist: String::new(),
-            player_playlists: HashMap::new(),
-            player_index: HashMap::new(),
-            player_volume: 0.8,
-            player_shuffle: false,
-            player_repeat: false,
-            player_samples_seeded: false,
-            player_chrome_collapsed: false,
-            player_radio_mode: false,
-            radio_stations: Vec::new(),
-            editor_states: super::EditorStates::default(),
-            ide_strip_docks: StripDocks::default(),
-        }
-    }
 }
 impl UiPreferences {
     pub fn needs_setup(&self, state_loaded: bool, project_count: usize) -> bool {

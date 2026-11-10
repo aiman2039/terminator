@@ -5,7 +5,7 @@ use super::*;
 
 /// What a tree row carries while it is dragged.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum TreeDrag {
+pub(crate) enum TreeDrag {
     Session { project: String, sid: String },
     Group { project: String, tab: String },
 }

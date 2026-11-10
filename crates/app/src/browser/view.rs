@@ -26,6 +26,8 @@ pub(crate) struct BuildInput<'a> {
     pub nav: &'a NavStates,
     pub navigations: &'a Arc<Mutex<Vec<(String, browser::BrowserTarget)>>>,
     pub opens: &'a Arc<Mutex<Vec<(String, String)>>>,
+    /// Web inspector (Settings → Browser developer tools; default off).
+    pub devtools: bool,
 }
 
 pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
@@ -42,9 +44,11 @@ pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
         nav,
         navigations,
         opens,
+        devtools,
     } = input;
     let builder = WebViewBuilder::new_with_web_context(context)
         .with_url(href)
+        .with_devtools(devtools)
         .with_navigation_handler({
             let scope = scope.clone();
             let current = Arc::clone(current);

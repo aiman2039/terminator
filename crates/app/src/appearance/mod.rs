@@ -8,6 +8,9 @@ mod editor;
 pub use editor::*;
 mod diff_tints;
 mod folders;
+pub(crate) mod fonts;
+#[cfg(test)]
+mod fonts_tests;
 mod lane_colors;
 pub(crate) use controls::FramedIconButtonInput;
 pub(crate) use controls::IconLabelButtonInput;

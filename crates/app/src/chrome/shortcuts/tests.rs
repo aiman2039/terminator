@@ -89,6 +89,63 @@ fn alt_variants_do_not_trigger_the_plain_shortcut() {
 }
 
 #[test]
+fn tab_step_defaults_take_no_chord_another_action_uses() {
+    let defaults = terminator_core::Settings::default().keybindings;
+    for tab in ["next_tab", "prev_tab"] {
+        let chord = parse(&defaults[tab]).unwrap_or_else(|| panic!("{tab}"));
+        let mac = cfg!(target_os = "macos");
+        assert_eq!(chord.modifiers.shift, mac, "{tab}");
+        for (action, value) in &defaults {
+            if action != tab {
+                assert_ne!(parse(value), Some(chord), "{tab} and {action}");
+            }
+        }
+        // Every JetBrains app-wide chord stays free as well.
+        for &(keymap, command, _) in jetbrains_app_chords() {
+            assert_ne!(parse(keymap), Some(chord), "{tab} and {command:?}");
+        }
+    }
+    // egui ignores an extra Shift, so the Shift chord is checked first.
+    let at = |action: Action| Action::ALL.iter().position(|a| *a == action);
+    assert!(at(Action::NextTab) < at(Action::NextPane));
+    assert!(at(Action::PrevTab) < at(Action::NextPane));
+}
+
+#[test]
+fn a_shift_bracket_chord_also_takes_the_curly_bracket_key() {
+    let ctx = egui::Context::default();
+    let chord = parse("command+shift+]").unwrap();
+    let press = |key: Key| egui::RawInput {
+        events: vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: chord.modifiers,
+        }],
+        ..Default::default()
+    };
+    for key in [Key::CloseBracket, Key::CloseCurlyBracket] {
+        let mut fired = None;
+        let mut output = ctx.run_ui(press(key), |ui| {
+            fired = Some(consume(ui.ctx(), "command+shift+]"));
+        });
+        output.textures_delta.clear();
+        assert_eq!(fired, Some(true), "{key:?}");
+    }
+    // On Linux stored `command` already holds Shift, so this is macOS only.
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let mut fired = None;
+    let mut output = ctx.run_ui(press(Key::CloseCurlyBracket), |ui| {
+        fired = Some(consume(ui.ctx(), "command+]"));
+    });
+    output.textures_delta.clear();
+    assert_eq!(fired, Some(false), "a plain bracket chord ignores `}}`");
+}
+
+#[test]
 fn fills_missing_default_actions() {
     let mut map = BTreeMap::new();
     fill_defaults(&mut map);
@@ -129,6 +186,11 @@ fn every_menu_action_has_a_unique_default_chord() {
     // unless focus picks one of them (see `shared`).
     let mut seen = HashMap::<String, String>::new();
     for (action, value) in &defaults {
+        // Next/Previous tab use Cmd+Shift+]/[ only on macOS; Linux has its
+        // own Ctrl+PageDown/PageUp defaults (see the tab-step test).
+        if cfg!(target_os = "macos") && matches!(action.as_str(), "next_tab" | "prev_tab") {
+            continue;
+        }
         let id = linux_chord_id(value);
         if let Some(other) = seen.insert(id.clone(), action.clone())
             && !shared::partners(action, &other)

@@ -101,6 +101,7 @@ impl App {
         match pane {
             Tab::NativeEditor { path }
             | Tab::Image { path }
+            | Tab::Document { path, .. }
             | Tab::Diff { path, .. }
             | Tab::Blame { path, .. }
             | Tab::RevisionDiff { path, .. }

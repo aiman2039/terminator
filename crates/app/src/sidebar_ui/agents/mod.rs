@@ -11,7 +11,7 @@ use super::explorer_rows::{
 use crate::diagnostics;
 use crate::{
     App, appearance,
-    preferences::{AgentsTab, SidebarTool},
+    preferences::{AgentStateFilter, AgentsTab, SidebarTool},
     settings_ui::SettingsSection,
 };
 use eframe::egui::{self};
@@ -286,11 +286,41 @@ impl App {
         });
     }
 
+    /// Marks every unread notice read with the per-card Mark read request.
+    /// Read state only: nothing is resolved or dismissed.
+    pub(crate) fn mark_all_read(&mut self) {
+        let ids: Vec<String> = self
+            .cached_unread_groups()
+            .iter()
+            .flat_map(|group| group.notices.iter())
+            .filter(|notice| !notice.read)
+            .map(|notice| notice.id.clone())
+            .collect();
+        for id in ids {
+            self.apply_notice_action(id, crate::sidebar_ui::AttentionAction::Read);
+        }
+        self.unread_selected = None;
+    }
+
     /// Read-state inbox. Marking read never resolves, dismisses, or changes
     /// lifecycle; the selected row stays until selection or filter changes.
     pub(super) fn agents_unread(&mut self, ui: &mut egui::Ui) {
         let index = self.sidebar_index();
         let notices = self.cached_unread_groups();
+        if !notices.is_empty() {
+            let response = appearance::icon_label_button(appearance::IconLabelButtonInput {
+                ui,
+                icon: "CircleCheck",
+                label: "Mark all read",
+                height: appearance::TOOLBAR_BUTTON,
+            })
+            .on_hover_text("Mark every unread event read (keeps agent state)");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "agents-mark-all-read", response.rect);
+            if response.clicked() {
+                self.mark_all_read();
+            }
+        }
         appearance::sidebar_scroll("agents-unread").show(ui, |ui| {
             if notices.is_empty() {
                 ui.weak("No unread agent events");

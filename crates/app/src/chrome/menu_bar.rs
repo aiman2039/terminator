@@ -1,4 +1,4 @@
-//! Menu-bar icon for the macOS status item. The badge is Telegram red
+//! Icon for the macOS status item and the Linux tray. The badge is Telegram red
 //! (`#FF3B30`) with a white count. `99+` is the cap.
 
 use std::sync::OnceLock;
@@ -94,6 +94,33 @@ fn badge_label(waiting: usize) -> String {
         waiting.to_string()
     }
 }
+
+/// Dock tile badge text for `waiting` agents: the menu-bar count and cap,
+/// and no badge at zero.
+#[cfg(any(test, target_os = "macos"))]
+pub(crate) fn dock_badge_label(waiting: usize) -> Option<String> {
+    (waiting > 0).then(|| badge_label(waiting))
+}
+
+/// Show the waiting count on the Dock icon (`NSApp.dockTile.badgeLabel`),
+/// or clear it at zero. Linux has no Dock badge.
+#[cfg(all(not(test), target_os = "macos"))]
+pub(crate) fn set_dock_badge(waiting: usize) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::NSString;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let label = dock_badge_label(waiting).map(|text| NSString::from_str(&text));
+    NSApplication::sharedApplication(mtm)
+        .dockTile()
+        .setBadgeLabel(label.as_deref());
+}
+
+/// Linux has no Dock; the tray tooltip carries the waiting count.
+#[cfg(all(not(test), target_os = "linux"))]
+pub(crate) fn set_dock_badge(_waiting: usize) {}
 
 fn badge_width(label: &str, badge_h: u32) -> u32 {
     if label.chars().count() == 1 {
@@ -280,6 +307,13 @@ mod tests {
 
     fn badge(pixel: image::Rgba<u8>) -> bool {
         pixel[0] > 220 && pixel[1] < 90 && pixel[2] < 80 && pixel[3] > 200
+    }
+
+    #[test]
+    fn dock_badge_shows_the_waiting_count_and_clears_at_zero() {
+        assert_eq!(dock_badge_label(0), None);
+        assert_eq!(dock_badge_label(3).as_deref(), Some("3"));
+        assert_eq!(dock_badge_label(100).as_deref(), Some("99+"));
     }
 
     #[test]

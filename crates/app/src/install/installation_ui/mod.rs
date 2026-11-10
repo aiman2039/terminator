@@ -1,6 +1,7 @@
 //! Recovery uses the ordinary session navigation and safe idle restart paths.
 pub(crate) mod service_op;
 mod settings;
+mod support_report;
 #[cfg(test)]
 mod tests;
 

@@ -102,6 +102,7 @@ impl App {
             self.theme_draft = file.config.clone();
             self.theme = file.config;
             appearance::apply(ctx, &self.theme);
+            self.sync_fonts(ctx);
         }
     }
 }

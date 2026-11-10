@@ -1,5 +1,21 @@
 # Validation evidence — 2026-09-08
 
+## Mermaid files and CSV/TSV table viewer — 2026-11-09
+
+Unit tests only; no GUI fixture or live daemon was run.
+
+- Mermaid: `.mmd`/`.mermaid` get the Markdown Edit/Preview/Split predicate;
+  a file renders as one fence with a 256 KiB cap (the inline 32 KiB cap still
+  applies to Markdown fences); a one-diagram document is detected; the
+  generated fence outlasts backtick runs in the source.
+- Tables: delimiter detection (TSV tab, CSV `;` only when steadier than `,`,
+  quoted commas ignored), header and quoted cells, the 100,000-row cap and
+  truncation note flag, sort order (numbers, text, empty) both ways, the
+  case-insensitive filter, the header click cycle, extension mapping, and the
+  bounded non-blocking read.
+- Layout: a `Tab::Document` persists as `{path, kind}`, bumps the layout to
+  v13, round-trips, version-2 layouts still load, and v14 is refused.
+
 ## Remote app windows (remote-apps-v1) — 2026-11-08
 
 Branch `worktree-remote-apps`. A remote X11 app on an SSH host opens as a

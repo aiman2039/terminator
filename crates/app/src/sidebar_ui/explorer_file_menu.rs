@@ -25,6 +25,7 @@ impl FileRowMenu<'_> {
                 browser: file_actions::browser_document(self.path),
                 git: None,
                 neovim: false,
+                url: false,
             },
         ) {
             outcome.menu = Some(action);

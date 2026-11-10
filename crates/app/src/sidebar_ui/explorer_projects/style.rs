@@ -188,7 +188,30 @@ impl App {
         if self.preferences.project_styles.contains_key(&p.id)
             && menu_entry(ui, "Reset appearance", "Eraser")
         {
-            self.edit_project_style(&p.id, |s| *s = ProjectStyle::default());
+            // The pin is a place in the list, not appearance: it stays.
+            self.edit_project_style(&p.id, |s| {
+                *s = ProjectStyle {
+                    pinned: s.pinned,
+                    ..ProjectStyle::default()
+                };
+            });
+            ui.close();
+        }
+        let pinned = self
+            .preferences
+            .project_styles
+            .get(&p.id)
+            .is_some_and(|style| style.pinned);
+        if menu_entry(
+            ui,
+            if pinned {
+                "Unpin project"
+            } else {
+                "Pin project"
+            },
+            "Pin",
+        ) {
+            self.edit_project_style(&p.id, |s| s.pinned = !pinned);
             ui.close();
         }
         ui.separator();

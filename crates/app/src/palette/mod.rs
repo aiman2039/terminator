@@ -32,6 +32,8 @@ const FILTER_SESSIONS: u8 = 1 << 3;
 const FILTER_AGENTS: u8 = 1 << 4;
 pub(crate) const FILTER_ACTIONS: u8 = 1 << 5;
 const FILTER_SETTINGS: u8 = 1 << 6;
+/// New agent session: only agent launchers. No chip shows this mode.
+pub(crate) const FILTER_LAUNCH: u8 = 1 << 7;
 
 const PALETTE_FILTERS: &[(&str, u8)] = &[
     ("Files", FILTER_FILES),
@@ -121,9 +123,14 @@ pub(crate) enum PaletteItem {
     NewWorktree,
     OpenPlayer,
     CheckForUpdates,
+    OpenLogsFolder,
+    CopyDiagnostics,
+    ReportProblem,
     ToggleIdeSidebarHeight,
     SaveLayout,
     ApplyLayout(String),
+    /// "New terminal with <agent>": types the command without Enter.
+    AgentLaunch(crate::agent_launch::AgentLauncher),
 }
 
 /// Shortcut actions the palette always lists, with a bare title and no
@@ -240,9 +247,13 @@ impl PaletteItem {
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
             Self::CheckForUpdates => "Check for Updates…".into(),
+            Self::OpenLogsFolder => "Open logs folder".into(),
+            Self::CopyDiagnostics => "Copy diagnostics".into(),
+            Self::ReportProblem => "Report a problem…".into(),
             Self::ToggleIdeSidebarHeight => "Toggle IDE sidebar height".into(),
             Self::SaveLayout => "Save layout".into(),
             Self::ApplyLayout(name) => name.clone(),
+            Self::AgentLaunch(launcher) => launcher.title(),
         }
     }
 
@@ -252,8 +263,12 @@ impl PaletteItem {
             | Self::NewWorktree
             | Self::OpenPlayer
             | Self::CheckForUpdates
+            | Self::OpenLogsFolder
+            | Self::CopyDiagnostics
+            | Self::ReportProblem
             | Self::ToggleIdeSidebarHeight
-            | Self::SaveLayout => self.title(),
+            | Self::SaveLayout
+            | Self::AgentLaunch(_) => self.title(),
             Self::Action(action) if pinned_action(*action) => self.title(),
             _ => format!("{}  {}", self.category(), self.title()),
         }
@@ -308,6 +323,7 @@ impl PaletteItem {
             Self::Settings(section) => section.keywords().into(),
             Self::Action(action) if !pinned_action(*action) => app.shortcut_label(*action),
             Self::Editor(command) => editor_chord(*command),
+            Self::AgentLaunch(launcher) => launcher.command.clone(),
             Self::VncProfile(id, _) => app
                 .state
                 .vnc_profiles
@@ -355,6 +371,7 @@ impl PaletteItem {
     fn icon(&self) -> Option<&'static str> {
         match self {
             Self::File(path) | Self::Symbol { path, .. } => Some(crate::icons::file_icon(path)),
+            Self::AgentLaunch(launcher) => Some(launcher.icon),
             _ => None,
         }
     }

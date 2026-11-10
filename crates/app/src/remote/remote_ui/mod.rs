@@ -261,9 +261,10 @@ impl App {
             && (crate::image_preview::supported(file)
                 || crate::browser::supported_file(file)
                 || crate::player::supported(file)
-                || file
-                    .extension()
-                    .is_some_and(|ext| ext == "md" || ext == "markdown"));
+                || crate::document_view::DocumentKind::for_path(file).is_some()
+                || file.extension().is_some_and(|ext| {
+                    ext == "md" || ext == "markdown" || ext == "mmd" || ext == "mermaid"
+                }));
         if preview {
             let _ = self.jobs.send(Job::RemoteAsset {
                 project: project.id.clone(),

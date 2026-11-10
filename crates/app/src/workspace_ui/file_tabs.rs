@@ -17,7 +17,9 @@ impl App {
     /// a Neovim editor whose label is still its file name.
     pub(crate) fn tab_file<'a>(&'a self, tab: &'a Tab) -> Option<&'a Path> {
         match tab {
-            Tab::NativeEditor { path } | Tab::Image { path } => Some(path),
+            Tab::NativeEditor { path } | Tab::Image { path } | Tab::Document { path, .. } => {
+                Some(path)
+            }
             Tab::Terminal(sid) => self.named_editor_file(sid),
             _ => None,
         }

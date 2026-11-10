@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Sessions, tabs and projects: multi-select session rows (tile, move, close),
+  Open in split and drag a session onto a pane, Next/Previous tab keys,
+  middle-click and Close editor tabs, pinned projects, Manual project order,
+  folder drops on the project list, clickable status-bar agent counts, Mark
+  all read, and the macOS Dock badge.
+- Terminal OSC 8 hyperlinks open their URI (file:// URIs open the local file),
+  and link menus add Open in browser tab and Copy link. Browser tabs search
+  non-URL address text, zoom (⌘=/⌘-/⌘0), find in page (⌘F), reopen closed tabs
+  (⌥⌘T), open status-bar ports in a tab, and have optional developer tools.
+- Terminal tabs show the program's window title as a subtitle and tooltip (`terminal-title-v1`; a named tab keeps its name), a dot for unread completed agents, and a Resume chip in the pane caption when a stopped agent can resume in that shell.
+- CSV and TSV files open in a read-only table tab with sortable columns and a
+  row filter, and `.mmd`/`.mermaid` files preview as one diagram; Mermaid
+  diagrams pan and zoom with Fit and 100%.
+- Windows and Linux show an "Update vX" status-bar chip with release notes and Skip this version; Installation details adds Open logs folder, Copy diagnostics and Report a problem…; Linux gets a tray icon with the agent menu (GNOME needs the AppIndicator extension).
+- Agent presets and launchers: Settings → Agents keeps named agent commands,
+  and the **+** menu, Search Everywhere and New agent session… (⌥⌘N) open
+  "New terminal with <agent>" for each preset and installed agent. The
+  command is typed without Enter. The New task form can pick one too.
+- Settings → Appearance has a Terminal font choice (installed monospace
+  families, for example a Nerd Font for prompt glyphs) and a CJK fallback font.
+  A missing saved family shows a warning and keeps the bundled JetBrains Mono.
 - JetBrains keys work in every pane, terminals and Settings included: double
   Shift (Search Everywhere), ⇧⌘A (Find Action) and ⇧⌘O (Go to File). ⌘E is
   now Recent Files everywhere, and Toggle IDE mode moved to ⌥⌘E. Saved

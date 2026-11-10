@@ -149,6 +149,71 @@ fn post_create_input_is_dropped_when_the_create_fails() {
     );
 }
 
+fn installed(kind: &str) -> crate::agent_launch::InstalledAgent {
+    crate::agent_launch::InstalledAgent {
+        kind: kind.into(),
+        program: kind.into(),
+    }
+}
+
+/// A launcher opens a tab in the current project and types the agent
+/// command there; it never presses Enter.
+#[test]
+fn agent_launcher_types_command_without_enter() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.selected = Some("a".into());
+    app.installed_agents = vec![installed("codex")];
+    let launcher = app.agent_launchers().remove(0);
+    app.launch_agent(&launcher);
+    let Job::Control(request, After::Workspace(id, _)) = received.try_recv().unwrap() else {
+        panic!("Expected workspace create")
+    };
+    let Request::Create { project, .. } = *request else {
+        panic!("Expected create")
+    };
+    assert_eq!(project, "a");
+    assert_eq!(
+        app.post_create.by_tab.get(&id),
+        Some(&PostCreate {
+            input: "codex".into(),
+            enter: false,
+        })
+    );
+    assert_eq!(app.preferences.agent_launch_recent, ["agent:codex"]);
+}
+
+/// New agent session lists only the launchers, the last used first.
+#[test]
+fn new_agent_session_lists_launchers_last_used_first() {
+    let (mut app, ctx, _dir) = fixture();
+    app.selected = Some("a".into());
+    app.installed_agents = vec![installed("codex"), installed("pi")];
+    app.preferences.agent_launch_recent = vec!["agent:pi".into()];
+    app.run_shortcut(&ctx, Action::NewAgentSession);
+    assert!(app.palette.open);
+    let titles: Vec<_> = app
+        .filtered_palette()
+        .iter()
+        .map(|item| match item {
+            crate::palette::PaletteItem::AgentLaunch(launcher) => launcher.title(),
+            other => panic!("Unexpected row {other:?}"),
+        })
+        .collect();
+    assert_eq!(titles, ["New terminal with Pi", "New terminal with Codex"]);
+}
+
+/// Without a preset or an installed agent the picker only says why.
+#[test]
+fn new_agent_session_without_agents_only_says_why() {
+    let (mut app, ctx, _dir) = fixture();
+    app.installed_agents.clear();
+    app.run_shortcut(&ctx, Action::NewAgentSession);
+    assert!(!app.palette.open);
+    assert!(app.info.is_some());
+}
+
 /// #268: a refused editor close does not leave the editors busy, and a
 /// refused Explorer search does not stay "Searching…".
 #[test]

@@ -3,6 +3,7 @@ use super::super::*;
 use crate::app::OpenFileModeInput;
 
 mod browser;
+mod browser_tools;
 mod commit_graph;
 #[cfg(test)]
 mod commit_graph_tests;

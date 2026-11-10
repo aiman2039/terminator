@@ -32,7 +32,7 @@ pub(crate) struct Cache {
     projects: Option<(ProjectKey, Arc<Vec<Arc<terminator_core::Project>>>)>,
     history: Option<(HistorySort, String, Arc<Vec<HistoryGroup>>)>,
     unread: Option<(Option<String>, Arc<Vec<NoticeGroup>>)>,
-    live_rows: Option<(String, String, Arc<LiveRows>)>,
+    live_rows: Option<(LiveKey, Arc<LiveRows>)>,
     pub git: Option<Arc<crate::sidebar_ui::PreparedGit>>,
     pub explorer: Option<ExplorerCache>,
     pub files_revision: u64,
@@ -67,9 +67,13 @@ struct ProjectKey {
     missing: HashSet<String>,
     hidden: HashSet<String>,
     sort: ProjectSort,
+    pinned: HashSet<String>,
+    manual: Vec<String>,
     filter: String,
     activity: HashMap<String, u64>,
 }
+/// All-live search text, agent kind and state filter the rows were built for.
+type LiveKey = (String, String, preferences::AgentStateFilter);
 #[derive(Default)]
 pub(crate) struct LiveRows {
     pub groups: Vec<(Arc<terminator_core::Project>, Vec<Arc<Session>>)>,
@@ -115,11 +119,20 @@ impl App {
 
     pub(crate) fn cached_projects(&self) -> Arc<Vec<Arc<terminator_core::Project>>> {
         self.sidebar_index();
+        let pinned: HashSet<String> = self
+            .preferences
+            .project_styles
+            .iter()
+            .filter(|(_, style)| style.pinned)
+            .map(|(id, _)| id.clone())
+            .collect();
         let mut cache = self.sidebar_cache.borrow_mut();
         if let Some((key, rows)) = &cache.projects
             && key.hidden == self.preferences.hidden_projects
             && key.missing == self.missing_projects
             && key.sort == self.preferences.project_sort
+            && key.pinned == pinned
+            && key.manual == self.preferences.project_order
             && key.filter == self.preferences.project_filter
             && key.activity == self.preferences.project_activity
         {
@@ -130,6 +143,8 @@ impl App {
                 projects: &self.state.projects,
                 hidden: &self.preferences.hidden_projects,
                 sort: self.preferences.project_sort,
+                pinned: &pinned,
+                manual: &self.preferences.project_order,
                 filter: &self.preferences.project_filter,
                 activity: &self.preferences.project_activity,
                 sessions: &self.state.sessions,
@@ -147,6 +162,8 @@ impl App {
                 missing: self.missing_projects.clone(),
                 hidden: self.preferences.hidden_projects.clone(),
                 sort: self.preferences.project_sort,
+                pinned,
+                manual: self.preferences.project_order.clone(),
                 filter: self.preferences.project_filter.clone(),
                 activity: self.preferences.project_activity.clone(),
             },
@@ -183,10 +200,12 @@ impl App {
         let index = self.sidebar_index();
         let query = self.preferences.agents_search.trim().to_lowercase();
         let kind = &self.preferences.agents_filter;
+        let state = self.preferences.agents_state;
         let mut cache = self.sidebar_cache.borrow_mut();
-        if let Some((old_query, old_kind, rows)) = &cache.live_rows
+        if let Some(((old_query, old_kind, old_state), rows)) = &cache.live_rows
             && *old_query == query
             && old_kind == kind
+            && *old_state == state
         {
             return Arc::clone(rows);
         }
@@ -195,6 +214,9 @@ impl App {
         for session in self.state.sessions.iter().filter(|s| s.lifecycle.live()) {
             let presented = self.present_session(&session.id);
             if !presented.live && presented.lifecycle.is_none() {
+                continue;
+            }
+            if !state.matches(presented.lifecycle) {
                 continue;
             }
             let kinds = if presented.live {
@@ -245,7 +267,7 @@ impl App {
             }
         }
         let rows = Arc::new(rows);
-        cache.live_rows = Some((query, kind.clone(), Arc::clone(&rows)));
+        cache.live_rows = Some(((query, kind.clone(), state), Arc::clone(&rows)));
         rows
     }
     pub(crate) fn cached_unread_groups(&self) -> Arc<Vec<NoticeGroup>> {

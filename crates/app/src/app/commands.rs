@@ -74,6 +74,7 @@ impl App {
                     .is_some_and(|session| self.session_action_applies(action, session))
             }
             Action::ZoomPane => self.pane_ops.zoomed.is_some() || self.zoom_target().is_some(),
+            Action::ReopenBrowserTab => !self.browser_extras.closed.is_empty(),
             action if SESSION_ACTIONS.contains(&action) => self.active_session.is_some(),
             action if super::actions::GIT_ACTIONS.contains(&action) => {
                 self.git_action_applies(action)
@@ -166,6 +167,7 @@ impl App {
         shortcuts::pretty(&self.state.settings.keybindings, action.id())
     }
 
+    // sarah-allow(large_function): flat dispatch, one single-call arm per shortcut Action
     pub(crate) fn run_shortcut(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::OpenFile => {
@@ -189,6 +191,8 @@ impl App {
             Action::FindInFiles => self.find_in_files_action(ctx),
             Action::ReplaceInFiles => self.replace_in_files_action(ctx),
             Action::FindInTerminal => self.find_in_active_terminal(ctx),
+            Action::NextTab => self.step_workspace_tab(true),
+            Action::PrevTab => self.step_workspace_tab(false),
             Action::NextPane => self.focus_next_pane(),
             Action::SelectAll => self.select_all_active(),
             Action::SearchScrollback => self.search_active_scrollback(ctx),
@@ -215,7 +219,9 @@ impl App {
             Action::NextAttention => self.next_attention(),
             Action::AskAgent => self.open_ask_agent(),
             Action::NewBrowser => self.open_new_browser_tab(None),
+            Action::ReopenBrowserTab => self.reopen_browser_tab(),
             Action::NewVnc => self.open_new_vnc_tab(None),
+            Action::NewAgentSession => self.open_agent_picker(),
             Action::SwitcherNext => self.step_switcher(false),
             Action::SwitcherBack => self.step_switcher(true),
             Action::ToolExplorer
@@ -351,6 +357,13 @@ impl App {
         ctx.memory_mut(|memory| {
             memory.request_focus(egui::Id::unique("scrollback-search"));
         });
+    }
+
+    /// Drop the scrollback-search page; another page stays.
+    pub(crate) fn close_scrollback_search(&mut self) {
+        if self.search_session().is_some() {
+            self.hide_center_overlay();
+        }
     }
 
     pub(crate) fn search_active_scrollback(&mut self, ctx: &egui::Context) {

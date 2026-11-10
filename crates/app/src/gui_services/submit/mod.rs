@@ -1,5 +1,6 @@
 //! All ordinary GUI commands are submitted without waiting on the UI thread.
 mod execute;
+mod font_jobs;
 mod git_jobs;
 mod local_history_jobs;
 mod local_jobs;

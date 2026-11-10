@@ -24,13 +24,21 @@ impl Mode {
         }
     }
 }
+/// Files with an Edit/Preview/Split preview: Markdown and Mermaid files.
 pub(crate) fn supported(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "md" | "markdown" | "mdown" | "mkd" | "mkdn"
-        )
-    })
+    mermaid_file(path)
+        || path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "mdown" | "mkd" | "mkdn"
+            )
+        })
+}
+/// A standalone Mermaid diagram file (`.mmd`, `.mermaid`).
+pub(super) fn mermaid_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("mmd") || e.eq_ignore_ascii_case("mermaid"))
 }
 pub(crate) fn available(session: &Session) -> bool {
     session.kind == SessionKind::Editor

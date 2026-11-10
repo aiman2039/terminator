@@ -106,6 +106,9 @@ impl App {
     }
 
     pub(super) fn palette_accept(&self, item: &PaletteItem) -> bool {
+        if self.palette.filters == FILTER_LAUNCH {
+            return matches!(item, PaletteItem::AgentLaunch(_));
+        }
         let kind = item.filter_bit();
         if !self.palette_wants(kind) {
             return false;

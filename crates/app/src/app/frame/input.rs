@@ -12,6 +12,7 @@ impl App {
         self.visible_dirs.clear();
         self.visible_sessions.clear();
         self.visible_images.clear();
+        self.tables.begin_frame();
         self.visible_browsers.clear();
         for (key, view) in &mut self.vnc_views {
             view.visible_last_frame = self.visible_vnc.contains(key);
@@ -75,6 +76,9 @@ impl App {
         // Shared chords go by the looser keyboard owner: the terminal's own
         // find bar counts as the terminal.
         let terminal_keyboard = self.terminal_has_keyboard(ctx);
+        if !keys_captured {
+            self.browser_keys(ctx);
+        }
         for &action in Action::ALL {
             if keys_captured {
                 continue;

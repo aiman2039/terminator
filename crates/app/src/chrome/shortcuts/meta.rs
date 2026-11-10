@@ -33,6 +33,19 @@ pub(super) fn consume_with_text(input: &mut egui::InputState, chord: Chord) -> b
     found
 }
 
+/// Shift+[ and Shift+] can arrive as `{` and `}` (the logical key of the
+/// layout); a stored `shift+[` chord takes those too.
+pub(super) fn shifted_key(chord: Chord) -> Option<egui::Key> {
+    if !chord.modifiers.shift {
+        return None;
+    }
+    match chord.key {
+        egui::Key::OpenBracket => Some(egui::Key::OpenCurlyBracket),
+        egui::Key::CloseBracket => Some(egui::Key::CloseCurlyBracket),
+        _ => None,
+    }
+}
+
 /// A focused terminal keeps this chord. On Linux, Alt+letter and
 /// Alt+digit are Meta keys for the shell, Emacs, tmux, and IRC clients.
 pub fn terminal_keeps(value: &str) -> bool {

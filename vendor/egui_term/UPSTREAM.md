@@ -332,3 +332,11 @@ even when terminal text is selected. Command+C and Ctrl+Shift+C keep copying.
 
 `open_link` panicked when the OS could not open a Cmd-clicked link. It now
 writes the error to stderr and returns, so the GUI stays up.
+
+## OSC 8 hyperlinks (2026-11-09)
+
+Link hit testing reads the alacritty cell hyperlink (`Cell::hyperlink()`)
+first. `target_at` returns the URI as the target text, the linked cells as
+the underline rects, and `LinkTarget::hyperlink = true`. Link hover and
+open (`LinkAction::Hover`/`Open`) also prefer the hyperlink URI over the URL
+regex. Test: `osc8_hyperlink_target_is_its_uri_not_the_text`.

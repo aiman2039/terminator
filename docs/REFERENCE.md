@@ -57,6 +57,8 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 
 Settings → Agent hooks installs, repairs, and removes managed hooks for Claude Code, Codex, OpenCode, Muse, Grok, and Cursor. Installation preserves unrelated hooks and writes a backup before changing an existing configuration. It never installs agent binaries or configures accounts.
 
+Settings → Agents lists the catalog agents found on PATH and keeps agent presets (name, icon, program, arguments) in `ui-preferences.json`. Preset changes save at once. Arguments are shell words: quote a word with spaces. The workspace **+** menu, Search Everywhere / Find Action and **New agent session…** (⌥⌘N; Ctrl+Shift+Alt+N on Linux; rebind it in Settings → Shortcuts) show **New terminal with <agent>** for each preset and installed agent, the last used first. A pick opens a terminal tab in the current project and types the command there without Enter: press Enter to start the agent. The New task form's agent list fills **Agent command** the same way.
+
 Read [the integration contract and capability notes](INTEGRATIONS.md) before connecting a custom agent. Installed hooks are inert outside terminals owned by this application. Notification defaults cover input, permission, completion, and failure events where the agent exposes them; opening the relevant terminal dismisses the notification without changing agent state. Settings → Notifications can play a system sound with desktop banners (default on). The in-app Agents inbox stays silent. The control requires a daemon that advertises `notification-sound-v1`.
 
 ## Local state and updates
@@ -76,6 +78,22 @@ button: finish all sessions, copy it, fully quit Terminator, then run it in
 Terminal.app or another terminal application. After `"Ok"`, wait two seconds and
 reopen Terminator. Logout/login is an alternative. Do not kill a daemon with live
 work merely to reload a build.
+
+On Windows and Linux an available release shows an **Update vX** chip in the
+status bar; click it to open Settings → Updates, which shows the release notes
+and **Skip this version** (hides the chip for that version only). macOS uses
+Sparkle and shows no chip. Settings → Updates → Installation details has **Open
+logs folder**, **Copy diagnostics** (versions, OS, capabilities and daemon
+generation; no scrollback or settings; home paths shown as `~`) and **Report a
+problem…**, which shows the copied text before it opens the GitHub issue page.
+Find Action lists all three. See [UPDATES.md](UPDATES.md).
+
+While the GUI runs, macOS shows a menu-bar status item and Linux shows a tray
+icon (StatusNotifierItem) with the same pending-agent menu and Show Terminator.
+The Linux tooltip and attention state show the waiting count. KDE, Xfce and
+most other desktops show the tray icon; GNOME needs the AppIndicator extension
+(`gnome-shell-extension-appindicator`). Without a StatusNotifierWatcher on
+D-Bus there is no tray icon and no error.
 
 ## Validation
 
@@ -119,7 +137,18 @@ preserves comments and unrelated TOML keys; Cancel restores the committed theme.
 Reset appearance changes only the draft. Invalid external edits retain the last
 valid theme and display an error. An externally changed configuration requires
 reloading a dirty draft before saving. Functional settings and navigation remain
-in their existing stores; font choices are not part of the appearance file.
+in their existing stores.
+
+Settings → Appearance → Terminal font lists the installed monospace families
+(for example a Nerd Font for starship or p10k prompt glyphs). The chosen family
+goes before the bundled JetBrains Mono in terminal and editor text, with its
+bold and italic faces. CJK fallback font adds an installed face (PingFang,
+Hiragino, Noto Sans CJK and similar faces are listed first) after the bundled
+fallbacks. The list and the font files load in the background; the system list
+is read once per GUI launch. Apply saves `terminal_font` and `cjk_font` in
+`[appearance]`; the bundled choice removes the key. A saved family that is not
+installed shows a warning in Settings and the bundled font stays in use. Text
+sizes still come from the font size settings.
 
 Toolbar buttons show 14 px icons in every row, and so does the close button on
 the top-level tab strip. Sidebar toolbars, tab strip controls, pane bars, the
@@ -179,6 +208,11 @@ resolved against the originating session directory, including `~/`, quoted space
 and `file:line:column`. Cmd-click (macOS) or Ctrl-click (Linux) opens the default
 action. Terminal mouse-reporting applications keep their input behavior. No
 Tree-sitter dependency is needed for these targets; Neovim owns editor syntax.
+OSC 8 hyperlinks (for example `ls --hyperlink` or `gcc -fdiagnostics-urls`) use
+their URI, not the text on screen: hover shows the URI, and Cmd/Ctrl-click opens
+its actions. A `file://` URI opens the local file with the default viewer (the
+host part is ignored). For an http(s) link the menu offers **Open in browser
+tab**, **Open in system browser** and **Copy link** (the real URI).
 
 
 The top-level tab strip sits above the split workspace. Every pane has a compact
@@ -394,7 +428,7 @@ Explorer roots.
 
 Explorer **Contents** search lists matching lines by file. Click a line to open
 the file at that line. The native editor also puts the caret on the match.
-Images, HTML, and audio still open in their default viewer. A file that is
+Images, HTML, CSV/TSV, and audio still open in their default viewer. A file that is
 already open in a Neovim or terminal editor tab gets focus and keeps its cursor.
 
 **Find in Files** searches the text of project files. Press Cmd+Shift+F on
@@ -436,6 +470,51 @@ disk, as with any other outside edit. If a file changed after the search,
 nothing is written and the search runs again. Remote projects are not changed;
 a note tells you so.
 
+### Sessions, tabs and projects
+
+**Session selection.** In the project sidebar, Command-click (Ctrl-click on
+Linux) adds a session row to the selection or removes it. Shift-click selects
+the rows from the last clicked row. A plain click opens one session, as
+before. The menu of a selected row acts on all selected sessions:
+
+- **Tile in new tab** puts 2 to 4 live sessions of one project in a new
+  top-level tab: the second to the right of the first, the third below the
+  first, the fourth below the second.
+- **Move to tab group** moves them into one top-level tab of the project.
+- **Close N sessions…** asks about each session in turn, with the usual
+  choice: keep it running in the background, or terminate it. Cancel stops the
+  rest. Unsaved native editors show the close bar.
+
+A session row menu also has **Open in split right** and **Open in split
+down**: the session opens beside the focused pane of the active tab. A session
+row dragged onto a pane opens there: the middle of the pane adds it to that
+pane, an edge opens a split. A pane that is already in the dock moves; a
+background session attaches. Terminals in the IDE strip or in a floating
+window stay where they are.
+
+**Tabs.** **Next tab** and **Previous tab** go to the neighbour top-level tab
+and wrap at the ends: Shift+Command+] and Shift+Command+[ on macOS,
+Ctrl+PageDown and Ctrl+PageUp on Linux. A middle click on a top-level tab
+closes it through the normal close (pinned tabs stay). The tab menu has
+**Close editor tabs…**: it closes every unpinned tab that holds only editors,
+through the unsaved-changes bar.
+
+**Projects.** **Pin project** in the project menu keeps the project at the top
+of the list, in the chosen sort. **Sort projects → Manual** keeps the order you
+drag the projects into: drag a project row onto another row. A drag with
+another sort turns on Manual and starts from the list you see. Folders dropped
+from Finder or the file manager on the project list open as projects, one
+each, like **New project**. A note names each folder; an item that is not a
+folder shows an error.
+
+**Agent counts.** The status bar shows waiting, unread, working and done
+agents as separate buttons. Waiting opens **Needs attention**, Unread opens
+**Unread**, Working and Done open **All live** filtered to that state. The
+All-live filter menu also sets the state filter. The **Unread** tab has
+**Mark all read**: it marks every unread event read and keeps the agent
+state. On macOS the Dock icon shows the waiting count (`99+` above 99) and
+clears it at zero.
+
 ## Native previews and explicit controls
 
 Markdown editor tabs place the filename, flat **Edit / Preview / Split** tabs and
@@ -452,8 +531,15 @@ when the editor is ready; switch to Edit to inspect or answer its prompt.
 The native viewer supports headings, links, lists, tables, read-only task lists,
 highlighted code blocks, and local raster/SVG images. Relative links and images
 resolve beside the Markdown file. The **refresh icon** also reloads images. Remote images
-show their alt text without being downloaded. HTML stays text; browser rendering,
-Mermaid and typeset math are not included. Preview text is limited to 1 MiB.
+show their alt text without being downloaded. HTML stays text; browser rendering
+and typeset math are not included. Preview text is limited to 1 MiB.
+
+Top-level ```` ```mermaid ```` fences render as diagrams (up to 8 per document,
+32 KiB of source each); an invalid diagram stays as source. Click a diagram to
+show it alone with pan/zoom, **Fit** and **100%**; **Back** returns to the
+document. `.mmd` and `.mermaid` files open with the same Edit / Preview / Split
+modes: the whole file is one diagram (up to 256 KiB of source), shown with
+pan/zoom. A Markdown file that holds only one diagram also opens zoomable.
 Custom terminal editors without Neovim RPC show a clearly labeled **Saved file**
 preview. Ordinary Neovim configuration and Git review profiles are unchanged.
 
@@ -465,6 +551,21 @@ details below). No Chromium is
 bundled. Browser-bearing layouts use version 6; v4 HTML tabs migrate. Linux
 Wayland cannot host a child webview yet — use Open in browser.
 
+Address bar text that is not a web address searches with Settings → Terminal &
+Editor → **Browser search** (an https URL where `%s` is the text; default
+DuckDuckGo). The "More actions" menu has **Find in page**, **Zoom in**, **Zoom
+out** and **Actual size**. While the Browser tab is the focused pane, ⌘F, ⌘=,
+⌘- and ⌘0 (Ctrl on Linux) do the same; a page that holds the keyboard keeps its
+own keys. Zoom is per tab and kept in memory only; a zoomed tab shows its level
+beside the address bar (click to reset). Find runs `window.find` in the page from
+the GUI; the page has no way to call the app. **Reopen closed browser tab**
+(⌥⌘T; Ctrl+Shift+Alt+T on Linux; rebindable) reopens the last closed Browser
+tabs, newest first, for this GUI run. **Browser developer tools** (Settings,
+default off) enables Inspect Element and a Developer tools menu item; open
+Browser tabs reload when it changes. On macOS this uses WebKit's developer-extras
+preference through wry. Right-click a status-bar port link for **Open in Browser
+tab**.
+
 Click PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, or SVG files to open a native image tab.
 Fit, 100%, pan/zoom, Reload, Open as text, and Open externally are available.
 Raster previews decode in a bounded worker and use the first frame of animated
@@ -472,6 +573,16 @@ formats. SVGs are rasterized with resvg; external references are not loaded.
 Corrupt or over-limit images display an error instead of opening binary text.
 Image-bearing layouts use version 3; ordinary version-2 workspaces remain readable.
 Older GUIs refuse the newer layout rather than overwriting it.
+
+CSV and TSV files (`.csv`, `.tsv`, `.tab`) open as a read-only, GUI-only
+**table** tab (no PTY). TSV uses tabs; a CSV uses `;` when that splits the
+first rows into more, steady columns than `,` does. The first row is the
+header. Click a header to sort ascending, descending, then unsorted (numbers by
+value, then text, then empty cells). The filter box keeps rows with a
+case-insensitive match in any cell. The header row has Reload, Open as text and
+Open externally. Up to 64 MiB and 100,000 rows load; a larger file shows a
+**showing the first N rows** note. Up to 8 tables stay loaded at once. Table
+tabs save only the path and the viewer, in layout version 13.
 
 Click mp3, flac, ogg, wav, m4a, opus, or aac to play in the chrome **Player**
 next to the project-sidebar Agents bell (no PTY). While audio is on, the bar
@@ -623,6 +734,19 @@ metadata every 30 seconds. Missing helpers and lookup failures are exposed in th
 metadata result. A terminal notification is distinct from an authenticated agent
 lifecycle event; OSC 9, OSC 777 notify, and OSC 99 title/body messages are supported.
 Desktop delivery of terminal messages is separately configurable.
+
+Terminal window titles (OSC 0 and OSC 2) show as a weak subtitle after the tab
+and pane-caption label where there is room, and in the tab tooltip. The daemon
+keeps the last title per live session, without control characters and cut to
+120 characters, behind `terminal-title-v1`; an older daemon sends no title. A
+tab the user named (Rename, or Name tab… on its group) keeps its label and shows
+no title. Titles are display only: they never change agent lifecycle and never
+make notices or notifications. A completed agent with unread notices shows a
+small dot on its tab and caption status icon. When a live shell's agent hook
+reports Stopped or Failed, that agent left a resume command, and process
+presence verifies that no agent runs there, the pane caption shows a Resume chip.
+A click types the resume command and Enter into that shell; nothing resumes
+automatically.
 
 External-browser automation stays outside the native application. Use
 `terminator-hook ctl browser open URL` for the system browser. For an existing

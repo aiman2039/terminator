@@ -136,8 +136,19 @@ impl App {
                 .filter(|&action| self.shortcut_applies(action))
                 .map(PaletteItem::Action),
         );
+        // Last used first: the New agent session picker keeps this order.
+        items.extend(
+            self.agent_launchers()
+                .into_iter()
+                .map(PaletteItem::AgentLaunch),
+        );
         items.push(PaletteItem::OpenPlayer);
-        items.push(PaletteItem::CheckForUpdates);
+        items.extend([
+            PaletteItem::CheckForUpdates,
+            PaletteItem::OpenLogsFolder,
+            PaletteItem::CopyDiagnostics,
+            PaletteItem::ReportProblem,
+        ]);
         items.extend(
             PINNED_IDE_ACTIONS
                 .iter()

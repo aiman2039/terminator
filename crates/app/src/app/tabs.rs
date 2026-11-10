@@ -28,6 +28,7 @@ impl Tab {
 
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
+            Self::Document { .. } => 13,
             Self::RemoteApp { .. } => 12,
             Self::ChangesDiff { .. } => 11,
             Self::Merge { .. } => 10,
@@ -143,6 +144,44 @@ impl App {
             return;
         }
         self.create_terminal_tab((project, cwd), (index, post));
+    }
+    /// Next tab / Previous tab: activate the neighbour top-level tab of the
+    /// selected project, wrapping at the ends, and focus its pane.
+    pub(crate) fn step_workspace_tab(&mut self, forward: bool) {
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        let Some(workspace) = self.layouts.get_mut(&project) else {
+            return;
+        };
+        let count = workspace.tabs.len();
+        if count < 2 {
+            return;
+        }
+        let at = workspace.active_index();
+        let last = count.saturating_sub(1);
+        let next = match (forward, at) {
+            (true, at) if at >= last => 0,
+            (true, at) => at.saturating_add(1),
+            (false, 0) => last,
+            (false, at) => at.saturating_sub(1),
+        };
+        let Some(id) = workspace.tabs.get(next).map(|tab| tab.id.clone()) else {
+            return;
+        };
+        workspace.active = id;
+        workspace.record_active();
+        let pane = workspace.active_pane().cloned();
+        if self.rename_surface == RenameSurface::Pane {
+            self.finish_rename(true);
+        }
+        self.hover_popup = None;
+        self.hide_center_overlay();
+        if let Some(Tab::Terminal(sid)) = pane {
+            self.focus_terminal(sid);
+        } else {
+            self.focus_non_terminal();
+        }
     }
     pub(crate) fn begin_workspace_close_tabs(&mut self, project: &str, ids: Vec<String>) {
         self.clear_session_rename();

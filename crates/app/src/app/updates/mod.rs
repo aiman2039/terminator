@@ -102,6 +102,10 @@ impl App {
             Update::OpenImage(project, path, after) => {
                 self.open_gui_tab(project, Tab::Image { path }, after);
             }
+            Update::OpenDocument(project, tab, after) => self.open_gui_tab(project, tab, after),
+            Update::Table(path, generation, result) => {
+                self.tables.loaded(&path, generation, result);
+            }
             Update::FocusViewport(viewport) => Self::handle_focus_viewport(ctx, viewport),
             Update::RevealFileSession(session, project) => {
                 self.handle_reveal_file_session(ctx, session, project);
@@ -150,6 +154,7 @@ impl App {
             ),
             Update::TestPickerClosed => self.picker.close(),
             Update::HookStatus(status) => self.hook_status = status,
+            Update::InstalledAgents(installed) => self.installed_agents = installed,
             Update::Appearance(file) => self.handle_appearance(ctx, *file),
             Update::Activation(notice) => self.handle_activation(ctx, notice),
             Update::AttentionMigrated(result) => self.handle_attention_migrated(result),
@@ -224,6 +229,7 @@ impl App {
             Update::Workspace(root, op, result) => self.handle_workspace(&root, op, result),
             Update::GitView(key, view) => self.handle_git_view(&key, view),
             Update::LocalHistory(reply) => self.handle_local_history(reply),
+            Update::Fonts(reply) => self.handle_fonts(ctx, reply),
             Update::WorktreeProbe(draft, git) => self.apply_worktree_probe(draft, git),
             Update::CommitFiles(hash, files) => {
                 self.commit_files.insert(hash, Some(files));

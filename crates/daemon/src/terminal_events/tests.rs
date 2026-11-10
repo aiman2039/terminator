@@ -203,3 +203,43 @@ fn palette_queries_return_distinct_ansi_colors() {
     assert!(replies[1].contains("9090/a9a9/5959"), "{}", replies[1]);
     assert_ne!(replies[0], replies[1]);
 }
+
+#[test]
+fn window_title_is_sanitized_and_never_a_notice() {
+    let mut p = vt100::Parser::new_with_callbacks(24, 80, 0, Events::default());
+    let start = std::time::Instant::now();
+    process(&mut p, b"\x1b]0;  vim\x7f main.rs \x07");
+    assert!(p.callbacks().notices.is_empty());
+    assert_eq!(
+        p.callbacks_mut().take_title(start, false).as_deref(),
+        Some("vim main.rs")
+    );
+    assert_eq!(p.callbacks_mut().take_title(start, true), None);
+    let long = format!("\x1b]2;{}\x1b\\", "x".repeat(500));
+    process(&mut p, long.as_bytes());
+    let title = p.callbacks_mut().take_title(start, true).expect("title");
+    assert_eq!(title.len(), terminator_core::terminal_title::LIMIT);
+}
+
+#[test]
+fn window_title_changes_are_throttled_until_a_flush() {
+    let mut p = vt100::Parser::new_with_callbacks(24, 80, 0, Events::default());
+    let start = std::time::Instant::now();
+    process(&mut p, b"\x1b]2;one\x07");
+    assert_eq!(
+        p.callbacks_mut().take_title(start, false).as_deref(),
+        Some("one")
+    );
+    process(&mut p, b"\x1b]2;two\x07");
+    assert_eq!(p.callbacks_mut().take_title(start, false), None);
+    let later = start + TITLE_PUBLISH_INTERVAL;
+    assert_eq!(
+        p.callbacks_mut().take_title(later, false).as_deref(),
+        Some("two")
+    );
+    process(&mut p, b"\x1b]2;three\x07");
+    assert_eq!(
+        p.callbacks_mut().take_title(later, true).as_deref(),
+        Some("three")
+    );
+}

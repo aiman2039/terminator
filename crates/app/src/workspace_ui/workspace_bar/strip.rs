@@ -409,6 +409,7 @@ impl App {
             switch,
             close,
             close_all,
+            close_editors,
             close_left,
             close_right,
             toggle_pin,
@@ -422,6 +423,10 @@ impl App {
         }
         if close_all {
             self.begin_workspace_close_tabs(project, workspace.unpinned_ids(workspace.ids()));
+        }
+        if close_editors {
+            let ids = workspace.editor_group_ids(|sid| self.editors_only(&[sid.to_owned()]));
+            self.begin_workspace_close_tabs(project, ids);
         }
         if let Some(id) = close_left {
             self.begin_workspace_close_tabs(

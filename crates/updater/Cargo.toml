@@ -18,5 +18,10 @@ objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString", "NSUserDefaults", "NSProcessInfo"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibilityProtocols", "NSApplication", "NSAlert", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSResponder", "NSView", "NSImage", "NSCell", "NSWindow", "NSWindowController", "objc2-core-foundation"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Tray icon over D-Bus. async-io reuses the zbus 5 runtime accesskit already links; no tokio, no GTK.
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [lints]
 workspace = true

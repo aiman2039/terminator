@@ -9,6 +9,7 @@ impl App {
         session: &Session,
         rename_tab: Option<(&str, &str)>,
     ) -> Option<egui::Response> {
+        self.session_selection.painted(&session.id);
         let presented = self.present_session(&session.id);
         let editing = self.renaming(&session.id, RenameSurface::Sidebar);
         let height = if !editing && presented.notice_preview.is_some() {
@@ -47,7 +48,14 @@ impl App {
             });
         }
         if response.clicked() && !editing {
-            self.go_session(&session.id);
+            let modifiers = ui.input(|input| input.modifiers);
+            let current = self.active_session.clone();
+            if self
+                .session_selection
+                .click(&session.id, current.as_deref(), modifiers)
+            {
+                self.go_session(&session.id);
+            }
         }
         appearance::context_menu(&response, |ui| {
             self.session_row_menu(ui, session, rename_tab);
@@ -99,7 +107,8 @@ impl App {
                     None if session.kind == SessionKind::Editor => "FileCode",
                     None => "Terminal",
                 },
-                selected: self.active_session.as_ref() == Some(&session.id),
+                selected: self.active_session.as_ref() == Some(&session.id)
+                    || self.session_selection.selected(&session.id),
                 trailing,
                 tint: color,
                 icon_tint: presented
@@ -146,6 +155,10 @@ impl App {
         session: &Session,
         rename_tab: Option<(&str, &str)>,
     ) {
+        if let Some(sids) = self.session_selection.bulk(&session.id) {
+            self.session_bulk_menu(ui, &session.project_id, &sids);
+            return;
+        }
         self.rename_action(ui, &session.id, RenameSurface::Sidebar);
         ui.separator();
         if appearance::menu_item(appearance::MenuItemInput {
@@ -158,6 +171,9 @@ impl App {
         {
             self.go_session(&session.id);
             ui.close();
+        }
+        if session.lifecycle.live() {
+            self.open_in_split_items(ui, &session.id);
         }
         if let Some((project_id, tab_id)) = rename_tab
             && appearance::menu_item(appearance::MenuItemInput {
@@ -199,6 +215,33 @@ impl App {
                 ui.close();
             }
             self.remove_record_item(ui, &session.id);
+        }
+    }
+
+    fn open_in_split_items(&mut self, ui: &mut egui::Ui, sid: &str) {
+        for (label, icon, split) in [
+            (
+                "Open in split right",
+                "PanelRightClose",
+                egui_dock::Split::Right,
+            ),
+            (
+                "Open in split down",
+                "PanelBottomClose",
+                egui_dock::Split::Below,
+            ),
+        ] {
+            if appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label,
+                icon,
+                shortcut: "",
+            })
+            .clicked()
+            {
+                self.open_session_in_split(sid, split);
+                ui.close();
+            }
         }
     }
 

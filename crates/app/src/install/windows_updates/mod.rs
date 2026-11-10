@@ -3,10 +3,12 @@
 //! There is no signed auto-installer outside macOS yet. Once a minute (and on
 //! demand from Settings → Updates, the header menu or the palette) the GUI
 //! asks the GitHub Releases API for the latest tag; a newer tag surfaces a
-//! download link for this platform's published archive. Nothing downloads or
+//! download link for this platform's published archive, a status-bar chip
+//! (unless the user skipped that version) and the release notes. Nothing downloads or
 //! installs automatically, and development/isolated launches never touch the
 //! feed.
 
+mod chip;
 mod feed;
 
 use crate::*;
@@ -112,7 +114,12 @@ enum Status {
     Idle,
     Checking,
     Current,
-    Available { version: String, url: String },
+    Available {
+        version: String,
+        url: String,
+        /// Release notes (Markdown); empty when the release has none.
+        notes: String,
+    },
     Failed(String),
 }
 
@@ -143,6 +150,34 @@ pub struct WindowsUpdateCheck {
     cached: Option<Latest>,
     /// Rate-limit replies in a row; drives the poll backoff.
     rate_limit_streak: u32,
+    /// Release-notes Markdown render cache.
+    notes_cache: egui_commonmark::CommonMarkCache,
+}
+
+/// The version the status-bar chip offers: the available one, unless the
+/// user skipped exactly that version.
+#[must_use]
+pub fn chip_version<'a>(available: Option<&'a str>, skipped: Option<&str>) -> Option<&'a str> {
+    available.filter(|version| Some(*version) != skipped)
+}
+
+/// "Skip this version" hides the status-bar chip for this version only;
+/// a later release shows it again.
+fn skip_version_row(ui: &mut egui::Ui, version: &str, skipped: &mut Option<String>) {
+    if skipped.as_deref() == Some(version) {
+        ui.horizontal(|ui| {
+            ui.weak("The status bar does not show this version.");
+            if ui.button("Show again").clicked() {
+                *skipped = None;
+            }
+        });
+    } else if ui
+        .button("Skip this version")
+        .on_hover_text("Hide the status-bar notice until a newer release")
+        .clicked()
+    {
+        *skipped = Some(version.to_owned());
+    }
 }
 
 impl WindowsUpdateCheck {
@@ -158,6 +193,7 @@ impl WindowsUpdateCheck {
             etag: None,
             cached: None,
             rate_limit_streak: 0,
+            notes_cache: egui_commonmark::CommonMarkCache::default(),
         }
     }
 
@@ -181,7 +217,7 @@ impl WindowsUpdateCheck {
             Err(error) => Err(error),
         };
         match result {
-            Ok((tag, html_url, assets)) => {
+            Ok((tag, html_url, assets, notes)) => {
                 self.rate_limit_streak = 0;
                 if newer_than(&tag) {
                     let url = download_url(&html_url, &assets, &platform_asset_suffix());
@@ -190,7 +226,11 @@ impl WindowsUpdateCheck {
                     // A repeat sighting must still restore the download offer:
                     // polling parks the status at Checking while probing.
                     if first || !matches!(self.status, Status::Available { .. }) {
-                        self.status = Status::Available { version: tag, url };
+                        self.status = Status::Available {
+                            version: tag,
+                            url,
+                            notes,
+                        };
                     }
                 } else {
                     self.status = Status::Current;
@@ -272,7 +312,20 @@ impl WindowsUpdateCheck {
         self.manual
     }
 
-    pub fn settings(&mut self, ui: &mut egui::Ui, enabled: &mut bool) {
+    /// The newer release this check found, if any.
+    pub fn available_version(&self) -> Option<&str> {
+        match &self.status {
+            Status::Available { version, .. } => Some(version),
+            _ => None,
+        }
+    }
+
+    pub fn settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        enabled: &mut bool,
+        skipped: &mut Option<String>,
+    ) {
         ui.heading("Updates");
         if !feed_eligible() {
             ui.label("This development build does not check for updates. Install a published Terminator release.");
@@ -284,7 +337,11 @@ impl WindowsUpdateCheck {
                 Status::Checking => {
                     ui.label("Checking for updates…");
                 }
-                Status::Available { version, url } => {
+                Status::Available {
+                    version,
+                    url,
+                    notes,
+                } => {
                     ui.label(format!("Terminator {version} is available."));
                     if cfg!(windows) {
                         ui.hyperlink_to("Download the Windows release", url);
@@ -296,6 +353,21 @@ impl WindowsUpdateCheck {
                         ui.label(
                             "Extract over your install and restart. Sessions stay in the background.",
                         );
+                    }
+                    skip_version_row(ui, version, skipped);
+                    if !notes.trim().is_empty() {
+                        ui.collapsing("Release notes", |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("update-release-notes")
+                                .max_height(320.0)
+                                .show(ui, |ui| {
+                                    egui_commonmark::CommonMarkViewer::new().show(
+                                        ui,
+                                        &mut self.notes_cache,
+                                        notes,
+                                    );
+                                });
+                        });
                     }
                 }
                 Status::Failed(error) => {

@@ -120,6 +120,7 @@ pub(super) fn start(shared: std::sync::Weak<Shared>) {
                 break;
             }
             inspect_once(&shared, &mut system);
+            shared.flush_terminal_titles();
         }
     });
 }

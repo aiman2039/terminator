@@ -321,13 +321,39 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(13);
+        saved["version"] = serde_json::json!(14);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()
                 .to_string()
                 .contains("Unsupported")
         );
+    }
+
+    #[test]
+    fn document_tab_layout_v13_round_trips_with_path_and_viewer_only() {
+        let table = Tab::Document {
+            path: "/data/sales.csv".into(),
+            kind: crate::document_view::DocumentKind::Table,
+        };
+        let mut workspace = Workspace::empty();
+        workspace.add("shell".into(), Tab::Terminal("shell".into()));
+        assert_eq!(workspace.version, 2);
+        // An older layout still loads at its own version.
+        let old = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        assert_eq!(Workspace::load(old).unwrap().version, 2);
+        workspace.add("table".into(), table.clone());
+        assert_eq!(workspace.version, 13);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let persisted = serde_json::to_value(&table).unwrap();
+        assert_eq!(
+            persisted,
+            serde_json::json!({"Document": {"path": "/data/sales.csv", "kind": "table"}})
+        );
+        let restored = Workspace::load(saved).unwrap();
+        assert_eq!(restored.version, 13);
+        assert!(restored.contains(&table));
+        assert!(restored.contains(&Tab::Terminal("shell".into())));
     }
 
     #[test]
@@ -1036,5 +1062,49 @@ mod tests {
         assert!(workspace.tabs[0].layout.find_tab(&editor).is_some());
         assert!(workspace.tabs[1].layout.find_tab(&shell).is_some());
         assert!(!workspace.move_pane_to_group(&editor, "missing"));
+    }
+
+    #[test]
+    fn tile_puts_live_and_background_panes_in_one_new_tab() {
+        let term = |sid: &str| Tab::Terminal(sid.into());
+        let mut workspace = Workspace::from_layout(DockState::new(vec![term("a"), term("keep")]));
+        workspace.add("second".into(), term("b"));
+        // "c" is a background terminal: in no tab yet.
+        let panes = [term("a"), term("b"), term("c"), term("keep")];
+        let group = workspace.tile_panes(&panes).expect("tile");
+        assert_eq!(workspace.active, group);
+        // "b" left an emptied tab behind, which is dropped.
+        assert_eq!(workspace.tabs.len(), 1);
+        let tiled = &workspace.tabs[0];
+        assert_eq!(tiled.id, group);
+        assert_eq!(tiled.layout.iter_leaves().count(), 4);
+        for pane in &panes {
+            assert!(tiled.layout.find_tab(pane).is_some());
+        }
+    }
+
+    #[test]
+    fn tile_refuses_one_pane_too_many_panes_or_duplicates() {
+        let term = |sid: &str| Tab::Terminal(sid.into());
+        let mut workspace = Workspace::from_layout(DockState::new(vec![term("a")]));
+        let before = workspace.ids();
+        assert!(workspace.tile_panes(&[term("a")]).is_none());
+        assert!(workspace.tile_panes(&[term("a"), term("a")]).is_none());
+        let five: Vec<Tab> = ["a", "b", "c", "d", "e"].iter().map(|s| term(s)).collect();
+        assert!(workspace.tile_panes(&five).is_none());
+        assert_eq!(workspace.ids(), before);
+    }
+
+    #[test]
+    fn editor_group_ids_keep_pinned_and_mixed_tabs() {
+        let editor = |path: &str| Tab::NativeEditor { path: path.into() };
+        let mut workspace = Workspace::from_layout(DockState::new(vec![editor("/a.rs")]));
+        let only_native = workspace.active.clone();
+        workspace.add("nvim".into(), Tab::Terminal("nvim-session".into()));
+        workspace.add("shell".into(), Tab::Terminal("shell".into()));
+        workspace.add("pinned".into(), editor("/b.rs"));
+        workspace.tabs[3].pinned = true;
+        let ids = workspace.editor_group_ids(|sid| sid == "nvim-session");
+        assert_eq!(ids, vec![only_native, "nvim".to_string()]);
     }
 }

@@ -314,7 +314,7 @@ impl App {
             &mut draft.open_terminal,
             "Create a terminal in the new project",
         );
-        super::task_form::task_extras(ui, draft);
+        super::task_form::task_extras(ui, draft, &self.agent_launchers());
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let (create, close) = form_buttons(ui, draft);

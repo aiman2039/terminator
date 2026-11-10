@@ -9,6 +9,7 @@ impl App {
                 "The session service is unreachable. Start it to show sessions and enable repair.",
             );
             self.start_service_button(ui, false);
+            self.installation_details(ui);
             return;
         }
         if !self.state.generations.is_empty() {
@@ -250,8 +251,11 @@ impl App {
         }
     }
 
-    fn installation_details(&self, ui: &mut egui::Ui) {
+    fn installation_details(&mut self, ui: &mut egui::Ui) {
+        // Outside the collapsed header, so a palette report shows at once.
+        self.report_preview(ui);
         ui.collapsing("Installation details", |ui| {
+            self.support_buttons(ui);
             ui.label(format!("App: {}", env!("CARGO_PKG_VERSION")));
             ui.label(format!(
                 "Session service: {}",

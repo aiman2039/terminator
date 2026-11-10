@@ -34,9 +34,11 @@ egui_extras = { version = "0.37", default-features = false, features = ["svg", "
 egui_commonmark = { version = "0.25", default-features = false, features = ["better_syntax_highlighting"] }
 merman = { version = "0.9", default-features = false, features = ["all-diagrams", "svg", "layout-cytoscape"] }
 pulldown-cmark = { version = "0.13", default-features = false }
+csv = "1.4"
 url = "2"
 uuid.workspace = true
-wry = { version = "0.57", optional = true }
+# `devtools`: the inspector stays off unless Settings → Browser turns it on.
+wry = { version = "0.57", optional = true, features = ["devtools"] }
 rodio = "0.23"
 cpal = "0.17"
 spectrum-analyzer = "2"
@@ -69,6 +71,8 @@ git-url-parse = "0.6"
 biquad = "0.5"
 encoding_rs = "0.8"
 chardetng = "0.1"
+# Agent preset arguments are quoted for the shell (src/agent_launch).
+shlex = "2"
 
 [features]
 default = ["wgpu", "webview"]
@@ -102,7 +106,7 @@ shlex = "2"
 dispatch2 = "0.3.1"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString", "NSUserDefaults", "NSProcessInfo", "NSFileManager", "NSURL", "NSError"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSAlert", "NSMenu", "NSMenuItem"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSAlert", "NSDockTile", "NSMenu", "NSMenuItem"] }
 
 [lints]
 workspace = true

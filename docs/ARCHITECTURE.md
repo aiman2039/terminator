@@ -313,7 +313,10 @@ Metadata work runs on its own coordinator, scoped to the selected directory and
 session PID/start time. sysinfo identifies descendants; lsof reports their TCP
 listeners. Optional gh lookups are read-only and cached. Terminal OSC messages are
 bounded records separate from agent notifications; history replay has no callback
-side effects and cannot manufacture agent lifecycle transitions.
+side effects and cannot manufacture agent lifecycle transitions. OSC 0/2 window
+titles are kept per live session in `State::terminal_titles` (`terminal-title-v1`),
+live-only and display-only; the PTY reader publishes a change at most once a
+second and the presence inspector flushes the last one.
 
 Explorer sends a bounded raw listing for each visible directory before Git
 ignore checks finish. Explorer watches only visible directories without

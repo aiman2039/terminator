@@ -59,6 +59,10 @@ actions! {
     SplitDown => "split_down", "Split down", "PanelBottomClose";
     SplitLeft => "split_left", "Split left", "PanelLeftClose";
     SplitRight => "split_right", "Split right", "PanelRightClose";
+    // Before Next pane: egui ignores an extra Shift, so Cmd+] would also
+    // take Cmd+Shift+] on macOS.
+    NextTab => "next_tab", "Next tab", "ChevronRight";
+    PrevTab => "prev_tab", "Previous tab", "ChevronLeft";
     NextPane => "next_pane", "Next pane", "ArrowRight";
     SelectAll => "select_all", "Select all", "TextSelect";
     // Before Find in terminal: egui ignores an extra Shift, so Cmd+F
@@ -117,6 +121,8 @@ actions! {
     ToolGit => "tool_git", "Git tool window", "GitBranch";
     ToolTerminal => "tool_terminal", "Terminal tool window", "Terminal";
     SelectIn => "select_in", "Select in Explorer", "LocateFixed";
+    ReopenBrowserTab => "reopen_browser_tab", "Reopen closed browser tab", "Globe";
+    NewAgentSession => "new_agent_session", "New agent session…", "AgentGeneric";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -338,7 +344,10 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
     if meta::types_text(chord) {
         return ctx.input_mut(|input| meta::consume_with_text(input, chord));
     }
-    ctx.input_mut(|input| input.consume_key(chord.modifiers, chord.key))
+    ctx.input_mut(|input| {
+        input.consume_key(chord.modifiers, chord.key)
+            || meta::shifted_key(chord).is_some_and(|key| input.consume_key(chord.modifiers, key))
+    })
 }
 
 /// True when a focused native editor owns this chord as an IDE caret

@@ -26,6 +26,12 @@ pub(crate) enum Tab {
     Image {
         path: PathBuf,
     },
+    /// A read-only native viewer with no PTY, such as the CSV/TSV table
+    /// (layout v13). Only the path and viewer persist.
+    Document {
+        path: PathBuf,
+        kind: crate::document_view::DocumentKind,
+    },
     Browser {
         #[serde(default)]
         id: String,
@@ -282,6 +288,8 @@ pub(crate) enum Job {
     GitView(Tab),
     GitLog(Tab, git_log::LogQuery),
     LocalHistory(crate::local_history::Op),
+    /// List or load system fonts off the GUI thread.
+    Fonts(crate::appearance::fonts::Op),
 }
 /// Loaded contents of a commit-log or blame tab.
 pub(crate) enum GitView {
@@ -328,6 +336,8 @@ pub(crate) enum Update {
     Metadata(u64, metadata::Metadata),
     Resources(resource_sample::Sample),
     OpenImage(String, PathBuf, After),
+    /// Opens a GUI-only `Tab::Document` (see `document_view`).
+    OpenDocument(String, Tab, After),
     OpenNativeEditor(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
     RemoteAdded(
@@ -380,6 +390,11 @@ pub(crate) enum Update {
     FocusViewport(egui::ViewportId),
     RevealFileSession(String, String),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),
+    Table(
+        PathBuf,
+        u64,
+        Result<std::sync::Arc<crate::document_view::Table>, String>,
+    ),
     TestPickerClosed,
     PickedProject(Option<PathBuf>, u64),
     OpenedProject(Box<State>, String, u64),
@@ -388,6 +403,8 @@ pub(crate) enum Update {
     Activation(String),
     Appearance(Box<AppearanceFile>),
     HookStatus(HashMap<String, bool>),
+    /// Catalog agents found on PATH, probed off the GUI thread.
+    InstalledAgents(Vec<crate::agent_launch::InstalledAgent>),
     EditorsClosed(editor_close::Target, Vec<String>, Result<(), String>),
     ResolvedTarget(String, Option<services::Target>),
     PreferencesSaved(Box<Result<UiPreferences, String>>),
@@ -440,6 +457,7 @@ pub(crate) enum Update {
     WorktreeProbe(worktree_ui::WorktreeDraft, bool),
     GitView(String, GitView),
     LocalHistory(crate::local_history::Reply),
+    Fonts(crate::appearance::fonts::Reply),
     DirectoryPreview(
         u64,
         PathBuf,

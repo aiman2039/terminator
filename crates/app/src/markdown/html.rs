@@ -28,6 +28,8 @@ pub(super) struct Document {
     /// Top-level Markdown blocks of `text` (see `blocks::split_blocks`).
     pub(super) blocks: Vec<std::ops::Range<usize>>,
     pub(super) mermaid: Vec<super::mermaid::Diagram>,
+    /// The document is one Mermaid diagram: paint it zoomable.
+    pub(super) single_diagram: bool,
     pub(super) words: usize,
     pub(super) headings: usize,
     pub(super) status: &'static str,
@@ -279,7 +281,12 @@ fn collapse_html_text(text: &str) -> String {
     }
     decode_html_entities(&out)
 }
-pub(super) fn prepare(snapshot: Snapshot) -> Document {
+pub(super) fn prepare(mut snapshot: Snapshot) -> Document {
+    // A Mermaid file is one diagram: render it as a single fence.
+    let diagram_file = super::source::mermaid_file(&snapshot.path);
+    if diagram_file {
+        snapshot.text = super::mermaid::fence_file(&snapshot.text);
+    }
     let mut links = HashMap::new();
     let mut images = HashSet::new();
     let mut replacements = Vec::new();
@@ -334,11 +341,14 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
     register_rendered_links(&snapshot.path, &text, &mut links);
     let words = text.split_whitespace().count();
     let headings = count_headings(&text);
-    let mermaid = super::mermaid::render_fences(&text);
+    let mermaid =
+        super::mermaid::render_fences_limited(&text, super::mermaid::source_cap(diagram_file));
+    let single_diagram = super::mermaid::single_diagram(&text, &mermaid);
     Document {
         blocks: super::blocks::split_blocks(&text),
         text,
         mermaid,
+        single_diagram,
         words,
         headings,
         status: snapshot_status(snapshot.revision, snapshot.paused),
