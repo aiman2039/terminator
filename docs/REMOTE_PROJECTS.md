@@ -31,6 +31,11 @@ UTF-8 locale, and UDP 60000–61000 open to the resolved address (a
 `ProxyJump` host is not used for UDP). Explorer, Git, editor control and
 transfers stay on OpenSSH. Older daemons ignore the setting.
 
+One host and path can have several saved variants (Duplicate… in the host
+menu) that differ in Mosh, the Mosh server command or the Terminal command.
+Two saved hosts with all of these equal are refused. Older daemons keep one
+entry per host and path and select the existing one.
+
 ## Authentication and commands
 
 OpenSSH config aliases (with their `User`, `Port`, `ProxyJump` and

@@ -48,7 +48,7 @@ impl Shared {
         if let Some(existing) = state
             .remote_projects
             .iter()
-            .find(|p| p.ssh == project.ssh && p.root == project.root)
+            .find(|p| p.same_variant(&project))
         {
             state.selected_project = Some(existing.id.clone());
         } else {
