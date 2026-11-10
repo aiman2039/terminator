@@ -192,6 +192,15 @@ impl RemoteProject {
     pub fn same_connection(&self, other: &Self) -> bool {
         self.ssh == other.ssh && self.root == other.root
     }
+    /// Whether `other` is the same saved variant: the same connection and
+    /// the same terminal settings (Mosh, its server command, the terminal
+    /// command). Variants of one host may differ only in those.
+    pub fn same_variant(&self, other: &Self) -> bool {
+        self.same_connection(other)
+            && self.mosh == other.mosh
+            && self.mosh_command == other.mosh_command
+            && self.shell_command == other.shell_command
+    }
     pub fn label(&self) -> String {
         format!("ssh://{}{}", self.ssh.authority(), self.root)
     }

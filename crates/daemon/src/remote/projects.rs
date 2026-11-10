@@ -23,8 +23,8 @@ fn replace_project(
         !state
             .remote_projects
             .iter()
-            .any(|p| p.id != project.id && p.same_connection(&project)),
-        "Another SSH project already uses this host and path"
+            .any(|p| p.id != project.id && p.same_variant(&project)),
+        "Another SSH project already uses this host, path and terminal settings"
     );
     let moved = !old.same_connection(&project);
     if moved {
@@ -174,5 +174,16 @@ mod tests {
         let mut state = state();
         assert!(replace_project(&mut state, project("a", "beta", "/b"), |_| Ok(())).is_err());
         assert!(replace_project(&mut state, project("z", "zeta", "/z"), |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn a_mosh_or_command_variant_may_share_another_projects_host_and_path() {
+        let mut state = state();
+        let mut mosh = project("a", "beta", "/b");
+        mosh.mosh = true;
+        assert!(replace_project(&mut state, mosh, |_| Ok(())).is_ok());
+        let mut tmux = project("a", "beta", "/b");
+        tmux.shell_command = Some("tmux new -A -s main".into());
+        assert!(replace_project(&mut state, tmux, |_| Ok(())).is_ok());
     }
 }
