@@ -366,7 +366,7 @@ impl App {
         ui.weak("No pending agent events");
     }
 
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     pub(crate) fn waiting_notice_count(&self) -> usize {
         self.sidebar_index().waiting_count
     }
