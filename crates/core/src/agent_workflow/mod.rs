@@ -8,6 +8,75 @@ pub const TRIAGE_CAPABILITY: &str = "notice-triage-v1";
 /// `Request::CreateRestored` opens a fresh shell with saved output above it.
 pub const RESTORE_CAPABILITY: &str = "restore-shell-v1";
 
+/// Hook events carry `usage` and `State::agent_usage` keeps it.
+pub const USAGE_CAPABILITY: &str = "agent-usage-v1";
+
+/// What an agent itself reports in its hook input: the model and the
+/// permission mode. Display only; never a lifecycle source. Fields no
+/// supported agent reports (context fullness, cost) are not kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AgentUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+}
+
+/// Longest stored model or mode text.
+const MAX_USAGE_TEXT: usize = 64;
+
+fn usage_text(value: Option<&str>) -> Option<String> {
+    let text: String = value?
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_USAGE_TEXT)
+        .collect();
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+impl AgentUsage {
+    /// Usage from the raw hook fields, cleaned and capped.
+    #[must_use]
+    pub fn new(model: Option<&str>, permission_mode: Option<&str>) -> Option<Self> {
+        let usage = Self {
+            model: usage_text(model),
+            permission_mode: usage_text(permission_mode),
+        };
+        (!usage.is_empty()).then_some(usage)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.permission_mode.is_none()
+    }
+
+    /// Newer reported fields replace older ones; missing ones keep theirs.
+    pub fn merge(&mut self, newer: &Self) {
+        if newer.model.is_some() {
+            self.model.clone_from(&newer.model);
+        }
+        if newer.permission_mode.is_some() {
+            self.permission_mode.clone_from(&newer.permission_mode);
+        }
+    }
+
+    /// Short chip text for a permission mode, by the agents' own names.
+    #[must_use]
+    pub fn mode_label(&self) -> Option<&str> {
+        Some(match self.permission_mode.as_deref()? {
+            "default" => return None,
+            "plan" => "Plan",
+            "acceptEdits" => "Accept edits",
+            "auto" => "Auto",
+            "dontAsk" => "Don't ask",
+            "bypassPermissions" => "Bypass",
+            other => other,
+        })
+    }
+}
+
 /// Longest snooze a client may ask for.
 pub const MAX_SNOOZE_SECS: u64 = 7 * 24 * 60 * 60;
 /// The fixed snooze of the plain `snooze` action (older clients).

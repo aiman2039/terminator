@@ -771,6 +771,15 @@ a click types the command without Enter; the tooltip says "Cannot confirm the
 agent stopped. Press Enter to run." When presence verifies a live agent, the
 chip is hidden. Nothing resumes automatically.
 
+Agent usage chips (`agent-usage-v1`) on an agent's pane caption and inbox card
+show the model and the permission mode that the agent itself put in its hook
+input: `model` (Claude Code on SessionStart; Codex on every event) and
+`permission_mode` (Claude Code, Codex, Factory Droid). The default mode shows no
+chip. They are display only, never read from terminal text, and never change
+lifecycle. No supported agent reports context fullness or cost in its hook
+input, so there are no chips for them. Older daemons keep no usage, so no
+chips show.
+
 External-browser automation stays outside the native application. Use
 `terminator-hook ctl browser open URL` for the system browser. For an existing
 local CDP page endpoint, the browser subcommands `navigate`, `snapshot`, `click`,

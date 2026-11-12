@@ -314,6 +314,8 @@ pub(crate) struct AttentionCard<'a> {
     pub pinned: bool,
     /// The daemon takes the triage verbs (`notice-triage-v1`).
     pub triage: bool,
+    /// Model and mode chips the agent reported (`agent-usage-v1`).
+    pub usage: &'a [String],
     /// Further notices from the same agent run folded into this row.
     pub group_extra: &'a [Notification],
 }

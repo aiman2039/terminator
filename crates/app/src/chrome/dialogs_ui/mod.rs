@@ -138,6 +138,7 @@ impl App {
         let mut action = AttentionAction::None;
         let presented = self.present_session(&n.session_id);
         let history = self.notice_history_brand(&n);
+        let usage = self.agent_usage_chips(&n.session_id);
         let brand_icon = history
             .as_ref()
             .map(|(icon, _)| *icon)
@@ -165,6 +166,7 @@ impl App {
                         show_read: false,
                         pinned: self.session_pinned(&n.session_id),
                         triage: self.triage_available(),
+                        usage: &usage,
                         group_extra: &[],
                     },
                 );

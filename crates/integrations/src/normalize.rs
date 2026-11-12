@@ -210,5 +210,12 @@ pub fn normalize(input: NormalizeInput<'_>) -> Result<Option<HookEvent>> {
         // The hook helper attaches ancestor process identity after
         // normalization; the normalizer itself never inspects processes.
         process: None,
+        // What the agent reports about itself: Claude Code (`model` on
+        // SessionStart, `permission_mode`), Codex (`model`,
+        // `permission_mode`) and Factory Droid (`permission_mode`).
+        usage: terminator_core::agent_workflow::AgentUsage::new(
+            first_str(payload, &["model"]),
+            first_str(payload, &["permission_mode"]),
+        ),
     }))
 }

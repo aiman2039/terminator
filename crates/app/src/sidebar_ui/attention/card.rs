@@ -338,12 +338,13 @@ fn paint_notice_line(ui: &egui::Ui, input: &AttentionCard<'_>, line1: egui::Rect
         });
         left += BRAND_SIZE + 4.0;
     }
+    let right = appearance::paint_usage_chips(ui, line, line.right(), input.usage);
     let text = notice_preview(&input.notice.summary);
     let weak = ui.visuals().weak_text_color();
     let galley = one_line(
         ui,
         &[(&text, appearance::FONT_CAPTION, weak)],
-        line.right() - left,
+        right - 4.0 - left,
     );
     ui.painter().galley(
         egui::pos2(left, line.center().y - galley.size().y * 0.5),

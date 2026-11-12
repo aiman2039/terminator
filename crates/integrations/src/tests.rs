@@ -113,6 +113,35 @@ fn permission_and_resume_mapping() {
     assert_eq!(e.resume.unwrap().args, vec!["--resume", "a"]);
 }
 #[test]
+fn hook_model_and_permission_mode_become_usage_without_changing_state() {
+    let e = normalize(NormalizeInput {
+        kind: "claude",
+        session: "s",
+        parent: "p",
+        payload: &json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "a",
+            "model": "claude-opus",
+            "permission_mode": "plan"
+        }),
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(e.state, AgentState::Unknown);
+    let usage = e.usage.unwrap();
+    assert_eq!(usage.model.as_deref(), Some("claude-opus"));
+    assert_eq!(usage.permission_mode.as_deref(), Some("plan"));
+    let plain = normalize(NormalizeInput {
+        kind: "gemini",
+        session: "s",
+        parent: "p",
+        payload: &json!({"hook_event_name":"AfterAgent","session_id":"a"}),
+    })
+    .unwrap()
+    .unwrap();
+    assert!(plain.usage.is_none());
+}
+#[test]
 fn grok_camel_case_permission_notification() {
     let e = normalize(NormalizeInput {
         kind: "grok",

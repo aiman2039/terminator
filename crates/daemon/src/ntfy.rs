@@ -239,6 +239,7 @@ mod tests {
             details: "private details".into(),
             resume: None,
             process: None,
+            usage: None,
         }
     }
     #[test]

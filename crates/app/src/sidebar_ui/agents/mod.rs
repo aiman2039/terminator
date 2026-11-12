@@ -205,6 +205,7 @@ impl App {
         let selected = self.active_session.as_ref() == Some(&notice.session_id);
         let presented = self.present_session(&notice.session_id);
         let history = self.notice_history_brand(notice);
+        let usage = self.agent_usage_chips(&notice.session_id);
         let brand_icon = history
             .as_ref()
             .map(|(icon, _)| *icon)
@@ -233,6 +234,7 @@ impl App {
                 show_read,
                 pinned: self.session_pinned(&notice.session_id),
                 triage: self.triage_available(),
+                usage: &usage,
                 group_extra: group.notices.get(1..).unwrap_or(&[]),
             },
             project,

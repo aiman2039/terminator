@@ -109,6 +109,9 @@ pub struct HookEvent {
     /// live presence observations before linking lifecycle to a process.
     #[serde(default)]
     pub process: Option<agents::ProcessIdentity>,
+    /// Model and mode the agent reported in this hook (`agent-usage-v1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::agent_workflow::AgentUsage>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resume {
@@ -268,15 +271,7 @@ pub const EDITOR_SPELL_CAPABILITY: &str = "editor-spell-v1";
 pub const AGENT_PRESENCE_CAPABILITY: &str = agents::CAPABILITY;
 pub const VNC_CAPABILITY: &str = vnc::CAPABILITY;
 pub const VNC_REGIONS_CAPABILITY: &str = vnc::REGIONS_CAPABILITY;
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TerminalNotice {
-    pub id: String,
-    pub session_id: String,
-    pub title: String,
-    pub body: String,
-    pub created: u64,
-    pub dismissed: bool,
-}
+pub use hooks::TerminalNotice;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
@@ -325,6 +320,9 @@ pub struct State {
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub init_commands: std::collections::BTreeMap<String, String>,
     pub degraded: Option<String>,
+    /// Last agent-reported model and mode by invocation id (`agent-usage-v1`).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub agent_usage: std::collections::BTreeMap<String, crate::agent_workflow::AgentUsage>,
 }
 impl State {
     /// True when at least one agent left a provider resume command for this

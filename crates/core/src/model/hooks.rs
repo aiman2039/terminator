@@ -1,6 +1,16 @@
 //! Agent hook events: validation, deduplication, agent records, and notifications.
 use super::*;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TerminalNotice {
+    pub id: String,
+    pub session_id: String,
+    pub title: String,
+    pub body: String,
+    pub created: u64,
+    pub dismissed: bool,
+}
+
 impl State {
     pub fn apply_hook(&mut self, e: HookEvent) -> Result<Option<String>, StateError> {
         self.validate_hook_event(&e)?;
@@ -13,6 +23,7 @@ impl State {
             .is_some_and(|i| self.agents.get(i).is_some_and(|a| a.state == e.state))
             && e.request_id.is_none();
         self.upsert_hook_agent(&e, existing);
+        self.record_agent_usage(&e);
         self.resolve_hook_notifications(&e);
         self.revision = self.revision.saturating_add(1);
         if repeated_state || !e.state.actionable() || !self.settings.events.contains(&e.state) {
@@ -157,6 +168,22 @@ impl State {
             *slot = agent;
         } else {
             self.agents.push(agent);
+        }
+    }
+
+    /// Keeps the newest model and mode each agent reported. Display only:
+    /// never a lifecycle or notification source.
+    fn record_agent_usage(&mut self, e: &HookEvent) {
+        if let Some(usage) = e.usage.as_ref().filter(|u| !u.is_empty()) {
+            self.agent_usage
+                .entry(e.agent_invocation_id.clone())
+                .or_default()
+                .merge(usage);
+        }
+        if !self.agent_usage.is_empty() {
+            let agents = &self.agents;
+            self.agent_usage
+                .retain(|id, _| agents.iter().any(|a| &a.invocation_id == id));
         }
     }
 

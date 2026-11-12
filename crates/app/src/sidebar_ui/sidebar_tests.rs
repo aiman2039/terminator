@@ -336,6 +336,7 @@ mod tests {
                             show_read: true,
                             pinned: false,
                             triage: false,
+                            usage: &[],
                             group_extra: &[],
                         },
                     );

@@ -1,5 +1,7 @@
 mod pane_bar;
 mod resume;
+mod usage;
+pub use usage::paint_usage_chips;
 
 use super::rows::{PaintStatusIconInput, paint_status_icon, u8_from_f32};
 use super::scale::{FONT_SMALL, WIDGET_RADIUS};

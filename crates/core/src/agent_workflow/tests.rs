@@ -63,6 +63,20 @@ fn old_actions_keep_their_meaning() {
 }
 
 #[test]
+fn usage_keeps_the_last_reported_model_and_mode() {
+    let mut usage = AgentUsage::new(Some("opus"), None).unwrap();
+    usage.merge(&AgentUsage::new(None, Some("plan")).unwrap());
+    assert_eq!(usage.model.as_deref(), Some("opus"));
+    assert_eq!(usage.mode_label(), Some("Plan"));
+    usage.merge(&AgentUsage::new(None, Some("default")).unwrap());
+    assert_eq!(usage.mode_label(), None, "the default mode shows no chip");
+    assert!(AgentUsage::new(Some(" \u{7} "), None).is_none());
+    let long = "m".repeat(200);
+    let capped = AgentUsage::new(Some(&long), None).unwrap();
+    assert_eq!(capped.model.unwrap().len(), 64);
+}
+
+#[test]
 fn restore_seed_ends_lines_with_crlf_and_marks_the_end() {
     let seed = restore_seed("one\ntwo\r\n\n");
     assert!(seed.starts_with("one\r\ntwo\r\n"));
