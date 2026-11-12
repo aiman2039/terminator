@@ -46,8 +46,26 @@ impl Shared {
         if let Some(response) = prepared.early {
             return Ok(response);
         }
-        let _coordination = prepared.coordination;
-        match self.dispatch(request)? {
+        let mut coordination = prepared.coordination;
+        let outcome = match request {
+            Request::WorktreeAdd {
+                project,
+                path,
+                branch,
+                start,
+            } => self.on_worktree_add(
+                worktrees::WorktreeAddInput {
+                    project,
+                    path,
+                    branch,
+                    start,
+                },
+                &mut coordination,
+            )?,
+            request => self.dispatch(request)?,
+        };
+        let _coordination = coordination;
+        match outcome {
             Outcome::Reply(response) => Ok(response),
             Outcome::Changed => self.commit_change(prepared.shared_write),
             Outcome::Deferred if prepared.shared_write => self.commit_change(true),
@@ -153,17 +171,6 @@ impl Shared {
             Request::ShellCommand { session } => self.on_shell_command(&session),
             Request::ShellPrompt { session, .. } => self.on_shell_prompt(&session),
             Request::WorktreeList { project } => self.on_worktree_list(&project),
-            Request::WorktreeAdd {
-                project,
-                path,
-                branch,
-                start,
-            } => self.on_worktree_add(worktrees::WorktreeAddInput {
-                project,
-                path,
-                branch,
-                start,
-            }),
             Request::WorktreeRemove { project } => self.on_worktree_remove(&project),
             Request::Screen { session } => self.on_screen(&session),
             Request::CommandBlocks { session, since } => self.on_command_blocks(&session, since),

@@ -1,5 +1,6 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use terminator_core::*;
 
 use super::super::super::shared::{Shared, relock};
@@ -20,16 +21,24 @@ impl Shared {
         )?)))
     }
 
-    pub(super) fn on_worktree_add(&self, input: WorktreeAddInput) -> Result<Outcome> {
+    /// `coordination` holds the cross-generation lock on entry; it is held
+    /// again on success so the caller saves the workspace under it.
+    pub(super) fn on_worktree_add(
+        self: &Arc<Self>,
+        input: WorktreeAddInput,
+        coordination: &mut Option<std::fs::File>,
+    ) -> Result<Outcome> {
         let WorktreeAddInput {
             project,
             path,
             branch,
             start,
         } = input;
-        // No worktree lock here: a long `git worktree add` must not block
-        // Create and Cwd (#190). Removal only acts on registered checkouts,
-        // and this one registers after git finishes.
+        // No worktree or coordination lock here: a long `git worktree add`
+        // must not block Create and Cwd (#190), which wait only 2 s for the
+        // coordination lock. Removal only acts on registered checkouts, and
+        // this one registers after git finishes.
+        drop(coordination.take());
         let source = self.project_path(&project)?;
         let common_dir = worktrees::common_dir(&source)?;
         let revision = worktrees::resolve_start(&source, &start)?;
@@ -39,6 +48,20 @@ impl Shared {
             branch: branch.as_deref(),
             start: &revision,
         })?;
+        let unregistered = || {
+            format!(
+                "Worktree {} was created but not added as a project",
+                checkout.path.display()
+            )
+        };
+        let prepared = self.prepare_shared_write().with_context(unregistered)?;
+        if prepared.early.is_some() {
+            bail!(
+                "{}: this session service is no longer active",
+                unregistered()
+            );
+        }
+        *coordination = prepared.coordination;
         self.register_worktree(common_dir, checkout.path);
         Ok(Outcome::Changed)
     }
