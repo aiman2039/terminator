@@ -176,6 +176,8 @@ pub struct App {
     /// docks; no cache). Reads the window under render only.
     pub(crate) float_pane_by_tab: HashMap<String, egui_dock::NodePath>,
     pub(crate) float_pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
+    /// The focused tab of the floating window under render, if any.
+    pub(crate) float_focus: Option<Tab>,
     /// Strip-dock pane lookup, rebuilt every strip render (the main-dock
     /// maps only ever cover the main dock; paths are meaningless across
     /// docks).

@@ -191,6 +191,7 @@ impl App {
             floating: Vec::new(),
             float_pane_by_tab: HashMap::new(),
             float_pane_tabs: HashMap::new(),
+            float_focus: None,
             strip_pane_by_tab: HashMap::new(),
             strip_pane_tabs: HashMap::new(),
             pane_by_tab: HashMap::new(),

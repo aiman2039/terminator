@@ -61,7 +61,7 @@ impl App {
     }
 
     fn merge_tab_active(&self, tab: &Tab) -> bool {
-        self.main_pane_active(tab)
+        self.main_pane_active(tab) || self.float_pane_active(tab)
     }
 }
 
