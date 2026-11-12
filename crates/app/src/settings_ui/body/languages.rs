@@ -10,6 +10,7 @@ impl App {
     ) {
         ui.heading("Languages");
         self.lsp_server_rows(ui, browse);
+        self.custom_server_rows(ui);
         self.spell_check_row(ui);
     }
 
@@ -55,14 +56,19 @@ impl App {
             if !self.field_visible(label, &keywords) {
                 continue;
             }
-            if self.lsp_server_row(ui, language, label) {
+            if self.lsp_server_row(ui, family) {
                 *browse = Some(BrowseTarget::Lsp(language));
             }
         }
     }
 
     /// One language-server path row. Returns whether Browse was clicked.
-    fn lsp_server_row(&mut self, ui: &mut egui::Ui, language: &str, label: &str) -> bool {
+    fn lsp_server_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        family: &terminator_native_edit::lsp::ServerFamily,
+    ) -> bool {
+        let (language, label) = (family.id, family.label);
         let mut pick = false;
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
@@ -88,22 +94,45 @@ impl App {
                         .lsp_servers
                         .insert(language.to_owned(), value.clone());
                 }
-                self.lsp_server_status(ui, value.trim());
+                self.lsp_server_status(ui, value.trim(), family);
             },
         });
         pick
     }
 
-    fn lsp_server_status(&self, ui: &mut egui::Ui, value: &str) {
-        if value.is_empty() {
+    /// Where the server was found, or the "not found" state with the
+    /// install hint. Probes are cached for the Settings session.
+    fn lsp_server_status(
+        &self,
+        ui: &mut egui::Ui,
+        value: &str,
+        family: &terminator_native_edit::lsp::ServerFamily,
+    ) {
+        let found = if value.is_empty() {
+            family
+                .candidates
+                .iter()
+                .find_map(|candidate| self.settings_executable(candidate))
+        } else {
+            self.settings_executable(value)
+        };
+        if let Some(path) = found {
+            if !value.is_empty() {
+                ui.weak(path.display().to_string());
+            }
             return;
         }
-        match self.settings_executable(value) {
-            Some(path) => ui.weak(path.display().to_string()),
-            None => ui.colored_label(
+        if value.is_empty() {
+            // Not an error: only languages you open need their server.
+            ui.weak("Language server not found on PATH");
+        } else {
+            ui.colored_label(
                 appearance::color(&self.theme.status_failed),
                 "Language server not found",
-            ),
-        };
+            );
+        }
+        if !family.install.is_empty() {
+            settings_controls::description_line(ui, &format!("Install: {}", family.install));
+        }
     }
 }

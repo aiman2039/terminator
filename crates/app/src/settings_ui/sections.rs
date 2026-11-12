@@ -167,6 +167,7 @@ impl SettingsSection {
         let mut text = format!("{} {}", self.title(), self.keywords());
         match self.canonical() {
             Self::Languages => {
+                text.push_str(super::body::CUSTOM_SERVER_KEYWORDS);
                 for family in terminator_native_edit::lsp::SERVER_FAMILIES {
                     text.push(' ');
                     text.push_str(family.id);

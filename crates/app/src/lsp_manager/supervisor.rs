@@ -109,12 +109,7 @@ impl LspManager {
     /// set (absolute path or bare name), else the default candidates,
     /// including the usual GUI-launch directories and `~/.cargo/bin`.
     pub(super) fn resolve_server(&self, language: &'static str) -> Option<PathBuf> {
-        if let Some(custom) = self
-            .overrides
-            .get(language)
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(custom) = self.path_override(language) {
             return terminator_core::find_executable(custom);
         }
         L::family_candidates(language)
@@ -122,21 +117,35 @@ impl LspManager {
             .find_map(|candidate| terminator_core::find_executable(candidate))
     }
 
-    /// Why no executable was found, naming the Settings row that fixes it.
-    pub(super) fn missing_server_note(&self, language: &'static str) -> String {
-        if let Some(custom) = self
-            .overrides
+    /// The Settings path for a built-in family. User-defined servers
+    /// (`custom:` keys) hold their whole definition there, not a path.
+    fn path_override(&self, language: &'static str) -> Option<&str> {
+        if language.starts_with(L::CUSTOM_PREFIX) {
+            return None;
+        }
+        self.overrides
             .get(language)
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
-        {
+    }
+
+    /// Why no executable was found, naming the Settings row that fixes it
+    /// and how to install the server.
+    pub(super) fn missing_server_note(&self, language: &'static str) -> String {
+        if let Some(custom) = self.path_override(language) {
             return format!(
                 "Language server not found: {custom}. Fix the path in Settings → Languages."
             );
         }
         let candidates = L::family_candidates(language);
+        let install = L::family_install(language);
+        let hint = if install.is_empty() {
+            String::new()
+        } else {
+            format!(" Install: {install}")
+        };
         format!(
-            "No language server on PATH ({}); install it or set a path in Settings → Languages.",
+            "No language server on PATH ({}); install it or set a path in Settings → Languages.{hint}",
             candidates.join(", ")
         )
     }

@@ -1,5 +1,7 @@
 mod agents;
 mod browser;
+mod custom_servers;
+pub(super) use custom_servers::CUSTOM_SERVER_KEYWORDS;
 mod editor;
 mod fonts;
 mod hooks;
