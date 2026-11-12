@@ -720,6 +720,33 @@ terminator-hook ctl wait SESSION_ID --state done --changed --timeout 600
 `updated` has a resolution of one second. A turn that starts and ends in the
 same second as the recorded record, with no hook sequence, is not seen.
 
+### Inbox in any terminal
+
+`terminator-hook inbox` shows the attention list in a terminal, for example
+over SSH from a phone. It needs no web or mobile client, no account and no
+relay. Rows are sessions sorted by attention: waiting, failed, working, done
+with an unread notice, then idle. Each row shows the project, the session
+label, the age of the last hook report and the notice text. It reads the
+daemon snapshot every 2 seconds (hook state and notices, never terminal text).
+
+| Key | Action |
+| --- | --- |
+| Up/Down, `j`/`k` | Select a row |
+| Enter | Read-only screen view of the session (`screen-v1`; else its history) |
+| `r` | Type a one-line reply. Enter shows the confirm step |
+| `s` (confirm step) | Send the reply and press Enter, like `ctl send --enter` |
+| `t` (confirm step) | Type the reply without Enter |
+| `d` | Dismiss the notice |
+| `s` (list) | Snooze the agent notice for 10 minutes |
+| `q`, Esc, Ctrl-C | Quit or go back |
+
+No other key sends text. Dismiss or snooze moves the session to idle until a
+newer notice arrives. The inbox never starts an agent.
+
+```sh
+ssh desk.example.invalid -t terminator-hook inbox
+```
+
 Run shutdown from Terminal.app or another terminal outside Terminator. The default
 refuses live sessions. Explicit `--stop-all` closes the GUI through its normal
 workspace checkpoint, stops every live shell/editor through the daemon, waits for

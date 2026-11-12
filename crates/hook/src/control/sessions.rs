@@ -157,7 +157,7 @@ impl Ctl {
         }
         Ok(())
     }
-    pub(super) fn read(&self, session: String, screen: bool) -> Result<()> {
+    pub(super) fn read(&self, session: String, screen: bool) -> Result<String> {
         if screen {
             self.capability(SCREEN_CAPABILITY)?;
         }
@@ -167,10 +167,7 @@ impl Ctl {
             Request::History { session }
         };
         match rpc(&self.paths, request)?.checked()? {
-            Response::Text(text) => {
-                crate::output::Output::text(text);
-                Ok(())
-            }
+            Response::Text(text) => Ok(text),
             _ => anyhow::bail!("No terminal text returned"),
         }
     }

@@ -33,6 +33,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("ctl") => control::run(args.get(1..).unwrap_or_default()),
+        Some("inbox") => control::inbox::run(args.get(1..).unwrap_or_default()),
         Some("mosh") => mosh::run(args.get(1..).unwrap_or_default()),
         Some("attach") => attach::Attach::run(
             args.get(1).context("Missing session ID")?,
@@ -73,7 +74,7 @@ fn main() -> Result<()> {
         }
         _ => {
             Output::line(
-                "terminator-hook ctl --help\nterminator-hook attach SESSION\nterminator-hook event AGENT < payload.json\nterminator-hook emit < normalized-event.json\nterminator-hook cwd PATH\nterminator-hook install|remove|inspect AGENT\nterminator-hook rpc JSON\n\nHooks are inert outside app-created terminals. They never approve or deny agent actions.",
+                "terminator-hook ctl --help\nterminator-hook inbox\nterminator-hook attach SESSION\nterminator-hook event AGENT < payload.json\nterminator-hook emit < normalized-event.json\nterminator-hook cwd PATH\nterminator-hook install|remove|inspect AGENT\nterminator-hook rpc JSON\n\nHooks are inert outside app-created terminals. They never approve or deny agent actions.",
             );
             Ok(())
         }
