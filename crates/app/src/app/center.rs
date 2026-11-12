@@ -381,6 +381,11 @@ impl App {
         } = input;
         let style = appearance::dock_style(ui.style(), &self.theme);
         self.refresh_float_pane_maps(dock);
+        // Diff and merge keys follow this window's focused pane.
+        self.float_focus = dock
+            .main_surface_mut()
+            .find_active_focused()
+            .map(|(_, tab)| tab.clone());
         DockArea::new(dock)
             .id(egui::Id::unique(("float-dock", viewport)))
             .style(style)
@@ -399,6 +404,7 @@ impl App {
                     render_tab: None,
                 },
             );
+        self.float_focus = None;
         self.apply_float_dock_ops(viewport, project, dock)
     }
 

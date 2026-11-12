@@ -3,5 +3,6 @@ use super::*;
 
 mod commit_lock;
 mod commit_log;
+mod float_diff_keys;
 mod git_actions;
 mod git_panel;
