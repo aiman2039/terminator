@@ -375,7 +375,8 @@ fn attention_row_glyphs_share_one_center_line() {
                     label_centers(out, shape, needle);
                 }
             }
-            egui::Shape::Text(text) if text.galley.text() == needle => {
+            // Line 1 reads "label · project".
+            egui::Shape::Text(text) if text.galley.text().starts_with(needle) => {
                 out.push(text.visual_bounding_rect().center().y);
             }
             _ => {}
@@ -1171,4 +1172,128 @@ fn review_changes_focuses_the_agent_and_shows_git() {
     assert_eq!(app.active_session.as_deref(), Some("agent"));
     assert_eq!(app.preferences.tool, SidebarTool::Git);
     assert!(app.preferences.visible);
+}
+
+/// One waiting card in the inbox, painted at `width` with `events`.
+#[cfg(feature = "test-support")]
+fn paint_inbox(
+    app: &mut App,
+    ctx: &egui::Context,
+    width: f32,
+    events: Vec<egui::Event>,
+) -> Vec<egui::epaint::ClippedShape> {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 800.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| app.agents_view(ui),
+    );
+    output.textures_delta.clear();
+    output.shapes
+}
+
+#[cfg(feature = "test-support")]
+fn waiting_card(app: &mut App) {
+    app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+    let mut notice = notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now().saturating_sub(240),
+    });
+    notice.summary = "Claude needs your permission to use Bash".into();
+    app.state.notifications = vec![notice];
+}
+
+/// Line 2 carries the notice text; line 1 ends with the age until the
+/// pointer is on the card, then the four actions take its place.
+#[cfg(feature = "test-support")]
+#[test]
+fn inbox_card_shows_the_notice_and_age_and_reveals_actions_on_hover() {
+    let (mut app, ctx, _dir) = fixture();
+    appearance::install(&ctx);
+    waiting_card(&mut app);
+    paint_inbox(&mut app, &ctx, 320.0, vec![]);
+    let shapes = paint_inbox(&mut app, &ctx, 320.0, vec![]);
+    let text = painted_strings(&shapes).join("\n");
+    assert!(text.contains("Claude needs your permission"), "{text}");
+    assert!(text.contains("4m"), "age on line 1: {text}");
+    let go = agent_target(&ctx, "agent-go:live-shell").expect("go slot");
+    let icon_at = |shapes: &[egui::epaint::ClippedShape], rect: egui::Rect| {
+        painted_icon_rects(shapes)
+            .iter()
+            .any(|icon| rect.contains(icon.center()))
+    };
+    assert!(!icon_at(&shapes, go), "actions hide while the card is idle");
+    let hover = vec![egui::Event::PointerMoved(go.center())];
+    paint_inbox(&mut app, &ctx, 320.0, hover.clone());
+    let shapes = paint_inbox(&mut app, &ctx, 320.0, hover);
+    assert!(icon_at(&shapes, go), "hover shows the actions");
+    assert!(!painted_strings(&shapes).iter().any(|s| s == "4m"));
+}
+
+/// Tab reaches the hidden actions, and a focused one shows.
+#[cfg(feature = "test-support")]
+#[test]
+fn inbox_card_actions_stay_reachable_by_keyboard() {
+    let (mut app, ctx, _dir) = fixture();
+    appearance::install(&ctx);
+    waiting_card(&mut app);
+    paint_inbox(&mut app, &ctx, 320.0, vec![]);
+    let go = agent_target(&ctx, "agent-go:live-shell").expect("go slot");
+    let tab = egui::Event::Key {
+        key: egui::Key::Tab,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut shown = false;
+    for _ in 0..12 {
+        let shapes = paint_inbox(&mut app, &ctx, 320.0, vec![tab.clone()]);
+        let focused = ctx
+            .memory(|memory| memory.focused())
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|response| response.rect == go);
+        if focused {
+            let shapes = paint_inbox(&mut app, &ctx, 320.0, vec![]);
+            shown = painted_icon_rects(&shapes)
+                .iter()
+                .any(|icon| go.contains(icon.center()));
+            break;
+        }
+        let _ = shapes;
+    }
+    assert!(shown, "Tab focuses Go and shows it");
+}
+
+/// The tabs read "Inbox 1 | Live 0 | Unread 1" where they fit and drop
+/// the counts on a narrow sidebar, so no label is cut.
+#[cfg(feature = "test-support")]
+#[test]
+fn agents_tabs_are_text_with_counts_and_fit_the_minimum_sidebar() {
+    let (mut app, ctx, _dir) = fixture();
+    appearance::install(&ctx);
+    waiting_card(&mut app);
+    paint_inbox(&mut app, &ctx, 320.0, vec![]);
+    let wide = painted_strings(&paint_inbox(&mut app, &ctx, 320.0, vec![]));
+    assert!(wide.iter().any(|s| s == "Inbox 1"), "{wide:?}");
+    assert!(wide.iter().any(|s| s.starts_with("Unread ")), "{wide:?}");
+    let narrow = painted_strings(&paint_inbox(&mut app, &ctx, 170.0, vec![]));
+    for name in ["needs", "live", "unread"] {
+        let cell = agent_target(&ctx, &format!("agent-tab:{name}")).unwrap();
+        assert!(
+            cell.right() <= 170.0 + 0.5,
+            "{name} cell inside the sidebar"
+        );
+    }
+    assert!(
+        !narrow.iter().any(|s| s == "Inbox 1"),
+        "a narrow sidebar drops the counts: {narrow:?}"
+    );
 }

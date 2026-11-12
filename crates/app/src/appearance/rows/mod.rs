@@ -1,6 +1,7 @@
 mod counters;
 mod list;
 mod markdown_header;
+mod segmented;
 mod tree_rows;
 
 use super::scale;
@@ -15,6 +16,7 @@ use list::{RowSpec, row_ext};
 pub use markdown_header::MarkdownHeader;
 pub(crate) use markdown_header::MarkdownHeaderInput;
 pub use markdown_header::markdown_header;
+pub use segmented::{SegmentCell, segmented};
 use std::time::Duration;
 pub(crate) use tree_rows::ProjectRowInput;
 pub use tree_rows::{
