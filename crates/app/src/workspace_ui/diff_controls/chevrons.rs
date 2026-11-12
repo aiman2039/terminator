@@ -36,17 +36,43 @@ pub(super) fn action_target(kind: Kind, index: usize) -> String {
     }
 }
 
-/// Tooltip of a hunk action: the picked lines, or the whole hunk.
-pub(super) fn action_tip(kind: Kind, picked: usize) -> String {
+/// Tooltip of a hunk action: the picked lines, or the whole hunk. The
+/// diff key (`s`, `u`, `x`) shows only on the selected change, since the
+/// key acts on the selected change and not on the one under the pointer.
+pub(super) fn action_tip(kind: Kind, picked: usize, selected: bool) -> String {
     let target = if picked > 0 {
         diff::actions::lines_label(picked, "selected")
     } else {
         "this change (Alt+click lines to pick some)".to_owned()
     };
-    if kind == Kind::Discard {
+    let tip = if kind == Kind::Discard {
         format!("Revert: discard {target}…")
     } else {
         format!("{} {target}", kind.label())
+    };
+    if selected {
+        format!("{tip} ({})", action_key(kind))
+    } else {
+        tip
+    }
+}
+
+/// The diff key that runs `kind` on the selected change.
+fn action_key(kind: Kind) -> char {
+    match kind {
+        Kind::Stage => 's',
+        Kind::Unstage => 'u',
+        Kind::Discard => 'x',
+    }
+}
+
+/// Glyph of a hunk action in the unified gutter: the same verb glyphs as
+/// the whole-file control (Stage Plus, Unstage Minus, Discard Eraser).
+pub(super) fn action_icon(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Stage => "Plus",
+        Kind::Unstage => "Minus",
+        Kind::Discard => "Eraser",
     }
 }
 
@@ -115,7 +141,10 @@ impl ControlsFrame<'_> {
                         egui::Sense::hover()
                     },
                 )
-                .on_hover_text(lock.map_or_else(|| action_tip(kind, picked), str::to_owned))
+                .on_hover_text(lock.map_or_else(
+                    || action_tip(kind, picked, state.review.selected == Some(band.index)),
+                    str::to_owned,
+                ))
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &action_target(kind, band.index), rect);

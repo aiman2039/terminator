@@ -58,6 +58,8 @@ struct DiffPass {
     gap: Option<(usize, diff::GapPart)>,
     confirmed: Option<usize>,
     stage_file: bool,
+    /// The toolbar is narrow: counters use their short form.
+    compact: bool,
 }
 
 impl DiffPass {
