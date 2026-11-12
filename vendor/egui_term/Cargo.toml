@@ -8,3 +8,5 @@ egui = "0.37"
 alacritty_terminal = "0.26"
 anyhow = "1"
 open = "5"
+# The PTY wrapper for shell marks implements alacritty's poll-based traits.
+polling = "3"

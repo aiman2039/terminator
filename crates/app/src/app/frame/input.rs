@@ -104,6 +104,10 @@ impl App {
             if terminal_focus && shortcuts::terminal_keeps(&key) {
                 continue;
             }
+            // Grid actions (prompt jumps, keyboard modes) need the terminal.
+            if !terminal_keyboard && crate::workspace_ui::TERMINAL_ACTIONS.contains(&action) {
+                continue;
+            }
             // Shared chords (Cmd+Shift+R; Ctrl+Shift+F on Linux) go by focus.
             if shortcuts::yields(&self.state.settings.keybindings, action, terminal_keyboard) {
                 continue;

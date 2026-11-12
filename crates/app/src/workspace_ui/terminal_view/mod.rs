@@ -5,8 +5,11 @@ use super::tabs::cached_terminal_theme;
 use super::viewer::Viewer;
 use egui_term::TerminalBackend;
 
+mod commands;
 mod menu;
 mod target;
+
+pub(crate) use commands::TERMINAL_ACTIONS;
 
 /// Per-frame state of one painted terminal pane.
 struct TerminalFrame<'a> {
@@ -291,6 +294,7 @@ impl Viewer<'_> {
         let response = ui.add_enabled(gates.input_enabled, view);
         // Shortcuts run before panes paint; this tells them a terminal has focus.
         shortcuts::mark_terminal(ui.ctx(), response.id);
+        self.app.paint_prompt_marks(ui, sid, response.rect);
         Some(response)
     }
 

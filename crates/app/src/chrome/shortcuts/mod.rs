@@ -126,6 +126,11 @@ actions! {
     ReopenBrowserTab => "reopen_browser_tab", "Reopen closed browser tab", "Globe";
     NewAgentSession => "new_agent_session", "New agent session…", "AgentGeneric";
     NewDrawing => "new_drawing", "New drawing", "Pencil";
+    // Shell integration (OSC 133) command navigation in a terminal.
+    PrevPrompt => "prev_prompt", "Previous prompt", "ArrowUp";
+    NextPrompt => "next_prompt", "Next prompt", "ArrowDown";
+    SelectCommand => "select_command", "Select command with output", "TextSelect";
+    CopyLastOutput => "copy_last_output", "Copy last command output", "Copy";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

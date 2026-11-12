@@ -340,3 +340,31 @@ first. `target_at` returns the URI as the target text, the linked cells as
 the underline rects, and `LinkTarget::hyperlink = true`. Link hover and
 open (`LinkAction::Hover`/`Open`) also prefer the hyperlink URI over the URL
 regex. Test: `osc8_hyperlink_target_is_its_uri_not_the_text`.
+
+## Shell integration marks (2026-11-12)
+
+alacritty ignores OSC 133 / OSC 633 `A`/`B`/`C`/`D`. `backend/marks.rs`
+wraps the PTY (`MarkedPty`, an `EventedPty`/`EventedReadWrite` over
+`tty::Pty`) and rewrites each mark into an OSC 8 hyperlink with the private
+URI scheme `terminator-mark:` (prompt text `A`..`B`, command output
+`C`..`D`; the next prompt URI carries the last exit code as `?last=N`).
+The links live in the cells, so prompt positions follow scrollback, reflow
+and history trimming. A mark split across reads is held back (at most 64
+bytes); longer, unknown or malformed OSCs pass through unchanged. Reads are
+sized so the rewritten bytes always fit the event loop buffer. Hover, link
+hit testing and link open ignore mark links (`user_link`).
+`backend/prompts.rs` adds `prompt_marks` (cached full-grid scan, at most
+every 250 ms), `jump_to_prompt`, `select_command`, `last_command_output`
+and `take_ended_commands` (command durations from `C` to `D`). All are
+local: nothing writes to the PTY. New dependency: `polling` (already used by
+alacritty_terminal) for the wrapper traits.
+
+Tests: `prompt_and_output_marks_become_private_links`,
+`marks_split_at_every_byte_rewrite_like_whole_reads`,
+`other_sequences_pass_through_unchanged`,
+`malformed_and_oversized_marks_pass_through_unchanged`,
+`only_a_started_command_is_logged_when_it_ends`,
+`prompts_are_found_with_the_exit_code_of_their_command`,
+`prompts_keep_their_place_after_scrolling_into_history`,
+`mark_links_are_not_link_targets`, and the real-PTY check
+`marks_from_a_real_pty_drive_jumps_selection_and_output_copy`.

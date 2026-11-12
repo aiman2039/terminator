@@ -231,6 +231,10 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
     Action::GitAnnotate,
     Action::GitStageAll,
     Action::GitShowAllChanges,
+    // Command actions from the terminal menu and Find Action; free chords
+    // for them are rare in both keymaps.
+    Action::SelectCommand,
+    Action::CopyLastOutput,
 ];
 
 #[test]
@@ -440,7 +444,7 @@ fn git_actions_start_unbound() {
         .copied()
         .filter(|action| action.label().starts_with("Git: "))
         .collect();
-    assert_eq!(git, UNBOUND_BY_DEFAULT);
+    assert_eq!(git, UNBOUND_BY_DEFAULT[..git.len()]);
     for action in git {
         assert!(action.id().starts_with("git_"), "{}", action.id());
         assert!(!defaults.contains_key(action.id()), "{}", action.id());

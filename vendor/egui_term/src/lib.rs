@@ -7,6 +7,7 @@ mod theme;
 mod types;
 mod view;
 
+pub use backend::marks::{CommandEnded, PromptMark};
 pub use backend::settings::BackendSettings;
 pub use backend::typeahead::TypeAheadMode;
 pub use backend::{

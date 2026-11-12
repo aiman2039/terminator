@@ -76,6 +76,9 @@ impl App {
             Action::ZoomPane => self.pane_ops.zoomed.is_some() || self.zoom_target().is_some(),
             Action::ReopenBrowserTab => !self.browser_extras.closed.is_empty(),
             action if SESSION_ACTIONS.contains(&action) => self.active_session.is_some(),
+            action if crate::workspace_ui::TERMINAL_ACTIONS.contains(&action) => {
+                self.terminal_action_applies()
+            }
             action if super::actions::GIT_ACTIONS.contains(&action) => {
                 self.git_action_applies(action)
             }
@@ -248,6 +251,10 @@ impl App {
             | Action::GitAnnotate
             | Action::GitStageAll
             | Action::GitShowAllChanges => self.run_git_action(action),
+            Action::PrevPrompt
+            | Action::NextPrompt
+            | Action::SelectCommand
+            | Action::CopyLastOutput => self.run_terminal_action(ctx, action),
         }
     }
 

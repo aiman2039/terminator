@@ -23,6 +23,19 @@ fn tab_step_key(forward: bool) -> String {
     .into()
 }
 
+/// Previous/next shell prompt: Cmd+Up / Down on macOS (Terminal.app,
+/// Ghostty), Ctrl+Shift+PageUp / PageDown on Linux (Ghostty), where
+/// Ctrl+Shift+Up scrolls a line in most terminals.
+fn prompt_jump_key(forward: bool) -> String {
+    match (cfg!(target_os = "macos"), forward) {
+        (true, true) => "command+Down",
+        (true, false) => "command+Up",
+        (false, true) => "ctrl+shift+PageDown",
+        (false, false) => "ctrl+shift+PageUp",
+    }
+    .into()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -147,6 +160,8 @@ impl Settings {
             // Free in both keymaps; New terminal is command+T.
             ("new_agent_session".into(), "command+alt+N".into()),
             ("new_drawing".into(), "command+alt+X".into()),
+            ("prev_prompt".into(), prompt_jump_key(false)),
+            ("next_prompt".into(), prompt_jump_key(true)),
         ]
         .into()
     }
