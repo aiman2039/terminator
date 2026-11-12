@@ -11,6 +11,7 @@ use crate::{AttentionAction, AttentionCard, attention_card, *};
 impl App {
     fn first_project_dialog(&mut self, ctx: &egui::Context) {
         if !(cfg!(target_os = "macos")
+            && self.center != CenterPage::Welcome
             && self
                 .preferences
                 .needs_setup(self.state_loaded, self.state.projects.len())

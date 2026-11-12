@@ -79,6 +79,7 @@ pub(crate) use anyhow::Result;
 mod clipboard;
 pub(crate) mod diff;
 mod gui_services;
+mod onboarding;
 mod perforce;
 mod tasks;
 pub use app::app_state::App;

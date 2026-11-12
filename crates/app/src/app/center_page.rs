@@ -26,6 +26,10 @@ pub(crate) enum CenterPage {
     LocalHistory,
     /// Changes since task start of a worktree; data is `App::task_changes`.
     TaskChanges,
+    /// The first-run setup page.
+    Welcome,
+    /// This version's changelog section, after an update.
+    WhatsNew,
 }
 
 impl CenterPage {

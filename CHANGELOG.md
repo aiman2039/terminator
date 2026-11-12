@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A Welcome page on the first run joins the setup steps: add a project, hook Install for each agent found on PATH, the keymap, SSH host import and a short Agents inbox tour. After an update, What's New shows this changelog's section for the new version (bundled, no network). Find Action reopens both.
 - Settings → Appearance can import a Ghostty or kitty theme file or an iTerm2 `.itermcolors` file into the colors (Apply saves it), and Follow OS appearance picks one preset while the OS is light and one while it is dark (`follow_os_theme`, `light_theme`, `dark_theme` in `config.toml`).
 - Tasks: Run task… (Find Action, project menu) lists named commands from `.terminator/tasks.toml` in the project and from `tasks.toml` next to `config.toml`, and Rerun last task runs the last one again. A Run opens a new terminal in the project and runs the command; a command that names an agent, or a task with `enter = false`, is only typed. Project task files wait for the project trust answer.
 - Native editor language servers for Go (gopls), C/C++ (clangd), Java (jdtls), Lua (lua-language-server), Bash (bash-language-server), Ruby (ruby-lsp) and PHP (intelephense), and user-defined servers in Settings → Languages (file types, command, arguments). Nothing is bundled or downloaded; a missing server shows its install command, and every server still waits for the project trust answer.

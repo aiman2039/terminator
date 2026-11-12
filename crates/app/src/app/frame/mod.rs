@@ -146,6 +146,7 @@ impl eframe::App for App {
         self.vnc_quit_dialog(&ctx);
         self.note_rename_frame(&ctx);
         self.preview_appearance(&ctx);
+        self.onboarding_tick();
         self.prune_unpainted(&ctx);
         self.sync_terminal_focus();
         self.sync_metadata_request();

@@ -234,7 +234,12 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
 ];
 
 /// Task actions have no default keys either (bind them in Keymap).
-const TASK_ACTIONS: &[Action] = &[Action::RunTask, Action::RerunTask];
+const TASK_ACTIONS: &[Action] = &[
+    Action::RunTask,
+    Action::RerunTask,
+    Action::ShowWelcome,
+    Action::ShowWhatsNew,
+];
 
 #[test]
 fn every_menu_action_has_a_unique_default_chord() {

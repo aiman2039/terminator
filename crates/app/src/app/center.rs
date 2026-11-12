@@ -42,6 +42,8 @@ impl App {
             CenterPage::Ssh => self.ssh_page_center(ui),
             CenterPage::Vnc => self.vnc_page_center(ui),
             CenterPage::TaskChanges => self.task_changes_center(ui),
+            CenterPage::Welcome => self.welcome_center(ui),
+            CenterPage::WhatsNew => self.whats_new_center(ui),
         }
         false
     }
