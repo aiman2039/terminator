@@ -1,5 +1,5 @@
 //! Builds one native webview with the navigation, load, and download policy.
-use crate::browser::{self, LocalScope, nav::NavStates};
+use crate::browser::{self, LocalScope, draw, nav::NavStates};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -28,6 +28,8 @@ pub(crate) struct BuildInput<'a> {
     pub opens: &'a Arc<Mutex<Vec<(String, String)>>>,
     /// Web inspector (Settings → Browser developer tools; default off).
     pub devtools: bool,
+    /// Scene files the drawing page may read and write.
+    pub scenes: &'a draw::Scenes,
 }
 
 pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
@@ -45,18 +47,22 @@ pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
         navigations,
         opens,
         devtools,
+        scenes,
     } = input;
+    let drawing = draw::own_url(href);
+    // WebKitGTK keeps a scheme on the shared context: register it once.
+    let register = drawing && !context.is_custom_protocol_registered(draw::SCHEME);
     let builder = WebViewBuilder::new_with_web_context(context)
         .with_url(href)
         .with_devtools(devtools)
-        .with_navigation_handler({
-            let scope = scope.clone();
-            let current = Arc::clone(current);
-            move |url| {
-                let current = current.lock().map(|c| c.clone()).ok();
-                browser::navigation_target(&url, current.as_deref(), &scope).is_some()
-            }
-        })
+        .with_navigation_handler(navigation_policy(Policy {
+            drawing,
+            key: key.to_owned(),
+            scope: scope.clone(),
+            current: Arc::clone(current),
+            opens: Arc::clone(opens),
+            scenes: scenes.clone(),
+        }))
         .with_on_page_load_handler(page_load_handler(PageLoad {
             key: key.to_owned(),
             scope: scope.clone(),
@@ -97,8 +103,54 @@ pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
                 NewWindowResponse::Deny
             }
         });
+    let builder = serve_drawings(builder, register.then_some(scenes));
     let builder = browser::apply_store(builder, data_dir)?;
     builder.build_as_child(frame).map_err(wry_error)
+}
+
+struct Policy {
+    drawing: bool,
+    key: String,
+    scope: LocalScope,
+    current: Current,
+    opens: Arc<Mutex<Vec<(String, String)>>>,
+    scenes: draw::Scenes,
+}
+
+/// Which addresses the view may load.
+fn navigation_policy(policy: Policy) -> impl Fn(String) -> bool + 'static {
+    move |url| {
+        if policy.drawing {
+            // "Browse libraries": the catalog opens in a Browser tab.
+            if draw::catalog_url(&url)
+                && let Ok(mut pending) = policy.opens.lock()
+            {
+                pending.push((policy.key.clone(), url));
+                return false;
+            }
+            return draw::own_url(&url);
+        }
+        // The catalog's "Add to Excalidraw" goes to the drawing, not here.
+        if let Some(install) = draw::install_request(&url) {
+            policy.scenes.push_script(install);
+            return false;
+        }
+        let current = policy.current.lock().map(|c| c.clone()).ok();
+        browser::navigation_target(&url, current.as_deref(), &policy.scope).is_some()
+    }
+}
+
+/// Lets the drawing page load itself and its scene file.
+fn serve_drawings<'a>(
+    builder: WebViewBuilder<'a>,
+    scenes: Option<&draw::Scenes>,
+) -> WebViewBuilder<'a> {
+    let Some(scenes) = scenes.cloned() else {
+        return builder;
+    };
+    builder.with_asynchronous_custom_protocol(draw::SCHEME.into(), move |_, request, responder| {
+        draw::serve(&scenes, request, responder);
+    })
 }
 
 struct PageLoad {

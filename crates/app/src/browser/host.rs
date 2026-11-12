@@ -81,6 +81,8 @@ pub(crate) struct BrowserHost {
     zoom: HashMap<String, f64>,
     /// Web inspector for views built from now on.
     devtools: bool,
+    scenes: browser::draw::Scenes,
+    dark: bool,
 }
 
 pub(crate) struct SyncInput<'a> {
@@ -105,6 +107,8 @@ impl BrowserHost {
             nav: NavStates::default(),
             zoom: HashMap::new(),
             devtools: false,
+            scenes: browser::draw::Scenes::default(),
+            dark: true,
         }
     }
 
@@ -158,6 +162,7 @@ impl BrowserHost {
         self.views.retain(|key, _| keys.contains(key));
         self.errors.retain(|key, _| keys.contains(key));
         self.zoom.retain(|key, _| keys.contains(key));
+        self.scenes.retain(|key| keys.contains(key));
         self.nav.retain(|key| keys.contains(key));
     }
 
@@ -275,6 +280,7 @@ impl BrowserHost {
             data_dir,
         } = input;
         self.nav.set_context(ctx);
+        self.dark = ctx.global_style().visuals.dark_mode;
         if occluded {
             self.hide_all();
             return;
@@ -301,6 +307,9 @@ impl BrowserHost {
         });
         self.hide_unlisted(visible);
         self.evict(visible);
+        for (key, script) in self.scenes.take_scripts() {
+            self.run_script(&key, &script);
+        }
         self.pump_linux();
     }
 
@@ -333,7 +342,8 @@ impl BrowserHost {
         pane: &VisibleBrowser,
         data_dir: &Path,
     ) -> Result<(), String> {
-        let href = browser::href(&pane.target).map_err(|error| error.to_string())?;
+        let page = (pane.key.as_str(), &pane.target);
+        let href = browser::draw::pane_href(&self.scenes, page, (self.dark, data_dir))?;
         if let Some(hosted) = self.views.get_mut(&pane.key) {
             if hosted.target != pane.target {
                 hosted.view.load_url(&href).map_err(wry_error)?;
@@ -373,6 +383,7 @@ impl BrowserHost {
             navigations: &self.navigations,
             opens: &self.opens,
             devtools: self.devtools,
+            scenes: &self.scenes,
         })?;
         if let Some(level) = self.zoom.get(&pane.key) {
             let _ = view.zoom(*level);

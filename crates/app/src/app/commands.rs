@@ -222,6 +222,7 @@ impl App {
             Action::ReopenBrowserTab => self.reopen_browser_tab(),
             Action::NewVnc => self.open_new_vnc_tab(None),
             Action::NewAgentSession => self.open_agent_picker(),
+            Action::NewDrawing => self.open_new_drawing(None),
             Action::SwitcherNext => self.step_switcher(false),
             Action::SwitcherBack => self.step_switcher(true),
             Action::ToolExplorer

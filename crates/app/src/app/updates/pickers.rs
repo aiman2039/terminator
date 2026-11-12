@@ -84,7 +84,7 @@ impl App {
             && let Some(project) = &project
         {
             self.open_document(project, path, None);
-        } else if crate::browser::supported_file(&path)
+        } else if crate::browser::opens_in_tab(&path)
             && let Some(project) = &project
         {
             self.open_html(project, path, None);

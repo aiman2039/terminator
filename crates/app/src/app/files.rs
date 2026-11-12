@@ -261,7 +261,7 @@ impl App {
         let document = crate::document_view::DocumentKind::for_path(path);
         if !(image_preview::supported(path)
             || document.is_some()
-            || crate::browser::supported_file(path)
+            || crate::browser::opens_in_tab(path)
             || player::supported(path))
         {
             return false;
@@ -274,7 +274,7 @@ impl App {
             self.open_image(&project, path, split);
         } else if document.is_some() {
             self.open_document(&project, path, split);
-        } else if crate::browser::supported_file(&path) {
+        } else if crate::browser::opens_in_tab(&path) {
             self.open_html(&project, path, split);
         } else {
             self.open_audio(&project, path, split);

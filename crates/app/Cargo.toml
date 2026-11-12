@@ -39,6 +39,8 @@ url = "2"
 uuid.workspace = true
 # `devtools`: the inspector stays off unless Settings → Browser turns it on.
 wry = { version = "0.57", optional = true, features = ["devtools"] }
+# Embeds the Excalidraw page (vendor/excalidraw/dist) for drawing tabs.
+include_dir = { version = "0.7", optional = true }
 rodio = "0.23"
 cpal = "0.17"
 spectrum-analyzer = "2"
@@ -78,7 +80,7 @@ shlex = "2"
 default = ["wgpu", "webview"]
 wgpu = ["eframe/wgpu"]
 # OS webview Browser tabs (WKWebView / WebKitGTK). Off for the portable Linux build.
-webview = ["dep:wry", "dep:gtk"]
+webview = ["dep:wry", "dep:gtk", "dep:include_dir"]
 test-support = ["dep:egui-winit", "egui-winit/test-support", "terminator-updater/test-support"]
 
 [dependencies.image]

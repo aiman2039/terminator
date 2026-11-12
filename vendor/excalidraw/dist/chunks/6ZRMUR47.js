@@ -1,0 +1,1 @@
+import{a as r,c as e}from"./HE6M3PVB.js";import"./UOCNILV2.js";import"./2LG6EX5W.js";import"./LNADNQCH.js";var i=import.meta.url?new URL(import.meta.url):void 0;typeof window>"u"&&typeof self<"u"&&(self.onmessage=async a=>{switch(a.data.command){case r.Subset:let t=await e(a.data.arrayBuffer,a.data.codePoints);self.postMessage(t,{transfer:[t]});break}});export{i as WorkerUrl};

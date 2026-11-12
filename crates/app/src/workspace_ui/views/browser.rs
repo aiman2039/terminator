@@ -53,6 +53,11 @@ impl App {
         key: String,
         target: &BrowserTarget,
     ) {
+        if crate::browser::draw::is_drawing(target) {
+            // Excalidraw brings its own toolbar and menu.
+            self.webview_area(ui, key, target);
+            return;
+        }
         let href = crate::browser::href(target).unwrap_or_else(|_| target.title());
         let mut draft = self
             .browser_urls
@@ -79,6 +84,11 @@ impl App {
         if let Some(url) = nav.blocked_download {
             self.download_notice(ui, &key, url);
         }
+        self.webview_area(ui, key, target);
+    }
+
+    /// The rest of the pane: a load error, then the native view.
+    fn webview_area(&mut self, ui: &mut egui::Ui, key: String, target: &BrowserTarget) {
         if let Some(error) = self.browser_host.error(&key) {
             ui.colored_label(ui.visuals().error_fg_color, error);
             ui.weak("Open in browser to view the page in your system browser.");
