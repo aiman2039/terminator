@@ -47,6 +47,7 @@ impl App {
             return;
         }
         self.git.list_root = Some(root);
+        self.git.list_error = None;
         self.git.branches.clear();
         self.git.log.clear();
         self.git.shelves.clear();
@@ -106,6 +107,8 @@ pub struct GitPanelInput<'a> {
     pub(crate) commit_lock: CommitLock,
     /// Summary line and output tail of the last failed commit or push.
     pub commit_failure: Option<&'a str>,
+    /// The last failure of a list the panel loaded by itself.
+    pub list_error: Option<&'a str>,
 }
 
 /// The Git panel's header tabs.
@@ -275,6 +278,17 @@ impl GitPanelPass<'_, '_> {
             outcome: self.outcome,
         });
         ui.separator();
+        if let Some(error) = self.input.list_error {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(error)
+                        .small()
+                        .color(ui.visuals().error_fg_color),
+                )
+                .truncate(),
+            )
+            .on_hover_text(error);
+        }
         match self.input.tab {
             GitTab::History => self.history(ui),
             GitTab::Stash => self.stash_tab(ui),

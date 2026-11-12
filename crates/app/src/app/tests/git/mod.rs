@@ -5,3 +5,4 @@ mod commit_lock;
 mod commit_log;
 mod git_actions;
 mod git_panel;
+mod status_errors;

@@ -314,6 +314,7 @@ impl App {
                     .map(crate::app::git_panel_state::CommitRun::progress),
                 commit_lock,
                 commit_failure: self.git.commit_failure.as_deref(),
+                list_error: self.git.list_error.as_deref(),
             },
         );
         self.git.commit = draft;

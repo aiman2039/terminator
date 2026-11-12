@@ -151,6 +151,7 @@ fn running_commit_shows_its_step_cancel_and_the_last_failure() {
                     }),
                     commit_lock: CommitLock::default(),
                     commit_failure: Some(failure),
+                    list_error: None,
                 };
                 outcome = git_panel(ui, &mut input);
             },
@@ -255,6 +256,7 @@ fn culled_change_rows_keep_the_full_scroll_range() {
                         commit_run: None,
                         commit_lock: CommitLock::default(),
                         commit_failure: None,
+                        list_error: None,
                     };
                     git_panel(ui, &mut input);
                 },
@@ -366,6 +368,7 @@ fn commit_tab_texts(ctx: &egui::Context) -> Vec<(egui::Pos2, String)> {
                 commit_run: None,
                 commit_lock: CommitLock::default(),
                 commit_failure: None,
+                list_error: None,
             };
             git_panel(ui, &mut input);
         },
@@ -475,6 +478,7 @@ fn header_rects(width: f32, branch: &str) -> (egui::Rect, egui::Rect) {
                     commit_run: None,
                     commit_lock: CommitLock::default(),
                     commit_failure: None,
+                    list_error: None,
                 };
                 git_panel(ui, &mut input);
             },

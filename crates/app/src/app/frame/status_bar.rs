@@ -32,6 +32,7 @@ impl App {
             let right_block = ui
                 .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     self.status_right_end(ui);
+                    self.status_log_button(ui);
                 })
                 .response
                 .rect
@@ -81,22 +82,22 @@ impl App {
         // A count only: holding the tab list across the chain would
         // borrow self while the banner bodies need `&mut self`.
         let unavailable_tabs = self.unavailable_tabs().len();
+        // Every banner keeps to the bar's one row: buttons stay, and text
+        // ends with an ellipsis (its full form is on hover).
         if self.installation_problem() {
             self.installation_repair_banner(ui);
         } else if self.service_disconnected() {
-            ui.horizontal_wrapped(|ui| self.service_unreachable_banner(ui));
-        } else if let Some(error) = self.error.text().map(str::to_owned) {
-            ui.horizontal_wrapped(|ui| {
-                if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
-                    self.dismiss_status_error();
-                }
-                ui.colored_label(appearance::color(&self.theme.status_failed), error);
-            });
+            ui.horizontal(|ui| self.service_unreachable_banner(ui));
+        } else if self.error.text().is_some() {
+            ui.horizontal(|ui| self.status_error_chip(ui));
         } else if unavailable_tabs > 0 {
-            ui.horizontal_wrapped(|ui| self.unavailable_tabs_banner(ui, unavailable_tabs));
+            ui.horizontal(|ui| self.unavailable_tabs_banner(ui, unavailable_tabs));
         } else if let Some(message) = self.state.degraded.clone() {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(appearance::color(&self.theme.status_waiting), message);
+            ui.horizontal(|ui| {
+                one_line(
+                    ui,
+                    RichText::new(message).color(appearance::color(&self.theme.status_waiting)),
+                );
                 self.info_row(ui);
             });
         } else if self.installation_mismatched() {
@@ -104,7 +105,10 @@ impl App {
                 self.open_installation_settings();
             }
             self.restart_session_button(ui, true);
-            ui.weak("App and session service use different installations.");
+            one_line(
+                ui,
+                RichText::new("App and session service use different installations.").weak(),
+            );
         } else if self.info.is_some() {
             ui.horizontal(|ui| self.info_row(ui));
         } else {
@@ -120,7 +124,7 @@ impl App {
         if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
             self.info = None;
         }
-        ui.label(info);
+        one_line(ui, RichText::new(info));
     }
 
     /// Info notes are short-lived: one clears [`INFO_TTL`] after it first
@@ -135,6 +139,8 @@ impl App {
         let since = match &self.info_since {
             Some((text, at)) if text == info => *at,
             _ => {
+                // The log keeps it after the bar drops it (a Create PR URL).
+                self.error.note_info(info);
                 self.info_since = Some((info.clone(), now));
                 now
             }
@@ -156,27 +162,29 @@ impl App {
             self.open_installation_settings();
         }
         self.restart_session_button(ui, true);
-        ui.colored_label(
-            appearance::color(&self.theme.status_failed),
-            "Terminal helper needs repair. Existing sessions are preserved.",
+        one_line(
+            ui,
+            RichText::new("Terminal helper needs repair. Existing sessions are preserved.")
+                .color(appearance::color(&self.theme.status_failed)),
         );
     }
 
     fn service_unreachable_banner(&mut self, ui: &mut egui::Ui) {
         self.start_service_button(ui, true);
-        ui.colored_label(
-            appearance::color(&self.theme.status_failed),
-            "Session service unreachable.",
-        );
-        if let Some(detail) = self
+        let failed = appearance::color(&self.theme.status_failed);
+        ui.colored_label(failed, "Session service unreachable.");
+        let detail = match self
             .error
             .get()
             .filter(|error| error.kind != StatusKind::Connection)
         {
-            ui.colored_label(appearance::color(&self.theme.status_failed), &detail.text);
-        } else {
-            ui.weak("Start it to show and close sessions. Ended sessions remain in History.");
-        }
+            Some(detail) => RichText::new(&detail.text).color(failed),
+            None => RichText::new(
+                "Start it to show and close sessions. Ended sessions remain in History.",
+            )
+            .weak(),
+        };
+        one_line(ui, detail);
     }
 
     fn unavailable_tabs_banner(&mut self, ui: &mut egui::Ui, unavailable_tabs: usize) {
@@ -186,11 +194,14 @@ impl App {
         if close.clicked() {
             self.close_unavailable_tabs();
         }
-        ui.weak(if unavailable_tabs == 1 {
+        let text = if unavailable_tabs == 1 {
             "1 tab has no session record. It was left behind by sessions that already ended.".into()
         } else {
-            format!("{unavailable_tabs} tabs have no session record. They were left behind by sessions that already ended.")
-        });
+            format!(
+                "{unavailable_tabs} tabs have no session record. They were left behind by sessions that already ended."
+            )
+        };
+        one_line(ui, RichText::new(text).weak());
     }
 
     /// The daemon runs another version, or lacks the stable helper.
@@ -396,6 +407,19 @@ impl App {
             diagnostics::record(ui.ctx(), "status-lsp", _lsp.rect);
         }
     }
+}
+
+/// Banner text on the bar's one row: at most 40 % of the window wide,
+/// ended with an ellipsis, full text on hover.
+fn one_line(ui: &mut egui::Ui, text: RichText) {
+    let max = (ui.ctx().content_rect().width() * 0.4).max(120.0);
+    let full = text.text().to_owned();
+    ui.scope(|ui| {
+        ui.set_max_width(max);
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
+    .on_hover_text(full);
 }
 
 /// "1 session running", "2 sessions running".

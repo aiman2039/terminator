@@ -25,6 +25,9 @@ pub(crate) struct GitPanelState {
     pub(crate) log: Vec<(String, String)>,
     pub(crate) shelves: Vec<(String, String)>,
     pub(crate) list_root: Option<PathBuf>,
+    /// The last failure of a list the panel loads by itself (branches,
+    /// log, shelves, comparison). It shows in the panel, not the status bar.
+    pub(crate) list_error: Option<String>,
     /// Expand/collapse-all generation; a new one resets the tree's open state.
     pub(crate) collapse: u64,
     /// The last Collapse all is still in force (else everything starts open).

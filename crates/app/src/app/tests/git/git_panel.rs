@@ -235,6 +235,7 @@ fn git_panel_clicks_reuse_an_open_diff_instead_of_duplicating() {
                         commit_run: None,
                         commit_lock: Default::default(),
                         commit_failure: None,
+                        list_error: None,
                     };
                     sidebar_ui::git_panel(ui, &mut { input })
                 };

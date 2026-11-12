@@ -11,6 +11,7 @@ mod input;
 mod menu;
 mod status_bar;
 pub(crate) mod status_line;
+mod status_messages;
 
 /// Env-gated idle-CPU probe. Set `TERMINATOR_REPAINT_LOG=1` and watch stderr:
 /// one line per second with the frame count plus egui's own repaint causes
@@ -209,7 +210,12 @@ impl App {
         if !self.state.settings.notifications_side {
             egui::Panel::top("attention").show(ui, |ui| self.notifications(ui));
         }
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        // One fixed row for every banner kind: a long message never makes
+        // the bar taller (the panel would keep its tallest height).
+        let status_height = ui.spacing().interact_size.y + 4.0;
+        egui::Panel::bottom("status")
+            .exact_size(status_height)
+            .show(ui, |ui| self.status_bar(ui));
         self.place_ide_columns(ui);
         // Center-only: shown after the sidebars so the tab strip sits beside
         // them instead of pushing them down.
