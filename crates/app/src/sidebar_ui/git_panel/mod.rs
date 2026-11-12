@@ -179,6 +179,8 @@ pub struct GitPanelOutcome {
     pub resolve: Option<PathBuf>,
     /// Open the Compare popup for this file.
     pub compare: Option<(PathBuf, crate::revision_compare::PickerMode)>,
+    /// Open the Commit Log at this commit (a History row click).
+    pub log_at: Option<String>,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -321,7 +323,7 @@ impl GitPanelPass<'_, '_> {
                 });
                 crate::shortcuts::tool_row_focus(ui, &row);
                 if row.clicked() {
-                    self.outcome.view_log = true;
+                    self.outcome.log_at = Some(hash.clone());
                 }
             }
         });

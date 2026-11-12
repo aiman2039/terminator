@@ -60,7 +60,7 @@ impl App {
     }
 
     /// Go to Hash: select a loaded commit, or load the log with it.
-    fn go_to_hash(&mut self, tab: &Tab, key: &str) {
+    pub(crate) fn go_to_hash(&mut self, tab: &Tab, key: &str) {
         let Some(view) = self.git.logs.get_mut(key) else {
             return;
         };

@@ -347,6 +347,7 @@ impl App {
             unread_selected: None,
             connected: false,
             control_server: None,
+            git_extras: Default::default(),
         }
     }
     pub(crate) fn fixture_rect(&self, ctx: &egui::Context, name: &str) -> Option<[f32; 4]> {

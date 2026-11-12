@@ -288,7 +288,13 @@ impl App {
         });
         let weak = appearance::color(&self.theme.secondary);
         let width = rect.width() - 58.0 - (label_x - 30.0) - badge_reserve;
-        let text = tab_label_job(&face.label, face.hint.as_deref(), [tint, weak], width);
+        let mut text = tab_label_job(&face.label, face.hint.as_deref(), [tint, weak], width);
+        // The Git panel's preview diff tab reads in italics until kept.
+        if self.is_preview_diff(Self::group_primary(paint.group)) {
+            for section in &mut text.sections {
+                section.format.italics = true;
+            }
+        }
         let galley = ui.painter().layout_job(text);
         ui.painter().galley(
             egui::pos2(

@@ -413,6 +413,8 @@ pub struct App {
     pub(crate) unread_selected: Option<String>,
     pub(crate) connected: bool,
     pub(crate) control_server: Option<ui_control::Server>,
+    /// Git preview tab, branch and sync actions, and the pull request panel.
+    pub(crate) git_extras: crate::git::GitExtras,
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

@@ -38,11 +38,14 @@ impl App {
         if outcome.view_log {
             self.open_commit_log();
         }
+        if let Some(hash) = outcome.log_at.take() {
+            self.open_commit_log_at(&hash);
+        }
         if let Some(staged) = outcome.show_changes {
             self.open_changes_diff(staged);
         }
         for clicked in std::mem::take(&mut outcome.clicked) {
-            self.activate_file_action(ui, &clicked.path, clicked.action);
+            self.open_git_preview(ui, &clicked.path, clicked.action);
         }
         for picked in std::mem::take(&mut outcome.menu) {
             self.file_action(FileActionInput {
@@ -51,6 +54,8 @@ impl App {
                 path: &picked.path,
                 line: None,
             });
+            // Open changes from the menu gives a kept tab, never the preview.
+            self.keep_preview_diff_of(&picked.path);
         }
         if let Some(path) = outcome.resolve.take() {
             self.open_merge(path);
@@ -244,5 +249,24 @@ impl App {
             workspace.add(terminator_core::id(), tab.clone());
         }
         self.insert(&project, tab, None);
+    }
+
+    /// The Commit Log with `hash` selected, through Go to Hash.
+    pub(crate) fn open_commit_log_at(&mut self, hash: &str) {
+        self.open_commit_log();
+        let Some(root) = self
+            .context
+            .as_ref()
+            .and_then(|context| context.root.clone())
+        else {
+            return;
+        };
+        if self.selected_remote_project().is_some() {
+            return;
+        }
+        let tab = Tab::CommitLog { cwd: root };
+        let key = tab.key();
+        hash.clone_into(&mut self.git.logs.entry(key.clone()).or_default().goto);
+        self.go_to_hash(&tab, &key);
     }
 }
