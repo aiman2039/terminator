@@ -1,11 +1,13 @@
 //! Perforce CLI adapter. Reads and explicit mutations use the GUI process pool.
 mod context;
 mod document;
+mod run;
 
 use crate::gui_services::Services;
 use anyhow::{Context, Result, bail, ensure};
 pub use context::{ContextInput, context};
 pub use document::{DocumentInput, document};
+pub use run::{Progress, RUN_BUSY, RUN_CANCELLED, RUN_SUBSYSTEM, RUN_TIMEOUT, Run, RunSlot};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -81,7 +83,16 @@ struct RunInput<'a> {
     json: bool,
 }
 
+/// A long action's output limit; past it the start is dropped.
+const LONG_STDOUT_LIMIT: usize = 64 * 1024 * 1024;
+
 async fn run(input: RunInput<'_>) -> Result<Vec<u8>> {
+    run_with(input, None).await
+}
+
+/// Runs `p4`. With `long`, the call is a cancellable network transfer:
+/// [`RUN_TIMEOUT`] cap, and `long` (or the cap) sends Ctrl-C first.
+async fn run_with(input: RunInput<'_>, long: Option<&CancellationToken>) -> Result<Vec<u8>> {
     let RunInput {
         service,
         cwd,
@@ -94,24 +105,42 @@ async fn run(input: RunInput<'_>) -> Result<Vec<u8>> {
         command.args(["-ztag", "-Mj"]);
     }
     command.args(args);
-    let output = service
-        .processes()
-        .run(
-            command,
-            CommandOptions {
-                timeout: Duration::from_secs(if args.first().is_some_and(|arg| arg == "info") {
-                    3
-                } else {
-                    30
-                }),
-                stdout_limit: 4 * 1024 * 1024,
-                // Perforce reports structured errors on stdout, including empty lists.
-                accepted_exit_codes: Some(if json { vec![0, 1] } else { vec![0] }),
-                ..Default::default()
-            },
-            Some("perforce".into()),
-        )
-        .await?;
+    let options = CommandOptions {
+        timeout: if long.is_some() {
+            RUN_TIMEOUT
+        } else if args.first().is_some_and(|arg| arg == "info") {
+            Duration::from_secs(3)
+        } else {
+            Duration::from_secs(30)
+        },
+        stdout_limit: if long.is_some() {
+            LONG_STDOUT_LIMIT
+        } else {
+            4 * 1024 * 1024
+        },
+        // Perforce reports structured errors on stdout, including empty lists.
+        accepted_exit_codes: Some(if json { vec![0, 1] } else { vec![0] }),
+        ..Default::default()
+    };
+    let processes = service.processes();
+    let output = match long {
+        Some(cancel) => processes.run_cancellable(command, options, cancel).await,
+        None => {
+            processes
+                .run(command, options, Some("perforce".into()))
+                .await
+        }
+    };
+    let mut output = output?;
+    if long.is_some() && output.stdout.len() >= LONG_STDOUT_LIMIT {
+        // The kept tail may start inside a record.
+        let start = output
+            .stdout
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(output.stdout.len(), |at| at.saturating_add(1));
+        output.stdout.drain(..start);
+    }
     // Raw print can report a missing revision as a warning on stderr and
     // still exit successfully. Never turn that failed read into an empty side.
     ensure!(
@@ -247,7 +276,12 @@ pub struct PerformInput<'a> {
     pub cwd: &'a Path,
     pub op: Op,
     pub cancel: &'a CancellationToken,
+    /// A long action ([`Op::is_long`]) that `cancel` stops with Ctrl-C.
+    pub long: bool,
 }
+
+/// Status lines kept from a long action's output.
+const REPORT_LINES: usize = 10;
 
 pub async fn perform(input: PerformInput<'_>) -> Result<crate::workspace_ops::Report> {
     let PerformInput {
@@ -255,15 +289,9 @@ pub async fn perform(input: PerformInput<'_>) -> Result<crate::workspace_ops::Re
         cwd,
         op,
         cancel,
+        long,
     } = input;
-    let verb = match &op {
-        Op::Edit(_) => "edit",
-        Op::Reconcile(_) => "reconcile",
-        Op::Sync => "sync",
-        Op::Submit(_) => "submit",
-        Op::Shelve(_) => "shelve",
-        Op::Unshelve(_) => "unshelve",
-    };
+    let verb = op.verb();
     let args = match op {
         Op::Edit(path) | Op::Reconcile(path) => {
             let root = cwd.to_owned();
@@ -289,27 +317,44 @@ pub async fn perform(input: PerformInput<'_>) -> Result<crate::workspace_ops::Re
             ]
         }
     };
-    let raw = run(RunInput {
-        service,
-        cwd,
-        args: &args,
-        json: true,
-    })
-    .await
-    .context("Perforce action failed; check the workspace before retrying")?;
+    let raw = run_with(
+        RunInput {
+            service,
+            cwd,
+            args: &args,
+            json: true,
+        },
+        long.then_some(cancel),
+    )
+    .await;
+    if long && cancel.is_cancelled() {
+        bail!("{RUN_CANCELLED}");
+    }
+    let raw = raw.context("Perforce action failed; check the workspace before retrying")?;
     let result = records(&raw, verb == "sync")?;
     let messages: Vec<_> = result
         .iter()
         .map(|record| field(record, "data"))
         .filter(|text| !text.is_empty())
         .collect();
-    Ok(crate::workspace_ops::Report::Message(
-        if messages.is_empty() {
-            "Perforce action complete".into()
-        } else {
-            messages.join("\n")
-        },
-    ))
+    Ok(crate::workspace_ops::Report::Message(report(&messages)))
+}
+
+/// The status text of an action: its messages, the last [`REPORT_LINES`]
+/// of a long list (a large sync names every file).
+fn report(messages: &[&str]) -> String {
+    match messages.len() {
+        0 => "Perforce action complete".into(),
+        n if n <= REPORT_LINES => messages.join("\n"),
+        n => format!(
+            "{} more lines\n{}",
+            n.saturating_sub(REPORT_LINES),
+            messages
+                .get(n.saturating_sub(REPORT_LINES)..)
+                .unwrap_or_default()
+                .join("\n")
+        ),
+    }
 }
 
 #[cfg(test)]

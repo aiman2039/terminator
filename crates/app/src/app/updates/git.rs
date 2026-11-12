@@ -244,6 +244,18 @@ impl App {
             self.handle_commit_reply(result);
             return;
         }
+        if let workspace_ops::Op::PerforceRun(_) = op {
+            self.git.perforce.finish();
+            if result
+                .as_ref()
+                .is_err_and(|error| error == crate::perforce::RUN_CANCELLED)
+            {
+                // A cancel is not a failure; the workspace may still need a look.
+                self.refresh_request = None;
+                self.info = Some(crate::perforce::RUN_CANCELLED.into());
+                return;
+            }
+        }
         if crate::revision_compare::answers(&op) {
             self.compare_reply(root, &op, result);
             return;
@@ -282,7 +294,10 @@ impl App {
                 self.git.compare = Some(data);
             }
             Err(error) => {
-                if matches!(op, workspace_ops::Op::Perforce(_)) {
+                if matches!(
+                    op,
+                    workspace_ops::Op::Perforce(_) | workspace_ops::Op::PerforceRun(_)
+                ) {
                     self.refresh_request = None;
                 }
                 if let workspace_ops::Op::Rename { from, to } = &op {

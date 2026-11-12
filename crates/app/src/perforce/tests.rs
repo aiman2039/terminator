@@ -40,6 +40,17 @@ fn opened_changelists_override_preview_and_keep_move_sides() {
 }
 
 #[test]
+fn a_long_action_reports_only_its_last_lines() {
+    assert_eq!(report(&[]), "Perforce action complete");
+    assert_eq!(report(&["a", "b"]), "a\nb");
+    let lines: Vec<String> = (0..25).map(|n| format!("file {n}")).collect();
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let text = report(&lines);
+    assert!(text.starts_with("15 more lines\nfile 15\n"), "{text}");
+    assert!(text.ends_with("file 24"));
+}
+
+#[test]
 fn file_specs_escape_revision_and_wildcard_characters() {
     assert_eq!(
         filespec(Path::new("/workspace/a@b#c%d*.txt")).unwrap(),
@@ -103,6 +114,7 @@ impl P4Fixture {
         perform(PerformInput {
             service: &self.service,
             cwd,
+            long: op.is_long(),
             op,
             cancel: &self.cancel,
         })

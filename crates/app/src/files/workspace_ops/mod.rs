@@ -91,6 +91,9 @@ pub enum Op {
         to_dir: PathBuf,
     },
     Reveal(PathBuf),
+    /// Perforce Sync, Submit, Shelve or Unshelve: a cancellable job with a
+    /// long cap, like `Commit`.
+    PerforceRun(crate::perforce::Run),
 }
 
 impl Op {
@@ -104,6 +107,7 @@ impl Op {
             Self::Switch(_) => CommitRisk::Head,
             Self::Shelve(_) | Self::Unshelve(_) | Self::DropShelf(_) => CommitRisk::Stash,
             Self::Perforce(_)
+            | Self::PerforceRun(_)
             | Self::Delete(_)
             | Self::Commit { .. }
             | Self::Shelves
@@ -164,7 +168,9 @@ pub struct CommittedFile {
 
 pub fn perform(root: &Path, op: Op) -> Result<Report> {
     match op {
-        Op::Perforce(_) => bail!("Perforce actions require the async process service"),
+        Op::Perforce(_) | Op::PerforceRun(_) => {
+            bail!("Perforce actions require the async process service")
+        }
         Op::Stage(path) => git_path(GitPathInput {
             root,
             prefix: &["add", "--"],

@@ -13,6 +13,7 @@ pub(crate) use files::ResolveTargetInput;
 pub(crate) use files::SearchInput;
 pub(crate) use files::WorkspaceOpInput;
 mod git;
+mod perforce_run;
 pub(crate) use git::DiffActionInput;
 pub(crate) use git::DiffContextInput;
 mod platform;

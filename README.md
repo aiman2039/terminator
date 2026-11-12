@@ -83,6 +83,10 @@ also has these actions for unchanged files. The sidebar offers **Sync** for the
 current folder. Select or enter a numbered changelist to **Shelve**, **Unshelve**
 (into the default changelist), or **Submit**. Submit requires confirmation and
 submits the complete numbered changelist, including files outside the open folder.
+Sync, Submit, Shelve, and Unshelve run one at a time, for at most 30 minutes.
+The panel shows the running action with **Cancel**: `p4` gets Ctrl-C, then is
+killed after 5 seconds. Check the workspace after a cancel. Read queries keep
+their short limits.
 Create numbered changelists and edit their descriptions with `p4 change` in a
 terminal. Revert, conflict resolution, stream switching, and shelf deletion also
 use the terminal. Refresh never opens, reverts, syncs, or submits files.

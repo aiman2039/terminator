@@ -130,6 +130,10 @@ impl Services {
             self.commit(root, op, updates);
             return Ok(());
         }
+        if let workspace_ops::Op::PerforceRun(_) = op {
+            self.perforce_run(root, op, updates);
+            return Ok(());
+        }
         let reply = op.clone();
         let reply_root = root.clone();
         let result = match op {
@@ -139,6 +143,7 @@ impl Services {
                     cwd: &root,
                     op,
                     cancel: &cancel,
+                    long: false,
                 })
                 .await
             }

@@ -28,6 +28,7 @@ impl App {
     pub(crate) fn process_updates(&mut self, ctx: &egui::Context) {
         let processing_started = Instant::now();
         self.drain_updates(ctx);
+        crate::sidebar_ui::publish_perforce_run(ctx, self.git.perforce.progress());
         self.drain_pty_events(ctx);
         self.poll_merge_saves();
         self.ui_service_peak_ms = self

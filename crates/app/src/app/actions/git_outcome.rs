@@ -29,8 +29,10 @@ impl App {
     /// Perforce ops, refresh, and the tabs and files the panel opens.
     fn git_outcome_views(&mut self, ui: &egui::Ui, outcome: &mut sidebar_ui::GitPanelOutcome) {
         for op in std::mem::take(&mut outcome.perforce) {
-            self.queue_workspace(workspace_ops::Op::Perforce(op));
+            self.queue_perforce(op);
         }
+        // The panel shows a run started this frame on the next one.
+        crate::sidebar_ui::publish_perforce_run(ui.ctx(), self.git.perforce.progress());
         if outcome.refresh {
             self.refresh_request = None;
             self.git.list_root = None;
@@ -98,6 +100,26 @@ impl App {
         }
         if let Some(reference) = outcome.drop_shelf.take() {
             self.ask_git_confirm(crate::sidebar_ui::GitConfirm::DropShelf(reference));
+        }
+    }
+
+    /// A short Perforce action queues on the root's queue; a long one starts
+    /// the one cancellable run, or is refused while one runs.
+    pub(crate) fn queue_perforce(&mut self, op: crate::perforce::Op) {
+        if !op.is_long() {
+            self.queue_workspace(workspace_ops::Op::Perforce(op));
+            return;
+        }
+        if self.op_root().is_none() {
+            self.error.set("Open a project folder first.");
+            return;
+        }
+        let Some(run) = self.git.perforce.start(op) else {
+            self.info = Some(crate::perforce::RUN_BUSY.into());
+            return;
+        };
+        if !self.queue_workspace(workspace_ops::Op::PerforceRun(run)) {
+            self.git.perforce.finish();
         }
     }
 

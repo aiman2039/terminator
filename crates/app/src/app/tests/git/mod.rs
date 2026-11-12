@@ -6,4 +6,5 @@ mod commit_log;
 mod float_diff_keys;
 mod git_actions;
 mod git_panel;
+mod perforce_run;
 mod status_errors;

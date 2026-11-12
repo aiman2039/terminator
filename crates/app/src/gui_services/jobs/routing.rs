@@ -66,7 +66,10 @@ impl JobRouting {
         }
         if matches!(
             job,
-            Job::Workspace(_, crate::workspace_ops::Op::Commit { .. })
+            Job::Workspace(
+                _,
+                crate::workspace_ops::Op::Commit { .. } | crate::workspace_ops::Op::PerforceRun(_)
+            )
         ) {
             // A queued commit still runs and replies, however long the
             // actions before it take; the Git panel waits for that reply.
