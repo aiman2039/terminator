@@ -299,6 +299,12 @@ fn push_fallback(
     }
 }
 
+/// The OS light/dark setting that eframe reports (`None` when unknown),
+/// for `AppearanceConfig::for_os`.
+pub fn os_dark(ctx: &egui::Context) -> Option<bool> {
+    ctx.system_theme().map(|theme| theme == egui::Theme::Dark)
+}
+
 pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     let light = theme.is_light();
     set_chrome(theme);

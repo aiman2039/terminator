@@ -18,6 +18,8 @@ rustix.workspace = true
 terminator-sys.workspace = true
 terminator-remote-apps.workspace = true
 toml_edit = { version = "0.25", features = ["serde"] }
+# iTerm2 `.itermcolors` theme import (appearance/import.rs).
+plist = "1.10"
 
 rusqlite = { version = "0.41", features = ["bundled"] }
 fs2 = "0.4"

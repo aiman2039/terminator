@@ -41,6 +41,7 @@ impl App {
                     .lsp_servers
                     .insert(language.to_owned(), text);
             }
+            BrowseTarget::ThemeFile => self.start_theme_import(path),
             BrowseTarget::WorktreeDest => {
                 if let Some(draft) = &mut self.worktree_draft {
                     let leaf = draft

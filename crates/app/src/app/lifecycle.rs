@@ -259,6 +259,7 @@ impl App {
             hook_status: HashMap::new(),
             installed_agents: Vec::new(),
             tasks: crate::tasks::TaskState::default(),
+            theme_import: crate::settings_ui::ThemeImport::default(),
             detail: None,
             close_session: None,
             popups: popup::Popups::default(),

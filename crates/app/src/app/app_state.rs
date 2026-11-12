@@ -265,6 +265,8 @@ pub struct App {
     pub(crate) installed_agents: Vec<crate::agent_launch::InstalledAgent>,
     /// Run task window and the last task run.
     pub(crate) tasks: crate::tasks::TaskState,
+    /// Settings → Appearance theme file import.
+    pub(crate) theme_import: crate::settings_ui::ThemeImport,
     pub(crate) detail: Option<String>,
     pub(crate) close_session: Option<String>,
     pub(crate) popups: popup::Popups,

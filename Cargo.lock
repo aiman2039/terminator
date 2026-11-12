@@ -7925,6 +7925,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "libc",
+ "plist",
  "rusqlite",
  "rustix 1.1.6",
  "serde",

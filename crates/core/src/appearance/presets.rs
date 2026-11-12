@@ -90,6 +90,7 @@ impl AppearanceConfig {
             density: Density::Comfortable,
             editor: crate::editor_prefs::EditorPrefs::default(),
             fonts: super::FontPrefs::default(),
+            follow: super::ThemeFollow::default(),
         }
     }
     /// Pre-IDE palette, kept as a selectable preset.

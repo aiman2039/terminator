@@ -166,6 +166,7 @@ impl SettingsSection {
     pub(super) fn haystack(self) -> String {
         let mut text = format!("{} {}", self.title(), self.keywords());
         match self.canonical() {
+            Self::Appearance => text.push_str(super::body::THEME_FOLLOW_KEYWORDS),
             Self::Languages => {
                 text.push_str(super::body::CUSTOM_SERVER_KEYWORDS);
                 for family in terminator_native_edit::lsp::SERVER_FAMILIES {

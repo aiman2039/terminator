@@ -8,4 +8,5 @@ mod sections;
 mod settings_tests;
 mod state;
 
+pub(crate) use body::ThemeImport;
 pub(crate) use state::{BrowseTarget, Probes, SettingsPending, SettingsSection};
