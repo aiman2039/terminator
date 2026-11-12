@@ -262,6 +262,7 @@ impl App {
             Action::HintsMode => self.toggle_hints_mode(),
             Action::CopyMode => self.toggle_copy_mode(),
             Action::BroadcastInput => self.toggle_broadcast(),
+            Action::QuickTerminal => self.quick_terminal_shortcut(ctx),
         }
     }
 

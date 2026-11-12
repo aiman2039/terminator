@@ -15,6 +15,7 @@ impl Default for UiPreferences {
             vnc_paste_shortcut: VncPasteShortcut::default(),
             type_ahead: crate::preferences::TypeAhead::default(),
             long_command_notice_secs: 0,
+            quick_terminal: super::QuickTerminalPrefs::default(),
             tool: SidebarTool::Explorer,
             visible: true,
             ide_mode: true,

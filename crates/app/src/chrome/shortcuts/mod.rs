@@ -140,6 +140,8 @@ actions! {
     CopyMode => "copy_mode", "Terminal copy mode", "Keyboard";
     // Typed keys go to every terminal of the tab; GUI memory only.
     BroadcastInput => "broadcast_input", "Broadcast input to all panes in this tab", "Radio";
+    // System-wide too (global-hotkey); unbound by default.
+    QuickTerminal => "quick_terminal", "Quick terminal (system-wide)", "Terminal";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

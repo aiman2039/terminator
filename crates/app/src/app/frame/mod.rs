@@ -110,6 +110,7 @@ impl eframe::App for App {
         }
         if !self.exit.active() {
             self.poll_background_services(ctx);
+            self.poll_quick_terminal(ctx);
         }
         ctx.request_repaint_after(Duration::from_secs(1));
     }

@@ -5,11 +5,13 @@ mod expanded;
 mod explorer;
 mod left_content;
 mod playlists;
+mod quick;
 mod styles;
 pub use agent_presets::AgentPreset;
 pub use agents::AgentStateFilter;
 pub use explorer::{ExplorerSearchMode, ExplorerView};
 pub use left_content::LeftContent;
+pub use quick::QuickTerminalPrefs;
 pub use styles::{ProjectStyle, TerminalStyle};
 #[cfg(test)]
 mod tests;
@@ -158,6 +160,9 @@ pub struct UiPreferences {
     /// without focus raises a terminal notice. 0 is off.
     #[serde(default)]
     pub long_command_notice_secs: u32,
+    /// The quick terminal's project and scratch session.
+    #[serde(default)]
+    pub quick_terminal: QuickTerminalPrefs,
     #[serde(deserialize_with = "lenient_tool")]
     pub tool: SidebarTool,
     pub visible: bool,

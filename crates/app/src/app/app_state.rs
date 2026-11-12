@@ -435,6 +435,8 @@ pub struct App {
     pub(crate) git_extras: crate::git::GitExtras,
     /// Broadcast input of one workspace tab (GUI memory only).
     pub(crate) broadcast: crate::workspace_ui::Broadcast,
+    /// The system-wide quick terminal hotkey and its scratch terminal.
+    pub(crate) quick_terminal: crate::workspace_ui::QuickTerminal,
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

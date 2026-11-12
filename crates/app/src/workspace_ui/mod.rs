@@ -25,6 +25,8 @@ mod terminal_style;
 pub(crate) use terminal_style::TITLE_COLORS;
 mod terminal_view;
 pub(crate) use terminal_view::{Broadcast, KeyModes, TERMINAL_ACTIONS};
+mod quick_terminal;
+pub(crate) use quick_terminal::QuickTerminal;
 mod viewer;
 mod views;
 mod window_header;
