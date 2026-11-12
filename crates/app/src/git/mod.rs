@@ -14,6 +14,7 @@ mod task_form;
 #[cfg(test)]
 #[cfg(feature = "test-support")]
 mod task_form_tests;
+pub(super) mod task_issue;
 mod task_page;
 #[cfg(test)]
 mod task_tests;
@@ -33,4 +34,6 @@ pub(crate) struct GitExtras {
     pub(crate) pull_request: pull_request::PrPanel,
     /// The Worktrees page: probes, ticks and Apply to source.
     pub(crate) cleanup: worktree_cleanup::Cleanup,
+    /// New task's issue or pull request lookup in flight.
+    pub(crate) task_issue: task_issue::IssueFetch,
 }

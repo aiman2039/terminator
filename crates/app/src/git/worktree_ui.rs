@@ -92,6 +92,8 @@ pub(crate) struct WorktreeDraft {
     pub advanced: bool,
     /// Give the task name field keyboard focus on the next frame.
     pub focus_name: bool,
+    /// Optional issue or pull request the task starts from.
+    pub issue: super::task_issue::IssueDraft,
 }
 
 /// A new draft ID; never 0, the ID of a default draft.
@@ -214,6 +216,7 @@ impl App {
             submitting: false,
             advanced: false,
             focus_name: true,
+            issue: Default::default(),
         };
         // `git rev-parse` runs on a worker; the form opens when it answers.
         let _ = self
@@ -242,6 +245,7 @@ impl App {
         let mut submit = false;
         let mut browse = false;
         let mut cancel = false;
+        self.poll_task_issue(&mut draft, ui.ctx());
         let style = appearance::CenterCardStyle::new(&self.theme);
         let ((), dismissed) = appearance::center_card(ui, style, |ui| {
             ui.set_min_size(ui.available_size());
@@ -270,6 +274,9 @@ impl App {
         cancel |= dismissed;
         if browse {
             self.request_pick(PickKind::Browse(BrowseTarget::WorktreeDest));
+        }
+        if std::mem::take(&mut draft.issue.requested) {
+            self.fetch_task_issue(&mut draft);
         }
         if submit {
             self.submit_worktree(&mut draft);
@@ -301,6 +308,8 @@ impl App {
         let source_name = source.map_or_else(|| "Project".into(), |project| project.name.clone());
         let source_path = source.map(|project| project.path.clone());
         super::task_form::task_name(ui, draft, source_path.as_deref());
+        let fetching = self.issue_fetching(draft.id);
+        super::task_issue::issue_row(ui, draft, fetching);
         if draft.open_terminal {
             super::task_form::agent_row(ui, draft, &self.agent_launchers());
         }

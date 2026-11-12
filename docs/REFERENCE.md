@@ -60,6 +60,21 @@ Settings → Agent hooks installs, repairs, and removes managed hooks for Claude
 
 Settings → Agents lists the catalog agents found on PATH and keeps agent presets (name, icon, program, arguments) in `ui-preferences.json`. Preset changes save at once. Arguments are shell words: quote a word with spaces. The workspace **+** menu, Search Everywhere / Find Action and **New agent session…** (⌥⌘N; Ctrl+Shift+Alt+N on Linux; rebind it in Settings → Keymap) show **New terminal with <agent>** for each preset and installed agent, the last used first. A pick opens a terminal tab in the current project and types the command there without Enter: press Enter to start the agent. The New task form's agent list fills **Agent command** the same way.
 
+The New task form has an optional **From issue/PR** field: type a number
+(`12`, `#12`, `!12` for a GitLab merge request) or an issue, pull request or
+merge request URL, then click **Fetch**. The GUI runs `gh issue view`/`gh pr
+view` (or `glab issue view`/`glab mr view`), picked by the `origin` host as
+Create PR does, as a background read with the 20-second cap. Only the number
+reaches the CLI, and it is looked up in `origin`'s repository; a bare number
+is tried as an issue, then as a pull request. The answer fills the task name
+(`12-fix-the-login-page`) and its branch and folder. For a pull request,
+**Start from** shows `PR #12 head`: on **Create task** the GUI runs `git fetch
+origin refs/pull/12/head` (`refs/merge-requests/12/head` on GitLab) into
+`FETCH_HEAD` only, and the worktree starts at that commit. Change Start from
+to skip the fetch. **Type the issue text as the first prompt** (off by
+default) types the title and body on one line, quoted, after the agent
+command. Nothing is sent: you press Enter.
+
 Read [the integration contract and capability notes](INTEGRATIONS.md) before connecting a custom agent. Installed hooks are inert outside terminals owned by this application. Notification defaults cover input, permission, completion, and failure events where the agent exposes them; opening the relevant terminal dismisses the notification without changing agent state. Settings → Notifications can play a system sound with desktop banners (default on). The in-app Agents inbox stays silent. The control requires a daemon that advertises `notification-sound-v1`.
 
 ## Local state and updates
