@@ -34,6 +34,9 @@ pub struct Client {
     /// and reused. Without this, every 100 ms poll re-read and JSON-decoded the
     /// whole history (tens of megabytes) for each retired owner.
     historical: Arc<Mutex<HashMap<String, Arc<State>>>>,
+    /// The last state of each live owner. Its hint lets an idle owner
+    /// answer `Unchanged` instead of sending its whole state each poll.
+    live: Arc<Mutex<HashMap<String, Arc<State>>>>,
 }
 
 impl Client {
@@ -45,6 +48,7 @@ impl Client {
             cpu,
             observations: Arc::default(),
             historical: Arc::new(Mutex::new(HashMap::new())),
+            live: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     pub fn observe(&self, state: &mut State) {

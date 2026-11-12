@@ -159,43 +159,9 @@ async fn oversized_response_is_rejected_before_allocation() {
 }
 #[tokio::test]
 async fn catalog_snapshot_short_circuits_unchanged_without_rebuilding() {
-    use crate::generations::{self, Catalog, Generation, Status};
     let dir = crate::tests::tempdir("snap-");
     let root = Paths::at(dir.path().into());
-    root.init().unwrap();
-    generations::migrate_idle(&root).unwrap();
-    let id = crate::id();
-    let owner = Generation {
-        id: id.clone(),
-        data: root.data.join("generations").join(&id),
-        runtime: root.runtime.join(id.get(..8).unwrap_or(&id)),
-        version: "test".into(),
-        build: "test".into(),
-        protocol: PROTOCOL_VERSION,
-        catalog: generations::CATALOG_VERSION,
-        status: Status::Prepared,
-        pid: None,
-    };
-    owner.paths().init().unwrap();
-    let db = rusqlite::Connection::open(owner.data.join("state.sqlite3")).unwrap();
-    db.execute_batch(
-        "CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;",
-    )
-    .unwrap();
-    db.execute(
-        "INSERT INTO app_state VALUES(1,?1)",
-        [serde_json::to_string(&State {
-            generation: id.clone(),
-            ..Default::default()
-        })
-        .unwrap()],
-    )
-    .unwrap();
-    let mut catalog = Catalog::open(&root).unwrap();
-    catalog.register(&owner).unwrap();
-    catalog.set_pid(&id, std::process::id()).unwrap();
-    catalog.activate(&id).unwrap();
-    std::fs::write(owner.paths().auth(), "fixture").unwrap();
+    let (id, owner) = live_catalog_owner(&root);
     let served = State {
         generation: id.clone(),
         revision: 7,
@@ -224,6 +190,94 @@ async fn catalog_snapshot_short_circuits_unchanged_without_rebuilding() {
         Response::Unchanged
     ));
     server.abort();
+}
+
+#[tokio::test]
+async fn idle_catalog_poll_lets_each_live_owner_answer_unchanged() {
+    let dir = crate::tests::tempdir("snap-");
+    let root = Paths::at(dir.path().into());
+    let (id, owner) = live_catalog_owner(&root);
+    let served = State {
+        generation: id.clone(),
+        revision: 7,
+        ..Default::default()
+    };
+    let hints = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&hints);
+    let listener = crate::transport::AsyncListener::bind_ipc(&owner.paths().socket()).unwrap();
+    let server = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let request = envelope(&mut socket).await;
+            let unchanged = request.snapshot_hint.as_ref() == Some(&served.snapshot_hint());
+            seen.lock().unwrap().push(request.snapshot_hint.is_some());
+            let response = if unchanged {
+                Response::Unchanged
+            } else {
+                Response::State(Box::new(served.clone()))
+            };
+            let mut bytes = Vec::new();
+            write_frame(&mut bytes, &response).unwrap();
+            let _ = socket.write_all(&bytes).await;
+        }
+    });
+    let client = Client::new(
+        root,
+        NativePool::new("catalog-snap", 1).unwrap(),
+        NativePool::new("cpu-snap", 1).unwrap(),
+    );
+    let Response::State(first) = client.snapshot(None).await.unwrap() else {
+        panic!("expected a built state");
+    };
+    assert!(matches!(
+        client.snapshot(Some(first.snapshot_hint())).await.unwrap(),
+        Response::Unchanged
+    ));
+    let Response::State(rebuilt) = client.snapshot(None).await.unwrap() else {
+        panic!("an unchanged owner still builds a full aggregate");
+    };
+    assert_eq!(rebuilt.revision, 7);
+    assert_eq!(*hints.lock().unwrap(), vec![false, true, true]);
+    server.abort();
+}
+
+/// A catalog with one active owner whose socket the test serves.
+fn live_catalog_owner(root: &Paths) -> (String, crate::generations::Generation) {
+    use crate::generations::{self, Catalog, Generation, Status};
+    root.init().unwrap();
+    generations::migrate_idle(root).unwrap();
+    let id = crate::id();
+    let owner = Generation {
+        id: id.clone(),
+        data: root.data.join("generations").join(&id),
+        runtime: root.runtime.join(id.get(..8).unwrap_or(&id)),
+        version: "test".into(),
+        build: "test".into(),
+        protocol: PROTOCOL_VERSION,
+        catalog: generations::CATALOG_VERSION,
+        status: Status::Prepared,
+        pid: None,
+    };
+    owner.paths().init().unwrap();
+    let db = rusqlite::Connection::open(owner.data.join("state.sqlite3")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO app_state VALUES(1,?1)",
+        [serde_json::to_string(&State {
+            generation: id.clone(),
+            ..Default::default()
+        })
+        .unwrap()],
+    )
+    .unwrap();
+    let mut catalog = Catalog::open(root).unwrap();
+    catalog.register(&owner).unwrap();
+    catalog.set_pid(&id, std::process::id()).unwrap();
+    catalog.activate(&id).unwrap();
+    std::fs::write(owner.paths().auth(), "fixture").unwrap();
+    (id, owner)
 }
 
 #[test]
