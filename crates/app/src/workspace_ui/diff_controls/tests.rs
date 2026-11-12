@@ -227,3 +227,26 @@ fn a_running_commit_disables_the_unstage_chevron_but_not_discard() {
     assert_eq!(click_revert_chevron(true, true), None);
     assert_eq!(click_revert_chevron(false, true), Some((0, Kind::Discard)));
 }
+
+#[test]
+fn gutter_glyphs_have_one_verb_each_and_unstage_is_not_an_arrow() {
+    use super::chevrons::action_icon;
+    assert_eq!(action_icon(Kind::Stage), "Plus");
+    assert_eq!(action_icon(Kind::Unstage), "Minus");
+    assert_eq!(action_icon(Kind::Discard), "Eraser");
+    for kind in [Kind::Stage, Kind::Unstage, Kind::Discard] {
+        assert!(crate::icons::is_ui_icon(action_icon(kind)));
+    }
+}
+
+#[test]
+fn hunk_tips_show_the_diff_key_only_on_the_selected_change() {
+    use super::chevrons::action_tip;
+    assert!(action_tip(Kind::Stage, 0, true).ends_with("(s)"));
+    assert!(action_tip(Kind::Unstage, 0, true).ends_with("(u)"));
+    assert!(action_tip(Kind::Discard, 2, true).ends_with("(x)"));
+    for kind in [Kind::Stage, Kind::Unstage, Kind::Discard] {
+        let (plain, keyed) = (action_tip(kind, 0, false), action_tip(kind, 0, true));
+        assert_eq!(keyed.strip_prefix(&plain).map(str::len), Some(4));
+    }
+}

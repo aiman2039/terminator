@@ -4,6 +4,7 @@ mod file_tables;
 mod lang_sources;
 mod lang_tables;
 mod langs;
+mod review_sources;
 mod ui_sources;
 
 /// Icon name paired with every lowercased key (file name or extension) it covers.
@@ -144,13 +145,15 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         return langs::source(language);
     }
     IconTables::source(ui_sources::UI_SOURCES, name)
+        .or_else(|| IconTables::source(review_sources::REVIEW_SOURCES, name))
         .unwrap_or(egui::include_image!("../../assets/icons/file.svg"))
 }
 
-/// `name` is in the shared UI icon table (no file-icon fallback).
+/// `name` is in the shared UI icon tables (no file-icon fallback).
 #[cfg(test)]
 pub fn is_ui_icon(name: &str) -> bool {
     IconTables::source(ui_sources::UI_SOURCES, name).is_some()
+        || IconTables::source(review_sources::REVIEW_SOURCES, name).is_some()
 }
 
 #[cfg(test)]

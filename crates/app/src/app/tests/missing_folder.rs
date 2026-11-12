@@ -800,7 +800,7 @@ fn a_worktree_row_shows_its_branch_leaf_and_diff_stats() {
     paint(&mut app);
     let asked = requests
         .try_iter()
-        .filter(|job| matches!(job, Job::WorktreeStats(path) if path == Path::new("/a--task")))
+        .filter(|job| matches!(job, Job::WorktreeStats(path, _) if path == Path::new("/a--task")))
         .count();
     assert_eq!(asked, 1, "one Git job per refresh period");
     app.worktree_stats.apply(
@@ -809,6 +809,7 @@ fn a_worktree_row_shows_its_branch_leaf_and_diff_stats() {
             branch: Some("user/fix-login".into()),
             added: 128,
             deleted: 12,
+            ..Default::default()
         }),
     );
     let text = paint(&mut app);

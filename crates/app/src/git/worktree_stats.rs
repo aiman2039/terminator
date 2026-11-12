@@ -8,14 +8,30 @@ use std::time::{Duration, Instant};
 /// The shortest time between two jobs for one worktree.
 pub(crate) const REFRESH: Duration = Duration::from_secs(30);
 
+/// The commit a task worktree started from, saved when New task made it
+/// (GUI preferences, by worktree path).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TaskBase {
+    /// The Start-from branch or revision, for the label (`main`).
+    pub name: String,
+    /// Full hash of that commit.
+    pub commit: String,
+}
+
 /// What one job read from a worktree.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WorktreeGit {
     /// The checked-out branch, `None` when HEAD is detached.
     pub branch: Option<String>,
-    /// Lines added and deleted by uncommitted changes against HEAD.
+    /// Lines added and deleted against the task base (committed work
+    /// included), else uncommitted changes against HEAD.
     pub added: u64,
     pub deleted: u64,
+    /// The verified task base commit the numbers count from.
+    pub base: Option<String>,
+    /// What that base is called when it came from the main checkout's
+    /// branch (no saved task base).
+    pub base_name: Option<String>,
 }
 
 impl WorktreeGit {
@@ -65,6 +81,21 @@ impl WorktreeStats {
     }
 }
 
+/// The branch of the main checkout: the first record of `git worktree
+/// list --porcelain -z`.
+pub(crate) fn main_branch(porcelain: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(porcelain);
+    text.split('\0')
+        .take_while(|field| !field.is_empty())
+        .find_map(|field| field.strip_prefix("branch "))
+        .map(|branch| {
+            branch
+                .strip_prefix("refs/heads/")
+                .unwrap_or(branch)
+                .to_owned()
+        })
+}
+
 /// Lines added and deleted in `git diff --shortstat` output, such as
 /// ` 3 files changed, 128 insertions(+), 12 deletions(-)`.
 pub(crate) fn parse_shortstat(text: &str) -> (u64, u64) {
@@ -103,6 +134,15 @@ mod tests {
     }
 
     #[test]
+    fn the_main_branch_is_the_first_worktree_record() {
+        let porcelain = b"worktree /r\0HEAD abc\0branch refs/heads/main\0\0\
+            worktree /w\0HEAD def\0branch refs/heads/terminator/fix\0\0";
+        assert_eq!(main_branch(porcelain).as_deref(), Some("main"));
+        let detached = b"worktree /r\0HEAD abc\0detached\0\0worktree /w\0branch refs/heads/x\0\0";
+        assert_eq!(main_branch(detached), None);
+    }
+
+    #[test]
     fn a_worktree_job_starts_at_most_once_per_refresh() {
         let mut stats = WorktreeStats::default();
         let path = Path::new("/w/fix");
@@ -120,6 +160,7 @@ mod tests {
             branch: Some("user/fix-login".into()),
             added: 3,
             deleted: 1,
+            ..WorktreeGit::default()
         };
         stats.apply(path.clone(), Some(git.clone()));
         stats.apply(path.clone(), None);

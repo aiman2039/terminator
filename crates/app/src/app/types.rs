@@ -159,8 +159,9 @@ pub(crate) enum Job {
     StartSessionService,
     CreateWorktree(worktree_ui::WorktreeDraft),
     WorktreeProbe(PathBuf, worktree_ui::WorktreeDraft),
-    /// Read-only branch and diff stats of a worktree row (local Git).
-    WorktreeStats(PathBuf),
+    /// Read-only branch and diff stats of a worktree row (local Git),
+    /// counted from its saved task base commit when there is one.
+    WorktreeStats(PathBuf, Option<String>),
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
     Preferences(UiPreferences),
@@ -294,6 +295,8 @@ pub(crate) enum Job {
     LocalHistory(crate::local_history::Op),
     /// List or load system fonts off the GUI thread.
     Fonts(crate::appearance::fonts::Op),
+    /// Files a task worktree changed since its base commit (read-only).
+    TaskChanges(PathBuf, String),
 }
 /// Loaded contents of a commit-log or blame tab.
 pub(crate) enum GitView {
@@ -481,4 +484,8 @@ pub(crate) enum Update {
     ClipboardPaste(String, String),
     Error(String),
     Info(String),
+    TaskChanges(
+        (PathBuf, String),
+        Result<Vec<task_changes::TaskFile>, String>,
+    ),
 }

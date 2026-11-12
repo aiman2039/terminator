@@ -300,6 +300,16 @@ impl App {
         if pass.stage_file && frame.enabled {
             self.stage_diff_file(&frame);
         }
+        if let Some(note) = pass
+            .add_note
+            .as_ref()
+            .and_then(|draft| draft.finish(&frame.absolute_path()))
+        {
+            self.diff_notes.add(&frame.notes_repo(), note);
+        }
+        if pass.send_notes {
+            self.open_ask_with_notes(frame.notes_repo());
+        }
         self.diff_reviews.insert(frame.key, pass.review);
         if let Some(line) = pass.open_line {
             self.open_file_mode(OpenFileModeInput {

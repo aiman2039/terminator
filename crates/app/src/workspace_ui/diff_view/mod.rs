@@ -41,6 +41,21 @@ struct DiffFrame<'a> {
     file_total: usize,
 }
 
+impl DiffFrame<'_> {
+    /// The repository that keeps this diff's review notes.
+    fn notes_repo(&self) -> PathBuf {
+        self.doc
+            .as_ref()
+            .and_then(|doc| doc.source.as_ref())
+            .map_or_else(|| self.cwd.to_path_buf(), |source| source.root.clone())
+    }
+
+    /// The diff's file as an absolute path.
+    fn absolute_path(&self) -> PathBuf {
+        self.cwd.join(self.path)
+    }
+}
+
 /// The checked-out review state, and what this frame's input asked for.
 /// Requests are sent after the pane paints.
 #[derive(Default)]
@@ -58,6 +73,12 @@ struct DiffPass {
     gap: Option<(usize, diff::GapPart)>,
     confirmed: Option<usize>,
     stage_file: bool,
+    /// The toolbar is narrow: counters use their short form.
+    compact: bool,
+    /// A review note the user finished typing.
+    add_note: Option<diff::notes::Draft>,
+    /// Send this repository's review notes to an agent (Ask agent).
+    send_notes: bool,
 }
 
 impl DiffPass {
@@ -88,6 +109,31 @@ impl DiffPass {
             .and_then(|index| doc?.hunks.get(index))
             .and_then(|hunk| u32::try_from(hunk.new.start.saturating_add(1)).ok())
             .or(Some(1))
+    }
+
+    /// A new note on the selected change: its picked lines when it has
+    /// some, else all of its new-side lines. A change that only removes
+    /// lines is noted where they were.
+    fn note_draft(&self, doc: Option<&Arc<diff::DiffDocument>>) -> Option<diff::notes::Draft> {
+        let index = self.review.selected?;
+        let hunk = doc?.hunks.get(index)?;
+        let picked = self
+            .review
+            .picked
+            .as_ref()
+            .filter(|(picked, lines)| *picked == index && !lines.new.is_empty())
+            .map(|(_, lines)| &lines.new);
+        Some(match picked {
+            Some(lines) => diff::notes::Draft::new(
+                lines.first()?.saturating_add(1),
+                lines.last()?.saturating_add(1),
+                false,
+            ),
+            None if hunk.new.is_empty() => {
+                diff::notes::Draft::new(hunk.new.start, hunk.new.start, true)
+            }
+            None => diff::notes::Draft::new(hunk.new.start.saturating_add(1), hunk.new.end, false),
+        })
     }
 }
 

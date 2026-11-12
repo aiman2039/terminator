@@ -109,4 +109,14 @@ mod agent_reference_tests {
             "@/elsewhere/x.rs#L1"
         );
     }
+
+    #[test]
+    fn add_to_agent_context_pastes_no_enter() {
+        let reference = agent_reference(Path::new("/w/a.rs"), Some(Path::new("/w")), 1, 3);
+        let bytes = egui_term::paste_input(
+            &format!("{reference} "),
+            egui_term::TerminalMode::BRACKETED_PASTE,
+        );
+        assert!(!bytes.contains(&b'\r') && !bytes.contains(&b'\n'));
+    }
 }
