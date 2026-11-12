@@ -1,4 +1,5 @@
 mod contents_search;
+mod results;
 mod toolbar;
 
 use super::explorer_rows::{
@@ -132,82 +133,6 @@ impl App {
             }
             Some(_) => self.pending_delete.clear(),
             None => {}
-        }
-    }
-
-    /// Contents search results, grouped by file. Clicking a hit opens that
-    /// file at the match.
-    pub(crate) fn explorer_results(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
-        if let Some(error) = &self.explorer_search_error {
-            ui.colored_label(appearance::color(&self.theme.status_failed), error);
-            return;
-        }
-        if self.explorer_search.is_empty() {
-            ui.weak(if self.explorer_search_pending {
-                "Searching…"
-            } else if self.explorer_query.trim().is_empty() {
-                "Type to search in files"
-            } else {
-                "No results"
-            });
-            return;
-        }
-        if self.explorer_search_pending {
-            ui.weak("Searching…");
-        }
-        let root = self.op_root().unwrap_or_else(|| cwd.to_path_buf());
-        let mut open: Option<(PathBuf, u32, u32)> = None;
-        let mut last: Option<&Path> = None;
-        for hit in &self.explorer_search {
-            if last != Some(hit.path.as_path()) {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                let header_height = ui
-                    .text_style_height(&egui::TextStyle::Small)
-                    .max(ui.spacing().interact_size.y);
-                if !skip_clipped_row(ui, header_height) {
-                    let relative = workspace_ops::relative_display(&root, &hit.path);
-                    ui.add_sized(
-                        [ui.available_width(), header_height],
-                        egui::Label::new(
-                            RichText::new(relative)
-                                .small()
-                                .color(appearance::color(&self.theme.secondary)),
-                        )
-                        .truncate(),
-                    )
-                    .on_hover_text(hit.path.display().to_string());
-                }
-                last = Some(hit.path.as_path());
-            }
-            if skip_clipped_row(ui, 20.0) {
-                continue;
-            }
-            let response = appearance::file_row(appearance::FileRowInput {
-                ui,
-                label: &hit.text,
-                icon: icons::file_icon(&hit.path),
-                selected: false,
-                height: 20.0,
-                trailing: &hit.line.to_string(),
-                tint: appearance::color(&self.theme.text),
-            })
-            .on_hover_text(format!("{}:{}", hit.path.display(), hit.line));
-            #[cfg(feature = "test-support")]
-            diagnostics::record(
-                ui.ctx(),
-                &format!("search-hit:{}:{}", hit.path.display(), hit.line),
-                response.rect,
-            );
-            if response.clicked() {
-                open = Some((hit.path.clone(), hit.line, hit.column));
-            }
-        }
-        if let Some((path, line, character)) = open {
-            let at = terminator_native_edit::lsp::Position {
-                line: line.saturating_sub(1),
-                character,
-            };
-            self.activate_file_at(ui, &path, at);
         }
     }
 

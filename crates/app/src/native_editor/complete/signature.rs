@@ -75,7 +75,9 @@ pub(crate) fn signature_after_frame(
 }
 
 /// Paint parameter info above the caret, the active parameter in bold.
-pub(crate) fn signature_ui(ui: &egui::Ui, popup: &SignaturePopup) {
+/// `below` puts it under the caret line instead: the completion list took
+/// the room above, and the two must not cover each other.
+pub(crate) fn signature_ui(ui: &egui::Ui, popup: &SignaturePopup, below: bool) {
     let (Some(help), Some(anchor)) = (&popup.help, popup.anchor) else {
         return;
     };
@@ -111,10 +113,15 @@ pub(crate) fn signature_ui(ui: &egui::Ui, popup: &SignaturePopup) {
             },
         );
     }
+    let (pivot, at) = if below {
+        (egui::Align2::LEFT_TOP, anchor.left_bottom())
+    } else {
+        (egui::Align2::LEFT_BOTTOM, anchor.left_top())
+    };
     egui::Area::new(egui::Id::unique(("native-signature", &popup.path)))
         .order(egui::Order::Foreground)
-        .pivot(egui::Align2::LEFT_BOTTOM)
-        .fixed_pos(anchor.left_top())
+        .pivot(pivot)
+        .fixed_pos(at)
         .interactable(false)
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
