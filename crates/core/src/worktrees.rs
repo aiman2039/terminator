@@ -245,6 +245,17 @@ pub fn add(input: AddInput<'_>) -> Result<GitWorktree> {
         .find(|w| w.path == canonical)
         .ok_or(WorktreeError::MissingAfterAdd { path: canonical })
 }
+/// The linked checkout Git already has at `path` on `branch` (detached
+/// when `None`), unlocked and present: what an earlier add created before
+/// it failed to finish. The main checkout never counts.
+pub fn existing(common: &Path, path: &Path, branch: Option<&str>) -> Result<Option<GitWorktree>> {
+    let Ok(canonical) = dunce::canonicalize(path) else {
+        return Ok(None);
+    };
+    Ok(list(common)?.into_iter().skip(1).find(|w| {
+        w.path == canonical && !w.bare && !w.locked && !w.prunable && w.branch.as_deref() == branch
+    }))
+}
 pub fn remove(common: &Path, path: &Path) -> Result<()> {
     let path = dunce::simplified(path);
     let list = list(common)?;

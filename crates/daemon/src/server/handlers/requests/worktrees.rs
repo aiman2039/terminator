@@ -6,6 +6,9 @@ use terminator_core::*;
 use super::super::super::shared::{Shared, relock};
 use super::Outcome;
 
+/// Tries for the coordination lock after `git worktree add` (2 s each).
+const LOCK_ATTEMPTS: u32 = 5;
+
 pub(super) struct WorktreeAddInput {
     pub project: String,
     pub path: PathBuf,
@@ -42,19 +45,24 @@ impl Shared {
         let source = self.project_path(&project)?;
         let common_dir = worktrees::common_dir(&source)?;
         let revision = worktrees::resolve_start(&source, &start)?;
-        let checkout = worktrees::add(worktrees::AddInput {
-            common: &common_dir,
-            path: &path,
-            branch: branch.as_deref(),
-            start: &revision,
-        })?;
+        // A retry after an add that created the checkout but could not
+        // register it adopts that checkout instead of failing on the path.
+        let checkout = match self.unregistered_checkout(&common_dir, &path, branch.as_deref())? {
+            Some(checkout) => checkout,
+            None => worktrees::add(worktrees::AddInput {
+                common: &common_dir,
+                path: &path,
+                branch: branch.as_deref(),
+                start: &revision,
+            })?,
+        };
         let unregistered = || {
             format!(
-                "Worktree {} was created but not added as a project",
+                "Worktree {} was created but not added as a project; try again to add it",
                 checkout.path.display()
             )
         };
-        let prepared = self.prepare_shared_write().with_context(unregistered)?;
+        let prepared = self.prepare_after_git().with_context(unregistered)?;
         if prepared.early.is_some() {
             bail!(
                 "{}: this session service is no longer active",
@@ -64,6 +72,48 @@ impl Shared {
         *coordination = prepared.coordination;
         self.register_worktree(common_dir, checkout.path);
         Ok(Outcome::Changed)
+    }
+
+    /// Take the coordination lock again after the Git run. Other requests
+    /// hold it only briefly, so wait through a few of their 2 s attempts.
+    fn prepare_after_git(self: &Arc<Self>) -> Result<super::prepare::PreparedRequest> {
+        for _ in 1..LOCK_ATTEMPTS {
+            if let Ok(prepared) = self.prepare_shared_write() {
+                return Ok(prepared);
+            }
+        }
+        self.prepare_shared_write()
+    }
+
+    /// The checkout Git has at `path` on `branch` that no project uses.
+    fn unregistered_checkout(
+        &self,
+        common: &Path,
+        path: &Path,
+        branch: Option<&str>,
+    ) -> Result<Option<worktrees::GitWorktree>> {
+        let Some(checkout) = worktrees::existing(common, path, branch)? else {
+            return Ok(None);
+        };
+        let state = relock(&self.state);
+        let known: Vec<PathBuf> = state
+            .projects
+            .iter()
+            .map(|p| p.path.clone())
+            .chain(
+                state
+                    .worktrees
+                    .iter()
+                    .filter(|w| !w.removed)
+                    .map(|w| w.path.clone()),
+            )
+            .collect();
+        drop(state);
+        let used = known.iter().any(|known| {
+            *known == checkout.path
+                || std::fs::canonicalize(known).is_ok_and(|real| real == checkout.path)
+        });
+        Ok((!used).then_some(checkout))
     }
 
     pub(super) fn on_worktree_remove(&self, project: &str) -> Result<Outcome> {

@@ -58,7 +58,10 @@ fn step(phase: Phase, byte: u8) -> (Phase, Option<u8>) {
         (_, ESC) => (Phase::Escape, Some(ESC)),
         (_, CAN | SUB) => (Phase::Ground, Some(byte)),
         (Phase::Escape, b']') => (Phase::Osc(0), Some(byte)),
-        (Phase::Escape, 0x00..=0x17 | 0x19 | 0x1c..=0x1f) => (Phase::Escape, Some(byte)),
+        // vte stays in Escape on C0 controls, DEL and every byte >= 0x80.
+        (Phase::Escape, 0x00..=0x17 | 0x19 | 0x1c..=0x1f | 0x7f..=0xff) => {
+            (Phase::Escape, Some(byte))
+        }
         (Phase::Osc(_), BEL) => (Phase::Ground, Some(byte)),
         (Phase::Osc(len), _) if len >= MAX_OSC => (Phase::Dropping, Some(CAN)),
         (Phase::Osc(len), _) => (Phase::Osc(len.saturating_add(1)), Some(byte)),
@@ -87,6 +90,38 @@ mod tests {
         assert_eq!(fed, 2 + MAX_OSC + 1, "OSC capped, then one CAN");
         let after = limit.filter(b"more\x07prompt$ ");
         assert_eq!(after.as_ref(), b"prompt$ ");
+    }
+
+    #[test]
+    fn del_or_a_high_byte_after_escape_does_not_bypass_the_limit() {
+        for gap in [0x7f_u8, 0x80, 0xc3, 0xff] {
+            let mut limit = OscLimit::default();
+            let mut fed = limit.filter(&[ESC, gap, b']']).len();
+            for _ in 0..100 {
+                fed += limit.filter(&[b'a'; 8192]).len();
+            }
+            assert_eq!(fed, 3 + MAX_OSC + 1, "{gap:#x}");
+        }
+    }
+
+    #[test]
+    fn the_escape_phase_matches_the_vte_parser() {
+        struct Osc(usize);
+        impl vte::Perform for Osc {
+            fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {
+                self.0 += 1;
+            }
+        }
+        for gap in [0x7f_u8, 0x80, 0xff] {
+            let data = [ESC, gap, b']', b'0', b';', b't', BEL];
+            let mut parser = vte::Parser::new();
+            let mut osc = Osc(0);
+            parser.advance(&mut osc, &data);
+            assert_eq!(osc.0, 1, "vte opens an OSC after ESC {gap:#x}");
+            let mut limit = OscLimit::default();
+            limit.filter(&data[..3]);
+            assert_eq!(limit.phase, Phase::Osc(0), "{gap:#x}");
+        }
     }
 
     #[test]

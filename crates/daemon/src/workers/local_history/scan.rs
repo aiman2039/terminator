@@ -102,15 +102,19 @@ pub(super) fn record_batch(
                 .into_iter()
                 .filter(|path| !build_output(root, path))
                 .collect(),
-            // One path (for example inside a submodule) failed the whole
-            // batch: ask path by path so the others keep their filter.
-            None => paths
-                .into_iter()
-                .filter(|path| match ignored(root, std::slice::from_ref(path)) {
-                    Some(ignored) => ignored.is_empty(),
-                    None => !build_output(root, path),
-                })
-                .collect(),
+            // Some path (for example inside a submodule) failed the whole
+            // batch: ask again in halves so the others keep their filter.
+            None => {
+                let mut split = SplitCheck::new();
+                split.check(root, &paths);
+                paths
+                    .into_iter()
+                    .filter(|path| {
+                        !split.ignored.contains(path)
+                            && !(split.unknown.contains(path) && build_output(root, path))
+                    })
+                    .collect()
+            }
         };
         let first: Vec<&Path> = paths
             .iter()
@@ -209,6 +213,52 @@ fn ignored(root: &Path, paths: &[PathBuf]) -> Option<HashSet<PathBuf>> {
             .collect()
     })
     .ok()
+}
+
+/// Most `check-ignore` runs, and the longest time, one failed batch may
+/// spend on finding the paths Git cannot answer for.
+const SPLIT_RUNS: usize = 32;
+const SPLIT_TIME: Duration = Duration::from_secs(10);
+
+/// `check-ignore` for a batch that failed as a whole: halves that fail are
+/// halved again, so a few bad paths cost a few runs per level. Paths still
+/// unanswered when the budget runs out are `unknown`.
+struct SplitCheck {
+    ignored: HashSet<PathBuf>,
+    unknown: HashSet<PathBuf>,
+    runs: usize,
+    started: std::time::Instant,
+}
+
+impl SplitCheck {
+    fn new() -> Self {
+        Self {
+            ignored: HashSet::new(),
+            unknown: HashSet::new(),
+            runs: 0,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// `paths` already failed as one batch.
+    fn check(&mut self, root: &Path, paths: &[PathBuf]) {
+        if paths.len() < 2 {
+            self.unknown.extend(paths.iter().cloned());
+            return;
+        }
+        let (left, right) = paths.split_at(paths.len() / 2);
+        for half in [left, right] {
+            if self.runs >= SPLIT_RUNS || self.started.elapsed() >= SPLIT_TIME {
+                self.unknown.extend(half.iter().cloned());
+                continue;
+            }
+            self.runs = self.runs.saturating_add(1);
+            match ignored(root, half) {
+                Some(found) => self.ignored.extend(found),
+                None => self.check(root, half),
+            }
+        }
+    }
 }
 
 /// The staged (index) text of each tracked path, read with one
@@ -403,6 +453,39 @@ mod tests {
         assert!(!store.has_history(&secret), "gitignored file stays out");
         assert!(store.has_history(&source));
         assert!(store.has_history(&in_submodule));
+    }
+
+    #[test]
+    fn a_failed_batch_is_rechecked_in_halves_not_path_by_path() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&["init", "-q"]) {
+            return; // No git on this machine.
+        }
+        std::fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        assert!(git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{oid},sub")
+        ]));
+        let mut paths: Vec<PathBuf> = (0..500).map(|i| root.join(format!("f{i}.rs"))).collect();
+        paths.push(root.join("x.log"));
+        paths.insert(250, root.join("sub/a.txt"));
+        assert!(ignored(root, &paths).is_none(), "the whole batch fails");
+        let mut split = SplitCheck::new();
+        split.check(root, &paths);
+        assert!(split.runs <= 2 * 10, "{} runs", split.runs);
+        assert_eq!(split.unknown, HashSet::from([root.join("sub/a.txt")]));
+        assert_eq!(split.ignored, HashSet::from([root.join("x.log")]));
     }
 
     #[test]
