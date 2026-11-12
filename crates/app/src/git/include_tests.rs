@@ -48,6 +48,24 @@ fn an_existing_file_is_kept_and_links_are_not_followed() {
     assert!(!task.join(".env.link").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_linked_folder_in_the_worktree_gets_no_new_folders_outside() {
+    let (_dir, source, task) = repo_with_task();
+    std::fs::write(source.join(".gitignore"), "cache/\n").unwrap();
+    std::fs::write(source.join(".worktreeinclude"), "cache/\n").unwrap();
+    std::fs::create_dir_all(source.join("cache/deep")).unwrap();
+    std::fs::write(source.join("cache/deep/key"), "k\n").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), task.join("cache")).unwrap();
+    let report = copy_included(&source, &task);
+    assert_eq!(report.copied, 0, "{report:?}");
+    assert!(
+        !outside.path().join("deep").exists(),
+        "no folder created through the link"
+    );
+}
+
 #[test]
 fn the_setup_command_is_typed_before_the_agent_on_one_line_without_enter() {
     use crate::worktree_ui::TaskStart;
