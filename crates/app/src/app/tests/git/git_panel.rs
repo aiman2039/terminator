@@ -448,6 +448,67 @@ fn git_views_load_asynchronously_and_reload_after_a_commit() {
     assert!(app.git_views.is_empty());
 }
 
+/// A commit made in a terminal changes History and Blame; their Reload asks
+/// Git again (a replaceable GUI job, no daemon request).
+#[cfg(feature = "test-support")]
+#[test]
+fn reload_asks_git_again_for_an_open_blame_or_file_history() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    let (cwd, path) = (PathBuf::from("/a"), PathBuf::from("/a/f.rs"));
+    let blame = Tab::Blame {
+        cwd: cwd.clone(),
+        path: path.clone(),
+    };
+    let history = Tab::FileHistory { cwd, path };
+    app.git_views.insert(
+        blame.key(),
+        crate::GitView::Blame(Ok(crate::git_log::BlameData::default())),
+    );
+    app.git_views
+        .insert(history.key(), crate::GitView::History(Ok(Vec::new())));
+    for tab in [blame, history] {
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw, |ui| match &tab {
+                Tab::Blame { .. } => app.blame_view(ui, &tab),
+                _ => app.file_history_view(ui, &tab),
+            });
+            output.textures_delta.clear();
+        };
+        frame(&mut app, vec![]);
+        assert!(requests.try_iter().next().is_none(), "the view is loaded");
+        let pos = header_target(&ctx)("git-view-reload").unwrap().center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        frame(&mut app, vec![press(true)]);
+        frame(&mut app, vec![press(false)]);
+        assert!(
+            matches!(app.git_views.get(&tab.key()), Some(crate::GitView::Loading)),
+            "{tab:?}"
+        );
+        let sent: Vec<Job> = requests.try_iter().collect();
+        assert!(
+            matches!(sent.as_slice(), [Job::GitView(t)] if *t == tab),
+            "{tab:?}: {} jobs",
+            sent.len()
+        );
+    }
+}
+
 #[test]
 fn a_git_tab_opened_from_a_pane_lands_in_the_painted_workspace() {
     let (mut app, _ctx, _dir) = fixture();

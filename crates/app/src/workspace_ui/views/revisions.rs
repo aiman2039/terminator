@@ -18,6 +18,27 @@ impl App {
         }
         true
     }
+
+    /// Right-aligned Reload for File History and Blame: a commit made in
+    /// a terminal changes both. True when clicked.
+    fn git_view_reload_button(ui: &mut egui::Ui) -> bool {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let button = appearance::sidebar_action(ui, "RefreshCw", "Reload");
+            #[cfg(feature = "test-support")]
+            diagnostics::record_response(ui.ctx(), "git-view-reload", &button);
+            button.clicked()
+        })
+        .inner
+    }
+
+    /// Drop the loaded view so the next paint asks Git again. A view still
+    /// loading keeps its job: its answer is the fresh one.
+    fn reload_git_view(&mut self, key: &str, reload: bool) {
+        if reload && !matches!(self.git_views.get(key), Some(crate::GitView::Loading)) {
+            self.git_views.remove(key);
+        }
+    }
+
     /// Read-only diff of one file between two revisions.
     pub(crate) fn revision_diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
         let Tab::RevisionDiff { cwd, path, .. } = tab else {
@@ -121,11 +142,15 @@ impl App {
             return;
         };
         let key = tab.key();
-        ui.horizontal(|ui| {
-            ui.strong(tab.git_title());
-            ui.weak(cwd.join(path).display().to_string());
-        });
+        let reload = ui
+            .horizontal(|ui| {
+                ui.strong(tab.git_title());
+                ui.weak(cwd.join(path).display().to_string());
+                Self::git_view_reload_button(ui)
+            })
+            .inner;
         ui.separator();
+        self.reload_git_view(&key, reload);
         if !self.git_view_ready(ui, &key, tab) {
             return;
         }
@@ -192,9 +217,15 @@ impl App {
         let Tab::Blame { path, .. } = tab else {
             return;
         };
-        ui.weak(format!("Blame: {}", path.display()));
+        let reload = ui
+            .horizontal(|ui| {
+                ui.weak(format!("Blame: {}", path.display()));
+                Self::git_view_reload_button(ui)
+            })
+            .inner;
         ui.separator();
         let key = tab.key();
+        self.reload_git_view(&key, reload);
         if !self.git_view_ready(ui, &key, tab) {
             return;
         }
