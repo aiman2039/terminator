@@ -6,8 +6,45 @@ use super::*;
 const COMMIT_AREA_ESTIMATE: f32 = 220.0;
 /// The changes keep at least this much height above the commit area.
 const MIN_TREE_HEIGHT: f32 = 80.0;
-/// Rows of the commit message field.
-const MESSAGE_ROWS: usize = 6;
+/// The commit message field starts at this many rows and grows with its
+/// text up to [`MESSAGE_MAX_ROWS`], then scrolls.
+const MESSAGE_ROWS: usize = 2;
+const MESSAGE_MAX_ROWS: f32 = 8.0;
+/// Git tools truncate a longer subject line.
+const SUBJECT_LIMIT: usize = 72;
+/// The key that runs Commit from the message field.
+const COMMIT_KEYS: &str = if cfg!(target_os = "macos") {
+    "⌘↩"
+} else {
+    "Ctrl+Enter"
+};
+
+/// What decides whether Commit can run now.
+pub(super) struct CommitBlockInput<'a> {
+    pub(super) running: bool,
+    pub(super) staged: bool,
+    pub(super) amend: bool,
+    pub(super) draft: &'a str,
+}
+
+/// Why Commit and Commit and Push are disabled, or `None` when they can
+/// run. Amending with an empty message keeps the previous message.
+pub(super) fn commit_block_reason(input: CommitBlockInput<'_>) -> Option<&'static str> {
+    if input.running {
+        Some("Wait for the commit to finish")
+    } else if !input.staged {
+        Some("Stage a file first")
+    } else if !input.amend && input.draft.trim().is_empty() {
+        Some("Write a commit message")
+    } else {
+        None
+    }
+}
+
+/// Characters in the draft's first line.
+fn subject_length(draft: &str) -> usize {
+    draft.lines().next().map_or(0, |line| line.chars().count())
+}
 
 impl GitPanelPass<'_, '_> {
     /// Changes above, the commit area below. The commit area is laid out
@@ -53,40 +90,50 @@ impl GitPanelPass<'_, '_> {
             .groups
             .iter()
             .any(|group| group.group == terminator_git::GitGroup::Staged);
+        let blocked = commit_block_reason(CommitBlockInput {
+            running: self.input.commit_run.is_some(),
+            staged,
+            amend: *self.input.amend,
+            draft: self.input.commit_draft,
+        });
         ui.separator();
         ui.horizontal(|ui| self.commit_options(ui));
-        self.commit_message(ui);
+        self.commit_message(ui, blocked);
         self.diff_summary(ui);
-        ui.horizontal_wrapped(|ui| self.commit_buttons(ui, staged));
+        ui.horizontal_wrapped(|ui| self.commit_buttons(ui, blocked));
         self.commit_progress(ui);
         self.commit_failure(ui);
     }
 
-    fn commit_message(&mut self, ui: &mut egui::Ui) {
-        let message = ui.add(
-            egui::TextEdit::multiline(self.input.commit_draft)
-                .hint_text("Commit Message")
-                .font(egui::TextStyle::Monospace)
-                .desired_width(ui.available_width())
-                .desired_rows(MESSAGE_ROWS),
-        );
+    /// The message: two rows that grow with the text to eight, then
+    /// scroll. Cmd+Enter (Ctrl+Enter) in it runs Commit when it can run.
+    fn commit_message(&mut self, ui: &mut egui::Ui, blocked: Option<&str>) {
+        let id = ui.make_persistent_id("git-commit-message");
+        // Taken before the field reads keys, so it never adds a line.
+        if ui.memory(|memory| memory.has_focus(id))
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))
+            && blocked.is_none()
+        {
+            self.outcome.commit = true;
+        }
+        let row = ui.text_style_height(&egui::TextStyle::Monospace);
+        let margin = 2.0 * ui.spacing().button_padding.y;
+        let message = egui::ScrollArea::vertical()
+            .id_salt("git-commit-message")
+            .max_height(row * MESSAGE_MAX_ROWS + margin)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(self.input.commit_draft)
+                        .id(id)
+                        .hint_text("Commit Message")
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(ui.available_width())
+                        .desired_rows(MESSAGE_ROWS),
+                )
+            })
+            .inner;
         if self.input.focus_message {
             message.request_focus();
-        }
-        // Subject length guide: Git tools truncate long first lines.
-        let subject = self
-            .input
-            .commit_draft
-            .lines()
-            .next()
-            .map_or(0, |line| line.chars().count());
-        if subject > 0 {
-            let text = RichText::new(format!("Subject {subject}/72")).small();
-            if subject > 72 {
-                ui.colored_label(ui.visuals().warn_fg_color, text);
-            } else {
-                ui.weak(text);
-            }
         }
     }
 
@@ -139,6 +186,17 @@ impl GitPanelPass<'_, '_> {
         diagnostics::record(ui.ctx(), "git-signoff", signoff.rect);
         #[cfg(not(feature = "test-support"))]
         let _ = (&amend, &signoff);
+        // Subject length guide at the row's end.
+        let subject = subject_length(input.commit_draft);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let text = RichText::new(format!("{subject}/{SUBJECT_LIMIT}")).small();
+            if subject > SUBJECT_LIMIT {
+                ui.colored_label(ui.visuals().warn_fg_color, text)
+            } else {
+                ui.weak(text)
+            }
+            .on_hover_text("Subject length; Git tools truncate a longer first line");
+        });
     }
 
     /// Picking a recent message replaces the draft.
@@ -156,25 +214,22 @@ impl GitPanelPass<'_, '_> {
         }
     }
 
-    /// The accent Commit button and Commit and Push…; both wait while a
-    /// commit runs.
-    fn commit_buttons(&mut self, ui: &mut egui::Ui, staged: bool) {
+    /// Commit (the main action) and Commit and Push on one row; each
+    /// disabled one says why on hover.
+    fn commit_buttons(&mut self, ui: &mut egui::Ui, blocked: Option<&str>) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let input = &*self.input;
         let outcome = &mut *self.outcome;
-        // Amending with an empty message keeps the previous message.
-        let can_commit = input.commit_run.is_none()
-            && staged
-            && (*input.amend || !input.commit_draft.trim().is_empty());
-        let commit = ui
-            .add_enabled_ui(can_commit, |ui| appearance::primary_button(ui, "Commit"))
-            .inner;
+        let commit =
+            appearance::enabled_unless(ui, blocked, |ui| appearance::primary_button(ui, "Commit"))
+                .on_hover_text(appearance::shortcut_tip("Commit", COMMIT_KEYS));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-commit", commit.rect);
         if commit.clicked() {
             outcome.commit = true;
         }
-        let commit_push = ui.add_enabled(can_commit, egui::Button::new("Commit and Push…"));
+        let commit_push =
+            appearance::enabled_unless(ui, blocked, |ui| ui.button("Commit and Push"));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-commit-push", commit_push.rect);
         if commit_push.clicked() {
