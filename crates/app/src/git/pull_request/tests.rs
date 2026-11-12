@@ -114,3 +114,34 @@ fn a_view_with_no_checks_has_no_summary() {
     assert_eq!(checks_text(&info.checks), None);
     assert!(parse_gh_threads(&serde_json::json!({})).is_empty());
 }
+
+#[test]
+fn a_known_pull_request_comes_only_from_reads_already_made_for_its_root_and_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = eframe::egui::Context::default();
+    let mut app = crate::App::with_context(&ctx, terminator_core::Paths::at(dir.path().into()));
+    let (wt, other) = (Path::new("/w/fix"), Path::new("/w/other"));
+    assert_eq!(app.known_pr(wt, Some("fix")), None, "nothing read yet");
+    app.metadata = Some(terminator_core::metadata::Metadata {
+        root: Some(wt.into()),
+        branch: Some("fix".into()),
+        pull_request: Some(terminator_core::metadata::PullRequest {
+            number: 7,
+            title: "Fix".into(),
+            url: "https://example.com/7".into(),
+            state: "OPEN".into(),
+        }),
+        ..Default::default()
+    });
+    assert_eq!(app.known_pr(wt, Some("fix")).map(|pr| pr.0), Some(7));
+    assert_eq!(app.known_pr(wt, Some("main")), None, "another branch");
+    assert_eq!(app.known_pr(other, Some("fix")), None, "another worktree");
+    // The PR tab's answer for its root and branch wins.
+    let panel = &mut app.git_extras.pull_request;
+    panel.key = Some((other.into(), "topic".into()));
+    panel.state = Some(PrState::Ready(super::fetch::PrInfo {
+        number: 9,
+        ..Default::default()
+    }));
+    assert_eq!(app.known_pr(other, Some("topic")).map(|pr| pr.0), Some(9));
+}
