@@ -237,6 +237,7 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
     Action::CopyLastOutput,
     // Agent review loop: Find Action and the agent pane menu.
     Action::ReviewLastTurn,
+    Action::PromptComposer,
 ];
 
 /// Task actions have no default keys either (bind them in Keymap).

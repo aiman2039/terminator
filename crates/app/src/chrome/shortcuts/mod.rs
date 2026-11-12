@@ -138,8 +138,8 @@ actions! {
     // Keyboard selection modes; their keys never reach the PTY.
     HintsMode => "hints_mode", "Terminal hints (open or copy by label)", "ExternalLink";
     CopyMode => "copy_mode", "Terminal copy mode", "Keyboard";
-    // Agent review loop.
     ReviewLastTurn => "review_last_turn", "Review last agent turn", "History";
+    PromptComposer => "prompt_composer", "Prompt composer…", "Pencil";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

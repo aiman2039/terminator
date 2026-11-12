@@ -94,6 +94,7 @@ impl Default for UiPreferences {
             radio_stations: Vec::new(),
             browser: crate::browser::extras::BrowserPrefs::default(),
             editor_states: crate::preferences::EditorStates::default(),
+            prompt_history: std::collections::BTreeMap::new(),
             ide_strip_docks: StripDocks::default(),
         }
     }

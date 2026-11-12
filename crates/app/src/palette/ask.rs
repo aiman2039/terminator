@@ -102,25 +102,34 @@ impl App {
         let Some(session) = ask.target.as_deref() else {
             return false;
         };
+        if !self.paste_prompt(session, &ask_text(ask), enter) {
+            return false;
+        }
+        // Sent notes are done; they do not go again with the next prompt.
+        if let Some(repo) = &ask.notes_repo {
+            self.diff_notes.clear(repo);
+        }
+        true
+    }
+
+    /// Pastes `text` into the live agent terminal `session`; `enter` also
+    /// presses Enter. The one path for Ask agent and the prompt composer;
+    /// only an explicit click or key calls it. True when pasted.
+    pub(crate) fn paste_prompt(&mut self, session: &str, text: &str, enter: bool) -> bool {
         // The agent can exit while the dialog is open: never type into
         // what is now a plain shell.
         if !self.ask_targets().iter().any(|(id, _)| id == session) {
             self.info = Some("The agent is no longer running. Nothing was sent.".into());
             return false;
         }
-        let text = ask_text(ask);
         if text.is_empty() {
             return false;
         }
-        self.handle_clipboard_paste(session, &text);
+        self.handle_clipboard_paste(session, text);
         if enter && let Some(backend) = self.backends.get_mut(session) {
             backend.process_command(egui_term::BackendCommand::Write(b"\r".to_vec()));
         }
         self.go_session(session);
-        // Sent notes are done; they do not go again with the next prompt.
-        if let Some(repo) = &ask.notes_repo {
-            self.diff_notes.clear(repo);
-        }
         true
     }
 

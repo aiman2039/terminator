@@ -433,6 +433,8 @@ pub struct App {
     pub(crate) control_server: Option<ui_control::Server>,
     /// Git preview tab, branch and sync actions, and the pull request panel.
     pub(crate) git_extras: crate::git::GitExtras,
+    /// Prompt composer window and follow-up queues (GUI memory).
+    pub(crate) composer: crate::composer::ComposerState,
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

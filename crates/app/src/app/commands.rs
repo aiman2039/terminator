@@ -262,6 +262,7 @@ impl App {
             Action::HintsMode => self.toggle_hints_mode(),
             Action::CopyMode => self.toggle_copy_mode(),
             Action::ReviewLastTurn => self.review_last_turn(),
+            Action::PromptComposer => self.open_composer(),
         }
     }
 

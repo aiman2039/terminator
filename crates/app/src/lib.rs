@@ -77,6 +77,7 @@ use workspace::Workspace;
 pub mod app;
 pub(crate) use anyhow::Result;
 mod clipboard;
+mod composer;
 pub(crate) mod diff;
 mod gui_services;
 mod onboarding;

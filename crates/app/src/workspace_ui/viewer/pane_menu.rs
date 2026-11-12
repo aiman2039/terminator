@@ -224,6 +224,7 @@ impl Viewer<'_> {
             self.app.texts.remove(&format!("history:{sid}"));
             ui.close();
         }
+        self.app.composer_menu_item(ui, sid);
         self.app.last_turn_menu_item(ui, sid);
     }
 }

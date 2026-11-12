@@ -338,6 +338,9 @@ pub struct UiPreferences {
     #[serde(default)]
     pub browser: crate::browser::extras::BrowserPrefs,
     pub editor_states: super::EditorStates,
+    /// Prompt composer history per project path, newest first (bounded).
+    #[serde(default)]
+    pub prompt_history: std::collections::BTreeMap<PathBuf, Vec<String>>,
     /// IDE strip dock layouts per project (shell terminals). GUI-local view
     /// state; validated on load, invalid docks dropped. Kept last so the
     /// derived `PartialEq` (which gates saves) short-circuits on cheap
