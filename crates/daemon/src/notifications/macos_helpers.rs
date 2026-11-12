@@ -32,6 +32,21 @@ pub(super) fn dismiss_poll_due() -> bool {
     }
 }
 
+/// Whether the dismiss poll for `generation` is paused at `now`. A latch
+/// (a remove, or [`DISMISS_ATTEMPTS`] misses) pauses it for [`ALERT_WAIT`],
+/// not for good: a banner delivered after the misses, or one a title
+/// fallback did not reach, is tried again, so the waiter cannot wait forever.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn dismiss_paused(
+    latch: Option<(u64, std::time::Instant)>,
+    generation: u64,
+    now: std::time::Instant,
+) -> bool {
+    latch.is_some_and(|(latched, at)| {
+        latched == generation && now.saturating_duration_since(at) < ALERT_WAIT
+    })
+}
+
 /// `true` when the main thread should remove the delivered banner. A newer
 /// alert does so immediately. An unanswered alert does so at [`ALERT_WAIT`],
 /// which is the only way to stop `mac-notification-sys` polling Notification
