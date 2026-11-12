@@ -102,7 +102,7 @@ impl App {
                     self.open_image(&session.project_id, path.clone(), Self::split_for(action));
                     return;
                 }
-                if crate::browser::supported_file(path)
+                if crate::browser::opens_in_tab(path)
                     && matches!(
                         action,
                         FileAction::Open | FileAction::Split | FileAction::Here

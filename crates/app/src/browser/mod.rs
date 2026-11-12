@@ -1,4 +1,5 @@
 //! GUI-owned browser tab identity. The native view is mounted later.
+pub(crate) mod draw;
 pub(crate) mod extras;
 pub(crate) mod favicon;
 #[cfg(feature = "webview")]
@@ -87,6 +88,11 @@ pub(crate) fn supported_file(path: &Path) -> bool {
                 "html" | "htm" | "xhtml"
             )
         })
+}
+
+/// A local file that opens in a Browser tab: a web page or a drawing.
+pub(crate) fn opens_in_tab(path: &Path) -> bool {
+    supported_file(path) || draw::supported(path)
 }
 
 /// egui layers drawn above panes. The native view draws over egui, so a

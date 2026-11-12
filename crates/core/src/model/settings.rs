@@ -143,6 +143,7 @@ impl Settings {
             ("reopen_browser_tab".into(), "command+alt+T".into()),
             // Free in both keymaps; New terminal is command+T.
             ("new_agent_session".into(), "command+alt+N".into()),
+            ("new_drawing".into(), "command+alt+X".into()),
         ]
         .into()
     }

@@ -138,6 +138,7 @@ pub(crate) enum PaletteItem {
 const PINNED_ACTIONS: &[Action] = &[
     Action::NewTerminal,
     Action::NewBrowser,
+    Action::NewDrawing,
     Action::NewVnc,
     Action::NextAttention,
 ];

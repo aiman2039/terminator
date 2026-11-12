@@ -39,6 +39,18 @@ impl App {
             self.open_new_browser_tab(None);
             ui.close();
         }
+        if self.can_draw()
+            && appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: Action::NewDrawing.label(),
+                icon: Action::NewDrawing.icon(),
+                shortcut: &self.shortcut_label(Action::NewDrawing),
+            })
+            .clicked()
+        {
+            self.open_new_drawing(None);
+            ui.close();
+        }
         self.agent_launcher_menu_items(ui);
         let profiles = self.state.vnc_profiles.clone();
         if !profiles.is_empty() {

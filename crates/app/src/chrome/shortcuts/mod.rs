@@ -125,6 +125,7 @@ actions! {
     SelectIn => "select_in", "Select in Explorer", "LocateFixed";
     ReopenBrowserTab => "reopen_browser_tab", "Reopen closed browser tab", "Globe";
     NewAgentSession => "new_agent_session", "New agent session…", "AgentGeneric";
+    NewDrawing => "new_drawing", "New drawing", "Pencil";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

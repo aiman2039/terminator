@@ -8,6 +8,33 @@ impl App {
         let _ = self.open_browser_url(&project, "https://example.com", split);
     }
 
+    /// Whether "New drawing" can run: a local project and a webview build.
+    pub(crate) fn can_draw(&self) -> bool {
+        crate::browser::draw::supported(std::path::Path::new("a.excalidraw"))
+            && self.selected_project().is_some()
+            && self.selected_remote_project().is_none()
+    }
+
+    /// Opens a new `.excalidraw` drawing in the project folder. The name
+    /// carries the time, so no file check runs on the GUI thread; the first
+    /// change on the canvas writes the file.
+    pub(crate) fn open_new_drawing(&mut self, split: Option<&str>) {
+        if !self.can_draw() {
+            return;
+        }
+        let Some(project) = self.selected_project() else {
+            return;
+        };
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let (id, path) = (
+            project.id.clone(),
+            project.path.join(format!("drawing-{stamp}.excalidraw")),
+        );
+        self.open_html(&id, path, split);
+    }
+
     pub(crate) fn open_new_vnc_tab(&mut self, split: Option<&str>) {
         self.hide_center_overlay();
         let Some(project) = self.selected.clone() else {

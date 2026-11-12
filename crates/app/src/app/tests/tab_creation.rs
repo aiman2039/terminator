@@ -78,6 +78,28 @@ fn new_task_types_agent_command_without_enter() {
     ));
 }
 
+/// New drawing opens an `.excalidraw` file of the project in a Browser tab
+/// and writes nothing until the user draws.
+#[cfg(feature = "webview")]
+#[test]
+fn new_drawing_opens_a_drawing_tab_in_the_project_folder() {
+    let (mut app, ctx, _dir) = fixture();
+    let root = app.selected_project().unwrap().path.clone();
+    app.run_shortcut(&ctx, Action::NewDrawing);
+    drain_updates(&mut app, &ctx);
+    let project = app.selected.clone().unwrap();
+    let Some(Tab::Browser {
+        target: BrowserTarget::File(path),
+        ..
+    }) = app.layouts[&project].active_pane().cloned()
+    else {
+        panic!("New drawing did not open a Browser tab");
+    };
+    assert_eq!(path.parent(), Some(root.as_path()));
+    assert!(crate::browser::draw::supported(&path));
+    assert!(!path.exists());
+}
+
 /// A created worktree that cannot be selected (here: removed) never gets
 /// its terminal in the project that stays selected.
 #[test]
