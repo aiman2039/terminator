@@ -334,6 +334,8 @@ mod tests {
                             brand_icon: None,
                             brand_label: None,
                             show_read: true,
+                            pinned: false,
+                            triage: false,
                             group_extra: &[],
                         },
                     );

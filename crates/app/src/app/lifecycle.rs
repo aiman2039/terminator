@@ -348,6 +348,7 @@ impl App {
             sidebar_projects: std::cell::RefCell::default(),
             sidebar_cache: std::cell::RefCell::default(),
             unread_selected: None,
+            triage: Default::default(),
             connected: false,
             control_server: None,
             git_extras: Default::default(),

@@ -205,6 +205,9 @@ pub struct UiPreferences {
     /// Collapsed All-live project groups (project ids + "unverified").
     #[serde(default)]
     pub agents_collapsed: HashSet<String>,
+    /// Sessions pinned to the top of the Agents inbox and live list.
+    #[serde(default)]
+    pub pinned_agent_sessions: HashSet<String>,
     pub show_ignored: bool,
     /// Explorer follows the focused editor file (`IntelliJ` "Always
     /// select opened file").

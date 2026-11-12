@@ -27,8 +27,8 @@ pub(crate) use structure::StructureState;
 mod sidebar_tests;
 
 pub(crate) use attention::{
-    AttentionAction, AttentionCard, NoticeGroup, attention_card, group_notices, notice_pending,
-    notice_rank, notice_waiting, state_color,
+    AttentionAction, AttentionCard, NoticeGroup, Triage, attention_card, group_notices,
+    notice_pending, notice_rank, notice_waiting, state_color,
 };
 pub(crate) use explorer::ExplorerReveal;
 pub(crate) use explorer_prompts::{GitConfirm, PendingGitConfirm};

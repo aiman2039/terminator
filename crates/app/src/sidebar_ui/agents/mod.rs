@@ -148,8 +148,11 @@ impl App {
     /// The existing inbox: pending notifications plus terminal notices.
     pub(super) fn agents_needs_attention(&mut self, ui: &mut egui::Ui) {
         let index = self.sidebar_index();
-        let notices = &index.pending_groups;
+        let notices = self.pinned_first(&index.pending_groups, |group| {
+            group.notices.first().map(|n| n.session_id.as_str())
+        });
         let terminal_notices = &index.terminal_pending;
+        self.triage_undo_bar(ui);
         appearance::sidebar_scroll("agents").show(ui, |ui| {
             if notices.is_empty() && terminal_notices.is_empty() {
                 self.agents_empty(ui);
@@ -228,6 +231,8 @@ impl App {
                 brand_icon,
                 brand_label,
                 show_read,
+                pinned: self.session_pinned(&notice.session_id),
+                triage: self.triage_available(),
                 group_extra: group.notices.get(1..).unwrap_or(&[]),
             },
             project,
@@ -334,7 +339,10 @@ impl App {
                 ui.weak("No unread agent events");
                 return;
             }
-            for group in notices.iter() {
+            let ordered = self.pinned_first(&notices, |group| {
+                group.notices.first().map(|n| n.session_id.as_str())
+            });
+            for group in ordered {
                 let Some(notice) = group.notices.first() else {
                     continue;
                 };

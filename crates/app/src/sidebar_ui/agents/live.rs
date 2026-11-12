@@ -101,7 +101,7 @@ impl App {
         }
         if !collapsed {
             ui.indent(("live-project", &project.id), |ui| {
-                for session in sessions {
+                for session in self.pinned_first(sessions, |s| Some(s.id.as_str())) {
                     self.live_agent_row(ui, session, "live-row");
                 }
             });
@@ -137,7 +137,7 @@ impl App {
         }
         if !collapsed {
             ui.indent("live-unverified", |ui| {
-                for session in unverified {
+                for session in self.pinned_first(unverified, |s| Some(s.id.as_str())) {
                     self.live_agent_row(ui, session, "unverified-row");
                 }
             });
@@ -155,6 +155,10 @@ impl App {
         };
         if !presented.verified {
             subtitle.push_str(" · unverified");
+        }
+        let pinned = self.session_pinned(&session.id);
+        if pinned {
+            subtitle.push_str(" · pinned");
         }
         let unread = if presented.unread > 0 {
             format!("{} unread", presented.unread)
@@ -187,7 +191,8 @@ impl App {
         diagnostics::record(ui.ctx(), &format!("{target}:{}", session.id), response.rect);
         #[cfg(not(feature = "test-support"))]
         let _ = target;
-        if response.clicked() {
+        let handled = self.session_row_triage(&response, &session.id, pinned);
+        if response.clicked() && !handled {
             self.go_session(&session.id);
         }
     }

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::time::Duration;
 use terminator_core::*;
 
@@ -14,12 +14,7 @@ impl Shared {
             .iter_mut()
             .find(|n| n.id == id)
             .context("Unknown notification")?;
-        match action {
-            "read" => n.read = true,
-            "dismiss" => n.dismissed = true,
-            "snooze" => n.snoozed_until = now().saturating_add(600),
-            _ => bail!("Unknown notification action"),
-        }
+        agent_workflow::apply(n, action, now())?;
         s.revision = s.revision.saturating_add(1);
         Ok(Outcome::Changed)
     }

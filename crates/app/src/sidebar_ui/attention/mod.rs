@@ -1,10 +1,14 @@
+mod actions;
 mod card;
+mod card_actions;
+mod peek;
 mod status;
+mod triage;
+#[cfg(test)]
+mod triage_tests;
 
 use super::super::agent_presence::{attention_status_icon, notice_preview as agent_notice_preview};
-use super::explorer_rows::{
-    ATTENTION_ACTION_COUNT, ATTENTION_ACTION_READ_COUNT, ATTENTION_ACTION_SIZE, skip_clipped_row,
-};
+use super::explorer_rows::{ATTENTION_ACTION_SIZE, skip_clipped_row};
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -17,11 +21,17 @@ use crate::{
 pub(crate) use card::{attention_card, attention_card_in};
 use eframe::egui::{self, Color32, RichText};
 use terminator_core::appearance::AppearanceConfig;
-use terminator_core::{AgentState, Notification, Request, Session, now};
+use terminator_core::{AgentState, Notification, Session, now};
+pub(crate) use triage::{SNOOZE_CHOICES, Triage, TriageUndo};
 
 impl App {
     // Inline selection is not a modal and must not take terminal keyboard focus.
+    // The session peek is a modal too: while it shows, no key reaches a PTY.
     pub(crate) fn notice_detail_modal_open(&self) -> bool {
+        self.triage.peek.is_some() || self.notice_detail_open()
+    }
+
+    pub(crate) fn notice_detail_open(&self) -> bool {
         self.detail.as_ref().is_some_and(|id| {
             self.state
                 .notifications
@@ -190,110 +200,6 @@ impl App {
             .contains_key(&notice.session_id)
     }
 
-    /// One row acts as one unit: navigation needs a single target, while
-    /// read/snooze/dismiss apply to every notice folded into the row.
-    pub(super) fn apply_group_action(&mut self, group: &NoticeGroup, action: AttentionAction) {
-        match action {
-            AttentionAction::Go | AttentionAction::Review => {
-                if let Some(first) = group.notices.first() {
-                    self.apply_notice_action(first.id.clone(), action);
-                }
-            }
-            _ => {
-                for notice in &group.notices {
-                    self.apply_notice_action(notice.id.clone(), action);
-                }
-            }
-        }
-    }
-
-    fn go_notice(&mut self, id: String) {
-        if let Some(session) = self
-            .state
-            .notifications
-            .iter()
-            .find(|notice| notice.id == id)
-            .map(|notice| notice.session_id.clone())
-        {
-            self.go_session(&session);
-        }
-        self.unread_selected = Some(id);
-        self.detail = None;
-    }
-
-    pub(crate) fn apply_notice_action(&mut self, id: String, action: AttentionAction) {
-        let mut presentation_changed = false;
-        match action {
-            AttentionAction::None => {}
-            AttentionAction::Go => self.go_notice(id),
-            AttentionAction::Review => {
-                self.go_notice(id);
-                // Read-only: the Git sidebar follows the focused session's
-                // working directory; no Git state changes.
-                self.show_git_sidebar();
-            }
-            AttentionAction::Read => {
-                self.send(Request::Notice {
-                    id: id.clone(),
-                    action: "read".into(),
-                });
-                if let Some(notice) = self
-                    .state
-                    .notifications
-                    .iter_mut()
-                    .find(|notice| notice.id == id)
-                {
-                    // Read state only: never resolve, dismiss, or touch lifecycle.
-                    notice.read = true;
-                    presentation_changed = true;
-                }
-                self.unread_selected = Some(id);
-            }
-            AttentionAction::Snooze => {
-                self.send(Request::Notice {
-                    id: id.clone(),
-                    action: "snooze".into(),
-                });
-                if let Some(notice) = self
-                    .state
-                    .notifications
-                    .iter_mut()
-                    .find(|notice| notice.id == id)
-                {
-                    notice.snoozed_until = now().saturating_add(600);
-                    presentation_changed = true;
-                }
-                if self.detail.as_ref() == Some(&id) {
-                    self.detail = None;
-                }
-            }
-            AttentionAction::Dismiss => {
-                self.send(Request::Notice {
-                    id: id.clone(),
-                    action: "dismiss".into(),
-                });
-                if let Some(notice) = self
-                    .state
-                    .notifications
-                    .iter_mut()
-                    .find(|notice| notice.id == id)
-                {
-                    notice.dismissed = true;
-                    presentation_changed = true;
-                }
-                if self.unread_selected.as_deref() == Some(id.as_str()) {
-                    self.unread_selected = None;
-                }
-                if self.detail.as_ref() == Some(&id) {
-                    self.detail = None;
-                }
-            }
-        }
-        if presentation_changed {
-            self.reconcile_presentations();
-        }
-    }
-
     pub(super) fn info_panel(&mut self, ui: &mut egui::Ui) {
         let session = self.context_session();
         let live = session.is_some_and(|session| session.lifecycle.live() && session.pid.is_some());
@@ -375,10 +281,19 @@ pub(crate) enum AttentionAction {
     Go,
     /// Go to the agent's terminal and show its working-tree changes.
     Review,
+    /// The fixed 10-minute snooze of daemons without `notice-triage-v1`.
     Snooze,
+    /// Snooze for this many seconds (`notice-triage-v1`).
+    SnoozeFor(u64),
     Dismiss,
     /// Mark read without resolving, dismissing, or changing lifecycle.
     Read,
+    /// Mark unread again (`notice-triage-v1`); read state only.
+    Unread,
+    /// Keep the session at the top of the inbox and live list (GUI only).
+    Pin,
+    /// Show a read-only snapshot of the session's screen.
+    Peek,
 }
 
 pub(crate) struct AttentionCard<'a> {
@@ -392,6 +307,10 @@ pub(crate) struct AttentionCard<'a> {
     pub brand_label: Option<&'a str>,
     /// Show the mark-read button (Unread view only).
     pub show_read: bool,
+    /// The session is pinned to the top.
+    pub pinned: bool,
+    /// The daemon takes the triage verbs (`notice-triage-v1`).
+    pub triage: bool,
     /// Further notices from the same agent run folded into this row.
     pub group_extra: &'a [Notification],
 }

@@ -53,6 +53,7 @@ impl App {
         self.close_session_modal(ctx);
         self.open_terminal_notice_detail();
         self.notice_detail_modal(ctx);
+        self.session_peek_modal(ctx);
         self.worktree_remove_dialog(ctx);
         self.ask_agent_dialog(ctx);
         self.init_command_dialog(ctx);
@@ -124,7 +125,7 @@ impl App {
         else {
             return;
         };
-        if !self.notice_detail_modal_open() {
+        if !self.notice_detail_open() {
             return;
         }
         let session = self
@@ -162,6 +163,8 @@ impl App {
                         brand_icon,
                         brand_label,
                         show_read: false,
+                        pinned: self.session_pinned(&n.session_id),
+                        triage: self.triage_available(),
                         group_extra: &[],
                     },
                 );

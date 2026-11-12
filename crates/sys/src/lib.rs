@@ -7,9 +7,14 @@
 mod console;
 #[cfg(windows)]
 mod handle;
+#[cfg(unix)]
+mod local_time;
 mod pressure;
 mod session;
 mod shm;
+
+#[cfg(unix)]
+pub use local_time::seconds_until_tomorrow_at;
 
 #[cfg(target_os = "macos")]
 mod threads;

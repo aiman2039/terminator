@@ -417,6 +417,8 @@ pub struct App {
     pub(crate) sidebar_cache: std::cell::RefCell<sidebar_cache::Cache>,
     /// Unread-view row retained after marking read, until selection/filter changes.
     pub(crate) unread_selected: Option<String>,
+    /// Inbox triage: session peek, last undoable action, restores in flight.
+    pub(crate) triage: sidebar_ui::Triage,
     pub(crate) connected: bool,
     pub(crate) control_server: Option<ui_control::Server>,
     /// Git preview tab, branch and sync actions, and the pull request panel.
