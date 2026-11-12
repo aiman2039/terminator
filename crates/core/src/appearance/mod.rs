@@ -22,6 +22,10 @@ pub struct AppearanceConfig {
     pub text: String,
     pub secondary: String,
     pub accent: String,
+    /// Fill of the main action button. Unset uses `accent`. A theme file
+    /// without the key stays unset, whatever the preset sets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<String>,
     pub selection: String,
     pub terminal_background: String,
     pub terminal_foreground: String,
@@ -81,6 +85,9 @@ impl Default for AppearanceConfig {
     }
 }
 impl AppearanceConfig {
+    /// Optional key; saving removes it when unset.
+    pub const PRIMARY_KEY: &'static str = "primary";
+
     pub fn colors_mut(&mut self) -> Vec<(&'static str, &mut String)> {
         vec![
             ("window", &mut self.window),
@@ -111,6 +118,12 @@ impl AppearanceConfig {
         }
         for (name, value) in self.clone().colors_mut() {
             rgb(value).map_err(|source| AppearanceError::InvalidColorField { name, source })?;
+        }
+        if let Some(primary) = &self.primary {
+            rgb(primary).map_err(|source| AppearanceError::InvalidColorField {
+                name: "primary",
+                source,
+            })?;
         }
         if !(self.border_width.is_finite() && (0.0..=8.0).contains(&self.border_width)) {
             return Err(AppearanceError::BorderWidth {
@@ -150,6 +163,7 @@ impl AppearanceConfig {
             && self.text == other.text
             && self.secondary == other.secondary
             && self.accent == other.accent
+            && self.primary == other.primary
             && self.selection == other.selection
             && self.terminal_background == other.terminal_background
             && self.terminal_foreground == other.terminal_foreground
@@ -161,6 +175,11 @@ impl AppearanceConfig {
             && self.status_running == other.status_running
             && self.status_waiting == other.status_waiting
             && self.status_failed == other.status_failed
+    }
+    /// The main action fill: `primary`, else `accent`.
+    #[must_use]
+    pub fn primary_color(&self) -> &str {
+        self.primary.as_deref().unwrap_or(&self.accent)
     }
     pub fn apply_accent(&mut self, accent: String) {
         if let Ok([r, g, b]) = rgb(&accent) {
@@ -279,7 +298,10 @@ impl AppearanceFile {
             }
             table.insert(key, new);
         }
-        for key in FontPrefs::KEYS {
+        for key in FontPrefs::KEYS
+            .iter()
+            .chain(&[AppearanceConfig::PRIMARY_KEY])
+        {
             if !values.contains_key(key) {
                 table.remove(key);
             }

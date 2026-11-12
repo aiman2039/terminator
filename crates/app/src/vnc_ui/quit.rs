@@ -34,29 +34,23 @@ impl App {
             return;
         }
         let count = self.live_vnc_sessions().len();
-        let mut choice = None;
-        egui::Window::new("Quit Terminator")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label(format!(
-                    "{count} VNC session{} stay connected after Terminator closes.",
-                    if count == 1 { "" } else { "s" }
-                ));
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if appearance::primary_button(ui, "Quit").clicked() {
-                        choice = Some(QuitChoice::Keep);
-                    }
-                    if ui.button("Disconnect all and quit").clicked() {
-                        choice = Some(QuitChoice::Disconnect);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(QuitChoice::Cancel);
-                    }
-                });
-            });
+        let window = egui::Window::new("Quit Terminator")
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO);
+        let dialog = appearance::Confirm::new(
+            format!(
+                "{} {} connected after Terminator closes.",
+                appearance::count_noun(count, "VNC session"),
+                if count == 1 { "stays" } else { "stay" }
+            ),
+            "",
+        )
+        .destructive(appearance::ConfirmButton::new("Disconnect all and quit"))
+        .default_action(appearance::ConfirmButton::new("Quit"));
+        let choice = appearance::confirm(ctx, window, dialog, |_| {}).map(|answer| match answer {
+            appearance::ConfirmAnswer::Default => QuitChoice::Keep,
+            appearance::ConfirmAnswer::Destructive => QuitChoice::Disconnect,
+            appearance::ConfirmAnswer::Cancel => QuitChoice::Cancel,
+        });
         if let Some(choice) = choice {
             self.answer_vnc_quit(ctx, choice);
         }

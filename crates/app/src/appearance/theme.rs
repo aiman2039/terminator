@@ -14,7 +14,11 @@ struct Chrome {
     menu_text: AtomicU32,
     menu_muted: AtomicU32,
     menu_line: AtomicU32,
+    primary: AtomicU32,
 }
+
+/// Carbon accent, the primary fill until the first [`apply`].
+const DEFAULT_PRIMARY: Color32 = Color32::from_rgb(0xEF, 0x62, 0x5A);
 
 /// Keep small navigation/action glyphs legible independently of secondary text.
 const DARK_ICON: Color32 = Color32::from_rgb(242, 244, 248);
@@ -49,6 +53,7 @@ static CHROME: Chrome = Chrome {
     menu_text: AtomicU32::new(packed(DARK_MENU_TEXT)),
     menu_muted: AtomicU32::new(packed(DARK_MENU_MUTED)),
     menu_line: AtomicU32::new(packed(DARK_MENU_LINE)),
+    primary: AtomicU32::new(packed(DEFAULT_PRIMARY)),
 };
 
 fn load(slot: &AtomicU32) -> Color32 {
@@ -79,6 +84,10 @@ pub(super) fn menu_muted() -> Color32 {
 /// Context menu border and hover fill.
 pub(super) fn menu_line() -> Color32 {
     load(&CHROME.menu_line)
+}
+/// Fill of the main action button: the theme's `primary`, else its accent.
+pub fn primary_fill() -> Color32 {
+    load(&CHROME.primary)
 }
 
 /// Icon, menu fill, menu text, menu muted, and menu line colors for `theme`.
@@ -112,6 +121,7 @@ fn set_chrome(theme: &AppearanceConfig) {
     store(&CHROME.menu_text, text);
     store(&CHROME.menu_muted, muted);
     store(&CHROME.menu_line, line);
+    store(&CHROME.primary, color(theme.primary_color()));
 }
 
 /// Black or white, whichever reads on `background`.
@@ -123,6 +133,51 @@ pub fn contrast_text(background: Color32) -> Color32 {
     } else {
         Color32::WHITE
     }
+}
+
+/// Dark label of a filled button.
+const DARK_LABEL: Color32 = Color32::from_rgb(0x14, 0x14, 0x16);
+
+/// WCAG 2.x relative luminance.
+fn luminance(color: Color32) -> f32 {
+    let channel = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.039_28 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+}
+
+/// WCAG 2.x contrast ratio of two opaque colors (1 to 21).
+pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// A filled button's fill and label: the label is dark or white, whichever
+/// has the higher WCAG ratio. When neither reaches 4.5:1 the fill gets 4 %
+/// darker per step until the white label does.
+pub fn filled_button_colors(fill: Color32) -> (Color32, Color32) {
+    let mut fill = fill;
+    for _ in 0..40 {
+        let dark = contrast_ratio(fill, DARK_LABEL);
+        let white = contrast_ratio(fill, Color32::WHITE);
+        if dark.max(white) >= 4.5 {
+            return (
+                fill,
+                if dark >= white {
+                    DARK_LABEL
+                } else {
+                    Color32::WHITE
+                },
+            );
+        }
+        fill = fill.lerp_to_gamma(Color32::BLACK, 0.04);
+    }
+    (fill, Color32::WHITE)
 }
 
 pub fn color(value: &str) -> Color32 {

@@ -147,31 +147,28 @@ impl App {
             return;
         };
         let card = HostKeyCard::new(prompt, appearance::color(&self.theme.status_failed));
-        let mut open = true;
-        let mut choice = (false, false);
-        self.popups
-            .window(
-                ctx,
-                if card.changed {
-                    "SSH host key changed"
-                } else {
-                    "Trust SSH host?"
-                },
-            )
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| choice = card.show(ui));
-        let (trust, cancel) = choice;
-        if trust && let Some(prompt) = &mut self.remote_ui.host_key {
-            prompt.busy = true;
-            prompt.error = None;
-            let _ = self.jobs.send(Job::HostKey {
-                ssh: prompt.ssh.clone(),
-                keys: Some(card.keys),
-            });
-        } else if cancel || !open {
-            self.dismiss_host_key();
+        let window = self.popups.window(
+            ctx,
+            if card.changed {
+                "SSH host key changed"
+            } else {
+                "Trust SSH host?"
+            },
+        );
+        let answer = appearance::confirm(ctx, window, card.dialog(), |ui| card.show(ui));
+        match answer {
+            Some(appearance::ConfirmAnswer::Destructive) => {
+                if let Some(prompt) = &mut self.remote_ui.host_key {
+                    prompt.busy = true;
+                    prompt.error = None;
+                    let _ = self.jobs.send(Job::HostKey {
+                        ssh: prompt.ssh.clone(),
+                        keys: Some(card.keys),
+                    });
+                }
+            }
+            Some(_) => self.dismiss_host_key(),
+            None => {}
         }
     }
 }
@@ -220,8 +217,8 @@ impl HostKeyCard {
         }
     }
 
-    /// Renders the prompt. Returns `(trust, cancel)` clicks.
-    fn show(&self, ui: &mut egui::Ui) -> (bool, bool) {
+    /// The prompt's text above the buttons.
+    fn show(&self, ui: &mut egui::Ui) {
         self.intro(ui);
         ui.add_space(4.0);
         self.fingerprints(ui);
@@ -233,8 +230,21 @@ impl HostKeyCard {
         if let Some(error) = &self.error {
             ui.colored_label(self.failed, error);
         }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| self.buttons(ui)).inner
+    }
+
+    /// A changed key only closes. Trust is a risk, so it is never the
+    /// Enter default: Enter cancels.
+    fn dialog(&self) -> appearance::Confirm<'static> {
+        if self.changed {
+            return appearance::Confirm::new("", "")
+                .cancel(appearance::ConfirmButton::new("Close"));
+        }
+        let ready = !self.busy && !self.keys.is_empty();
+        appearance::Confirm::new("", "").destructive(
+            appearance::ConfirmButton::new("Trust and connect")
+                .id("ssh-hostkey-trust")
+                .disabled((!ready).then_some("Reading host keys…")),
+        )
     }
 
     fn intro(&self, ui: &mut egui::Ui) {
@@ -277,21 +287,5 @@ impl HostKeyCard {
                 egui::RichText::new(format!("{}  {}", key.key_type, key.fingerprint)).monospace(),
             );
         }
-    }
-
-    fn buttons(&self, ui: &mut egui::Ui) -> (bool, bool) {
-        if self.changed {
-            return (false, ui.button("Close").clicked());
-        }
-        let ready = !self.busy && !self.keys.is_empty();
-        let response = ui.add_enabled(ready, egui::Button::new("Trust and connect"));
-        // Only once clickable, so a fixture click waits for the scan.
-        #[cfg(feature = "test-support")]
-        if ready {
-            crate::diagnostics::record(ui.ctx(), "ssh-hostkey-trust", response.rect);
-        }
-        let trust = response.clicked();
-        let cancel = ui.button("Cancel").clicked();
-        (trust, cancel)
     }
 }

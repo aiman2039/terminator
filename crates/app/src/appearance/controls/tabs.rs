@@ -1,5 +1,4 @@
-//! Text tabs for tool-window headers (`JetBrains` Commit | Stash) and the
-//! accent-filled primary button of a form footer.
+//! Text tabs for tool-window headers (`JetBrains` Commit | Stash).
 use super::super::scale::WIDGET_RADIUS;
 use super::TOOLBAR_BUTTON;
 use eframe::egui;
@@ -44,12 +43,4 @@ pub fn text_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Respons
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, label));
     super::paint_focus(ui, &response);
     response
-}
-
-/// The form's main action, filled with the theme accent (VNC Connect, SSH
-/// Save, Git Commit).
-pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let fill = ui.visuals().selection.bg_fill;
-    let color = ui.visuals().selection.stroke.color;
-    ui.add(egui::Button::new(egui::RichText::new(text).strong().color(color)).fill(fill))
 }
