@@ -6,8 +6,9 @@ use eframe::egui;
 
 /// Height of one chip.
 const CHIP_HEIGHT: f32 = 16.0;
-/// Space kept for the text left of the chips.
-const KEEP_LEFT: f32 = 96.0;
+/// Space kept for the caption title left of the chips and the program
+/// status badge.
+pub(super) const KEEP_LEFT: f32 = 96.0;
 
 /// Paints `chips` right-aligned, ending at `right`, vertically centred in
 /// `row`. Chips that do not fit are left out. Returns the left edge of

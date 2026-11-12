@@ -229,8 +229,12 @@ impl Viewer<'_> {
                 }),
             },
         );
-        appearance::paint_usage_chips(ui, bar.bar.rect, bar.controls_left, &usage);
-        self.app.paint_program_status(ui, sid, &bar);
+        // Side by side, right to left: the program badge next to the
+        // controls, then the agent usage chips.
+        let right = self
+            .app
+            .paint_program_status(ui, sid, (bar.bar.rect, bar.controls_left));
+        appearance::paint_usage_chips(ui, bar.bar.rect, right, &usage);
         bar
     }
 
