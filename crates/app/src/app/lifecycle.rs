@@ -15,6 +15,7 @@ impl App {
             || self.center_is_dialog()
             || self.worktree_remove.is_some()
             || self.git.picker.is_some()
+            || self.popups.confirm_open()
     }
     pub fn new(cc: &eframe::CreationContext<'_>, paths: Paths) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, paths.clone());

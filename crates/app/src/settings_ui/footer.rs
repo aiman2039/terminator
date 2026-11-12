@@ -113,19 +113,17 @@ impl App {
         if let Err(error) = &validation {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
         }
-        ui.horizontal(|ui| {
-            let accent = appearance::color(&self.theme.accent);
-            let apply = egui::Button::new(
-                egui::RichText::new("Apply").color(appearance::contrast_text(accent)),
-            )
-            .fill(accent)
-            .min_size(egui::vec2(72.0, 0.0));
-            let mut response = ui.add_enabled(validation.is_ok() && !self.theme_conflict, apply);
-            if self.theme_conflict {
-                response = response.on_disabled_hover_text(
-                    "Appearance changed externally. Reload it in Appearance before applying.",
-                );
-            }
+        // Right to left: Apply at the far right, Cancel left of it.
+        appearance::footer_row(ui, |ui| {
+            let why = if self.theme_conflict {
+                Some("Appearance changed externally. Reload it in Appearance before applying.")
+            } else {
+                validation.as_ref().err().map(String::as_str)
+            };
+            let response =
+                appearance::enabled_unless(ui, why, |ui| appearance::primary_button(ui, "Apply"));
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "settings-apply", response.rect);
             if response.clicked() {
                 frame.apply = true;
             }

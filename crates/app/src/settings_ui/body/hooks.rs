@@ -2,7 +2,7 @@ use crate::*;
 
 impl App {
     pub(super) fn hook_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Agent Hooks");
+        settings_controls::sub_heading(ui, "Hooks");
         ui.weak("Agents are launched manually. Install hooks so Terminator can show waiting and done states.");
         egui::Grid::new("hook-settings")
             .num_columns(5)

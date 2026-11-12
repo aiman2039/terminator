@@ -53,21 +53,44 @@ impl App {
         } else {
             "Close session?"
         };
-        self.popups
-            .window(ctx, title)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                if let Some(s) = session {
-                    self.close_session_summary(ui, &sid, &s);
-                }
-                ui.label("Keep it running in the background, or terminate its processes.");
-                ui.horizontal(|ui| self.close_session_buttons(ui, &sid));
-            });
+        let body = session
+            .as_ref()
+            .map(|s| format!("{} · {}", s.label, s.cwd.display()))
+            .unwrap_or_default();
+        let window = self.popups.window(ctx, title);
+        let dialog = appearance::Confirm::new(
+            body,
+            "Keep running leaves it in the background. Terminate stops its processes.",
+        )
+        .destructive(appearance::ConfirmButton::new("Terminate").id("close-session-terminate"))
+        .default_action(appearance::ConfirmButton::new("Keep running").id("close-session-keep"));
+        let answer = appearance::confirm(ctx, window, dialog, |ui| {
+            if let Some(s) = &session {
+                self.close_session_editor_note(ui, &sid, s);
+            }
+        });
+        match answer {
+            Some(appearance::ConfirmAnswer::Default) => {
+                self.remove_tab(&sid);
+                self.close_session = None;
+            }
+            Some(appearance::ConfirmAnswer::Destructive) => {
+                self.send(Request::Stop {
+                    session: sid.clone(),
+                });
+                self.remove_tab(&sid);
+                self.close_session = None;
+            }
+            Some(appearance::ConfirmAnswer::Cancel) => {
+                self.close_session = None;
+                // Cancel stops the rest of a bulk close too.
+                self.session_selection.close_queue.clear();
+            }
+            None => {}
+        }
     }
 
-    fn close_session_summary(&mut self, ui: &mut egui::Ui, sid: &str, s: &Session) {
-        ui.label(format!("{} · {}", s.label, s.cwd.display()));
+    fn close_session_editor_note(&mut self, ui: &mut egui::Ui, sid: &str, s: &Session) {
         if s.kind != SessionKind::Editor {
             return;
         }
@@ -79,31 +102,6 @@ impl App {
             self.send(Request::EditorSave {
                 session: sid.to_owned(),
             });
-        }
-    }
-
-    fn close_session_buttons(&mut self, ui: &mut egui::Ui, sid: &str) {
-        let keep = ui.button("Keep running");
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "close-session-keep", keep.rect);
-        if keep.clicked() {
-            self.remove_tab(sid);
-            self.close_session = None;
-        }
-        let terminate = ui.button("Terminate");
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "close-session-terminate", terminate.rect);
-        if terminate.clicked() {
-            self.send(Request::Stop {
-                session: sid.to_owned(),
-            });
-            self.remove_tab(sid);
-            self.close_session = None;
-        }
-        if ui.button("Cancel").clicked() {
-            self.close_session = None;
-            // Cancel stops the rest of a bulk close too.
-            self.session_selection.close_queue.clear();
         }
     }
 
@@ -219,44 +217,32 @@ impl App {
             tab_id,
             live,
         } = input;
-        let mut open = true;
-        let mut decided = false;
-        self.popups
-            .window(ctx, "Close tab?")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(format!(
-                    "This tab contains {} running session(s).",
-                    live.len()
-                ));
-                ui.weak("Keep their processes running in the background, or terminate them.");
-                ui.horizontal(|ui| {
-                    let response = ui.button("Keep running");
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), "workspace-keep-running", response.rect);
-                    let background = response.clicked();
-                    let terminate = ui.button("Terminate sessions").clicked();
-                    if background || terminate {
-                        if terminate {
-                            for session in &live {
-                                self.send(Request::Stop {
-                                    session: session.clone(),
-                                });
-                            }
-                        }
-                        self.close_workspace_tab_now(project, tab_id);
-                        decided = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.abort_workspace_close();
-                        decided = true;
-                    }
-                });
-            });
-        if !open && !decided {
-            self.abort_workspace_close();
+        let sessions = appearance::count_noun(live.len(), "session");
+        let running = if live.len() == 1 { "is" } else { "are" };
+        let terminate = format!("Terminate {sessions}");
+        let window = self.popups.window(ctx, "Close tab?");
+        let dialog = appearance::Confirm::new(
+            format!("{sessions} {running} running in this tab."),
+            "Keep running leaves them in the background. Terminate stops their processes.",
+        )
+        .destructive(appearance::ConfirmButton::new(&terminate).id("workspace-terminate"))
+        .default_action(
+            appearance::ConfirmButton::new("Keep running").id("workspace-keep-running"),
+        );
+        match appearance::confirm(ctx, window, dialog, |_| {}) {
+            Some(appearance::ConfirmAnswer::Destructive) => {
+                for session in &live {
+                    self.send(Request::Stop {
+                        session: session.clone(),
+                    });
+                }
+                self.close_workspace_tab_now(project, tab_id);
+            }
+            Some(appearance::ConfirmAnswer::Default) => {
+                self.close_workspace_tab_now(project, tab_id)
+            }
+            Some(appearance::ConfirmAnswer::Cancel) => self.abort_workspace_close(),
+            None => {}
         }
     }
 }

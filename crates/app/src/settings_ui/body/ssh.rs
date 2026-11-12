@@ -1,4 +1,4 @@
-//! Settings → SSH: connection timing the daemon passes to OpenSSH
+//! Settings → Remote → SSH: connection timing the daemon passes to OpenSSH
 //! (`ssh-settings-v1`). Host-specific options stay in `~/.ssh/config`.
 use crate::*;
 use terminator_core::ssh::Tuning;
@@ -27,7 +27,8 @@ const SEARCH: [(&str, &str); 4] = [
 
 impl App {
     pub(super) fn ssh_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("SSH");
+        ui.heading("Remote");
+        settings_controls::sub_heading(ui, "SSH");
         ui.weak(
             "Applies to new SSH connections. Host names, users, keys and jumps come from ~/.ssh/config.",
         );

@@ -3,32 +3,43 @@ use crate::settings_controls::BinaryOption;
 use crate::*;
 
 impl App {
+    /// Settings → Terminal: the shell and terminal text.
     pub(super) fn terminal_settings(
         &mut self,
         ui: &mut egui::Ui,
         grant_folder: &mut bool,
-    ) -> Option<BrowseTarget> {
-        ui.heading("Terminal & Editor");
-        let mut browse = None;
+        browse: &mut Option<BrowseTarget>,
+    ) {
+        ui.heading("Terminal");
         let (shells, editors) = self.settings_binary_options();
         self.detect_custom_binaries(&shells, &editors);
-        self.shell_override_row(ui, &shells, &mut browse);
-        self.pr_metadata_row(ui);
+        self.shell_override_row(ui, &shells, browse);
         self.font_size_row(ui);
         self.type_ahead_row(ui);
+        self.folder_access_row(ui, grant_folder);
+    }
+
+    /// The Mode group of Settings → Editor: which editor opens files.
+    pub(super) fn editor_mode_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        browse: &mut Option<BrowseTarget>,
+    ) {
+        let (shells, editors) = self.settings_binary_options();
+        self.detect_custom_binaries(&shells, &editors);
         self.editor_mode_row(ui);
-        self.native_editor_rows(ui);
-        self.spell_check_row(ui);
-        self.lsp_server_rows(ui, &mut browse);
+        self.editor_executable_row(ui, &editors, browse);
+        self.external_editor_row(ui);
+        self.external_custom_row(ui, browse);
+        self.test_draft_row(ui);
+    }
+
+    /// Settings → Git & Diff.
+    pub(super) fn git_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Git & Diff");
         self.diff_viewer_row(ui);
         self.diff_close_settings(ui);
-        self.editor_executable_row(ui, &editors, &mut browse);
-        self.external_editor_row(ui);
-        self.external_custom_row(ui, &mut browse);
-        self.test_draft_row(ui);
-        self.folder_access_row(ui, grant_folder);
-        self.browser_settings_rows(ui);
-        browse
+        self.pr_metadata_row(ui);
     }
 
     fn detect_custom_binaries(&mut self, shells: &[BinaryOption], editors: &[BinaryOption]) {
@@ -173,7 +184,7 @@ impl App {
     }
 
     /// Vim keybindings and inlay hints, shown only for the native editor.
-    fn native_editor_rows(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn native_editor_rows(&mut self, ui: &mut egui::Ui) {
         let native = self.settings_draft.editor_mode == EditorMode::Native;
         if self.field_visible("Vim keybindings", "vim modal native") && native {
             settings_controls::settings_row(settings_controls::SettingsRowInput {
@@ -195,100 +206,6 @@ impl App {
                 },
             });
         }
-    }
-
-    /// Spell checking for both editors. Neovim needs a daemon that
-    /// passes the flag on (`editor-spell-v1`); the native editor does not.
-    fn spell_check_row(&mut self, ui: &mut egui::Ui) {
-        if !self.field_visible("Spell checking", "spell spelling typo harper dictionary") {
-            return;
-        }
-        let native = self.settings_draft.editor_mode == EditorMode::Native;
-        let enabled = native
-            || self
-                .state
-                .capabilities
-                .iter()
-                .any(|c| c == terminator_core::EDITOR_SPELL_CAPABILITY);
-        let description = if native {
-            "Underline typos in text and comments (harper-ls on PATH). Alt+Enter lists fixes."
-        } else {
-            "Turn on Neovim 'spell' for new editors. z= lists fixes, zg adds a word."
-        };
-        settings_controls::settings_row(settings_controls::SettingsRowInput {
-            ui,
-            label: "Spell checking",
-            description,
-            add_control: |ui| {
-                ui.add_enabled(
-                    enabled,
-                    egui::Checkbox::new(&mut self.settings_draft.spell_check, "Check spelling"),
-                )
-                .on_disabled_hover_text("Restart the daemon to use this with Neovim editors.");
-            },
-        });
-    }
-
-    fn lsp_server_rows(&mut self, ui: &mut egui::Ui, browse: &mut Option<BrowseTarget>) {
-        for family in terminator_native_edit::lsp::SERVER_FAMILIES {
-            let (language, label) = (family.id, family.label);
-            let keywords = format!(
-                "lsp language server {language} {}",
-                family.candidates.join(" ")
-            );
-            if !self.field_visible(label, &keywords) {
-                continue;
-            }
-            if self.lsp_server_row(ui, language, label) {
-                *browse = Some(BrowseTarget::Lsp(language));
-            }
-        }
-    }
-
-    /// One language-server path row. Returns whether Browse was clicked.
-    fn lsp_server_row(&mut self, ui: &mut egui::Ui, language: &str, label: &str) -> bool {
-        let mut pick = false;
-        settings_controls::settings_row(settings_controls::SettingsRowInput {
-            ui,
-            label,
-            description: "Empty finds it on PATH. Saving restarts that server; the app keeps running.",
-            add_control: |ui| {
-                let mut value = self
-                    .settings_draft
-                    .lsp_servers
-                    .get(language)
-                    .cloned()
-                    .unwrap_or_default();
-                let _ = settings_controls::path_field(settings_controls::PathFieldInput {
-                    ui,
-                    value: &mut value,
-                    browse_id: &format!("lsp-{language}"),
-                    browse: &mut pick,
-                });
-                if value.is_empty() {
-                    self.settings_draft.lsp_servers.remove(language);
-                } else {
-                    self.settings_draft
-                        .lsp_servers
-                        .insert(language.to_owned(), value.clone());
-                }
-                self.lsp_server_status(ui, value.trim());
-            },
-        });
-        pick
-    }
-
-    fn lsp_server_status(&self, ui: &mut egui::Ui, value: &str) {
-        if value.is_empty() {
-            return;
-        }
-        match self.settings_executable(value) {
-            Some(path) => ui.weak(path.display().to_string()),
-            None => ui.colored_label(
-                appearance::color(&self.theme.status_failed),
-                "Language server not found",
-            ),
-        };
     }
 
     fn diff_viewer_row(&mut self, ui: &mut egui::Ui) {

@@ -606,6 +606,7 @@ mod tests {
                         commit_run: None,
                         commit_lock: Default::default(),
                         commit_failure: None,
+                        list_error: None,
                     };
                     *outcome = git_panel(ui, &mut input);
                 },
@@ -688,6 +689,7 @@ mod tests {
                         commit_run: None,
                         commit_lock: Default::default(),
                         commit_failure: None,
+                        list_error: None,
                     };
                     *outcome = git_panel(ui, &mut input);
                 },

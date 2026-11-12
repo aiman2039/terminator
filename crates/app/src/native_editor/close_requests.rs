@@ -269,32 +269,19 @@ impl App {
             self.resume_native_close_owner(&request.owner);
             return;
         }
-        let mut open = true;
-        let mut choice = None;
-        self.popups
-            .window(ctx, "Unsaved native changes?")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(format!("{} has unsaved changes.", request.name()));
-                ui.horizontal(|ui| {
-                    if ui.button("Save and close").clicked() {
-                        choice = Some(Some(NativeCloseChoice::SaveClose));
-                    }
-                    if ui.button("Discard changes").clicked() {
-                        choice = Some(Some(NativeCloseChoice::Discard));
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(None);
-                    }
-                });
+        let window = self.popups.window(ctx, "Unsaved changes");
+        let dialog =
+            crate::appearance::Confirm::new(format!("{} has unsaved changes.", request.name()), "")
+                .destructive(crate::appearance::ConfirmButton::new("Discard changes"))
+                .default_action(crate::appearance::ConfirmButton::new("Save and close"));
+        // Closing the dialog is its Cancel. Sparkle keeps waiting if a quit
+        // prompt is only hidden.
+        let choice =
+            crate::appearance::confirm(ctx, window, dialog, |_| {}).map(|answer| match answer {
+                crate::appearance::ConfirmAnswer::Default => Some(NativeCloseChoice::SaveClose),
+                crate::appearance::ConfirmAnswer::Destructive => Some(NativeCloseChoice::Discard),
+                crate::appearance::ConfirmAnswer::Cancel => None,
             });
-        if !open && choice.is_none() {
-            // Closing the dialog is its Cancel. Sparkle keeps waiting if
-            // a quit prompt is only hidden.
-            choice = Some(None);
-        }
         if let Some(choice) = choice {
             self.answer_native_close(request, choice);
         }

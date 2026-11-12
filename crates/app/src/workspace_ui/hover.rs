@@ -197,6 +197,7 @@ impl App {
             && !self.editor_close_sessions.contains(sid)
             && !self.rename_blocks_input()
             && self.worktree_remove.is_none()
+            && !self.popups.confirm_open()
     }
 
     /// Terminals in floating windows live outside the main window, so the
@@ -215,6 +216,7 @@ impl App {
             && !self.editor_close_sessions.contains(sid)
             && !self.rename_blocks_input()
             && self.worktree_remove.is_none()
+            && !self.popups.confirm_open()
     }
 
     /// Copy is local to the selected terminal. A file menu may block PTY input

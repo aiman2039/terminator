@@ -207,7 +207,7 @@ fn palette_labels_are_stable() {
     );
     assert_eq!(
         PaletteItem::Settings(SettingsSection::Terminal).label(),
-        "Settings  Terminal & Editor"
+        "Settings  Terminal"
     );
 }
 

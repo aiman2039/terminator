@@ -15,81 +15,7 @@ pub(crate) enum SettingsPending {
     Close,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SettingsSection {
-    Appearance,
-    Terminal,
-    Editor,
-    Notifications,
-    History,
-    Shortcuts,
-    Agents,
-    AgentHooks,
-    Ssh,
-    Updates,
-}
-
-impl SettingsSection {
-    pub const ALL: [Self; 10] = [
-        Self::Appearance,
-        Self::Terminal,
-        Self::Editor,
-        Self::Notifications,
-        Self::History,
-        Self::Shortcuts,
-        Self::Agents,
-        Self::AgentHooks,
-        Self::Ssh,
-        Self::Updates,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Appearance => "Appearance",
-            Self::Terminal => "Terminal & Editor",
-            Self::Editor => "Editor",
-            Self::Notifications => "Notifications",
-            Self::History => "History",
-            Self::Shortcuts => "Shortcuts",
-            Self::Agents => "Agents",
-            Self::AgentHooks => "Agent Hooks",
-            Self::Ssh => "SSH",
-            Self::Updates => "Updates",
-        }
-    }
-
-    pub(super) fn icon(self) -> &'static str {
-        match self {
-            Self::Appearance | Self::Updates => "Settings2",
-            Self::Terminal => "Terminal",
-            Self::Editor => "Pencil",
-            Self::Notifications => "PanelsTopLeft",
-            Self::History => "FileText",
-            Self::Shortcuts => "SquareDashed",
-            Self::Agents => "AgentGeneric",
-            Self::AgentHooks => "GitBranch",
-            Self::Ssh => "Globe",
-        }
-    }
-
-    pub(crate) fn keywords(self) -> &'static str {
-        match self {
-            Self::Appearance => "theme accent density color hex font",
-            Self::Terminal => {
-                "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout lsp language server \
-                 markdown html css scss less json toml yaml type-ahead typeahead prediction latency echo"
-            }
-            Self::Editor => "native font size line spacing height caret blink cursor",
-            Self::Notifications => "alert os desktop dismiss sound ntfy channel machine test",
-            Self::History => "days mib scrollback disk",
-            Self::Shortcuts => "keymap command shortcut chord palette",
-            Self::Agents => "preset launcher program arguments new agent session terminal",
-            Self::AgentHooks => "claude codex opencode muse grok cursor install hook test hello",
-            Self::Ssh => "ssh remote host keep-alive keepalive reuse connection timeout",
-            Self::Updates => "sparkle install repair session service",
-        }
-    }
-}
+pub(crate) use super::sections::SettingsSection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BrowseTarget {
@@ -146,7 +72,8 @@ impl App {
     }
 
     pub(crate) fn request_settings_section(&mut self, section: SettingsSection) {
-        if section == self.settings_section || !self.settings_dirty() {
+        let section = section.canonical();
+        if section == self.settings_section.canonical() || !self.settings_dirty() {
             self.settings_section = section;
             return;
         }
@@ -201,59 +128,40 @@ impl App {
         if self.settings_pending.is_none() {
             return;
         }
-        let mut save = false;
-        let mut discard = false;
-        let mut cancel = false;
-        let valid = self.settings_validation().is_ok();
-        self.popups
-            .window(ctx, "Unsaved settings")
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label("You changed settings on this page. Save them before moving on?");
-                ui.horizontal(|ui| {
-                    let save_button = ui.add_enabled(valid, egui::Button::new("Save"));
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), "settings-unsaved-save", save_button.rect);
-                    if save_button.clicked() {
-                        save = true;
-                    }
-                    let discard_button = ui.button("Discard changes");
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), "settings-unsaved-discard", discard_button.rect);
-                    if discard_button.clicked() {
-                        discard = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
-            });
-        if save {
-            self.resolve_settings_pending(true);
-        } else if discard {
-            self.resolve_settings_pending(false);
-        } else if cancel {
-            self.settings_pending = None;
-        }
-    }
-
-    pub(super) fn section_visible(&self, section: SettingsSection) -> bool {
-        settings_controls::matches_search(
-            &self.settings_search,
-            &[section.title(), section.keywords()],
+        let invalid = self.settings_validation().err();
+        let window = self.popups.window(ctx, "Unsaved settings");
+        let dialog = appearance::Confirm::new(
+            "You changed settings on this page. Save them before moving on?",
+            "",
         )
+        .destructive(
+            appearance::ConfirmButton::new("Discard changes").id("settings-unsaved-discard"),
+        )
+        .default_action(
+            appearance::ConfirmButton::new("Save")
+                .id("settings-unsaved-save")
+                .disabled(invalid.as_deref()),
+        );
+        match appearance::confirm(ctx, window, dialog, |_| {}) {
+            Some(appearance::ConfirmAnswer::Default) => self.resolve_settings_pending(true),
+            Some(appearance::ConfirmAnswer::Destructive) => self.resolve_settings_pending(false),
+            Some(appearance::ConfirmAnswer::Cancel) => self.settings_pending = None,
+            None => {}
+        }
     }
 
+    /// A section shows while the search matches its title or one of its
+    /// rows (every word, any order).
+    pub(super) fn section_visible(&self, section: SettingsSection) -> bool {
+        self.settings_search.trim().is_empty()
+            || settings_controls::matches_search(&self.settings_search, &[&section.haystack()])
+    }
+
+    /// A row of the open section shows while the search matches it or the
+    /// section title.
     pub(super) fn field_visible(&self, label: &str, keywords: &str) -> bool {
-        if self.section_visible(self.settings_section)
-            && settings_controls::matches_search(
-                &self.settings_search,
-                &[self.settings_section.title()],
-            )
-            && self.settings_search.trim().is_empty()
-        {
-            return true;
-        }
+        #[cfg(test)]
+        super::settings_tests::seen_row(label, keywords);
         settings_controls::matches_search(
             &self.settings_search,
             &[self.settings_section.title(), label, keywords],

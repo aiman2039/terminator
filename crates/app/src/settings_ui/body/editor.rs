@@ -1,5 +1,7 @@
 //! Settings → Editor: native editor font size, line spacing, caret
-//! blink, rainbow brackets and the JetBrains keymap. Saved with the appearance in `config.toml`.
+//! blink, rainbow brackets, problems, autosave and documentation, and the
+//! JetBrains keymap row of Settings → Keymap. Saved with the appearance in
+//! `config.toml`.
 use crate::*;
 use terminator_core::editor_prefs::{AUTOSAVE_DELAY_MS, Autosave, FONT_SIZE, LINE_SPACING};
 
@@ -18,10 +20,24 @@ const KEYMAP_HELP: &str = if cfg!(target_os = "macos") {
 };
 
 impl App {
-    pub(super) fn editor_settings(&mut self, ui: &mut egui::Ui) {
+    /// Settings → Editor: which editor opens files, then the native
+    /// editor's text and behavior.
+    pub(super) fn editor_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        browse: &mut Option<super::super::state::BrowseTarget>,
+    ) {
         ui.heading("Editor");
-        ui.weak("Native editor text. Apply saves your changes.");
-        ui.add_space(8.0);
+        settings_controls::sub_heading(ui, "Mode");
+        self.editor_mode_settings(ui, browse);
+        settings_controls::sub_heading(ui, "Native editor");
+        self.native_editor_text_rows(ui);
+        self.native_editor_rows(ui);
+        self.editor_save_settings(ui);
+    }
+
+    /// Font size, line spacing, caret and brackets of the native editor.
+    fn native_editor_text_rows(&mut self, ui: &mut egui::Ui) {
         let show = [
             self.field_visible("Font size", "editor text points"),
             self.field_visible("Line spacing", "line height leading"),
@@ -77,12 +93,10 @@ impl App {
                 },
             });
         }
-        self.editor_keymap_setting(ui);
-        self.editor_save_settings(ui);
     }
 
     /// The JetBrains keymap row. The keymap works in the whole app.
-    fn editor_keymap_setting(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn editor_keymap_setting(&mut self, ui: &mut egui::Ui) {
         let keywords = "jetbrains intellij shortcuts keys double shift find action go to file";
         if !self.field_visible("Keymap", keywords) {
             return;
