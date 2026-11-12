@@ -340,18 +340,6 @@ impl App {
         }
     }
 
-    pub(crate) fn workspace_blank(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.3);
-            ui.heading("Your workspace, ready.");
-            ui.label("Open a terminal. Run the tools you already use.");
-            ui.add_space(12.0);
-            if ui.button("Open terminal").clicked() {
-                self.create(None);
-            }
-        });
-    }
-
     /// Pane lookup for the floating window under render, rebuilt every
     /// time (small docks; no cache). Only the window under render may
     /// read these; the main-dock maps are untouched.

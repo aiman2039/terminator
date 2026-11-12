@@ -49,7 +49,7 @@ fn history_tool(h: &Harness, o: &Options, p: &Value) -> Result<()> {
             h,
             opts: o,
             name: "history",
-            actions: waiting(json!([{"target":"tool-History"}])),
+            actions: waiting(json!([{"target":"stripe-tool-History"}])),
             after: 15000,
         },
         |_| prefs(h).is_ok_and(|prefs| prefs.get("tool").is_some_and(|tool| tool == "history")),
@@ -102,7 +102,7 @@ fn git_open(h: &Harness, o: &Options) -> Result<()> {
             h,
             opts: o,
             name: "git-open",
-            actions: waiting(json!([{"target":"tool-Git"},{"target":"git-file-README.md"}])),
+            actions: waiting(json!([{"target":"stripe-tool-Git"},{"target":"git-file-README.md"}])),
             after: 15000,
         },
         |state| {

@@ -40,6 +40,9 @@ pub struct AppearanceConfig {
     pub border_width: f32,
     pub pane_divider_width: f32,
     pub density: Density,
+    /// Interface size: the egui zoom factor for the whole window (1.0 is
+    /// 100 %). Read it through [`Self::interface_scale`].
+    pub ui_scale: f32,
     #[serde(flatten)]
     pub editor: crate::editor_prefs::EditorPrefs,
     #[serde(flatten)]
@@ -85,6 +88,18 @@ impl Default for AppearanceConfig {
     }
 }
 impl AppearanceConfig {
+    /// The interface sizes Settings offers.
+    pub const UI_SCALES: [f32; 5] = [0.9, 1.0, 1.1, 1.25, 1.5];
+
+    /// `ui_scale` kept in 0.75..=2.0; a bad value gives 100 %.
+    #[must_use]
+    pub fn interface_scale(&self) -> f32 {
+        if self.ui_scale.is_finite() {
+            self.ui_scale.clamp(0.75, 2.0)
+        } else {
+            1.0
+        }
+    }
     /// Optional key; saving removes it when unset.
     pub const PRIMARY_KEY: &'static str = "primary";
 
@@ -181,8 +196,39 @@ impl AppearanceConfig {
     pub fn primary_color(&self) -> &str {
         self.primary.as_deref().unwrap_or(&self.accent)
     }
+    /// Set the accent; the selection follows it except in neutral themes.
+    /// A grey selection (channel spread of 12 or less, as in Carbon) stays.
+    /// A light theme mixes 18 % of the accent into `surface`, so text stays
+    /// readable on it. Dark themes keep the dark tint.
     pub fn apply_accent(&mut self, accent: String) {
-        if let Ok([r, g, b]) = rgb(&accent) {
+        let neutral = rgb(&self.selection).is_ok_and(|channels| {
+            let high = channels.iter().max().copied().unwrap_or(0);
+            let low = channels.iter().min().copied().unwrap_or(0);
+            high.saturating_sub(low) <= 12
+        });
+        if neutral {
+            self.accent = accent;
+            return;
+        }
+        if self.is_light()
+            && let (Ok(tint), Ok(base)) = (rgb(&accent), rgb(&self.surface))
+        {
+            let mix = |base: u8, tint: u8| {
+                let value = u32::from(base)
+                    .saturating_mul(82)
+                    .saturating_add(u32::from(tint).saturating_mul(18))
+                    .saturating_add(50)
+                    .checked_div(100)
+                    .unwrap_or(0);
+                u8::try_from(value).unwrap_or(u8::MAX)
+            };
+            self.selection = format!(
+                "#{:02X}{:02X}{:02X}",
+                mix(base[0], tint[0]),
+                mix(base[1], tint[1]),
+                mix(base[2], tint[2])
+            );
+        } else if let Ok([r, g, b]) = rgb(&accent) {
             self.selection = format!(
                 "#{:02X}{:02X}{:02X}",
                 r / 3,

@@ -2,8 +2,10 @@
 //!
 //! Font roles step from [`FONT_BASE`] like `JetBrains` `JBFont` (`small` −2,
 //! `medium` −1, `regular`, `h4` +1, `h3` +3, `h2` +5), so a new base moves
-//! every role together. The UI size is not a user preference: terminal and
-//! editor text sizes are, and they stay outside this scale.
+//! every role together. The user's Interface size (Settings › Appearance)
+//! scales the whole window through the egui zoom factor, so these tokens
+//! stay the only sizes; terminal and editor text sizes are separate
+//! settings and stay outside this scale.
 //! [`apply_text_styles`] registers the roles as egui text styles, so
 //! `ui.heading()`, `RichText::small()`, and `TextStyle::resolve` agree with
 //! the constants. `scale_tests` fails on a literal font size or corner

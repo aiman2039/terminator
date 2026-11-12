@@ -352,7 +352,9 @@ impl App {
             }
             self.error.clear();
             if self.neovim_review_unavailable() {
-                self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
+                self.info = Some(
+                    "Using built-in diff. Neovim review needs the updated session service.".into(),
+                );
             }
             let _ = self.jobs.send(Job::Diff(tab));
             return;

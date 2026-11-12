@@ -248,6 +248,7 @@ impl App {
             structure: crate::sidebar_ui::StructureState::default(),
             worktree_draft: None,
             worktree_remove: None,
+            worktree_remove_check: Default::default(),
             theme: AppearanceConfig::default(),
             terminal_theme: None,
             theme_committed: AppearanceConfig::default(),

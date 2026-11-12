@@ -61,7 +61,9 @@ impl ViewPass<'_> {
         if self.frame.is_markdown {
             self.markdown_toolbar(ui, shown.area);
         }
-        self.problems_panel(ui);
+        // Problems show in the status bar count, the squiggle rail and the
+        // Problems tool window (Cmd+6); a list under the source fell
+        // below the pane.
         self.actions_popup(ui);
         self.gutter_popup(ui, &shown.gutter_hunks);
         self.signature_popup(ui, shown.revision_before);

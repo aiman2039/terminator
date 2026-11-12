@@ -361,39 +361,6 @@ impl App {
     pub(crate) fn confirm_remove_worktree(&mut self, project_id: &str) {
         self.worktree_remove = Some(project_id.into());
     }
-
-    pub(crate) fn worktree_remove_dialog(&mut self, ctx: &egui::Context) {
-        let Some(project_id) = self.worktree_remove.clone() else {
-            return;
-        };
-        let Some(record) = self.managed_worktree(&project_id).cloned() else {
-            self.worktree_remove = None;
-            return;
-        };
-        let name = self
-            .state
-            .projects
-            .iter()
-            .find(|project| project.id == project_id)
-            .map(|project| project.name.clone())
-            .unwrap_or_else(|| "Worktree".into());
-        let window = self.popups.window(ctx, "Remove worktree?");
-        let dialog = appearance::Confirm::new(
-            format!("Remove {name} at {}?", record.path.display()),
-            "Git refuses dirty or locked checkouts. Live sessions must be stopped first. The branch is kept.",
-        )
-        .destructive(appearance::ConfirmButton::new("Remove worktree"));
-        match appearance::confirm(ctx, window, dialog, |_| {}) {
-            Some(appearance::ConfirmAnswer::Destructive) => {
-                self.send(Request::WorktreeRemove {
-                    project: project_id.clone(),
-                });
-                self.worktree_remove = None;
-            }
-            Some(_) => self.worktree_remove = None,
-            None => {}
-        }
-    }
 }
 
 #[cfg(test)]

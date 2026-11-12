@@ -103,7 +103,8 @@ impl SettingsSection {
                  terminal font family monospace nerd powerline cjk fallback font chinese japanese \
                  korean reset color hex interface window surface hover border text main button \
                  primary background foreground git added modified deleted agent status running \
-                 waiting failed width pane divider"
+                 waiting failed width pane divider interface size zoom scale text ui larger \
+                 smaller"
             }
             Self::Terminal => {
                 "shell override zsh bash fish sh font size type terminal type-ahead typeahead \

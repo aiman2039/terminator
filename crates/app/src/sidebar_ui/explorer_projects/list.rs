@@ -182,8 +182,9 @@ impl App {
     }
 
     /// A warning icon and a dim name when the folder is missing, else the
-    /// agent face when a live session runs an agent, else a folder. Live
-    /// agents show as state counters in place of the terminal count.
+    /// project's folder (or chosen icon and color) and name. Live agents
+    /// show as state counters in place of the terminal count; the agent
+    /// brand stays on the session rows.
     fn project_row(&self, ui: &mut egui::Ui, p: &Project, state: (usize, bool)) -> egui::Response {
         let (count, expanded) = state;
         let selected = self.selected.as_ref() == Some(&p.id);
@@ -195,23 +196,6 @@ impl App {
             counters: &counters,
             ..appearance::RowExtras::default()
         };
-        if let Some((brand, agent)) = self.project_agent_face(&p.id) {
-            return appearance::session_row_with(
-                ui,
-                appearance::SessionRowSpec {
-                    label: &p.name,
-                    icon: attention_status_icon(agent),
-                    selected,
-                    trailing: &count.to_string(),
-                    tint: appearance::color(&self.theme.secondary),
-                    icon_tint: Some(state_color(agent, &self.theme)),
-                    spin: agent == AgentState::Running,
-                    subtitle: None,
-                    brand: Some(brand),
-                },
-                extras,
-            );
-        }
         let folder = if expanded { "FolderOpen" } else { "Folder" };
         appearance::project_row_with(
             appearance::ProjectRowInput {

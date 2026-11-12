@@ -21,7 +21,7 @@ use std::time::Duration;
 pub(crate) use tree_rows::ProjectRowInput;
 pub use tree_rows::{
     SESSION_ROW_DETAIL_HEIGHT, SESSION_ROW_HEIGHT, SessionRowSpec, project_row, project_row_with,
-    session_row_spec, session_row_with,
+    session_row_spec,
 };
 
 pub fn target_header(ui: &mut egui::Ui, label: &str, tooltip: &str) {

@@ -152,8 +152,8 @@ mod tests {
         // place, so a row one point short moves two actions into it.
         assert_eq!(header_visible_count(full - 1.0, count), count - 2);
         let three = header_row_width(3, true);
-        assert_eq!(header_visible_count(three, count), 3);
-        assert_eq!(header_visible_count(three - 1.0, count), 2);
+        assert_eq!(header_visible_count(three, 8), 3);
+        assert_eq!(header_visible_count(three - 1.0, 8), 2);
         assert_eq!(header_visible_count(0.0, count), 0);
     }
 

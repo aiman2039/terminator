@@ -535,3 +535,104 @@ fn a_focused_editor_pane_is_marked_but_a_strip_terminal_marks_no_main_pane() {
         "a terminal outside the main dock marks no main pane"
     );
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn a_hidden_caption_button_takes_no_click_but_a_shown_one_does() {
+    let (mut app, ctx, _dir) = fixture();
+    split_pair(&mut app);
+    combined_frame(&mut app, &ctx, vec![]);
+    combined_frame(&mut app, &ctx, vec![]);
+    let split = frame_center(&app, &ctx, "pane-split-horizontal:right");
+    let adds = |app: &App| {
+        app.dock_ops
+            .iter()
+            .filter(|op| matches!(op, DockOp::AddTab { .. }))
+            .count()
+    };
+    // The pointer arrives and presses in one frame: the button was hidden.
+    combined_frame(
+        &mut app,
+        &ctx,
+        vec![egui::Event::PointerMoved(split), frame_press(split, true)],
+    );
+    combined_frame(&mut app, &ctx, vec![frame_press(split, false)]);
+    assert_eq!(adds(&app), 0, "a hidden split button must not split");
+    // Now it shows under the pointer, so a click splits.
+    combined_frame(&mut app, &ctx, vec![frame_press(split, true)]);
+    combined_frame(&mut app, &ctx, vec![frame_press(split, false)]);
+    assert_eq!(adds(&app), 1);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn a_stacked_leaf_shows_its_tab_bar_without_a_second_caption_row() {
+    let (mut app, ctx, _dir) = fixture();
+    split_pair(&mut app);
+    app.state
+        .sessions
+        .push(session_fixture("third", SessionKind::Shell));
+    let surface = app.layouts.get_mut("a").unwrap().main_surface_mut();
+    let right = surface.find_tab(&Tab::Terminal("right".into())).unwrap().0;
+    if let Ok(leaf) = surface.leaf_mut(right) {
+        leaf.tabs.push(Tab::Terminal("third".into()));
+    }
+    for _ in 0..3 {
+        combined_frame(&mut app, &ctx, vec![]);
+    }
+    // The left leaf has one pane: its caption stays.
+    assert!(app.fixture_rect(&ctx, "pane-caption:left").is_some());
+    // The stacked leaf titles its panes on its tab bar.
+    assert!(app.fixture_rect(&ctx, "pane-caption:right").is_none());
+    assert!(app.fixture_rect(&ctx, "pane-caption:third").is_none());
+}
+
+/// Thirteen one-terminal tabs in project `a`, the last one active.
+#[cfg(feature = "test-support")]
+fn many_tabs(app: &mut App) {
+    let tab = |n: usize| crate::workspace::WorkspaceTab {
+        id: format!("g{n}"),
+        name: None,
+        pinned: false,
+        primary: Some(Tab::Terminal(format!("s{n}"))),
+        layout: egui_dock::DockState::new(vec![Tab::Terminal(format!("s{n}"))]),
+    };
+    let mut workspace =
+        Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal("s1".into())]));
+    workspace.tabs = (1..=13).map(tab).collect();
+    workspace.active = "g13".into();
+    for n in 1..=13 {
+        app.state
+            .sessions
+            .push(session_fixture(&format!("s{n}"), SessionKind::Shell));
+    }
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn the_all_tabs_button_stays_in_view_when_tabs_overflow() {
+    let (mut app, ctx, _dir) = fixture();
+    many_tabs(&mut app);
+    for _ in 0..3 {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 120.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.window_header_tabs(ui),
+        );
+        output.textures_delta.clear();
+    }
+    let strip = rect_of(&app, &ctx, "workspace-strip");
+    let all = rect_of(&app, &ctx, "workspace-all-tabs");
+    assert!(app.fixture_rect(&ctx, "tabs-right").is_some(), "overflow");
+    assert!(
+        all.right() <= strip.right() + 0.5,
+        "All tabs {all:?} must fit in the strip {strip:?}"
+    );
+}

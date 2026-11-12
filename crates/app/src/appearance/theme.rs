@@ -317,6 +317,11 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     apply_spacing(&mut style.spacing, theme.compact());
     ctx.set_style_of(egui::Theme::Dark, style);
     ctx.set_theme(egui::Theme::Dark);
+    // Interface size scales every FONT_* and RADIUS_* token together.
+    let scale = theme.interface_scale();
+    if (ctx.zoom_factor() - scale).abs() > f32::EPSILON {
+        ctx.set_zoom_factor(scale);
+    }
 }
 
 fn apply_visuals(visuals: &mut egui::Visuals, theme: &AppearanceConfig) {

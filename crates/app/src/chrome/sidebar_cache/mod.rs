@@ -15,7 +15,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use terminator_core::{AgentState, Notification, Session, TerminalNotice};
+use terminator_core::{Notification, Session, TerminalNotice};
 
 #[derive(PartialEq, Eq)]
 struct Stamp {
@@ -43,7 +43,6 @@ pub(crate) struct Index {
     pub by_project: HashMap<String, Vec<Arc<Session>>>,
     pub terminal_notes: HashMap<String, TerminalNotice>,
     pub live_counts: HashMap<String, usize>,
-    pub faces: HashMap<String, (&'static str, AgentState)>,
     pub worktree_states: HashMap<String, (bool, bool)>,
     /// Live agents per project by hook state (row state counters).
     pub state_counts: HashMap<String, crate::agent_presence::StateCounts>,

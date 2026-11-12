@@ -97,12 +97,34 @@ fn disabled_control_waits_until_enabled_before_fixture_click() {
     let mut input = egui::RawInput::default();
     diagnostics.input(&ctx, &mut input);
     assert_eq!(diagnostics.actions_completed(), 1);
-    assert!(
-        input
-            .events
-            .iter()
-            .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
-    );
+    // The pointer arrives on this frame and presses on the next.
+    assert!(!pressed(&input));
+    let mut input = egui::RawInput::default();
+    diagnostics.input(&ctx, &mut input);
+    assert!(pressed(&input));
+}
+
+fn pressed(input: &egui::RawInput) -> bool {
+    input
+        .events
+        .iter()
+        .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+}
+
+#[test]
+fn a_moved_pointer_presses_one_frame_later_and_a_still_one_at_once() {
+    let ctx = egui::Context::default();
+    let mut diagnostics = waiting_script(serde_json::json!([
+        {"at_ms":0,"target":"Save and close"},
+        {"at_ms":0,"target":"Save and close"}
+    ]));
+    let mut frames = Vec::new();
+    for _ in 0..6 {
+        frames.push(frame_with_button(&ctx, &mut diagnostics, 0.0));
+    }
+    // Move, press, release, then the second click at the same place.
+    assert_eq!(frames, [false, true, false, true, false, false]);
+    assert_eq!(diagnostics.actions_completed(), 2);
 }
 
 #[test]
@@ -224,8 +246,9 @@ fn waiting_action_fires_when_target_holds_still_not_at_its_time() {
     ]));
     assert!(!frame_with_button(&ctx, &mut diagnostics, 0.0));
     assert!(!frame_with_button(&ctx, &mut diagnostics, 0.0));
-    assert!(frame_with_button(&ctx, &mut diagnostics, 0.0));
+    assert!(!frame_with_button(&ctx, &mut diagnostics, 0.0));
     assert_eq!(diagnostics.actions_completed(), 1);
+    assert!(frame_with_button(&ctx, &mut diagnostics, 0.0));
 }
 
 #[test]
@@ -238,6 +261,8 @@ fn moving_target_restarts_the_stability_wait() {
         assert!(!frame_with_button(&ctx, &mut diagnostics, offset));
     }
     assert!(!frame_with_button(&ctx, &mut diagnostics, 40.0));
+    assert!(!frame_with_button(&ctx, &mut diagnostics, 40.0));
+    assert_eq!(diagnostics.actions_completed(), 1);
     assert!(frame_with_button(&ctx, &mut diagnostics, 40.0));
 }
 
