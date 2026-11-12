@@ -4,6 +4,7 @@ pub(super) mod git_log;
 pub(super) mod local_history;
 pub(super) mod merge;
 mod preview_tab;
+mod pull_request;
 pub(super) mod revision_compare;
 mod task_form;
 pub(super) mod worktree_stats;
@@ -16,4 +17,6 @@ pub(crate) struct GitExtras {
     pub(crate) preview: preview_tab::Preview,
     /// A branch action waiting for its name or confirmation.
     pub(crate) dialog: Option<branch_ui::PendingBranchDialog>,
+    /// The Git panel's PR tab.
+    pub(crate) pull_request: pull_request::PrPanel,
 }

@@ -123,6 +123,8 @@ pub enum GitTab {
     Stash,
     /// The commit log.
     History,
+    /// The current branch's pull request (read only); `App` paints it.
+    PullRequest,
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -298,6 +300,8 @@ impl GitPanelPass<'_, '_> {
         match self.input.tab {
             GitTab::History => self.history(ui),
             GitTab::Stash => self.stash_tab(ui),
+            // Painted after the panel by `App::pull_request_tab`.
+            GitTab::PullRequest => {}
             GitTab::Commit => {
                 git_actions(GitActionsInput {
                     ui,

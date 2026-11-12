@@ -20,6 +20,7 @@ pub(crate) use commit::{
 };
 use entries::*;
 use pr::create_pr;
+pub(crate) use pr::review_cli;
 use vcs::*;
 
 use anyhow::{Context, Result, bail, ensure};

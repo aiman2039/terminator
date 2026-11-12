@@ -4,7 +4,7 @@ use super::*;
 
 /// Which CLI creates the review for a remote URL: GitLab hosts use `glab`,
 /// every other host uses `gh`.
-pub(super) fn review_cli(remote: &str) -> &'static str {
+pub(crate) fn review_cli(remote: &str) -> &'static str {
     let host = crate::git_log::remote_host(remote).unwrap_or_default();
     if host.contains("gitlab") {
         "glab"

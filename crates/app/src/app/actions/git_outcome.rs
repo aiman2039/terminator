@@ -12,9 +12,11 @@ const COMMIT_HISTORY_LIMIT: usize = 20;
 impl App {
     pub(crate) fn perform_git_outcome(
         &mut self,
-        ui: &egui::Ui,
+        ui: &mut egui::Ui,
         mut outcome: sidebar_ui::GitPanelOutcome,
     ) {
+        // The PR tab body paints under the panel header with app state.
+        self.pull_request_tab(ui);
         self.git_outcome_views(ui, &mut outcome);
         self.git_outcome_commits(&mut outcome);
         self.git_outcome_index(&mut outcome);

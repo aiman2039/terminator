@@ -12,7 +12,7 @@ mod labels;
 mod tests;
 mod three_way;
 
-pub(crate) use io::{MergeTab, MergeTabs, take_done};
+pub(crate) use io::{Done, MergeTab, MergeTabs, take_done};
 pub(crate) use labels::SideLabels;
 pub(crate) use three_way::ChunkKind;
 
