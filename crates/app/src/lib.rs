@@ -80,6 +80,7 @@ mod clipboard;
 pub(crate) mod diff;
 mod gui_services;
 mod perforce;
+mod tasks;
 pub use app::app_state::App;
 pub(crate) use app::app_state::{inventory_is_stale, observation_is_stale};
 pub(crate) use app::frame::RepaintProbe;

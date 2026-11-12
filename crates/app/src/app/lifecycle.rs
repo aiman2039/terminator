@@ -258,6 +258,7 @@ impl App {
             fonts: crate::appearance::fonts::FontState::default(),
             hook_status: HashMap::new(),
             installed_agents: Vec::new(),
+            tasks: crate::tasks::TaskState::default(),
             detail: None,
             close_session: None,
             popups: popup::Popups::default(),

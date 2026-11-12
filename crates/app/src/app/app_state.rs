@@ -263,6 +263,8 @@ pub struct App {
     pub(crate) hook_status: HashMap<String, bool>,
     /// Catalog agents on PATH, for the agent launchers.
     pub(crate) installed_agents: Vec<crate::agent_launch::InstalledAgent>,
+    /// Run task window and the last task run.
+    pub(crate) tasks: crate::tasks::TaskState,
     pub(crate) detail: Option<String>,
     pub(crate) close_session: Option<String>,
     pub(crate) popups: popup::Popups,

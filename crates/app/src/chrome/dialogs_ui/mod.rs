@@ -57,6 +57,7 @@ impl App {
         self.ask_agent_dialog(ctx);
         self.init_command_dialog(ctx);
         self.missing_offer_dialog(ctx);
+        self.task_dialog(ctx);
     }
 
     fn restart_confirm_dialog(&mut self, ctx: &egui::Context) {

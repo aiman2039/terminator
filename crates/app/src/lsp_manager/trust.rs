@@ -20,6 +20,16 @@ impl LspManager {
         self.trust_asks.retain(|asked| asked != root);
     }
 
+    /// The saved answer for one folder, if any. Tasks from a project's
+    /// `.terminator/tasks.toml` use the same answers.
+    #[must_use]
+    pub fn trust_answer(&self, root: &Path) -> Option<bool> {
+        if self.trust_all {
+            return Some(true);
+        }
+        self.trust.get(root).copied()
+    }
+
     /// Project root waiting for a trust answer for this buffer, if any.
     #[must_use]
     pub fn trust_request_for(&self, path: &Path) -> Option<&Path> {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Tasks: Run task… (Find Action, project menu) lists named commands from `.terminator/tasks.toml` in the project and from `tasks.toml` next to `config.toml`, and Rerun last task runs the last one again. A Run opens a new terminal in the project and runs the command; a command that names an agent, or a task with `enter = false`, is only typed. Project task files wait for the project trust answer.
 - Native editor language servers for Go (gopls), C/C++ (clangd), Java (jdtls), Lua (lua-language-server), Bash (bash-language-server), Ruby (ruby-lsp) and PHP (intelephense), and user-defined servers in Settings → Languages (file types, command, arguments). Nothing is bundled or downloaded; a missing server shows its install command, and every server still waits for the project trust answer.
 - Mermaid edge labels fill with the pane color (no gray box; dark panes use the dark theme), Mermaid files show no word counts, numeric CSV/TSV columns are right-aligned, the status bar says "1 session running", and the Resume chip shows "Resume ?" (no Enter) when presence is unverified.
 - Sessions, tabs and projects: multi-select session rows (tile, move, close),
