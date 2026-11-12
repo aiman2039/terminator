@@ -7,6 +7,9 @@ pub(super) mod merge;
 pub(super) mod revision_compare;
 pub(super) mod task_changes;
 mod task_form;
+#[cfg(test)]
+#[cfg(feature = "test-support")]
+mod task_form_tests;
 mod task_page;
 #[cfg(test)]
 mod task_tests;

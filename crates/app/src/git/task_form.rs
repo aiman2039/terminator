@@ -56,12 +56,19 @@ pub(super) fn task_name(ui: &mut egui::Ui, draft: &mut WorktreeDraft, source: Op
     settings_controls::settings_row(settings_controls::SettingsRowInput {
         ui,
         label: "Task name",
-        description: "Sets the branch name and the destination.",
+        description: "Names the branch and the folder.",
         add_control: |ui| {
-            let field = appearance::singleline(&mut draft.task)
-                .hint_text("fix-login")
-                .desired_width(260.0);
-            if ui.add(field).changed()
+            let field = ui.add(
+                appearance::singleline(&mut draft.task)
+                    .hint_text("fix-login")
+                    .desired_width(360.0),
+            );
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "worktree-task-name", field.rect);
+            if std::mem::take(&mut draft.focus_name) {
+                field.request_focus();
+            }
+            if field.changed()
                 && let Some(path) = source
             {
                 draft.set_task(path);
@@ -70,27 +77,70 @@ pub(super) fn task_name(ui: &mut egui::Ui, draft: &mut WorktreeDraft, source: Op
     });
 }
 
-/// Agent command (only with a terminal) and Browser URL rows. The combo box
-/// fills the command from a preset or an installed agent.
-pub(super) fn task_extras(
+/// The agent command row. The combo box fills the command from a preset
+/// or an installed agent. The command is typed, never sent.
+pub(super) fn agent_row(
     ui: &mut egui::Ui,
     draft: &mut WorktreeDraft,
     launchers: &[crate::agent_launch::AgentLauncher],
 ) {
-    if draft.open_terminal {
-        settings_controls::settings_row(settings_controls::SettingsRowInput {
+    settings_controls::settings_row(settings_controls::SettingsRowInput {
+        ui,
+        label: "Agent",
+        description: "Typed into the new terminal. Press Enter there to start it.",
+        add_control: |ui| {
+            ui.add(
+                appearance::singleline(&mut draft.agent_command)
+                    .hint_text("claude")
+                    .desired_width(260.0),
+            );
+            agent_choice(ui, &mut draft.agent_command, launchers);
+        },
+    });
+}
+
+/// One line with what the task makes (branch, start, folder) and the
+/// Advanced toggle that shows the rows to change them.
+pub(super) fn summary_line(ui: &mut egui::Ui, draft: &mut WorktreeDraft, source: &str) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let folder = draft.dest.file_name().unwrap_or_default().to_string_lossy();
+        ui.add(egui::Label::new(task_summary(draft, source, &folder)).truncate());
+        let (icon, tip) = if draft.advanced {
+            ("ChevronDown", "Hide the branch, start, folder and extras")
+        } else {
+            (
+                "ChevronRight",
+                "Change the branch, start, folder and extras",
+            )
+        };
+        let toggle = appearance::icon_label_button(appearance::IconLabelButtonInput {
             ui,
-            label: "Agent command",
-            description: "Typed into the terminal. Press Enter there to start it.",
-            add_control: |ui| {
-                ui.add(
-                    appearance::singleline(&mut draft.agent_command)
-                        .hint_text("claude")
-                        .desired_width(260.0),
-                );
-                agent_choice(ui, &mut draft.agent_command, launchers);
-            },
-        });
+            icon,
+            label: "Advanced",
+            height: appearance::TOOLBAR_BUTTON,
+        })
+        .on_hover_text(tip);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "worktree-advanced", toggle.rect);
+        if toggle.clicked() {
+            draft.advanced = !draft.advanced;
+        }
+    });
+}
+
+/// `terminator/fix-login from HEAD of webapp in terminator-fix-login`.
+pub(crate) fn task_summary(draft: &WorktreeDraft, source: &str, folder: &str) -> String {
+    format!(
+        "{} from {} of {source} in {folder}",
+        draft.branch.trim(),
+        draft.start.trim()
+    )
+}
+
+/// Setup command (only with a terminal) and Browser URL rows.
+pub(super) fn task_extras(ui: &mut egui::Ui, draft: &mut WorktreeDraft) {
+    if draft.open_terminal {
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label: "Setup command",

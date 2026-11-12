@@ -61,7 +61,7 @@ impl App {
         if !has_worktrees && self.worktree_draft.is_none() {
             ui.weak("No worktrees yet.");
             ui.add_space(8.0);
-            if ui.button("Create a worktree").clicked() {
+            if ui.button("New task…").clicked() {
                 self.open_worktree_wizard();
             }
             return;
@@ -74,7 +74,7 @@ impl App {
         self.worktree_list(ui, list_h);
         ui.separator();
         ui.horizontal(|ui| {
-            if self.worktree_draft.is_none() && ui.button("New worktree").clicked() {
+            if self.worktree_draft.is_none() && ui.button("New task…").clicked() {
                 self.open_worktree_wizard();
             }
         });

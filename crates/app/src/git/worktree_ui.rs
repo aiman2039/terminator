@@ -29,17 +29,28 @@ fn destination(ui: &mut egui::Ui, draft: &mut WorktreeDraft) -> bool {
     ui.button("Browse…").clicked()
 }
 
-/// Returns `(create, cancel)` clicks.
+/// Create is possible: a task name, a branch and a start, and no
+/// submission still running (one at a time).
+pub(crate) fn can_create(draft: &WorktreeDraft) -> bool {
+    !draft.submitting
+        && !draft.task.trim().is_empty()
+        && !draft.branch.trim().is_empty()
+        && !draft.start.trim().is_empty()
+}
+
+/// Returns `(create, cancel)` clicks. Right to left in the footer: the
+/// primary Create task is the rightmost button.
 fn form_buttons(ui: &mut egui::Ui, draft: &WorktreeDraft) -> (bool, bool) {
-    // One submission at a time: Create stays off until it answers.
-    let create = ui.add_enabled(
-        !draft.submitting && !draft.branch.trim().is_empty() && !draft.start.trim().is_empty(),
-        egui::Button::new(if draft.submitting {
-            "Creating…"
-        } else {
-            "Create worktree"
-        }),
-    );
+    let label = if draft.submitting {
+        "Creating…"
+    } else {
+        "Create task"
+    };
+    let create = ui
+        .add_enabled_ui(can_create(draft), |ui| {
+            appearance::primary_button(ui, label)
+        })
+        .inner;
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), "worktree-create", create.rect);
     let create = create.clicked();
@@ -77,6 +88,10 @@ pub(crate) struct WorktreeDraft {
     pub id: u64,
     /// A Create of this draft is running.
     pub submitting: bool,
+    /// The Advanced rows are shown.
+    pub advanced: bool,
+    /// Give the task name field keyboard focus on the next frame.
+    pub focus_name: bool,
 }
 
 /// A new draft ID; never 0, the ID of a default draft.
@@ -197,6 +212,8 @@ impl App {
                 .unwrap_or_default(),
             id: next_draft_id(),
             submitting: false,
+            advanced: false,
+            focus_name: true,
         };
         // `git rev-parse` runs on a worker; the form opens when it answers.
         let _ = self
@@ -229,7 +246,7 @@ impl App {
         let ((), dismissed) = appearance::center_card(ui, style, |ui| {
             ui.set_min_size(ui.available_size());
             ui.horizontal(|ui| {
-                ui.strong("New task worktree");
+                ui.strong("New task");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if appearance::sidebar_action(ui, "X", "Close").clicked() {
                         cancel = true;
@@ -274,9 +291,7 @@ impl App {
             browse,
             cancel,
         } = input;
-        ui.weak(
-            "Creates an isolated git checkout as a new project. You start agents in its terminal.",
-        );
+        ui.weak("Makes a Git worktree and a terminal. The command is typed; you press Enter.");
         ui.add_space(8.0);
         let source = self
             .state
@@ -285,15 +300,23 @@ impl App {
             .find(|project| project.id == draft.source);
         let source_name = source.map_or_else(|| "Project".into(), |project| project.name.clone());
         let source_path = source.map(|project| project.path.clone());
-        settings_controls::settings_row(settings_controls::SettingsRowInput {
-            ui,
-            label: "Source project",
-            description: "Must already be a git checkout.",
-            add_control: |ui| {
-                ui.label(source_name);
-            },
-        });
         super::task_form::task_name(ui, draft, source_path.as_deref());
+        if draft.open_terminal {
+            super::task_form::agent_row(ui, draft, &self.agent_launchers());
+        }
+        super::task_form::summary_line(ui, draft, &source_name);
+        if draft.advanced {
+            self.advanced_rows(ui, draft, browse);
+        }
+        ui.add_space(8.0);
+        let (create, close) = appearance::footer_row(ui, |ui| form_buttons(ui, draft));
+        *submit |= create;
+        *cancel |= close;
+    }
+
+    /// The rows behind Advanced: where the worktree starts and lives, the
+    /// terminal, the setup command and the Browser URL.
+    fn advanced_rows(&self, ui: &mut egui::Ui, draft: &mut WorktreeDraft, browse: &mut bool) {
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label: "Start from",
@@ -322,17 +345,7 @@ impl App {
             &mut draft.open_terminal,
             "Create a terminal in the new project",
         );
-        super::task_form::task_extras(ui, draft, &self.agent_launchers());
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let (create, close) = form_buttons(ui, draft);
-            if create {
-                *submit = true;
-            }
-            if close {
-                *cancel = true;
-            }
-        });
+        super::task_form::task_extras(ui, draft);
     }
 
     /// Sends the draft once; it stays `submitting` until its reply
