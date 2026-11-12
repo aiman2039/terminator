@@ -149,6 +149,8 @@ pub(crate) enum After {
     Text(String),
     /// Shell integration blocks for this session.
     CommandBlocks(String),
+    /// Restore workspace: the new shell replaces this interrupted session.
+    Restore(String),
 }
 pub(crate) enum Job {
     PrepareLayouts(u64, Vec<(String, Workspace)>),
@@ -432,6 +434,8 @@ pub(crate) enum Update {
     WorkspaceCreated(Session, String, Vec<Tab>),
     StripCreated(Session, Option<String>, Vec<Tab>),
     FloatCreated(Session, egui::ViewportId, Option<String>, Vec<Tab>),
+    /// A restored shell and the interrupted session it replaces.
+    Restored(Session, String),
     Text(String, String),
     CommandBlocks(String, Vec<terminator_core::command_blocks::CommandBlock>),
     /// A Text or CommandBlocks request failed: clear its `loading` key.

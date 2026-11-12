@@ -377,7 +377,3 @@ pub(super) fn paint_header_count(input: PaintHeaderCountInput<'_>) {
 const BADGE_FONT: f32 = appearance::FONT_CAPTION;
 
 pub(super) const ATTENTION_ACTION_SIZE: f32 = 22.0;
-
-pub(super) const ATTENTION_ACTION_COUNT: f32 = 4.0;
-
-pub(super) const ATTENTION_ACTION_READ_COUNT: f32 = 5.0;

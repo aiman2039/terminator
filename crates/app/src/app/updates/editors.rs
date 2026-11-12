@@ -25,6 +25,7 @@ impl App {
     pub(super) fn handle_text(&mut self, key: String, text: String) {
         self.loading.remove(&key);
         self.texts.insert(key, text);
+        self.continue_restores();
     }
 
     /// A History or CommandBlocks request failed. Store a terminal result
@@ -38,6 +39,7 @@ impl App {
             self.texts
                 .insert(key, format!("Could not load scrollback: {error}"));
         }
+        self.continue_restores();
         self.handle_error(error);
     }
 

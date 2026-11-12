@@ -189,6 +189,36 @@ pub const CATALOG: &[AgentInfo] = &[
         exes: &["cursor-agent"],
         entrypoints: &[],
     },
+    // No brand glyph is bundled for these: they use the generic icon.
+    // Node CLIs run as `node <bin path>`, so the bin name is the entrypoint.
+    AgentInfo {
+        kind: "gemini",
+        name: "Gemini CLI",
+        icon: GENERIC_ICON,
+        exes: &["gemini"],
+        entrypoints: &["gemini"],
+    },
+    AgentInfo {
+        kind: "copilot",
+        name: "Copilot CLI",
+        icon: GENERIC_ICON,
+        exes: &["copilot"],
+        entrypoints: &["copilot"],
+    },
+    AgentInfo {
+        kind: "droid",
+        name: "Factory Droid",
+        icon: GENERIC_ICON,
+        exes: &["droid"],
+        entrypoints: &[],
+    },
+    AgentInfo {
+        kind: "qwen",
+        name: "Qwen Code",
+        icon: GENERIC_ICON,
+        exes: &["qwen"],
+        entrypoints: &["qwen"],
+    },
 ];
 
 /// Generic fallback for custom hook agents and multi-agent terminals.

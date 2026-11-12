@@ -117,6 +117,7 @@ pub fn hello_events(session: &str) -> Vec<HookEvent> {
             details: "hello".into(),
             resume: None,
             process: None,
+            usage: None,
         })
         .collect()
 }

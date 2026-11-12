@@ -306,6 +306,7 @@ impl App {
             self.open_task_picker();
             ui.close();
         }
+        self.restore_workspace_item(ui, &p.id);
         if self.has_worktrees() || self.has_project_init() {
             ui.separator();
         }

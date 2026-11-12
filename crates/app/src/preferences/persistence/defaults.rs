@@ -36,6 +36,7 @@ impl Default for UiPreferences {
             agents_filter: String::new(),
             agents_state: AgentStateFilter::All,
             agents_collapsed: HashSet::new(),
+            pinned_agent_sessions: HashSet::new(),
             show_ignored: false,
             explorer_autoreveal: false,
             explorer_flat_folders: false,

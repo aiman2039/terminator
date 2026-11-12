@@ -148,8 +148,11 @@ impl App {
     /// The existing inbox: pending notifications plus terminal notices.
     pub(super) fn agents_needs_attention(&mut self, ui: &mut egui::Ui) {
         let index = self.sidebar_index();
-        let notices = &index.pending_groups;
+        let notices = self.pinned_first(&index.pending_groups, |group| {
+            group.notices.first().map(|n| n.session_id.as_str())
+        });
         let terminal_notices = &index.terminal_pending;
+        self.triage_undo_bar(ui);
         appearance::sidebar_scroll("agents").show(ui, |ui| {
             if notices.is_empty() && terminal_notices.is_empty() {
                 self.agents_empty(ui);
@@ -202,6 +205,7 @@ impl App {
         let selected = self.active_session.as_ref() == Some(&notice.session_id);
         let presented = self.present_session(&notice.session_id);
         let history = self.notice_history_brand(notice);
+        let usage = self.agent_usage_chips(&notice.session_id);
         let brand_icon = history
             .as_ref()
             .map(|(icon, _)| *icon)
@@ -228,6 +232,9 @@ impl App {
                 brand_icon,
                 brand_label,
                 show_read,
+                pinned: self.session_pinned(&notice.session_id),
+                triage: self.triage_available(),
+                usage: &usage,
                 group_extra: group.notices.get(1..).unwrap_or(&[]),
             },
             project,
@@ -334,7 +341,10 @@ impl App {
                 ui.weak("No unread agent events");
                 return;
             }
-            for group in notices.iter() {
+            let ordered = self.pinned_first(&notices, |group| {
+                group.notices.first().map(|n| n.session_id.as_str())
+            });
+            for group in ordered {
                 let Some(notice) = group.notices.first() else {
                     continue;
                 };
