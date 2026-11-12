@@ -50,6 +50,9 @@ pub(crate) struct GitPanelState {
     pub(crate) perforce: crate::perforce::RunSlot,
     /// Fetch, Pull or Push in flight, one per repository.
     pub(crate) sync: workspace_ops::SyncSlots,
+    /// The last `HEAD` read for a repository root; Blame and File History
+    /// reload when it moves.
+    pub(crate) head: Option<(PathBuf, String)>,
 }
 
 /// A commit (and push) job in flight.

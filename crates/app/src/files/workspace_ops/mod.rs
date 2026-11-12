@@ -105,6 +105,9 @@ pub enum Op {
     Branch(BranchOp),
     /// Fetch, Pull or Push: a cancellable job with a 5-minute cap.
     SyncRun(SyncRun),
+    /// The full hash of `HEAD` (read-only): open Blame and File History
+    /// views reload when it moves.
+    Head,
 }
 
 impl Op {
@@ -138,7 +141,8 @@ impl Op {
             | Self::Rename { .. }
             | Self::Move { .. }
             | Self::Copy { .. }
-            | Self::Reveal(_) => CommitRisk::None,
+            | Self::Reveal(_)
+            | Self::Head => CommitRisk::None,
         }
     }
 }
@@ -232,6 +236,10 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         Op::Rename { from, to } => rename(root, &from, &to),
         Op::Reveal(path) => reveal_entry(root, &path),
         Op::Branch(op) => branch::perform(root, &op),
+        Op::Head => Ok(Report::Revision(git_text(
+            root,
+            &["rev-parse", "--verify", "--quiet", "HEAD"],
+        )?)),
     }
 }
 

@@ -196,6 +196,7 @@ impl App {
         // HEAD may have moved (commit, checkout): gutter
         // bases re-read on their next paint.
         self.git_base_generation = self.git_base_generation.wrapping_add(1);
+        self.check_head_for_git_views();
         self.watch_fallback = fallback;
         for (path, entries) in directories {
             if path == root
@@ -245,6 +246,10 @@ impl App {
             return;
         }
         if self.long_run_cancelled(root, &op, &result) {
+            return;
+        }
+        if let workspace_ops::Op::Head = op {
+            self.head_read(root, result);
             return;
         }
         if crate::revision_compare::answers(&op) {
