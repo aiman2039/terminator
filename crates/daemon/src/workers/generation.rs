@@ -4,7 +4,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use terminator_core::{Paths, Request, generations};
+use terminator_core::{Paths, Request, generations, runtime_dir};
 
 use crate::server::{Shared, relock};
 
@@ -32,6 +32,7 @@ impl GenerationWorker {
                     .checked_sub(Duration::from_secs(30))
                     .unwrap_or_else(Instant::now),
             };
+            let mut kept_alive = Instant::now();
             loop {
                 thread::sleep(Duration::from_secs(1));
                 let Some(shared) = weak.upgrade() else {
@@ -47,6 +48,10 @@ impl GenerationWorker {
                 }
                 if let Err(error) = worker.tick(&shared) {
                     shared.degraded(&format!("Generation maintenance: {error:#}"));
+                }
+                if kept_alive.elapsed() >= runtime_dir::KEEP_ALIVE_INTERVAL {
+                    kept_alive = Instant::now();
+                    keep_runtime_files(&shared);
                 }
             }
         });
@@ -125,6 +130,17 @@ impl GenerationWorker {
         {
             let _ = generations::recover_exited(root, other);
         }
+    }
+}
+
+/// The OS temp cleaner deletes untouched runtime files. Without `auth`
+/// clients cannot reach this daemon, so restore it and keep the locks
+/// fresh. Best effort: a later pass retries.
+fn keep_runtime_files(shared: &Shared) {
+    let _ = runtime_dir::keep_token(&shared.paths.auth(), &shared.auth);
+    let _ = runtime_dir::touch(&shared.paths.runtime.join("daemon.lock"));
+    if let Some(root) = &shared.catalog_paths {
+        let _ = runtime_dir::touch(&root.runtime.join("daemon.lock"));
     }
 }
 

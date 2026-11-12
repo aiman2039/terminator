@@ -21,7 +21,7 @@ mod model;
 pub mod recovery;
 pub mod remote;
 pub mod remote_apps;
-mod runtime_dir;
+pub mod runtime_dir;
 pub mod signals;
 pub mod snapshot;
 pub mod ssh;
