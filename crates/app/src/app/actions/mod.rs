@@ -333,9 +333,10 @@ impl App {
                 path,
                 staged,
             };
-            if self.focus_file_view(&project, &tab) {
+            if self.focus_file_view(&project, &tab) || self.reuse_preview_diff(&project, &tab) {
                 return;
             }
+            self.note_new_diff_tab(&project, &tab);
             self.layouts
                 .entry(project)
                 .or_insert_with(Workspace::empty)

@@ -44,9 +44,40 @@ fn git_base_ref_contents(
     }
 }
 
-/// The ⋮ menu: commit log, base ref, and branch compare refresh.
+/// The ⋮ menu: Fetch, Pull, Push, commit log, base ref, and branch
+/// compare refresh.
 fn git_more_menu(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut GitPanelOutcome) {
     let more = appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
+        super::branch_menu::sync_items(ui, input.commit_lock.head, outcome);
+        ui.separator();
+        // The header has no room for a fourth tab at the default width.
+        let pr = appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Pull request",
+            icon: "ExternalLink",
+            shortcut: if input.tab == GitTab::PullRequest {
+                "✓"
+            } else {
+                ""
+            },
+        });
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "git-pull-request", pr.rect);
+        if pr.clicked() {
+            outcome.tab = Some(GitTab::PullRequest);
+            ui.close();
+        }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Draft commit message with agent…",
+            icon: "Pencil",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            outcome.draft_message = true;
+            ui.close();
+        }
         let log = appearance::menu_item(appearance::MenuItemInput {
             ui,
             label: "View commit log",
@@ -315,6 +346,7 @@ fn git_branch_items(
             ui.close();
         }
     }
+    super::branch_menu::branch_actions(ui, input, branch_name, outcome);
 }
 
 /// One toolbar icon, recorded for fixtures under `target`.

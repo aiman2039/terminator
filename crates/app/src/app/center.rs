@@ -281,6 +281,7 @@ impl App {
         self.paint_zoom(ui.ctx(), outer, &project);
         self.layouts.insert(project.clone(), dock);
         self.drain_pending_git_tabs();
+        self.follow_preview_replacement();
         self.apply_diff_replacement();
         if self.pending_layout_save {
             self.pending_layout_save = false;
