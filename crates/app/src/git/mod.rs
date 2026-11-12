@@ -33,4 +33,6 @@ pub(crate) struct GitExtras {
     pub(crate) pull_request: pull_request::PrPanel,
     /// The Worktrees page: probes, ticks and Apply to source.
     pub(crate) cleanup: worktree_cleanup::Cleanup,
+    /// Data of `CenterPage::LastTurn`.
+    pub(crate) last_turn: Option<local_history::turn::LastTurn>,
 }

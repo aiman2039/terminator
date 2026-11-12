@@ -277,6 +277,11 @@ impl NativeDoc {
         }
     }
 
+    /// A load or save runs: the buffer's relation to the disk is unknown.
+    pub(crate) fn busy(&self) -> bool {
+        self.loading || self.saving
+    }
+
     /// Unsaved changes: the text differs from the saved text, or a
     /// pending encoding / line-break conversion. Typing costs O(1): only
     /// an edit that restores the saved length hashes the buffer.

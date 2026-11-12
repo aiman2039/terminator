@@ -43,6 +43,7 @@ impl App {
             CenterPage::TaskChanges => self.task_changes_center(ui),
             CenterPage::Welcome => self.welcome_center(ui),
             CenterPage::WhatsNew => self.whats_new_center(ui),
+            CenterPage::LastTurn => self.last_turn_center(ui),
         }
         false
     }

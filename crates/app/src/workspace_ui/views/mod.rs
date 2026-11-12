@@ -8,6 +8,7 @@ mod commit_graph;
 #[cfg(test)]
 mod commit_graph_tests;
 mod commit_log;
+mod last_turn;
 mod local_history;
 mod log_filters;
 mod revisions;

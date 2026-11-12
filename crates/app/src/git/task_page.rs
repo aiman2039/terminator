@@ -132,6 +132,11 @@ impl App {
                 self.task_changes = Some(page);
             }
             PageAction::Close => self.hide_center_overlay(),
+            PageAction::Uncommitted => {
+                self.hide_center_overlay();
+                self.open_changes_diff(false);
+            }
+            PageAction::LastTurn(session) => self.open_last_turn(session),
             PageAction::None if dismissed => self.hide_center_overlay(),
             PageAction::None => self.task_changes = Some(page),
         }
@@ -157,6 +162,9 @@ impl App {
             page.label,
             short_hash(&page.base)
         ));
+        if let Some(scope) = self.task_scope_row(ui, &page.worktree) {
+            action = scope;
+        }
         ui.add_space(8.0);
         match &page.files {
             None => {
@@ -177,6 +185,29 @@ impl App {
                 }
             }
         }
+        action
+    }
+
+    /// Scope: Uncommitted, Since task start (this page), and Last turn when
+    /// the daemon delimits turns and an agent ran in the worktree.
+    fn task_scope_row(&self, ui: &mut egui::Ui, worktree: &Path) -> Option<PageAction> {
+        let project = self.state.projects.iter().find(|p| p.path == worktree);
+        let turn = project
+            .filter(|_| self.last_turn_supported())
+            .and_then(|p| self.last_turn_session(Some(&p.id)));
+        let mut action = None;
+        ui.horizontal(|ui| {
+            ui.weak("Scope");
+            if ui.selectable_label(false, "Uncommitted").clicked() {
+                action = Some(PageAction::Uncommitted);
+            }
+            let _ = ui.selectable_label(true, "Since task start");
+            if let Some(session) = turn
+                && ui.selectable_label(false, "Last turn").clicked()
+            {
+                action = Some(PageAction::LastTurn(session));
+            }
+        });
         action
     }
 
@@ -232,6 +263,8 @@ enum PageAction {
     Open(PathBuf),
     Reload,
     Close,
+    Uncommitted,
+    LastTurn(String),
 }
 
 /// The first 8 characters of a commit hash.

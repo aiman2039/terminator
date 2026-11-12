@@ -23,7 +23,8 @@ impl Request {
             Self::RemoteAppsConnect { .. } => 40,
             Self::VncFrame { .. }
             | Self::CloseIdleSessions { .. }
-            | Self::LocalHistoryRevert { .. } => 30,
+            | Self::LocalHistoryRevert { .. }
+            | Self::LocalHistoryTurn { .. } => 30,
             // Writing the OS keychain can wait on a macOS permission prompt.
             Self::VncProfileSave { .. } | Self::VncForgetCredential { .. } => 120,
             _ => 3,
@@ -107,6 +108,7 @@ impl Request {
             Self::LocalHistoryPage { .. } => "LocalHistoryPage",
             Self::NtfyToken { .. } => "NtfyToken",
             Self::CreateRestored { .. } => "CreateRestored",
+            Self::LocalHistoryTurn { .. } => "LocalHistoryTurn",
         }
     }
 }

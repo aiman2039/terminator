@@ -261,6 +261,7 @@ impl App {
             | Action::CopyLastOutput => self.run_terminal_action(ctx, action),
             Action::HintsMode => self.toggle_hints_mode(),
             Action::CopyMode => self.toggle_copy_mode(),
+            Action::ReviewLastTurn => self.review_last_turn(),
         }
     }
 

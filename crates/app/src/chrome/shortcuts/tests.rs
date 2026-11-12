@@ -235,6 +235,8 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
     // for them are rare in both keymaps.
     Action::SelectCommand,
     Action::CopyLastOutput,
+    // Agent review loop: Find Action and the agent pane menu.
+    Action::ReviewLastTurn,
 ];
 
 /// Task actions have no default keys either (bind them in Keymap).

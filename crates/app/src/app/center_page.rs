@@ -30,6 +30,8 @@ pub(crate) enum CenterPage {
     Welcome,
     /// This version's changelog section, after an update.
     WhatsNew,
+    /// An agent's last turn; data is `App::git_extras.last_turn`.
+    LastTurn,
 }
 
 impl CenterPage {
@@ -58,6 +60,9 @@ impl App {
         }
         if page != CenterPage::TaskChanges {
             self.task_changes = None;
+        }
+        if page != CenterPage::LastTurn {
+            self.git_extras.last_turn = None;
         }
         self.shortcut_capture = None;
         if self.palette.open {

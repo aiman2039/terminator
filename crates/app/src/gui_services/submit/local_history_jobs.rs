@@ -4,7 +4,10 @@ use super::Services;
 use crate::local_history::{Op, Reply};
 use crate::{Update, diff};
 use anyhow::{Context, Result};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use terminator_core::async_service::CancellationToken;
 use terminator_core::local_history::{self, Entry};
 use terminator_core::{Request, Response};
@@ -54,6 +57,7 @@ impl Services {
                     .map_err(|error| format!("{error:#}"));
                 Reply::Reverted(path, result)
             }
+            Op::Turn(op) => Reply::Turn(self.turn_job(op, cancel).await),
         };
         updates.push(Update::LocalHistory(reply));
         Ok(())
@@ -81,24 +85,44 @@ impl Services {
         }
     }
 
+    /// The text of snapshot `id` of `path`.
+    pub(super) async fn local_history_text(
+        &self,
+        path: &Path,
+        id: String,
+    ) -> Result<String, String> {
+        match self
+            .client()
+            .rpc(Request::LocalHistoryRead {
+                path: path.to_path_buf(),
+                id,
+            })
+            .await
+        {
+            Ok(Response::Text(text)) => Ok(text),
+            Ok(_) => Err("Unexpected Local History reply".into()),
+            Err(error) => Err(format!("{error:#}")),
+        }
+    }
+
     async fn local_history_diff(
         &self,
         path: PathBuf,
         id: String,
         cancel: CancellationToken,
     ) -> Result<Arc<diff::DiffDocument>, String> {
-        let snapshot = match self
-            .client()
-            .rpc(Request::LocalHistoryRead {
-                path: path.clone(),
-                id,
-            })
+        let snapshot = self.local_history_text(&path, id).await?;
+        self.snapshot_diff((path, snapshot), "Snapshot", cancel)
             .await
-        {
-            Ok(Response::Text(text)) => text,
-            Ok(_) => return Err("Unexpected Local History reply".into()),
-            Err(error) => return Err(format!("{error:#}")),
-        };
+    }
+
+    /// `snapshot` against the file on disk, built on the filesystem pool.
+    pub(super) async fn snapshot_diff(
+        &self,
+        (path, snapshot): (PathBuf, String),
+        left_label: &'static str,
+        cancel: CancellationToken,
+    ) -> Result<Arc<diff::DiffDocument>, String> {
         self.fs()
             .run(&cancel, move || {
                 let current = read_current(&path)
@@ -115,7 +139,7 @@ impl Services {
                     context: 3,
                 });
                 doc.read_only = true;
-                doc.left_label = "Snapshot".into();
+                doc.left_label = left_label.into();
                 doc.right_label = "On disk".into();
                 anyhow::Ok(Arc::new(doc))
             })
@@ -126,7 +150,7 @@ impl Services {
 
 /// Current file text for a Local History diff. A deleted file diffs as empty;
 /// any other read failure is reported instead of showing a false deletion.
-fn read_current(path: &std::path::Path) -> std::io::Result<String> {
+pub(super) fn read_current(path: &std::path::Path) -> std::io::Result<String> {
     match std::fs::read_to_string(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         other => other,

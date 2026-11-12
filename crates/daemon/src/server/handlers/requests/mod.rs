@@ -275,6 +275,7 @@ impl Shared {
                 self.on_local_history_label(&project, label)
             }
             Request::LocalHistoryRevert { path, id } => self.on_local_history_revert(&path, &id),
+            Request::LocalHistoryTurn { session } => self.on_local_history_turn(&session),
             _ => bail!("Request requires an attached stream"),
         }
     }
