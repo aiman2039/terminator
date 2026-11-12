@@ -41,6 +41,21 @@ pub(crate) fn publish_title(state: &mut State, sid: &str, title: String) {
     }
 }
 
+/// Whether `sid` has a hook-reported agent that has not stopped, unless
+/// fresh verified presence finds no agent there. Read only.
+pub(crate) fn hook_agent_live(state: &State, sid: &str, now: u64) -> bool {
+    let verified_gone = state
+        .presence
+        .iter()
+        .find(|p| p.session_id == sid)
+        .is_some_and(|p| agents::presence_verified(Some(p), now) && p.agents.is_empty());
+    !verified_gone
+        && state
+            .agents
+            .iter()
+            .any(|agent| agent.session_id == sid && agent.state != AgentState::Stopped)
+}
+
 /// Stores a live session's OSC 7501 status (`program-status-v1`); `None`
 /// clears it. Display only: never agent lifecycle or presence.
 pub(crate) fn publish_program_status(
@@ -191,7 +206,7 @@ impl Shared {
             send_with_backpressure(&tx, frame, SUBSCRIBER_STALL);
         }
         for notice in notices {
-            self.raise_terminal_notice(sid, &notice.title, &notice.body);
+            self.raise_terminal_notice(sid, &notice);
         }
         if let Some(title) = title {
             publish_title(&mut relock(&self.state), sid, title);
@@ -233,10 +248,18 @@ impl Shared {
         }
     }
 
-    fn raise_terminal_notice(&self, sid: &str, title: &str, body: &str) {
+    fn raise_terminal_notice(&self, sid: &str, notice: &terminal_events::Notice) {
         let mut state = relock(&self.state);
+        // An agent that reports both ways raises one notice: its hooks'.
+        // The OSC 7501 badge stays; this reads agents, never writes them.
+        if notice.program && hook_agent_live(&state, sid, now()) {
+            return;
+        }
         let os = state.settings.terminal_notifications_os;
-        let id = state.terminal_notice(sid, title, body).ok().flatten();
+        let id = state
+            .terminal_notice(sid, &notice.title, &notice.body)
+            .ok()
+            .flatten();
         drop(state);
         if os && let Some(id) = id {
             let _ = self.alerts.try_send(id);
@@ -317,6 +340,40 @@ mod tests {
             state.agents.is_empty(),
             "program status never makes an agent"
         );
+    }
+
+    fn agent(state: AgentState) -> Agent {
+        Agent {
+            invocation_id: "i".into(),
+            session_id: "s".into(),
+            kind: "claude".into(),
+            provider_session_id: None,
+            state,
+            sequence: None,
+            updated: 0,
+            resume: None,
+            process: None,
+        }
+    }
+
+    #[test]
+    fn program_notices_yield_to_a_live_hook_agent_only() {
+        let mut state = State::default();
+        assert!(!hook_agent_live(&state, "s", 100), "no agent: notice");
+        state.agents.push(agent(AgentState::Completed));
+        assert!(hook_agent_live(&state, "s", 100), "a finished turn is live");
+        assert!(!hook_agent_live(&state, "other", 100));
+        state.presence.push(agents::TerminalPresence {
+            session_id: "s".into(),
+            generation: "g".into(),
+            agents: Vec::new(),
+            outcome: agents::PresenceOutcome::Verified,
+            observed_at: 100,
+        });
+        assert!(!hook_agent_live(&state, "s", 100), "verified gone: notice");
+        state.presence.clear();
+        state.agents[0].state = AgentState::Stopped;
+        assert!(!hook_agent_live(&state, "s", 100), "stopped: notice");
     }
 
     #[test]

@@ -39,6 +39,9 @@ const ANSI16: [[u8; 3]; 16] = [
 pub struct Notice {
     pub title: String,
     pub body: String,
+    /// From OSC 7501. Left out while the session has a live hook-reported
+    /// agent, whose hooks already raise the notice for that moment.
+    pub program: bool,
 }
 #[derive(Default)]
 pub struct Events {
@@ -191,13 +194,21 @@ impl Events {
         }
     }
     fn notice(&mut self, title: String, body: String) {
-        if title.is_empty() && body.is_empty() {
+        self.push_notice(Notice {
+            title,
+            body,
+            program: false,
+        });
+    }
+
+    fn push_notice(&mut self, notice: Notice) {
+        if notice.title.is_empty() && notice.body.is_empty() {
             return;
         }
         if self.notices.len() == 16 {
             self.notices.pop_front();
         }
-        self.notices.push_back(Notice { title, body });
+        self.notices.push_back(notice);
     }
     fn kitty(&mut self, params: &[&[u8]]) {
         if params.len() < 3 {
