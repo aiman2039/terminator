@@ -294,12 +294,15 @@ impl App {
     }
 }
 
+/// The one colour of an agent state. Completed uses the text colour, not the
+/// accent: the accent marks focus and unread results, and in Carbon it is
+/// almost the red of `status_failed`.
 pub(crate) fn state_color(state: AgentState, theme: &AppearanceConfig) -> Color32 {
     appearance::color(match state {
         AgentState::Running => &theme.status_running,
         AgentState::WaitingInput | AgentState::WaitingPermission => &theme.status_waiting,
         AgentState::Failed => &theme.status_failed,
-        AgentState::Completed => &theme.accent,
+        AgentState::Completed => &theme.text,
         _ => &theme.secondary,
     })
 }

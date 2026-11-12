@@ -43,11 +43,14 @@ impl Viewer<'_> {
         }
     }
 
-    /// A session tab's `text` in its title color, then the folder hint when
-    /// it is an editor named after a file that another tab shows, else the
-    /// program's window title.
+    /// A session tab's `text` in its user-chosen title color (else the dock
+    /// tab text color), then the folder hint when it is an editor named
+    /// after a file that another tab shows, else the program's window title.
     pub(super) fn session_title(&self, sid: &str, text: String) -> egui::WidgetText {
-        let color = self.app.terminal_title_color(sid);
+        let color = self
+            .app
+            .terminal_chosen_title_color(sid)
+            .unwrap_or(Color32::PLACEHOLDER);
         let hint = self
             .app
             .named_editor_file(sid)
