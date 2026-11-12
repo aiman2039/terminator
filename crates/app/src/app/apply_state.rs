@@ -107,13 +107,17 @@ impl App {
         self.reconcile_presentations();
         self.migrate_attention();
         self.migrate_keymap();
-        if initial && self.preferences.ide_mode {
-            // First state load under IDE layout (the default for fresh
-            // preferences): main-dock shells belong in the terminal strip.
-            // Later loads must not re-move shells the user dragged out.
-            self.move_shells_to_strip();
-            self.note_focus_baselines();
-            self.save_layouts();
+        if initial && !self.preferences.ide_strip_migrated {
+            // First state load ever, under IDE layout (the default for
+            // fresh preferences): main-dock shells belong in the terminal
+            // strip. Later loads and launches must not re-move shells the
+            // user put in the main pane.
+            self.preferences.ide_strip_migrated = true;
+            if self.preferences.ide_mode {
+                self.move_shells_to_strip();
+                self.note_focus_baselines();
+                self.save_layouts();
+            }
         }
 
         if self.preferences_writable

@@ -372,6 +372,9 @@ pub struct App {
     pub(crate) file_index_roots: Vec<PathBuf>,
     pub(crate) file_index_at: Option<std::time::Instant>,
     pub(crate) pending_unavailable_close: Vec<String>,
+    /// `Some` while the main dock paints (out of `layouts`): Git view tabs
+    /// opened from a pane wait here until check-in.
+    pub(crate) pending_git_tabs: Option<Vec<Tab>>,
     pub(crate) pending_quit_all: Option<bool>,
     /// Vim navigation from native editors, run after check-in.
     pub(crate) native_nav: native_editor::NavPending,

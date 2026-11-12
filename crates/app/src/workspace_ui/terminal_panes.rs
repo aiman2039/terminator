@@ -334,7 +334,7 @@ impl Viewer<'_> {
         find.outcome.matches.get(find.current).map(|hit| hit.line)
     }
 
-    fn find_bar_nav(
+    pub(super) fn find_bar_nav(
         ui: &mut egui::Ui,
         find: &mut TerminalFind,
         response: &egui::Response,
@@ -354,7 +354,13 @@ impl Viewer<'_> {
         };
         ui.monospace(label);
         let shift = ui.input(|i| i.modifiers.shift);
-        let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        // A single-line field gives up focus on Enter, and egui drops it on
+        // Esc before the field runs: test `lost_focus` too.
+        let field = response.has_focus() || response.lost_focus();
+        let enter = field && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter {
+            response.request_focus();
+        }
         if appearance::sidebar_action(ui, "ArrowUp", "Previous (Shift+Enter)").clicked()
             || (enter && shift)
         {
@@ -368,8 +374,7 @@ impl Viewer<'_> {
             reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
         }
         let close = appearance::sidebar_action(ui, "X", "Close (Esc)").clicked()
-            || (response.has_focus()
-                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)));
+            || (field && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)));
         (reveal, close)
     }
 }

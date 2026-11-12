@@ -251,6 +251,9 @@ pub struct UiPreferences {
     /// Rename terminal's move off Cmd+Shift+R ran (or needed no move).
     #[serde(default)]
     pub keymap_rename_migrated: bool,
+    /// The one-time move of main-pane shells to the IDE strip ran.
+    #[serde(default)]
+    pub ide_strip_migrated: bool,
     pub markdown_modes: HashMap<String, crate::markdown::Mode>,
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,

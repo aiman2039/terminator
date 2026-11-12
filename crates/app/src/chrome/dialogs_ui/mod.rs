@@ -187,11 +187,12 @@ impl App {
         }
     }
 
-    fn layout_save_dialog(&mut self, ctx: &egui::Context) {
+    pub(crate) fn layout_save_dialog(&mut self, ctx: &egui::Context) {
         if self.layout_save_name.is_none() {
             return;
         }
         let mut name = self.layout_save_name.take().unwrap_or_default();
+        let mut done = false;
         self.popups
             .centered(ctx, "Save layout")
             .collapsible(false)
@@ -199,14 +200,18 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(280.0);
                 ui.label("Name this layout:");
-                ui.add(
+                let field = ui.add(
                     appearance::singleline(&mut name)
                         .hint_text("My layout")
                         .desired_width(f32::INFINITY),
                 );
                 let mut action = None;
-                if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                // Only Enter typed in the field saves: the Enter that chose
+                // the palette row must not save an empty name.
+                if field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
                     action = Some(true);
+                } else if ui.memory(|memory| memory.focused().is_none()) {
+                    field.request_focus();
                 }
                 ui.horizontal(|ui| {
                     if ui.button("Save").clicked() {
@@ -224,9 +229,14 @@ impl App {
                                 .save_current_layout(&trimmed, self.project_width);
                         }
                     }
+                    done = true;
                     ui.close();
                 }
             });
+        // The dialog stays open until Save or Cancel.
+        if !done {
+            self.layout_save_name = Some(name);
+        }
     }
 
     pub(crate) fn save_layout_dialog(&mut self) {

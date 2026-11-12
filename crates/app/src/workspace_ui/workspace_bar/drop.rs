@@ -108,7 +108,7 @@ impl App {
             ui.input(|i| i.pointer.interact_pos()),
         ) && drop.workspace.tabs.iter().any(|tab| tab.id == dragged)
             && let Some(index) = drop.insertion_index(pos)
-            && drop.workspace.reorder_group(&dragged, index)
+            && drop.workspace.reorder_group_to_slot(&dragged, index)
         {
             drop.workspace.active = dragged;
             drop.actions.switch = None;

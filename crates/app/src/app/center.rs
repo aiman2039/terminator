@@ -257,6 +257,7 @@ impl App {
             .layouts
             .remove(&project)
             .unwrap_or_else(Workspace::empty);
+        self.pending_git_tabs.get_or_insert_default();
         self.sync_active_session(&mut dock);
         self.restore_cleared_focus(&dock);
         let outer = ui.available_rect_before_wrap();
@@ -279,6 +280,7 @@ impl App {
         self.check_zoom(&project, &dock);
         self.paint_zoom(ui.ctx(), outer, &project);
         self.layouts.insert(project.clone(), dock);
+        self.drain_pending_git_tabs();
         self.apply_diff_replacement();
         if self.pending_layout_save {
             self.pending_layout_save = false;

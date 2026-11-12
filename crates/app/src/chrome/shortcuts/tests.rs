@@ -112,6 +112,39 @@ fn tab_step_defaults_take_no_chord_another_action_uses() {
 }
 
 #[test]
+fn shift_f7_runs_the_previous_diff_actions() {
+    let ctx = egui::Context::default();
+    let keys = terminator_core::Settings::default().keybindings;
+    for (chord, expected) in [
+        ("shift+F7", Action::DiffPrevChange),
+        ("F7", Action::DiffNextChange),
+        ("alt+shift+F7", Action::DiffPrevFile),
+        ("alt+F7", Action::DiffNextFile),
+    ] {
+        let pressed = parse(chord).unwrap();
+        let raw = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: pressed.key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: pressed.modifiers,
+            }],
+            ..Default::default()
+        };
+        let mut fired = None;
+        let mut output = ctx.run_ui(raw, |ui| {
+            fired = Action::ALL
+                .iter()
+                .copied()
+                .find(|action| consume(ui.ctx(), &binding(&keys, action.id())));
+        });
+        output.textures_delta.clear();
+        assert_eq!(fired, Some(expected), "{chord}");
+    }
+}
+
+#[test]
 fn a_shift_bracket_chord_also_takes_the_curly_bracket_key() {
     let ctx = egui::Context::default();
     let chord = parse("command+shift+]").unwrap();
@@ -659,6 +692,69 @@ fn terminal_focus_needs_a_focused_terminal_painted_last_pass() {
     }
     ctx.memory_mut(|memory| memory.request_focus(terminal));
     assert!(!terminal_has_focus(&ctx));
+}
+
+/// One frame: a sidebar field, then an active terminal that takes free
+/// focus (as egui_term does). Returns whether the terminal read `key`.
+fn field_then_terminal(
+    ctx: &egui::Context,
+    text: &mut String,
+    focus_field: bool,
+    key: Option<Key>,
+) -> bool {
+    let events = key
+        .map(|key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        })
+        .into_iter()
+        .collect();
+    let raw = egui::RawInput {
+        events,
+        ..Default::default()
+    };
+    let mut read = false;
+    let mut output = ctx.run_ui(raw, |ui| {
+        note_frame_focus(ui.ctx());
+        let field = ui.text_edit_singleline(text);
+        if focus_field {
+            field.request_focus();
+        }
+        let terminal = ui.allocate_response(egui::vec2(40.0, 20.0), egui::Sense::click());
+        mark_terminal(ui.ctx(), terminal.id);
+        let free = ui.memory(|memory| memory.focused().is_none());
+        if free && !focus_left_another_widget(ui.ctx()) {
+            terminal.request_focus();
+        }
+        if terminal.has_focus() {
+            read = key.is_some_and(|key| ui.input(|input| input.key_pressed(key)));
+        }
+    });
+    output.textures_delta.clear();
+    read
+}
+
+#[test]
+fn enter_or_esc_in_a_sidebar_field_never_reaches_the_terminal() {
+    for key in [Key::Enter, Key::Escape] {
+        let ctx = egui::Context::default();
+        let mut text = String::from("filter");
+        field_then_terminal(&ctx, &mut text, true, None);
+        field_then_terminal(&ctx, &mut text, false, None);
+        assert!(
+            !field_then_terminal(&ctx, &mut text, false, Some(key)),
+            "{key:?} reached the terminal"
+        );
+        // The terminal takes the free focus a frame later, with no key.
+        field_then_terminal(&ctx, &mut text, false, None);
+        field_then_terminal(&ctx, &mut text, false, None);
+        assert!(terminal_has_focus(&ctx), "{key:?}");
+        // Once it has focus, the terminal reads its own keys.
+        assert!(field_then_terminal(&ctx, &mut text, false, Some(key)));
+    }
 }
 
 #[test]

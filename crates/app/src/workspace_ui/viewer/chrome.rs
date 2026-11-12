@@ -230,6 +230,8 @@ impl Viewer<'_> {
                 ));
             return OnCloseResponse::Ignore;
         }
+        // A Git view opened again loads fresh data (History, Blame).
+        self.app.git_views.remove(&tab.key());
         // A closed VNC tab detaches, like a terminal: the daemon keeps the
         // session connected and the VNC sidebar reattaches it.
         // Buffer pruning runs after the dock is checked back in and keeps

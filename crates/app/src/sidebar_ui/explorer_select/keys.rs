@@ -80,7 +80,7 @@ impl App {
     }
 
     /// Pressed keys and typed text this frame.
-    fn tree_key_events(ui: &egui::Ui) -> (Vec<(egui::Key, egui::Modifiers)>, String) {
+    pub(super) fn tree_key_events(ui: &egui::Ui) -> (Vec<(egui::Key, egui::Modifiers)>, String) {
         let mut keys: Vec<(egui::Key, egui::Modifiers)> = Vec::new();
         let mut typed = String::new();
         ui.input(|input| {
@@ -93,6 +93,11 @@ impl App {
                         ..
                     } => keys.push((*key, *modifiers)),
                     egui::Event::Text(text) => typed.push_str(text),
+                    // The window layer turns Cmd/Ctrl+C, X and V into
+                    // clipboard events, with no Key event.
+                    egui::Event::Copy => keys.push((egui::Key::C, egui::Modifiers::COMMAND)),
+                    egui::Event::Cut => keys.push((egui::Key::X, egui::Modifiers::COMMAND)),
+                    egui::Event::Paste(_) => keys.push((egui::Key::V, egui::Modifiers::COMMAND)),
                     _ => {}
                 }
             }

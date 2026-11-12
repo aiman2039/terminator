@@ -331,4 +331,62 @@ mod tests {
             "closing the diff tab must forget its cached split scroll"
         );
     }
+
+    /// One frame of the terminal find field and its keys. `focus` puts
+    /// the keyboard in the field first. Returns whether the bar closes.
+    fn find_frame(
+        ctx: &egui::Context,
+        find: &mut TerminalFind,
+        focus: bool,
+        key: Option<(egui::Key, egui::Modifiers)>,
+    ) -> bool {
+        let held = key.map_or(egui::Modifiers::NONE, |(_, modifiers)| modifiers);
+        let mut events = vec![egui::Event::ModifiersChanged(held)];
+        events.extend(key.map(|(key, modifiers)| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }));
+        let raw = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        let mut close = false;
+        let mut output = ctx.run_ui(raw, |ui| {
+            let response = ui.add(appearance::singleline(&mut find.query));
+            if focus {
+                response.request_focus();
+            }
+            close = super::super::viewer::Viewer::find_bar_nav(ui, find, &response).1;
+        });
+        output.textures_delta.clear();
+        close
+    }
+
+    #[test]
+    fn enter_shift_enter_and_esc_work_in_the_terminal_find_bar() {
+        let ctx = egui::Context::default();
+        let hit = |line| egui_term::FoundMatch {
+            line,
+            start_col: 0,
+            end_col: 1,
+        };
+        let mut find = TerminalFind {
+            query: "x".into(),
+            ..Default::default()
+        };
+        find.outcome.matches = vec![hit(0), hit(1), hit(2)];
+        let press = |key| Some((key, egui::Modifiers::NONE));
+        find_frame(&ctx, &mut find, true, None);
+        find_frame(&ctx, &mut find, false, press(egui::Key::Enter));
+        assert_eq!(find.current, 1, "Enter moves to the next match");
+        find_frame(&ctx, &mut find, false, press(egui::Key::Enter));
+        assert_eq!(find.current, 2, "the field keeps focus after Enter");
+        let shift_enter = Some((egui::Key::Enter, egui::Modifiers::SHIFT));
+        find_frame(&ctx, &mut find, false, shift_enter);
+        assert_eq!(find.current, 1, "Shift+Enter moves back");
+        assert!(find_frame(&ctx, &mut find, false, press(egui::Key::Escape)));
+    }
 }

@@ -3,6 +3,14 @@ Vendored egui-winit from https://github.com/emilk/egui at
 The package version is 0.37.0 so it matches eframe 0.37. MIT and Apache-2.0
 licenses retained. Cargo.toml is the published crate manifest.
 
+## Alt chords are not clipboard commands (2026-11-12)
+
+`is_cut_command`, `is_copy_command` and `is_paste_command` no longer match
+when Alt is held. Cmd+Alt+V (New VNC viewer) and Cmd+Alt+C (Copy working
+directory) are app shortcuts; before this they became `Event::Paste` /
+`Event::Copy` and the Paste went to the focused terminal. Plain Cmd+C/X/V
+(and Ctrl+Shift+C/V on Linux) are unchanged.
+
 ## eframe 0.37 surface (2026-10-24)
 
 eframe 0.37 calls APIs that the 0.36 fork did not have. This fork now has

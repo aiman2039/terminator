@@ -317,6 +317,7 @@ impl App {
             file_index_roots: Vec::new(),
             file_index_at: None,
             pending_unavailable_close: Vec::new(),
+            pending_git_tabs: None,
             pending_quit_all: None,
             native_nav: native_editor::NavPending::default(),
             diff_nav: None,

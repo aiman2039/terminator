@@ -7,7 +7,7 @@ mod shared;
 mod tests;
 mod tool_focus;
 
-pub use jetbrains::{JetBrainsCommand, jetbrains_app_chords, mark_terminal, terminal_has_focus};
+pub use jetbrains::*;
 pub use meta::terminal_keeps;
 pub use migrate::{
     CMD_E_MOVES, RENAME_TERMINAL_MOVES, fill_moved_defaults, migrate_moved_defaults,
@@ -97,10 +97,12 @@ actions! {
     AskAgent => "ask_agent", "Ask agent…", "Terminal";
     NewBrowser => "new_browser", "New browser tab", "Globe";
     NewVnc => "new_vnc", "New VNC viewer", "Monitor";
-    DiffNextChange => "diff_next_change", "Diff: next change", "ArrowDown";
+    // Previous first: egui ignores an extra Shift, so F7 would also take
+    // Shift+F7 (and Alt+F7 Alt+Shift+F7).
     DiffPrevChange => "diff_prev_change", "Diff: previous change", "ArrowUp";
-    DiffNextFile => "diff_next_file", "Diff: next file", "ArrowRight";
+    DiffNextChange => "diff_next_change", "Diff: next change", "ArrowDown";
     DiffPrevFile => "diff_prev_file", "Diff: previous file", "ArrowLeft";
+    DiffNextFile => "diff_next_file", "Diff: next file", "ArrowRight";
     GitCommit => "git_commit", "Git: Commit…", "CircleCheck";
     GitCommitPush => "git_commit_push", "Git: Commit and Push", "Upload";
     GitRefresh => "git_refresh", "Git: Refresh", "RefreshCw";

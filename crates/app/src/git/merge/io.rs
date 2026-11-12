@@ -115,11 +115,22 @@ impl App {
             return;
         };
         let tab = super::tab(root, path);
+        // While the main dock paints it is out of `layouts`: decide after
+        // check-in (`drain_pending_git_tabs`), or a showing tab looks closed.
+        if self.pending_git_tabs.is_none() {
+            self.reset_hidden_merge(&tab);
+        }
+        self.open_git_tab(tab);
+    }
+
+    /// Forget the state of a merge tab that is not showing, so the open
+    /// starts from a fresh read.
+    pub(crate) fn reset_hidden_merge(&mut self, tab: &Tab) {
         let showing = self
             .selected
             .as_ref()
             .and_then(|project| self.layouts.get(project))
-            .is_some_and(|workspace| workspace.contains(&tab));
+            .is_some_and(|workspace| workspace.contains(tab));
         // A pending save must still land (and stage) after the tab is left.
         let saving = self
             .merge
@@ -128,7 +139,6 @@ impl App {
         if !showing && !saving {
             self.merge.remove(&tab.key());
         }
-        self.open_git_tab(tab);
     }
 
     /// Run blocking `work` on the file pool; the receiver gets its result.

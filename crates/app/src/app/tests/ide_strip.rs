@@ -185,6 +185,32 @@ fn first_state_load_in_ide_mode_moves_shells_to_the_strip() {
 }
 
 #[test]
+fn a_later_launch_in_ide_mode_keeps_main_pane_shells() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+    app.preferences_writable = false;
+    // An earlier launch already ran the one-time move.
+    app.preferences.ide_strip_migrated = true;
+    assert!(app.preferences.ide_mode);
+    let main = egui_dock::DockState::new(vec![Tab::Terminal("shell".into())]);
+    let layout = serde_json::to_value(Workspace::from_layout(main)).unwrap();
+    app.apply_state(State {
+        projects: vec![Project {
+            id: "a".into(),
+            name: "a".into(),
+            path: PathBuf::from("/a"),
+            layout,
+        }],
+        sessions: vec![session_fixture("shell", SessionKind::Shell)],
+        selected_project: Some("a".into()),
+        ..Default::default()
+    });
+    assert!(!app.is_strip_session("a", "shell"));
+    assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+}
+
+#[test]
 fn toggle_ide_mode_keeps_sidebar_visibility_and_widths() {
     let (mut app, ctx, _dir) = fixture();
     app.preferences.left_visible = false;
