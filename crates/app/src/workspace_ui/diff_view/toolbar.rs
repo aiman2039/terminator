@@ -23,6 +23,7 @@ impl App {
         Self::diff_stage_file_button(ui, frame, pass);
         self.diff_edit_buttons(ui, frame, pass);
         Self::diff_source_button(ui, frame, pass);
+        self.diff_note_buttons(ui, frame, pass);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             self.diff_toolbar_trailing(ui, frame, pass);
         });
@@ -219,6 +220,36 @@ impl App {
         if source.clicked() {
             pass.open_line = pass.selected_change_line(frame.doc.as_ref());
         }
+    }
+
+    /// Add a review note on the selected change; when the repository has
+    /// notes, Send opens Ask agent with all of them. GUI-only state.
+    fn diff_note_buttons(&self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        let add = ui
+            .add_enabled_ui(frame.count > 0 && pass.review.note.is_none(), |ui| {
+                appearance::sidebar_action(
+                    ui,
+                    "MessageSquarePlus",
+                    "Add a review note on the selected change (Alt+click lines to note \
+                     only those; right-click a line to note it)",
+                )
+            })
+            .inner;
+        #[cfg(feature = "test-support")]
+        diagnostics::record_response(ui.ctx(), "diff-add-note", &add);
+        if add.clicked() {
+            pass.review.note = pass.note_draft(frame.doc.as_ref());
+        }
+        let count = self.diff_notes.list(&frame.notes_repo()).len();
+        if count == 0 {
+            return;
+        }
+        let tip = format!("Send {count} review note(s) to an agent…");
+        let send = appearance::sidebar_action(ui, "Send", &tip);
+        #[cfg(feature = "test-support")]
+        diagnostics::record_response(ui.ctx(), "diff-send-notes", &send);
+        ui.weak(count.to_string());
+        pass.send_notes = send.clicked();
     }
 
     fn diff_file_buttons(&self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {

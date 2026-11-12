@@ -112,6 +112,7 @@ impl ControlsFrame<'_> {
         };
         let mut open = true;
         let mut chosen = false;
+        let mut note = false;
         egui::Popup::new(
             ui.scope_id().with("diff-row-menu"),
             ui.ctx().clone(),
@@ -128,9 +129,21 @@ impl ControlsFrame<'_> {
                 shortcut: "",
             })
             .clicked();
+            note = appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: &format!("Add review note on line {line}"),
+                icon: "MessageSquarePlus",
+                shortcut: "",
+            })
+            .clicked();
         });
         if chosen {
             state.result.open_line = Some(line);
+        }
+        if note {
+            let line = usize::try_from(line).unwrap_or(1);
+            state.review.note = Some(diff::notes::Draft::new(line, line, false));
+            chosen = true;
         }
         if chosen || !open {
             state.review.row_menu = None;

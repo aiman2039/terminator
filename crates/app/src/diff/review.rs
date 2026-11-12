@@ -112,6 +112,8 @@ pub(crate) struct State {
     pub offer_undo: bool,
     /// Row context menu: screen position and the file line it opens.
     pub row_menu: Option<([f32; 2], u32)>,
+    /// A review note being typed for this diff.
+    pub note: Option<super::notes::Draft>,
 }
 
 /// The working-tree side of an editable diff: a native editor buffer.

@@ -205,6 +205,8 @@ pub struct App {
     pub(crate) diff_split_scroll: HashMap<String, f32>,
     pub(crate) diff_preview: HashSet<String>,
     pub(crate) diff_reviews: HashMap<String, diff::review::State>,
+    /// Diff review notes waiting to go to an agent (GUI-only).
+    pub(crate) diff_notes: diff::notes::Notes,
     pub(crate) loading: HashSet<String>,
     /// Commit-log and blame tab contents, loaded by `Job::GitView`.
     pub(crate) git_views: HashMap<String, crate::GitView>,

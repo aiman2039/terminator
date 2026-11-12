@@ -213,6 +213,7 @@ impl App {
             diff_split_scroll: HashMap::new(),
             diff_preview: HashSet::new(),
             diff_reviews: HashMap::new(),
+            diff_notes: Default::default(),
             loading: HashSet::new(),
             git_views: HashMap::new(),
             selected_commit: None,

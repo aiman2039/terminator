@@ -32,6 +32,7 @@ pub(crate) mod live;
 mod live_tests;
 mod load;
 mod moved;
+pub(crate) mod notes;
 mod options;
 mod picks;
 pub(crate) mod review;
