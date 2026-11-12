@@ -123,36 +123,10 @@ impl App {
             .entry(session.project_id.clone())
             .or_default();
         *count = count.saturating_add(1);
-        if let Some(brand) = presented.brand_icon {
-            let state = presented.lifecycle.unwrap_or(AgentState::Unknown);
-            index.offer_face(&session.project_id, brand, state);
-        }
-    }
-}
-
-/// Lower ranks win the project's face: waiting, failed, running, done,
-/// the order of the state counters.
-fn face_rank(state: AgentState) -> u8 {
-    match state {
-        AgentState::WaitingInput | AgentState::WaitingPermission => 0,
-        AgentState::Failed => 1,
-        AgentState::Running => 2,
-        AgentState::Completed => 3,
-        _ => 4,
     }
 }
 
 impl Index {
-    fn offer_face(&mut self, project: &str, brand: &'static str, state: AgentState) {
-        if self
-            .faces
-            .get(project)
-            .is_none_or(|(_, old)| face_rank(state) < face_rank(*old))
-        {
-            self.faces.insert(project.to_owned(), (brand, state));
-        }
-    }
-
     fn add_agents(&mut self, agents: &[Agent]) {
         for agent in agents {
             self.history_brands
