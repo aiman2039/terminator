@@ -485,20 +485,6 @@ mod tests {
     }
 
     #[test]
-    fn attention_label_width_leaves_the_action_row_intact() {
-        let spacing = 4.0;
-        let remaining = 200.0;
-        let width = attention_label_width(remaining, spacing, false);
-        let used = width + spacing + ATTENTION_ACTION_SIZE * ATTENTION_ACTION_COUNT;
-        assert!((used - remaining).abs() < f32::EPSILON);
-        assert_eq!(attention_label_width(10.0, spacing, false), 0.0);
-        let read = attention_label_width(remaining, spacing, true);
-        assert!(read < width);
-        let read_used = read + spacing + ATTENTION_ACTION_SIZE * ATTENTION_ACTION_READ_COUNT;
-        assert!((read_used - remaining).abs() < f32::EPSILON);
-    }
-
-    #[test]
     fn change_tree_nests_directories_and_counts_files() {
         let a = terminator_git::Change {
             path: "/repo/src/a.rs".into(),

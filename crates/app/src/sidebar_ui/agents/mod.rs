@@ -1,8 +1,8 @@
 mod live;
 
 use super::attention::{
-    AttentionCard, NoticeGroup, activity_label, attention_badge_label, attention_card, join_labels,
-    state_color,
+    AttentionCard, NoticeGroup, activity_label, attention_badge_label, attention_card_in,
+    join_labels, state_color,
 };
 use super::explorer_rows::{
     PaintHeaderCountInput, cached_variable_card, paint_header_count, skip_clipped_row,
@@ -210,7 +210,14 @@ impl App {
         let brand_label = history_label
             .as_deref()
             .or(presented.brand_label.as_deref());
-        let action = attention_card(
+        let project = session.and_then(|session| {
+            self.state
+                .projects
+                .iter()
+                .find(|project| project.id == session.project_id)
+                .map(|project| project.name.as_str())
+        });
+        let action = attention_card_in(
             ui,
             AttentionCard {
                 theme: &self.theme,
@@ -223,6 +230,7 @@ impl App {
                 show_read,
                 group_extra: group.notices.get(1..).unwrap_or(&[]),
             },
+            project,
         );
         self.apply_group_action(group, action);
     }

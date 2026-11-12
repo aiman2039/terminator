@@ -17,4 +17,5 @@ pub(crate) use counts::{AttentionCounts, StateCounts, attention_status_icon, not
 pub(crate) use presentation::AgentPresentation;
 #[cfg(test)]
 pub(crate) use presentation::row_state;
+pub(crate) use presentation::short_age;
 pub(crate) use queries::notice_preview;
