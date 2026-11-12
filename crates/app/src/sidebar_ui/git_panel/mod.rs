@@ -187,6 +187,8 @@ pub struct GitPanelOutcome {
     pub log_at: Option<String>,
     /// Branch and sync actions, in click order.
     pub(crate) branch: Vec<crate::git::branch_ui::BranchRequest>,
+    /// Ask a live agent to draft the commit message (Ask agent, no Enter).
+    pub draft_message: bool,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open

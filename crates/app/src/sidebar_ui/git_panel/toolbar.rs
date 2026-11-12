@@ -67,6 +67,17 @@ fn git_more_menu(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut Git
             outcome.tab = Some(GitTab::PullRequest);
             ui.close();
         }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Draft commit message with agent…",
+            icon: "Pencil",
+            shortcut: "",
+        })
+        .clicked()
+        {
+            outcome.draft_message = true;
+            ui.close();
+        }
         let log = appearance::menu_item(appearance::MenuItemInput {
             ui,
             label: "View commit log",

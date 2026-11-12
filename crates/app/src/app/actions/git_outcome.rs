@@ -109,6 +109,9 @@ impl App {
         for request in std::mem::take(&mut outcome.branch) {
             self.branch_request(request);
         }
+        if outcome.draft_message {
+            self.draft_commit_message();
+        }
     }
 
     /// Commits the draft message and records it in the message history.

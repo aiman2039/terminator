@@ -1,5 +1,6 @@
 //! Git history, merge and worktree UI.
 pub(crate) mod branch_ui;
+mod draft_message;
 pub(super) mod git_log;
 pub(super) mod local_history;
 pub(super) mod merge;
