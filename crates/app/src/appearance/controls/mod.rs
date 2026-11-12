@@ -116,15 +116,61 @@ pub fn icon_label_button(input: IconLabelButtonInput<'_>) -> egui::Response {
         label,
         height,
     } = input;
+    icon_label(
+        ui,
+        (icon, icon_color()),
+        egui::RichText::new(label),
+        (height, None),
+    )
+}
+
+/// An [`icon_label_button`] in one tint whose label ends with an ellipsis
+/// past `max_width`, such as the status-bar message chip.
+pub(crate) struct IconLabelChipInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub icon: &'a str,
+    pub label: &'a str,
+    pub tint: Color32,
+    pub height: f32,
+    pub max_width: f32,
+}
+
+pub fn icon_label_chip(input: IconLabelChipInput<'_>) -> egui::Response {
+    let IconLabelChipInput {
+        ui,
+        icon,
+        label,
+        tint,
+        height,
+        max_width,
+    } = input;
+    let text = egui::RichText::new(label).color(tint);
+    icon_label(ui, (icon, tint), text, (height, Some(max_width)))
+}
+
+/// `height` is the row's button square; `max_width` truncates the label.
+fn icon_label(
+    ui: &mut egui::Ui,
+    (icon, tint): (&str, Color32),
+    label: egui::RichText,
+    (height, max_width): (f32, Option<f32>),
+) -> egui::Response {
     // `Button::new` keeps the exact glyph size; `image_and_text` caps it to
     // the font height.
     let image = egui::Image::new(crate::icons::source(icon))
-        .tint(icon_color())
+        .tint(tint)
         .fit_to_exact_size(egui::Vec2::splat(TOOLBAR_ICON));
     ui.scope(|ui| {
         // The ambient interact size would make the button taller than its row.
         ui.spacing_mut().interact_size.y = height;
-        ui.add(egui::Button::new((image, label)).frame(false))
+        let button = egui::Button::new((image, label)).frame(false);
+        match max_width {
+            Some(width) => {
+                ui.set_max_width(width);
+                ui.add(button.truncate())
+            }
+            None => ui.add(button),
+        }
     })
     .inner
 }

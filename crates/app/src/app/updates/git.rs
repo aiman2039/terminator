@@ -289,8 +289,44 @@ impl App {
                     self.explorer_undoing
                         .retain(|pair| pair != &(from.clone(), to.clone()));
                 }
-                self.report_status_error(error);
+                self.workspace_op_failed(op, error, stale);
             }
+        }
+    }
+
+    /// A failed job. Lists the panel loads by itself show their error in
+    /// the panel and the log only; a new repository's `git log` is an
+    /// empty History. Other failures go to the status bar with their
+    /// operation name, and with Retry when the job can run again.
+    fn workspace_op_failed(&mut self, op: workspace_ops::Op, error: String, stale: bool) {
+        if let Some(list) = background_list(&op) {
+            if stale {
+                return;
+            }
+            if matches!(op, workspace_ops::Op::Log)
+                && error.contains("does not have any commits yet")
+            {
+                self.git.log.clear();
+                return;
+            }
+            let text = format!(
+                "{list} failed: {}",
+                crate::app::frame::status_line::first_line(&error)
+            );
+            self.error.log_error(&error);
+            self.git.list_error = Some(text);
+            return;
+        }
+        let shown = error.clone();
+        self.report_status_error(error);
+        if let Some(operation) = operation_name(&op) {
+            self.error.attach_origin(
+                &shown,
+                crate::app::frame::status_line::ErrorOrigin {
+                    operation,
+                    retry: retryable(&op).then_some(op),
+                },
+            );
         }
     }
 
@@ -354,4 +390,52 @@ impl App {
             }
         }
     }
+}
+
+/// Lists the Git panel loads by itself: their failures stay in the panel.
+fn background_list(op: &workspace_ops::Op) -> Option<&'static str> {
+    use workspace_ops::Op;
+    match op {
+        Op::Branches => Some("Branches"),
+        Op::Log => Some("History"),
+        Op::Shelves => Some("Shelves"),
+        Op::Compare { .. } => Some("Compare"),
+        Op::HeadMessage => Some("Last commit message"),
+        _ => None,
+    }
+}
+
+/// The operation name a failure summary starts with.
+fn operation_name(op: &workspace_ops::Op) -> Option<&'static str> {
+    use workspace_ops::Op;
+    Some(match op {
+        Op::Stage(_) => "Stage",
+        Op::StageAll(_) => "Stage all",
+        Op::Unstage(_) => "Unstage",
+        Op::Discard { .. } => "Discard",
+        Op::Delete(_) => "Move to Trash",
+        Op::Shelve(_) => "Shelve",
+        Op::Unshelve(_) => "Unshelve",
+        Op::DropShelf(_) => "Drop shelf",
+        Op::Switch(_) => "Switch branch",
+        Op::CreatePr => "Create PR",
+        Op::CreateFile(_) => "New file",
+        Op::CreateDir(_) => "New folder",
+        Op::Duplicate(_) => "Duplicate",
+        Op::Rename { .. } => "Rename",
+        Op::Move { .. } => "Move",
+        Op::Copy { .. } => "Copy",
+        _ => return None,
+    })
+}
+
+/// Jobs that a Retry click may run again as they are. Discard, delete,
+/// file moves and stash writes are left out: a partial first try may
+/// have changed what they act on.
+fn retryable(op: &workspace_ops::Op) -> bool {
+    use workspace_ops::Op;
+    matches!(
+        op,
+        Op::Stage(_) | Op::StageAll(_) | Op::Unstage(_) | Op::Switch(_) | Op::CreatePr
+    )
 }
