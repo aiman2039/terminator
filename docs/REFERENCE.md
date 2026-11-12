@@ -518,6 +518,45 @@ All-live filter menu also sets the state filter. The **Unread** tab has
 state. On macOS the Dock icon shows the waiting count (`99+` above 99) and
 clears it at zero.
 
+**Broadcast input.** **Broadcast input to all panes in this tab** (pane menu,
+Find Action, bindable, unbound by default) sends the keys typed in one
+terminal of the tab to every live shell of that tab. Each of them shows a
+BROADCAST chip and an outline. A paste goes to all of them; a paste of more
+than one line asks once (Paste to all / Cancel). Broadcast stops when another
+tab or project becomes active, on Esc pressed twice (the second Esc is not
+typed), or from the same item. It is GUI memory only and never saved.
+
+**Quick terminal.** Settings → Keymap → **Quick terminal (system-wide)**
+(unbound by default) is a system-wide hotkey (`global-hotkey`: macOS, X11,
+Windows). A press shows the window on the scratch terminal of the **Quick
+terminal project** (or the selected project), and opens a new shell there the
+first time. A press while that terminal has focus minimizes the window. The
+scratch terminal is an ordinary daemon session. Wayland has no global key
+grab, so the hotkey is off there and Settings says so.
+
+**Launch layouts.** A project file `.terminator/layout.toml` describes tabs,
+splits, folders and commands:
+
+```toml
+[[tab]]
+name = "Dev"            # optional
+[[tab.pane]]            # the first pane fills a new top-level tab
+cwd = "web"             # optional, inside the project
+command = "npm run dev" # optional
+[[tab.pane]]
+split = "down"          # "right" (default) or "down" of the previous pane
+command = "claude"      # an agent command is typed, never sent
+enter = false           # optional: only type a shell command
+```
+
+**Open launch layout** (Find Action, project menu) reads it, asks the project
+trust question first (the answer tasks and language servers share), and opens
+the tabs only on **Open**. It only creates new terminals; live sessions are
+never closed or restarted. Commands are typed when the prompt shows; a shell
+command is sent unless `enter = false`, an agent command never is. **Save
+layout as launch file** writes the project's tabs (folders and splits, no
+commands); an existing file needs **Replace it**.
+
 ## Native previews and explicit controls
 
 Markdown editor tabs place the filename, flat **Edit / Preview / Split** tabs and

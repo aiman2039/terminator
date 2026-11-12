@@ -437,6 +437,8 @@ pub struct App {
     pub(crate) broadcast: crate::workspace_ui::Broadcast,
     /// The system-wide quick terminal hotkey and its scratch terminal.
     pub(crate) quick_terminal: crate::workspace_ui::QuickTerminal,
+    /// Launch layout window, file reads and saves, and a launch in progress.
+    pub(crate) launch: crate::workspace::launch::LaunchState,
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

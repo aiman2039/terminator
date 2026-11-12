@@ -359,6 +359,7 @@ impl App {
             git_extras: Default::default(),
             broadcast: Default::default(),
             quick_terminal: Default::default(),
+            launch: Default::default(),
         }
     }
     pub(crate) fn fixture_rect(&self, ctx: &egui::Context, name: &str) -> Option<[f32; 4]> {

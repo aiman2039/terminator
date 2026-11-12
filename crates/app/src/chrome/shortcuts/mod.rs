@@ -142,6 +142,9 @@ actions! {
     BroadcastInput => "broadcast_input", "Broadcast input to all panes in this tab", "Radio";
     // System-wide too (global-hotkey); unbound by default.
     QuickTerminal => "quick_terminal", "Quick terminal (system-wide)", "Terminal";
+    // `.terminator/layout.toml`: new terminals only, after the trust answer.
+    OpenLaunchLayout => "open_launch_layout", "Open launch layout", "PanelsTopLeft";
+    SaveLaunchLayout => "save_launch_layout", "Save layout as launch file", "Save";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -318,27 +321,9 @@ pub fn from_input(modifiers: Modifiers, key: Key) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    let key = key_token(key);
+    let key = meta::key_token(key);
     parts.push(&key);
     Some(parts.join("+"))
-}
-
-fn key_token(key: Key) -> String {
-    match key {
-        Key::Comma => ",".into(),
-        Key::Period => ".".into(),
-        Key::OpenBracket => "[".into(),
-        Key::CloseBracket => "]".into(),
-        Key::Minus => "-".into(),
-        Key::Equals => "=".into(),
-        Key::Slash => "/".into(),
-        Key::Backslash => "\\".into(),
-        Key::Semicolon => ";".into(),
-        Key::Quote => "'".into(),
-        Key::Backtick => "`".into(),
-        Key::Space => "space".into(),
-        other => other.symbol_or_name().to_string(),
-    }
 }
 
 pub fn consume(ctx: &egui::Context, value: &str) -> bool {
