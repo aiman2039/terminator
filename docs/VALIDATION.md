@@ -6309,3 +6309,30 @@ not take focus to scroll); they were checked only in the headless dump.
 Remaining differences: line height (19 px rows against MarkEdit's 24 px),
 loose lists keep tight item spacing, and extra source blank lines stay
 visible (MarkEdit collapses them).
+
+## ctl wait --changed, Perforce jobs, Local History limits, agent hooks, ntfy server (2026-11-12)
+
+- `ctl wait --changed`: unit tests `ctl_wait_changed_ignores_the_previous_turn_state`,
+  `ctl_wait_changed_accepts_a_first_agent_record`. No live daemon run.
+- Perforce long actions: `a_second_long_perforce_action_is_refused_while_one_runs`,
+  `a_second_long_perforce_action_waits_for_the_first_reply`,
+  `a_cancelled_perforce_action_is_a_note_not_an_error`,
+  `a_running_perforce_action_shows_progress_and_cancel_stops_it`,
+  `a_long_action_reports_only_its_last_lines`. The Ctrl-C then kill path is
+  `run_cancellable` (already covered by the commit job tests). No Perforce
+  server was used; `scripts/test-perforce.sh` was not run.
+- Local History: `prune_keeps_only_the_newest_entries_of_each_file`,
+  `prune_drops_the_oldest_entries_of_all_files_until_under_the_size_budget`,
+  `list_page_returns_the_timeline_in_pages_with_the_total`,
+  `local_history_page_reply_fits_one_frame_for_a_large_timeline`,
+  `local_history_limits_default_for_old_settings_and_are_bounded`.
+- Agent hooks: isolated-home installer tests in
+  `crates/integrations/src/agents_tests.rs`. Hook formats come from the
+  official documentation only; no Gemini, Copilot, Droid or Qwen CLI was run.
+- ntfy: `ntfy_notice_text_and_click_are_opt_in`,
+  `ntfy_uses_the_configured_server`,
+  `the_worker_reads_the_token_once_and_uses_a_new_one_at_once` (in-memory
+  credential store), `ntfy_posts_json_to_http_server` (local HTTP server,
+  checks the `Authorization` header that curl reads from stdin),
+  `a_token_that_could_break_the_curl_config_is_refused`. The OS keychain was
+  not touched by tests; a real ntfy server was not used.

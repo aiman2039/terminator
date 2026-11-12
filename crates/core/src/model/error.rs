@@ -22,6 +22,8 @@ pub enum SettingsError {
     NtfyChannel { channel: String },
     #[error("ntfy machine name must be at most 128 bytes without control characters")]
     NtfyMachine { machine: String },
+    #[error("ntfy server and click URLs must be http(s) URLs without spaces")]
+    NtfyUrl { url: String },
     #[error("History age must be 1–3650 days")]
     HistoryDays { days: u64 },
     #[error("Local History age must be 0–3650 days")]

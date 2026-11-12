@@ -266,6 +266,7 @@ impl Shared {
                 offset,
                 limit,
             } => self.on_local_history_page(&path, offset, limit),
+            Request::NtfyToken { token } => self.on_ntfy_token(token),
             Request::LocalHistoryRead { path, id } => self.on_local_history_read(&path, &id),
             Request::LocalHistoryLabel { project, label } => {
                 self.on_local_history_label(&project, label)

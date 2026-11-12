@@ -7,6 +7,7 @@ mod helper;
 mod idle_close;
 mod notifications;
 mod ntfy;
+mod ntfy_token;
 mod presence;
 mod review;
 mod terminal_env;

@@ -117,10 +117,15 @@ impl Services {
                 })
                 .await
             }
-            Job::TestNtfy { channel, machine } => {
+            Job::TestNtfy {
+                channel,
+                machine,
+                endpoint,
+            } => {
                 self.test_ntfy(TestNtfyInput {
                     channel,
                     machine,
+                    endpoint,
                     cancel,
                     updates,
                 })

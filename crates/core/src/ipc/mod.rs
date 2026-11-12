@@ -336,6 +336,12 @@ pub enum Request {
         offset: u64,
         limit: u64,
     },
+    /// Saves the ntfy access token in the OS credential store; empty
+    /// removes it. The daemon queues the write on its ntfy worker and
+    /// replies at once. Requires `ntfy-server-v1`.
+    NtfyToken {
+        token: String,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {

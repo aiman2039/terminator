@@ -65,7 +65,10 @@ impl App {
     }
 
     fn ntfy_settings(&mut self, ui: &mut egui::Ui) {
-        if !self.field_visible("ntfy", "channel machine phone push") {
+        if !self.field_visible(
+            "ntfy",
+            "channel machine phone push server token click notice text",
+        ) {
             return;
         }
         // Clearing the channel is the removal gesture: an enabled toggle
@@ -75,11 +78,67 @@ impl App {
             self.settings_draft.ntfy_enabled = false;
         }
         self.ntfy_fields(ui);
+        self.ntfy_server_fields(ui);
         if !self.state.capabilities.iter().any(|c| c == NTFY_CAPABILITY) {
             ui.small("Activate an updated daemon to enable ntfy. Older sessions need a supporting daemon.");
         }
         ui.horizontal(|ui| self.ntfy_test_buttons(ui));
-        ui.small("Test posts directly to ntfy.sh with this channel; no Apply needed. Real alerts need the toggle on plus Apply, and no hook reinstall.");
+        ui.small("Test posts directly to the server with this channel and no token; no Apply needed. Real alerts need the toggle on plus Apply, and no hook reinstall.");
+    }
+
+    /// Self-hosted server, click action, notice text and access token
+    /// (`ntfy-server-v1`). The token goes to the daemon, which keeps it in
+    /// the OS credential store; it is never part of the settings.
+    fn ntfy_server_fields(&mut self, ui: &mut egui::Ui) {
+        let supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == terminator_core::NTFY_SERVER_CAPABILITY);
+        let token_id = egui::Id::unique("ntfy-token-draft");
+        let mut token = ui.data(|data| data.get_temp::<String>(token_id).unwrap_or_default());
+        let mut save = None;
+        ui.add_enabled_ui(supported, |ui| {
+            let options = &mut self.settings_draft.ntfy_options;
+            ui.horizontal(|ui| {
+                ui.label("Server");
+                ui.add(
+                    egui::TextEdit::singleline(&mut options.server).hint_text("https://ntfy.sh"),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Click opens");
+                ui.add(egui::TextEdit::singleline(&mut options.click).hint_text("Optional URL"));
+            });
+            ui.checkbox(
+                &mut options.include_text,
+                "Include the notice text (it can contain the agent's question)",
+            );
+            ui.horizontal(|ui| {
+                ui.label("Access token");
+                ui.add(egui::TextEdit::singleline(&mut token).password(true));
+                if ui
+                    .add_enabled(!token.is_empty(), egui::Button::new("Save token"))
+                    .clicked()
+                {
+                    save = Some(std::mem::take(&mut token));
+                }
+                if ui.button("Remove token").clicked() {
+                    save = Some(String::new());
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text(OLDER_DAEMON_HINT);
+        ui.data_mut(|data| data.insert_temp(token_id, token));
+        if let Some(token) = save {
+            self.info = Some(if token.is_empty() {
+                "ntfy token removed.".into()
+            } else {
+                "ntfy token saved in the OS credential store.".into()
+            });
+            self.send(Request::NtfyToken { token });
+        }
     }
 
     fn ntfy_fields(&mut self, ui: &mut egui::Ui) {
@@ -116,8 +175,9 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "ntfy-copy-test", copy.rect);
         if copy.clicked() {
+            let endpoint = self.settings_draft.ntfy_endpoint();
             ui.ctx()
-                .copy_text(notify_test::curl_command(&channel, &machine));
+                .copy_text(notify_test::curl_command(&endpoint, &channel, &machine));
             self.info = Some("ntfy test command copied.".into());
         }
     }
@@ -207,7 +267,12 @@ impl App {
 
     fn send_ntfy_test(&mut self, channel: String, machine: String) -> Result<(), String> {
         notify_test::validate(&channel, &machine)?;
-        let _ = self.jobs.send(Job::TestNtfy { channel, machine });
+        let endpoint = self.settings_draft.ntfy_endpoint();
+        let _ = self.jobs.send(Job::TestNtfy {
+            channel,
+            machine,
+            endpoint,
+        });
         self.info = Some("Sending ntfy test…".into());
         Ok(())
     }

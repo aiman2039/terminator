@@ -45,6 +45,7 @@ pub use model::{
     SettingsError, State, StateError, TERMINAL_NOTICES_CAPABILITY, TerminalNotice, VNC_CAPABILITY,
     VNC_REGIONS_CAPABILITY, WORKTREES_CAPABILITY,
 };
+pub use model::{NTFY_SERVER_CAPABILITY, NtfyOptions};
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};

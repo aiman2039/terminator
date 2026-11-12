@@ -134,6 +134,7 @@ impl SettingsSection {
             }
             Self::Notifications => {
                 "events waiting permission completed failed ntfy channel machine phone push alert \
+                 server self-hosted access token click notice text \
                  os desktop dismiss notifications focus resolve manual position corner terminal osc \
                  test place notifications at the side play sound with desktop notifications"
             }

@@ -239,16 +239,16 @@ pub struct Settings {
     /// Keep Local History file snapshots this many days; 0 turns
     /// recording off (`local-history-v1`).
     pub local_history_days: u32,
-    /// Local History size limit in MiB (`local-history-limits-v1`).
+    /// Local History MiB and snapshots per file (`local-history-limits-v1`).
     pub local_history_mib: u64,
-    /// Newest Local History snapshots kept per file.
     pub local_history_file_entries: u32,
+    pub ntfy_options: NtfyOptions,
 }
 mod error;
 mod hooks;
 mod settings;
 pub use error::{SettingsError, StateError};
-
+pub use settings::{NTFY_SERVER_CAPABILITY, NtfyOptions};
 pub const METADATA_SETTINGS_CAPABILITY: &str = "metadata-settings-v1";
 pub const WORKTREES_CAPABILITY: &str = "worktrees-v1";
 /// `State::init_commands` is stored and run in new local shell terminals.

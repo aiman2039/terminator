@@ -177,6 +177,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::local_history::CAPABILITY.into(),
         terminator_core::terminal_title::CAPABILITY.into(),
         terminator_core::local_history::LIMITS_CAPABILITY.into(),
+        terminator_core::NTFY_SERVER_CAPABILITY.into(),
     ];
     if catalog {
         state.daemon_build = Some(generations::build_identity(
@@ -244,6 +245,8 @@ pub(crate) fn start_shared(input: StartInput) -> Started {
     let (alerts, alert_rx) = mpsc::sync_channel::<String>(64);
     let (local_history, local_history_rx) =
         mpsc::sync_channel::<crate::workers::LocalHistoryJob>(4096);
+    // The credential store entry follows the shared data directory.
+    let ntfy = ntfy::start(catalog_paths.as_ref().unwrap_or(&paths).data.clone());
     let shared = Arc::new(Shared {
         helper,
         catalog_paths,
@@ -261,7 +264,7 @@ pub(crate) fn start_shared(input: StartInput) -> Started {
         persist_pending: AtomicBool::new(false),
         history,
         alerts,
-        ntfy: ntfy::start(),
+        ntfy,
         ntfy_cooldown: Mutex::new(ntfy::Cooldown::default()),
         forwards: Mutex::new(crate::remote::Forwards::default()),
         remote_transfers: Mutex::new(crate::remote::Transfers::default()),

@@ -105,6 +105,7 @@ impl Request {
             Self::LocalHistoryLabel { .. } => "LocalHistoryLabel",
             Self::LocalHistoryRevert { .. } => "LocalHistoryRevert",
             Self::LocalHistoryPage { .. } => "LocalHistoryPage",
+            Self::NtfyToken { .. } => "NtfyToken",
         }
     }
 }

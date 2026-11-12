@@ -194,6 +194,8 @@ pub(crate) enum Job {
     TestNtfy {
         channel: String,
         machine: String,
+        /// The ntfy server URL to post to.
+        endpoint: String,
     },
     External(PathBuf),
     /// Read usage preview lines `(file, lines)` for usages generation `u64`.

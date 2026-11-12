@@ -103,7 +103,27 @@ Delivery uses `curl` (required on PATH), one worker and a 64-item bounded queue.
 Requests time out after eight seconds and are not retried; queue overflow drops
 pings rather than blocking hooks. Failures log a generic daemon message and do
 not affect lifecycle tracking. `TERMINATOR_NO_NOTIFICATIONS` suppresses delivery
-for fixtures. This option currently supports public ntfy.sh topics without auth.
+for fixtures.
+
+With `ntfy-server-v1`, Settings → Notifications also has:
+
+- **Server**: a self-hosted ntfy URL (http or https). Empty uses ntfy.sh.
+- **Click opens**: an optional URL that the push opens when tapped (ntfy
+  `click`).
+- **Include the notice text**: off by default. When on, the hook summary
+  (for example the agent's question, at most 500 characters) follows the
+  status line. Details, paths and tool input are never sent.
+- **Access token**: Save token sends it to the daemon with `NtfyToken`. The
+  daemon's ntfy worker thread writes it to the OS credential store (service
+  `dev.terminator.ntfy:<data dir>`), never the IPC handler, and reads it
+  there once before the first push. Remove token deletes it. The token is
+  never in settings, logs, the process list or a temporary file: curl reads
+  the request, with the `Authorization: Bearer` header, from stdin
+  (`--config -`).
+
+Send test posts to the draft server without a token. To check a protected
+server, Apply and use Send hello from all agents, which goes through the
+daemon. Telegram and keep-awake are not supported.
 
 Pushes are time-gated while the inbox keeps every notification: repeats
 from one agent run and state are held back for 60s, and any push holds
