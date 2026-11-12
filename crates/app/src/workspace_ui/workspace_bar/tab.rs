@@ -183,8 +183,10 @@ impl App {
         }
     }
 
-    /// Terminal color underline, then the focused terminal identity: stable
-    /// brand glyph beside the hook lifecycle status or the kind icon.
+    /// A user-chosen terminal color line, then the focused terminal
+    /// identity: stable brand glyph beside the hook lifecycle status or the
+    /// kind icon. Without a chosen color the tab has no line and a neutral
+    /// glyph, so the accent underline marks only the active tab.
     fn paint_strip_tab_identity(&self, ui: &mut egui::Ui, paint: &TabPaint<'_>) {
         let TabPaint {
             face, rect, active, ..
@@ -192,7 +194,7 @@ impl App {
         let terminal_tint = face
             .sid
             .as_deref()
-            .map(|sid| self.terminal_title_color(sid));
+            .and_then(|sid| self.terminal_chosen_title_color(sid));
         if let Some(color) = terminal_tint {
             ui.painter().hline(
                 rect.x_range(),
@@ -237,11 +239,16 @@ impl App {
             egui::Image::new(image.clone()).paint_at(ui, icon_rect.shrink(1.0));
         } else {
             // File-type icons keep their own colors.
+            let neutral = if face.sid.is_some() && !*active {
+                appearance::color(&self.theme.secondary)
+            } else {
+                appearance::icon_color()
+            };
             appearance::paint_status_icon(appearance::PaintStatusIconInput {
                 ui,
                 rect: icon_rect,
                 icon: face.icon,
-                tint: terminal_tint.unwrap_or(appearance::icon_color()),
+                tint: terminal_tint.unwrap_or(neutral),
                 spin: false,
             });
         }

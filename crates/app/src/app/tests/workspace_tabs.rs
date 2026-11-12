@@ -157,6 +157,78 @@ fn workspace_tabs_hug_their_labels_and_underline_inside() {
     );
 }
 
+/// Only a user-chosen title color paints a terminal tab's bottom line; a
+/// tab without one has no accent line, so the accent marks the active tab.
+#[cfg(feature = "test-support")]
+#[test]
+fn terminal_tabs_without_a_chosen_color_paint_no_accent_line() {
+    let (mut app, ctx, _dir) = fixture();
+    for sid in ["one", "two"] {
+        app.state
+            .sessions
+            .push(session_fixture(sid, SessionKind::Shell));
+    }
+    let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+    workspace.add("tB".into(), Tab::Terminal("two".into()));
+    workspace.active = workspace.tabs[0].id.clone();
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+    let line_colors = |app: &mut App| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                app.workspace_bar(ui, "a", &mut dock);
+                app.layouts.insert("a".into(), dock);
+            },
+        );
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    line_colors(&mut app);
+    let accent = appearance::color(&app.theme.accent);
+    assert!(
+        !line_colors(&mut app).contains(&accent),
+        "no terminal tab may paint an accent bottom line"
+    );
+    app.preferences
+        .terminal_styles
+        .entry("two".into())
+        .or_default()
+        .color = Some("#5AA9FF".into());
+    assert!(
+        line_colors(&mut app).contains(&appearance::color("#5AA9FF")),
+        "a chosen color paints the tab line"
+    );
+}
+
+/// A finished agent is not painted in the accent: in Carbon the accent is
+/// almost the red of a failure.
+#[test]
+fn completed_agents_use_the_text_color_not_the_accent() {
+    let theme = AppearanceConfig::default();
+    let done = crate::sidebar_ui::state_color(AgentState::Completed, &theme);
+    assert_eq!(done, appearance::color(&theme.text));
+    assert_ne!(done, appearance::color(&theme.accent));
+    assert_ne!(
+        done,
+        crate::sidebar_ui::state_color(AgentState::Failed, &theme)
+    );
+}
+
 /// The tab close glyph uses the same icon size as the strip's `+` and menu
 /// controls, which keep the compact toolbar square.
 #[cfg(feature = "test-support")]
