@@ -15,10 +15,14 @@ pub(crate) fn bootstrap() -> Result<Bootstrap> {
         paths.runtime = p.into();
     }
     paths.init()?;
+    // A catalog generation's folder is deleted when it is pruned; dumps go
+    // to the workspace root's crashes folder, which the GUI opens.
+    let crash_dir = std::env::var_os("TERMINATOR_CATALOG_DATA")
+        .map_or_else(|| paths.data.clone(), std::path::PathBuf::from);
     crash::install(crash::CrashInstall {
         binary: "terminator-daemon",
         version: env!("CARGO_PKG_VERSION"),
-        data_dir: paths.data.clone(),
+        data_dir: crash_dir,
         notify: None,
     });
     let catalog_paths = if let Some(data) = std::env::var_os("TERMINATOR_CATALOG_DATA") {

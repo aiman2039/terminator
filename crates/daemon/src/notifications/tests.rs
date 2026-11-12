@@ -128,6 +128,19 @@ fn release_falls_back_to_the_title_when_the_marker_was_stripped() {
 }
 
 #[test]
+fn title_fallback_never_clears_a_banner_with_another_marker() {
+    let other = format!("{BODY_LEAD}{}", marker_for(7));
+    let banners = [Banner {
+        title: "Agent: Waiting",
+        text: &other,
+    }];
+    assert!(
+        banners_to_remove(&banners, &marker_for(8), "Agent: Waiting").is_empty(),
+        "another daemon's banner with the same title stays"
+    );
+}
+
+#[test]
 fn marker_is_hidden_and_unique_per_generation() {
     let first = marker_for(1);
     let second = marker_for(2);

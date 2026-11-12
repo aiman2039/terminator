@@ -141,8 +141,9 @@ impl Shared {
         data: &[u8],
     ) -> std::collections::VecDeque<String> {
         let mut rt = relock(runtime);
-        terminal_events::process(&mut rt.parser, data);
-        let _finished = rt.commands.process(data, now_ms());
+        let parsed = rt.osc_limit.filter(data);
+        terminal_events::process(&mut rt.parser, &parsed);
+        let _finished = rt.commands.process(&parsed, now_ms());
         let replies = std::mem::take(&mut rt.parser.callbacks_mut().replies);
         let notices = std::mem::take(&mut rt.parser.callbacks_mut().notices);
         let title = rt.parser.callbacks_mut().take_title(Instant::now(), false);

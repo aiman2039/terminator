@@ -24,7 +24,11 @@ fn reopen_unconfirmed(lifecycle: &mut Lifecycle) {
 }
 
 impl Shared {
-    fn idle_preflight(&self, session: &str) -> Result<Option<u32>> {
+    fn idle_preflight(
+        &self,
+        inventory: &mut sysinfo::System,
+        session: &str,
+    ) -> Result<Option<u32>> {
         let state = relock(&self.state);
         let record = state
             .sessions
@@ -53,7 +57,7 @@ impl Shared {
             .shell_executable
             .as_deref()
             .context("Launched shell identity is unavailable")?;
-        let pid = terminator_core::idle_close::verify_shell(record, expected)?;
+        let pid = terminator_core::idle_close::verify_shell(inventory, record, expected)?;
         ensure!(
             !runtime.ended && !runtime.closing,
             "Session exit is still being reconciled"
@@ -114,8 +118,8 @@ impl Shared {
             })
             .collect()
     }
-    fn signal_one(&self, session: &str) -> (Status, String) {
-        match self.idle_preflight(session) {
+    fn signal_one(&self, inventory: &mut sysinfo::System, session: &str) -> (Status, String) {
+        match self.idle_preflight(inventory, session) {
             Ok(None) => (Status::AlreadyEnded, "Session already ended".into()),
             Ok(Some(pid)) => {
                 if terminator_core::signals::signal_group(
@@ -198,6 +202,8 @@ impl Shared {
         sessions.sort();
         sessions.dedup();
         let mut outcomes = Vec::new();
+        // One full process scan per pass, taken before any lock.
+        let mut inventory = terminator_core::idle_close::process_inventory();
         {
             let _operation = relock(&self.terminal_operations);
             if relock(&self.state).generation != generation {
@@ -205,19 +211,24 @@ impl Shared {
                     Self::stale_generation_outcomes(sessions),
                 ));
             }
-            let checks: Vec<_> = sessions.iter().map(|s| self.idle_preflight(s)).collect();
+            let checks: Vec<_> = sessions
+                .iter()
+                .map(|s| self.idle_preflight(&mut inventory, s))
+                .collect();
             if checks.iter().any(Result::is_err) {
                 return Ok(Response::IdleSessionsClosed(
                     Self::preflight_failed_outcomes(sessions, checks),
                 ));
             }
+            // Re-check right before the signals, with input still held.
+            let mut inventory = terminator_core::idle_close::process_inventory();
             let mut partial_failure = false;
             for session in sessions {
                 if partial_failure {
                     outcomes.push(Outcome { session, status: Status::Failed, reason: "Not signalled after another target failed; no rollback of previous signals".into() });
                     continue;
                 }
-                let (status, reason) = self.signal_one(&session);
+                let (status, reason) = self.signal_one(&mut inventory, &session);
                 let failed = status == Status::Failed;
                 outcomes.push(Outcome {
                     session,

@@ -254,22 +254,39 @@ fn show_and_wait(
     if sound {
         notification.sound_name(sound_name());
     }
+    // GNOME keeps a plain notification in its list without closing it; a
+    // transient one is closed when its banner goes.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    notification.hint(notify_rust::Hint::Transient(true));
     let Ok(handle) = notification.show() else {
         return;
     };
-    handle.wait_for_action(|action| {
+    let on_action = |action: &str| {
         if action == "__closed" {
             return;
         }
         let _ = atomic_write(&paths.runtime.join("activation"), notice.as_bytes());
         launch_gui(&paths);
-    });
+    };
+    // The server may ignore the timeout: end the wait at ALERT_WAIT or when
+    // a newer alert is queued, and close only this notification.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Some(action) = linux_wait::wait(&handle, |started| {
+        superseded() || started.elapsed() >= ALERT_WAIT
+    }) {
+        on_action(&action);
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    handle.wait_for_action(on_action);
 }
+
+#[cfg(all(unix, not(target_os = "macos")))]
+mod linux_wait;
 
 /// Whether a submitted alert is waiting behind the one currently presented.
 /// The main loop preempts the active notification in that case so the newest
 /// alert is shown immediately instead of after the previous waiter ends.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(unix, test))]
 fn superseded() -> bool {
     let presenting = PRESENTING.load(Ordering::Relaxed);
     presenting != 0 && SUBMITTED.load(Ordering::Relaxed) > presenting

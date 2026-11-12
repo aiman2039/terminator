@@ -98,9 +98,18 @@ pub(super) fn record_batch(
                 .into_iter()
                 .filter(|path| !ignored.contains(path))
                 .collect(),
-            None => paths
+            None if !inside_work_tree(root) => paths
                 .into_iter()
                 .filter(|path| !build_output(root, path))
+                .collect(),
+            // One path (for example inside a submodule) failed the whole
+            // batch: ask path by path so the others keep their filter.
+            None => paths
+                .into_iter()
+                .filter(|path| match ignored(root, std::slice::from_ref(path)) {
+                    Some(ignored) => ignored.is_empty(),
+                    None => !build_output(root, path),
+                })
                 .collect(),
         };
         let first: Vec<&Path> = paths
@@ -171,7 +180,14 @@ fn options(input: Option<Vec<u8>>) -> CommandOptions {
     }
 }
 
-/// The subset of `paths` Git ignores, or `None` outside a repository.
+/// Whether `root` is inside a Git work tree.
+fn inside_work_tree(root: &Path) -> bool {
+    git::run_blocking(root, &["rev-parse", "--is-inside-work-tree"], options(None))
+        .is_ok_and(|out| out.trim_ascii() == b"true")
+}
+
+/// The subset of `paths` Git ignores, or `None` when Git cannot tell
+/// (outside a repository, a path inside a submodule, a timeout).
 fn ignored(root: &Path, paths: &[PathBuf]) -> Option<HashSet<PathBuf>> {
     let mut input = Vec::new();
     for path in paths {
@@ -345,6 +361,48 @@ mod tests {
         record_batch(&store, &roots, vec![output.clone(), source.clone()]);
         assert!(!store.has_history(&output));
         assert!(store.has_history(&source));
+    }
+
+    #[test]
+    fn a_submodule_path_in_the_batch_keeps_gitignored_files_out() {
+        let data = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        if !git(&["init", "-q"]) {
+            return; // No git on this machine.
+        }
+        std::fs::write(root.join(".gitignore"), ".env\n").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        assert!(git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{oid},sub")
+        ]));
+        let in_submodule = root.join("sub/a.txt");
+        let secret = root.join(".env");
+        let source = root.join("main.rs");
+        std::fs::write(&in_submodule, "sub").unwrap();
+        std::fs::write(&secret, "TOKEN=1").unwrap();
+        std::fs::write(&source, "fn main() {}").unwrap();
+        let store = local_history::Store::in_data(data.path());
+        let roots = BTreeSet::from([root.to_path_buf()]);
+        record_batch(
+            &store,
+            &roots,
+            vec![in_submodule.clone(), secret.clone(), source.clone()],
+        );
+        assert!(!store.has_history(&secret), "gitignored file stays out");
+        assert!(store.has_history(&source));
+        assert!(store.has_history(&in_submodule));
     }
 
     #[test]

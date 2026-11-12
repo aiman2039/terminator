@@ -39,6 +39,8 @@ pub(crate) struct Runtime {
     pub(crate) shell_executable: Option<std::path::PathBuf>,
     /// Shell integration command blocks (`command-blocks-v1`).
     pub(crate) commands: crate::commands::Commands,
+    /// Caps OSC strings fed to `parser` and `commands`.
+    pub(crate) osc_limit: crate::terminal_events::osc_limit::OscLimit,
 }
 impl Runtime {
     /// The child is still ours to signal: not reaped and not ended. Between

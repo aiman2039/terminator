@@ -7,6 +7,10 @@ use std::{
 use crate::server::{HistoryJob, Shared, relock};
 use crate::storage;
 
+/// Warning prefixes; each clears when its source succeeds again.
+const FLUSH_FAILED: &str = "History flush failed: ";
+const CLEANUP_FAILED: &str = "History cleanup failed: ";
+
 /// Owns scrollback storage: applies queued jobs and periodically flushes
 /// and prunes history.
 pub(crate) struct HistoryWorker {
@@ -102,8 +106,9 @@ impl HistoryWorker {
 
     fn maintain(&mut self, s: &Shared) {
         if self.last_flush.elapsed() >= Duration::from_millis(250) {
-            if let Err(e) = self.history.flush() {
-                s.degraded(&format!("History flush failed: {e}"));
+            match self.history.flush() {
+                Err(e) => s.degraded(&format!("{FLUSH_FAILED}{e}")),
+                Ok(()) => s.recovered(FLUSH_FAILED),
             }
             self.last_flush = Instant::now();
         }
@@ -149,8 +154,8 @@ impl HistoryWorker {
                     s.degraded(&format!("History truncation not saved: {e}"));
                 }
             }
-            Ok(_) => {}
-            Err(e) => s.degraded(&format!("History cleanup failed: {e}")),
+            Ok(_) => s.recovered(CLEANUP_FAILED),
+            Err(e) => s.degraded(&format!("{CLEANUP_FAILED}{e}")),
         }
     }
 }

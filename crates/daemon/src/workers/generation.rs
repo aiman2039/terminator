@@ -8,6 +8,12 @@ use terminator_core::{Paths, Request, generations, runtime_dir};
 
 use crate::server::{Shared, relock};
 
+/// Warning prefixes; each clears when its source succeeds again.
+const PERSIST: &str = "Agent state not saved: ";
+const MAINTENANCE: &str = "Generation maintenance: ";
+const PRUNE_GLOBAL: &str = "Global history retention: ";
+const PRUNE_RETIRED: &str = "Generation retention: ";
+
 /// Once a second, keeps this generation in step with the shared catalog:
 /// refreshes state, prunes retained history and retires a drained owner.
 pub(crate) struct GenerationWorker {
@@ -41,13 +47,15 @@ impl GenerationWorker {
                 if shared.shutdown.load(Ordering::Acquire) {
                     break;
                 }
-                if shared.persist_pending.load(Ordering::Acquire)
-                    && let Err(error) = shared.persist()
-                {
-                    shared.degraded(&format!("Agent state not saved: {error:#}"));
+                if shared.persist_pending.load(Ordering::Acquire) {
+                    match shared.persist() {
+                        Err(error) => shared.degraded(&format!("{PERSIST}{error:#}")),
+                        Ok(()) => shared.recovered(PERSIST),
+                    }
                 }
-                if let Err(error) = worker.tick(&shared) {
-                    shared.degraded(&format!("Generation maintenance: {error:#}"));
+                match worker.tick(&shared) {
+                    Err(error) => shared.degraded(&format!("{MAINTENANCE}{error:#}")),
+                    Ok(()) => shared.recovered(MAINTENANCE),
                 }
                 if kept_alive.elapsed() >= runtime_dir::KEEP_ALIVE_INTERVAL {
                     kept_alive = Instant::now();
@@ -112,14 +120,15 @@ impl GenerationWorker {
             match shared.prune_global(&survey.owners) {
                 // Another holder has the coordination lock: retry on the next tick.
                 Err(error) if is_busy(&error) => return,
-                Err(error) => shared.degraded(&format!("Global history retention: {error:#}")),
-                Ok(()) => {}
+                Err(error) => shared.degraded(&format!("{PRUNE_GLOBAL}{error:#}")),
+                Ok(()) => shared.recovered(PRUNE_GLOBAL),
             }
-            if let Err(error) = generations::prune_retired(root, generations::RETIRED_RETENTION) {
-                shared.degraded(&format!(
-                    "Generation retention: {error}",
+            match generations::prune_retired(root, generations::RETIRED_RETENTION) {
+                Err(error) => shared.degraded(&format!(
+                    "{PRUNE_RETIRED}{error}",
                     error = terminator_core::ErrorChain(&error)
-                ));
+                )),
+                Ok(_) => shared.recovered(PRUNE_RETIRED),
             }
             self.global_prune = Instant::now();
         }
