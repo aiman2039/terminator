@@ -26,6 +26,9 @@ pub(crate) struct VncViewState {
     pub(crate) error: Option<String>,
     /// The last received clipboard text. Frames repeat it until it changes.
     pub(crate) remote_clipboard: Option<String>,
+    /// A frame was applied to this view. The first frame only sets the
+    /// clipboard baseline: reattaching must not replace the local clipboard.
+    pub(crate) clipboard_seeded: bool,
     pub(crate) fetching: bool,
     pub(crate) last_poll: Option<Instant>,
     /// Newest cursor image received (`vnc-shm-v1` sends it only on change).
@@ -107,6 +110,7 @@ impl Default for VncViewState {
             error: None,
             fetching: false,
             remote_clipboard: None,
+            clipboard_seeded: false,
             last_poll: None,
             cursor_serial: 0,
             shm_failed: false,

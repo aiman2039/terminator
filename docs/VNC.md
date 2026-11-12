@@ -158,12 +158,13 @@ SFTP transfers require a writable SSH session and an explicit file selection.
 Files dropped on the screen of a writable SSH session upload to the Upload
 folder set in the Files panel (an absolute path; `~` cannot be expanded on
 the client). One file uploads per drop.
-They are limited to 1 GiB and five minutes, with at most two active transfers
+They are limited to 1 GiB and one hour, with at most two active transfers
 per session. Existing destinations are not overwritten. Upload publication
 uses the server's hard-link and fsync extensions; servers without them are
 rejected before upload. Downloads use a local temporary file and atomic
-non-overwriting publication. A failed or timed-out upload can leave a named
-`.terminator-<transfer-id>.partial` file; it is never reported as complete or
+non-overwriting publication. A failed or timed-out upload removes its
+`.terminator-<transfer-id>.partial` file while the SFTP session still answers;
+a lost connection can leave it. It is never reported as complete or
 automatically retried. The Files panel reports progress and errors.
 
 Advanced operations require the owning daemon's `vnc-features-v1` capability.

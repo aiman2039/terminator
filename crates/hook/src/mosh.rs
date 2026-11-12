@@ -38,12 +38,25 @@ fn endpoint(options: &[String], host: &str) -> Result<IpAddr> {
         "Cannot read the SSH host configuration"
     );
     let resolved = ssh::parse_resolved(std::str::from_utf8(&output.stdout)?)?;
-    (resolved.hostname.as_str(), 0)
+    let addresses = (resolved.hostname.as_str(), 0)
         .to_socket_addrs()
         .with_context(|| format!("Cannot resolve {}", resolved.hostname))?
-        .next()
-        .map(|address| address.ip())
-        .with_context(|| format!("{} has no address", resolved.hostname))
+        .map(|address| address.ip());
+    pick_address(addresses, resolved.address_family.as_deref())
+        .with_context(|| format!("{} has no usable address", resolved.hostname))
+}
+
+/// The first address of the family `AddressFamily` allows: with `inet`
+/// SSH (and so `mosh-server -s`) uses IPv4 even when IPv6 resolves first.
+fn pick_address(
+    mut addresses: impl Iterator<Item = IpAddr>,
+    family: Option<&str>,
+) -> Option<IpAddr> {
+    addresses.find(|address| match family {
+        Some("inet") => address.is_ipv4(),
+        Some("inet6") => address.is_ipv6(),
+        _ => true,
+    })
 }
 
 /// Runs `mosh-server` over SSH and returns its UDP port and session key.
@@ -124,6 +137,17 @@ fn connect(_: &std::path::Path, _: IpAddr, _: u16, _: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mosh_targets_the_address_family_ssh_config_selects() {
+        let v6: IpAddr = "2001:db8::1".parse().unwrap();
+        let v4: IpAddr = "192.0.2.1".parse().unwrap();
+        let both = || [v6, v4].into_iter();
+        assert_eq!(pick_address(both(), Some("inet")), Some(v4));
+        assert_eq!(pick_address(both(), Some("inet6")), Some(v6));
+        assert_eq!(pick_address(both(), None), Some(v6));
+        assert_eq!(pick_address([v6].into_iter(), Some("inet")), None);
+    }
 
     #[test]
     fn mosh_connect_line_yields_port_and_key() {

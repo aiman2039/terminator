@@ -8,7 +8,6 @@ use terminator_core::remote::TransferStatus;
 const MAX_ACTIVE: usize = 2;
 /// Finished statuses are kept for polling until this many are recorded.
 const MAX_RECORDED: usize = 32;
-const TIMEOUT: Duration = Duration::from_hours(1);
 
 #[derive(Default)]
 pub(crate) struct Transfers {
@@ -91,6 +90,7 @@ struct RunInput<'a> {
     id: &'a str,
     operation: &'a Operation,
     progress: &'a dyn super::transfer::Progress,
+    deadline: tokio::time::Instant,
 }
 async fn run(input: RunInput<'_>) -> Result<()> {
     let RunInput {
@@ -99,6 +99,7 @@ async fn run(input: RunInput<'_>) -> Result<()> {
         id,
         operation,
         progress,
+        deadline,
     } = input;
     super::transfer::with_sftp(&project.ssh, control, async |sftp| {
         let mut fs = sftp.fs();
@@ -124,6 +125,7 @@ async fn run(input: RunInput<'_>) -> Result<()> {
                     remote: &remote,
                     id,
                     progress,
+                    deadline,
                 })
                 .await?;
             }
@@ -180,8 +182,9 @@ impl Shared {
                         .build()?;
                     runtime.block_on(async {
                         tokio::time::timeout(
-                            TIMEOUT,
+                            super::transfer::OUTER_TIMEOUT,
                             run(RunInput {
+                                deadline: super::transfer::deadline(),
                                 project: &project,
                                 control: control.as_deref(),
                                 id: &id,

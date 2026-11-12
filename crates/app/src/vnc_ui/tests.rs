@@ -625,3 +625,23 @@ fn small_trackpad_deltas_accumulate_into_one_remote_step() {
     assert_eq!(wheel_steps(&mut pending, small), 1);
     assert!((pending - 0.125).abs() < 1e-4);
 }
+
+#[test]
+fn reattaching_a_vnc_view_does_not_replace_the_local_clipboard() {
+    use super::frame::take_remote_clipboard;
+    let mut view = VncViewState::default();
+    // The daemon repeats the last remote text in every frame.
+    assert_eq!(take_remote_clipboard(&mut view, Some("old".into())), None);
+    assert_eq!(take_remote_clipboard(&mut view, Some("old".into())), None);
+    assert_eq!(
+        take_remote_clipboard(&mut view, Some("new".into())),
+        Some("new".into())
+    );
+    // A view whose first frame had no text copies the first remote text.
+    let mut empty = VncViewState::default();
+    assert_eq!(take_remote_clipboard(&mut empty, None), None);
+    assert_eq!(
+        take_remote_clipboard(&mut empty, Some("copied".into())),
+        Some("copied".into())
+    );
+}

@@ -116,6 +116,8 @@ pub(crate) struct UploadInput<'a> {
     pub remote: &'a str,
     pub id: &'a str,
     pub progress: &'a dyn Progress,
+    /// The copy stops here; the partial file is then still removed.
+    pub deadline: tokio::time::Instant,
 }
 pub(crate) async fn upload(input: UploadInput<'_>) -> Result<u64> {
     let UploadInput {
@@ -124,6 +126,7 @@ pub(crate) async fn upload(input: UploadInput<'_>) -> Result<u64> {
         remote,
         id,
         progress,
+        deadline,
     } = input;
     ensure!(
         sftp.support_hardlink() && sftp.support_fsync(),
@@ -151,23 +154,60 @@ pub(crate) async fn upload(input: UploadInput<'_>) -> Result<u64> {
     )
     .await?;
     let mut file = Box::pin(TokioCompatFile::from(file));
-    let result = async {
-        let bytes = copy(source, file.as_mut(), progress).await?;
-        ensure!(
-            bytes == metadata.len(),
-            "Upload source changed during transfer"
-        );
-        file.as_mut().shutdown().await?;
-        file.as_mut().as_mut_file().sync_all().await?;
-        drop(file);
-        fs.hard_link(&temporary, remote).await.context(
-            "Remote destination already exists or cannot be published; it was not overwritten",
-        )?;
-        Ok::<u64, anyhow::Error>(bytes)
-    }
-    .await;
-    let _ = fs.remove_file(&temporary).await;
+    until_then_clean(
+        deadline,
+        &mut fs,
+        async |fs| {
+            let bytes = copy(source, file.as_mut(), progress).await?;
+            ensure!(
+                bytes == metadata.len(),
+                "Upload source changed during transfer"
+            );
+            file.as_mut().shutdown().await?;
+            file.as_mut().as_mut_file().sync_all().await?;
+            drop(file);
+            fs.hard_link(&temporary, remote).await.context(
+                "Remote destination already exists or cannot be published; it was not overwritten",
+            )?;
+            Ok(bytes)
+        },
+        async |fs| {
+            let _ = fs.remove_file(&temporary).await;
+        },
+    )
+    .await
+}
+
+/// Runs `work` until `deadline`, then always runs `cleanup` on the still
+/// open SFTP session. A time limit outside this would drop the future and
+/// leave the remote `.partial` file behind.
+async fn until_then_clean<S, T>(
+    deadline: tokio::time::Instant,
+    state: &mut S,
+    work: impl AsyncFnOnce(&mut S) -> Result<T>,
+    cleanup: impl AsyncFnOnce(&mut S),
+) -> Result<T> {
+    let result = tokio::time::timeout_at(deadline, work(state))
+        .await
+        .unwrap_or_else(|_| {
+            Err(anyhow::anyhow!(
+                "SFTP transfer timed out; the partial upload was removed"
+            ))
+        });
+    cleanup(state).await;
     result
+}
+
+/// Time limit for one whole SFTP transfer (1 GiB must fit on a slow link).
+pub(crate) const TIMEOUT: std::time::Duration = std::time::Duration::from_hours(1);
+/// Limit for the whole transfer future: [`TIMEOUT`] plus time for an upload
+/// to remove its partial file.
+pub(crate) const OUTER_TIMEOUT: std::time::Duration =
+    TIMEOUT.saturating_add(std::time::Duration::from_secs(30));
+/// When a transfer that starts now must stop copying.
+pub(crate) fn deadline() -> tokio::time::Instant {
+    let now = tokio::time::Instant::now();
+    now.checked_add(TIMEOUT).unwrap_or(now)
 }
 
 pub(crate) struct DownloadInput<'a> {
@@ -270,6 +310,20 @@ mod tests {
                 .is_err()
         );
         assert!(output.len() < source.len());
+    }
+    #[tokio::test]
+    async fn a_timed_out_upload_still_removes_its_partial_file() {
+        let mut removed = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(20);
+        let result: Result<u64> = until_then_clean(
+            deadline,
+            &mut removed,
+            async |_| std::future::pending().await,
+            async |removed| *removed = true,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(removed);
     }
     #[test]
     fn transfer_ids_are_safe_in_remote_temporary_names() {

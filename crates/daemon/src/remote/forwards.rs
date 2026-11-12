@@ -262,24 +262,27 @@ impl Shared {
         if tracked && up {
             return Ok(());
         }
-        if !up {
-            ensure!(
-                allow_master,
-                "The SSH terminal has not signed in, so the forward was not started"
-            );
-            start_master(&project, &control)?;
-            relock(&self.forwards).mark_dedicated(control.clone());
-        }
+        ensure!(
+            up || allow_master,
+            "The SSH terminal has not signed in, so the forward was not started"
+        );
         // A port busy before the request is reported as such. The request
         // still goes out when the port is busy and the master was already up:
         // OpenSSH accepts a duplicate of a forward it already carries (one an
         // earlier daemon generation started), and refuses anything else.
+        // Checked first, so a refusal leaves no dedicated master behind.
         let free = local_port_free(local_port);
         ensure!(
             free || up,
             "Local port {local_port} is already in use on this computer. Stop whatever listens there or choose another local port."
         );
+        if !up {
+            start_master(&project, &control)?;
+            relock(&self.forwards).mark_dedicated(control.clone());
+        }
         forward_command(true, &control, &forward).map_err(|error| {
+            // A dedicated master this call started carries nothing.
+            self.release_forward_master(&control);
             if free && local_port_free(local_port) {
                 anyhow::anyhow!("Cannot forward localhost:{local_port}: {error:#}")
             } else {
@@ -320,7 +323,7 @@ impl Shared {
     }
 
     /// Exits a dedicated master once its last forward stopped, unless a live
-    /// terminal or VNC session joined it meanwhile.
+    /// terminal, VNC, transfer or remote-apps session joined it meanwhile.
     fn release_forward_master(&self, control: &Path) {
         if !relock(&self.forwards).release_dedicated(control) {
             return;
@@ -339,6 +342,12 @@ impl Shared {
                 s.status.live()
                     && s.options.transport == terminator_core::vnc::Transport::Ssh
                     && uses(&s.options.ssh)
+            })
+            // State, then transfers, then remote apps: the established order.
+            || state.remote_projects.iter().any(|p| {
+                uses(&p.ssh)
+                    && (relock(&self.remote_transfers).active(&p.id) > 0
+                        || self.remote_apps_live_for(&p.id))
             });
         drop(state);
         if !busy {

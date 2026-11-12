@@ -265,6 +265,11 @@ pub struct Resolved {
     pub hostname: String,
     pub port: u16,
     pub host_key_alias: Option<String>,
+    /// `UserKnownHostsFile` entries as `ssh -G` prints them (may start
+    /// with `~/`); empty when the output has none.
+    pub user_known_hosts: Vec<String>,
+    /// `AddressFamily`: `inet`, `inet6`, or `None` for any.
+    pub address_family: Option<String>,
 }
 impl Resolved {
     /// The host field OpenSSH looks up: a `HostKeyAlias` verbatim, otherwise
@@ -284,6 +289,8 @@ pub fn parse_resolved(output: &str) -> Result<Resolved, SshOptionsError> {
     let mut hostname = None;
     let mut port = None;
     let mut host_key_alias = None;
+    let mut user_known_hosts = Vec::new();
+    let mut address_family = None;
     for line in output.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
@@ -294,6 +301,16 @@ pub fn parse_resolved(output: &str) -> Result<Resolved, SshOptionsError> {
             "port" => port = value.parse::<u16>().ok(),
             "hostkeyalias" if !value.is_empty() && value != "none" => {
                 host_key_alias = Some(value.to_owned());
+            }
+            "userknownhostsfile" => {
+                user_known_hosts = value
+                    .split_whitespace()
+                    .map(|path| path.trim_matches('"').to_owned())
+                    .filter(|path| !path.is_empty())
+                    .collect();
+            }
+            "addressfamily" if matches!(value, "inet" | "inet6") => {
+                address_family = Some(value.to_owned());
             }
             _ => {}
         }
@@ -309,6 +326,8 @@ pub fn parse_resolved(output: &str) -> Result<Resolved, SshOptionsError> {
             .filter(|p| *p > 0)
             .ok_or(SshOptionsError::MissingPort)?,
         host_key_alias,
+        user_known_hosts,
+        address_family,
     })
 }
 

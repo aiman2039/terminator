@@ -19,6 +19,9 @@ fn resolve(options: &SshOptions) -> Result<ssh::Resolved> {
     Ok(ssh::parse_resolved(std::str::from_utf8(&output.stdout)?)?)
 }
 pub(crate) fn scan(options: &SshOptions) -> Result<HostKeyScan> {
+    scan_resolved(options).map(|(_, scan)| scan)
+}
+fn scan_resolved(options: &SshOptions) -> Result<(ssh::Resolved, HostKeyScan)> {
     let resolved = resolve(options)?;
     let mut command = ssh::scrubbed(Command::new("ssh-keyscan"));
     command
@@ -72,13 +75,42 @@ pub(crate) fn scan(options: &SshOptions) -> Result<HostKeyScan> {
     for (key, fingerprint) in keys.iter_mut().zip(fingerprints) {
         key.fingerprint = fingerprint;
     }
-    Ok(HostKeyScan { host, keys })
+    Ok((resolved, HostKeyScan { host, keys }))
 }
-fn known_hosts(options: &SshOptions) -> Result<PathBuf> {
+/// The file OpenSSH reads first for a host without a project file: the
+/// first `UserKnownHostsFile` from `ssh_config`, else `~/.ssh/known_hosts`.
+fn known_hosts_path(configured: &[String], home: Option<&Path>) -> Result<PathBuf> {
+    let Some(first) = configured.first() else {
+        return Ok(home
+            .context("Home directory is unavailable")?
+            .join(".ssh")
+            .join("known_hosts"));
+    };
+    ensure!(
+        first != "/dev/null" && !first.eq_ignore_ascii_case("none"),
+        "Your SSH configuration sets UserKnownHostsFile {first} for this host, so a trusted key would not be kept. Sign in through an SSH terminal instead."
+    );
+    ensure!(
+        !first.contains('%') && !first.contains("${"),
+        "Your SSH configuration sets UserKnownHostsFile {first} for this host, which Terminator cannot expand. Sign in through an SSH terminal instead."
+    );
+    let path = match first.strip_prefix("~/") {
+        Some(rest) => home.context("Home directory is unavailable")?.join(rest),
+        None => PathBuf::from(first),
+    };
+    ensure!(
+        path.is_absolute(),
+        "Your SSH configuration sets a relative UserKnownHostsFile {first}. Sign in through an SSH terminal instead."
+    );
+    Ok(path)
+}
+fn known_hosts(options: &SshOptions, resolved: &ssh::Resolved) -> Result<PathBuf> {
     if let Some(path) = &options.known_hosts_file {
         return Ok(path.clone());
     }
-    let path = ssh::default_known_hosts().context("Home directory is unavailable")?;
+    let home = ssh::default_known_hosts()
+        .and_then(|path| path.parent().and_then(Path::parent).map(Path::to_path_buf));
+    let path = known_hosts_path(&resolved.user_known_hosts, home.as_deref())?;
     let directory = path.parent().context("known_hosts has no parent")?;
     if !directory.exists() {
         #[cfg_attr(
@@ -93,12 +125,12 @@ fn known_hosts(options: &SshOptions) -> Result<PathBuf> {
     Ok(path)
 }
 pub(crate) fn trust(options: &SshOptions, accepted: &[HostKey]) -> Result<()> {
-    let current = scan(options)?;
+    let (resolved, current) = scan_resolved(options)?;
     ensure!(
         ssh::same_keys(&current.keys, accepted),
         "The host presented different keys than the ones shown; nothing was trusted. Check the host and try again."
     );
-    let path = known_hosts(options)?;
+    let path = known_hosts(options, &resolved)?;
     let known = known_keys(&path, &current.host)?;
     // A changed key is never replaced here, and appending beside it would
     // make OpenSSH accept the new key: it trusts any matching line.
@@ -193,7 +225,31 @@ fn parse_known(output: &str) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_known;
+    use super::{known_hosts_path, parse_known};
+    use std::path::{Path, PathBuf};
+    #[test]
+    fn trusted_keys_go_to_the_known_hosts_file_ssh_config_names() {
+        let home = Some(Path::new("/home/dev"));
+        assert_eq!(
+            known_hosts_path(&[], home).unwrap(),
+            PathBuf::from("/home/dev/.ssh/known_hosts")
+        );
+        let configured = ["~/.ssh/vm_hosts".to_owned(), "/etc/other".to_owned()];
+        assert_eq!(
+            known_hosts_path(&configured, home).unwrap(),
+            PathBuf::from("/home/dev/.ssh/vm_hosts")
+        );
+        assert_eq!(
+            known_hosts_path(&["/srv/hosts".to_owned()], home).unwrap(),
+            PathBuf::from("/srv/hosts")
+        );
+        for refused in ["/dev/null", "none", "~/.ssh/%h_hosts", "relative"] {
+            assert!(
+                known_hosts_path(&[refused.to_owned()], home).is_err(),
+                "{refused}"
+            );
+        }
+    }
     #[test]
     fn known_host_lines_parse_with_markers_and_comments() {
         let output = "# Host [h]:2222 found: line 3\n[h]:2222 ssh-ed25519 AAAA1\n@revoked [h]:2222 ssh-rsa AAAA2\n|1|salt|hash ecdsa-sha2-nistp256 AAAA3 comment\n";
