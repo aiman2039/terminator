@@ -42,6 +42,10 @@ pub(crate) use tree::PreparedGit;
 pub(super) use tree::build_change_tree;
 use tree::*;
 
+/// One glyph per verb, as the diff toolbar: Stage is Plus, Unstage Minus.
+pub(crate) const STAGE_ICON: &str = "Plus";
+pub(crate) const UNSTAGE_ICON: &str = "Minus";
+
 pub(super) fn skip_clipped_git_row(ui: &mut egui::Ui) -> bool {
     skip_clipped_row(ui, GIT_TREE_ROW_HEIGHT)
 }

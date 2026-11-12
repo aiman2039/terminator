@@ -317,9 +317,9 @@ impl ChangeRow<'_> {
         let path = &self.change.path;
         let staged = self.group == terminator_git::GitGroup::Staged;
         let (label, icon) = if staged {
-            ("Unstage", "ArrowLeft")
+            ("Unstage", UNSTAGE_ICON)
         } else {
-            ("Stage", "Plus")
+            ("Stage", STAGE_ICON)
         };
         let lock = self.ctx.lock.index;
         let item = |ui: &mut egui::Ui, label: &str, icon: &str| {

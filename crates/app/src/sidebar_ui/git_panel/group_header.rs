@@ -52,9 +52,9 @@ fn git_group_bulk_action(
     outcome: &mut GitPanelOutcome,
 ) {
     let (icon, tip) = match prepared.group {
-        terminator_git::GitGroup::Staged => ("ArrowLeft", "Unstage all"),
+        terminator_git::GitGroup::Staged => (UNSTAGE_ICON, "Unstage all"),
         terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
-            ("Plus", "Stage all")
+            (STAGE_ICON, "Stage all")
         }
         terminator_git::GitGroup::Conflicts => return,
     };
