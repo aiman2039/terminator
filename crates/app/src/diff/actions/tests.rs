@@ -714,6 +714,17 @@ async fn discarding_a_picked_removal_without_final_newline_keeps_lines_apart() {
     );
 }
 
+#[tokio::test]
+async fn stage_hunk_after_a_bare_cr_stages_the_added_line() {
+    let fixture = Fixture::new("cr.txt", Some("a\rb\nc\nd\ne\nf\ng\nh\n"));
+    std::fs::write(fixture.absolute(), "a\rb\nc\nd\ne\nf\nNEW\ng\nh\n").unwrap();
+    let doc = fixture.doc(false).await;
+    assert_eq!(doc.hunks.len(), 1);
+    assert_eq!(doc.hunks[0].new, 5..6, "lines end at \\n only");
+    fixture.change(doc, 0, Kind::Stage).await.unwrap();
+    assert_eq!(fixture.index(), "a\rb\nc\nd\ne\nf\nNEW\ng\nh\n");
+}
+
 #[test]
 fn patch_marks_a_missing_final_newline() {
     let version = |text: &str| Version {

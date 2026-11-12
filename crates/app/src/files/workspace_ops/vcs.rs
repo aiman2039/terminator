@@ -97,15 +97,43 @@ pub(super) fn shelve(root: &Path, paths: &[PathBuf]) -> Result<Report> {
     Ok(Report::Message("Shelved staged changes".into()))
 }
 
-pub(super) fn shelves(root: &Path) -> Result<Vec<(String, String)>> {
-    let text = git_text(root, &["stash", "list", "--format=%gd%x09%gs"])?;
+/// Shelves as `(stash@{N}, message, commit hash)`, newest first.
+fn stash_list(root: &Path) -> Result<Vec<(String, String, String)>> {
+    let text = git_text(root, &["stash", "list", "--format=%gd%x09%H%x09%gs"])?;
     Ok(text
         .lines()
         .filter_map(|line| {
-            let (reference, message) = line.split_once('\t')?;
-            Some((reference.to_owned(), message.to_owned()))
+            let mut fields = line.splitn(3, '\t');
+            let (reference, hash) = (fields.next()?, fields.next()?);
+            let message = fields.next().unwrap_or_default();
+            Some((reference.to_owned(), message.to_owned(), hash.to_owned()))
         })
         .collect())
+}
+
+/// Each shelf as `(commit hash, message)`. Rows keep the hash, not the
+/// position: a `git stash` elsewhere moves every `stash@{N}`.
+pub(super) fn shelves(root: &Path) -> Result<Vec<(String, String)>> {
+    Ok(stash_list(root)?
+        .into_iter()
+        .map(|(_, message, hash)| (hash, message))
+        .collect())
+}
+
+/// The current `stash@{N}` of the shelf with commit `hash`, resolved just
+/// before `pop`/`drop`; a shelf that is gone is refused.
+pub(super) fn shelf_position(root: &Path, hash: &str) -> Result<String> {
+    ensure!(
+        !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "Invalid shelf reference"
+    );
+    let reference = stash_list(root)?
+        .into_iter()
+        .find(|(_, _, listed)| listed == hash)
+        .map(|(reference, _, _)| reference)
+        .context("The shelf is gone; refresh the list")?;
+    valid_shelf_ref(&reference)?;
+    Ok(reference)
 }
 
 pub(super) fn branches(root: &Path) -> Result<Vec<String>> {
@@ -244,15 +272,15 @@ pub(super) fn compare(root: &Path, base_override: Option<&str>) -> Result<Compar
     Ok(data)
 }
 
-pub(super) fn unshelve(root: &Path, reference: &str) -> Result<Report> {
-    valid_shelf_ref(reference)?;
-    git_text(root, &["stash", "pop", "--quiet", reference])?;
+pub(super) fn unshelve(root: &Path, hash: &str) -> Result<Report> {
+    let reference = shelf_position(root, hash)?;
+    git_text(root, &["stash", "pop", "--quiet", &reference])?;
     Ok(Report::Message("Unshelved".into()))
 }
 
-pub(super) fn drop_shelf(root: &Path, reference: &str) -> Result<Report> {
-    valid_shelf_ref(reference)?;
-    git_text(root, &["stash", "drop", "--quiet", reference])?;
+pub(super) fn drop_shelf(root: &Path, hash: &str) -> Result<Report> {
+    let reference = shelf_position(root, hash)?;
+    git_text(root, &["stash", "drop", "--quiet", &reference])?;
     Ok(Report::Message("Shelf dropped".into()))
 }
 

@@ -220,6 +220,35 @@ fn mark_resolved_stages_after_tab_is_left() {
 }
 
 #[test]
+fn accepting_the_deleted_side_never_writes_an_empty_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = eframe::egui::Context::default();
+    let mut app =
+        crate::App::with_context(&ctx, terminator_core::Paths::at(dir.path().join("state")));
+    let (jobs, received) = std::sync::mpsc::channel();
+    app.jobs = jobs.into();
+    let path = dir.path().join("conflicted.txt");
+    std::fs::write(&path, "markers\n").unwrap();
+    let key = tab(dir.path().into(), path.clone()).key();
+    let mut merge = MergeDoc::new(
+        Side::new("a\nb\nc\n".into(), true),
+        Side::new(String::new(), false),
+        Side::new("a\nB\nc\n".into(), true),
+    );
+    merge.accept(0, Pick::Ours);
+    assert!(merge.result_text().is_empty());
+    let mut state = MergeTab::default();
+    state.doc = Some(merge);
+    state.dirty = true;
+    app.merge.insert(key.clone(), state);
+    app.save_merge(&key, &path, true);
+    assert!(!app.merge[&key].busy(), "no write starts");
+    assert_eq!(app.merge[&key].error.as_deref(), Some(io::DELETION_REFUSED));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "markers\n");
+    assert!(received.try_iter().next().is_none(), "nothing is staged");
+}
+
+#[test]
 fn unsaved_merge_result_blocks_closing_and_quit() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = eframe::egui::Context::default();

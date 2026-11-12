@@ -244,6 +244,33 @@ fn fetch_blame_annotates_every_line() {
 }
 
 #[test]
+fn commit_files_with_non_ascii_names_open_as_real_paths() {
+    let dir = repo();
+    let root = dir.path();
+    std::fs::write(root.join("naïve.md"), "one\n").unwrap();
+    git_cmd(root, &["add", "."]);
+    git_cmd(root, &["commit", "-qm", "add"]);
+    git_cmd(root, &["mv", "naïve.md", "naïve 2.md"]);
+    git_cmd(root, &["commit", "-qm", "rename"]);
+    let history = file_history(root, &root.join("naïve 2.md")).unwrap();
+    let head = history[0].hash.as_str();
+    let changed = commit_files(root, head).unwrap();
+    let names: Vec<_> = changed
+        .iter()
+        .map(|(status, path)| (*status, path.file_name().unwrap().to_owned()))
+        .collect();
+    assert_eq!(names, [('R', "naïve 2.md".into())]);
+    let before = revision_document(RevisionDocumentInput {
+        cwd: root,
+        path: &root.join("naïve 2.md"),
+        left: &format!("{head}^"),
+        right: head,
+    })
+    .unwrap();
+    assert_eq!(before.left_text, "one\n", "the old name is read before");
+}
+
+#[test]
 fn history_files_and_revision_diffs_follow_commits() {
     let dir = repo();
     let root = dir.path();

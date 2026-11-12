@@ -86,13 +86,30 @@ pub(super) fn contained_join(root: &Path, path: &Path, allow_root: bool) -> Resu
     let parent = if parent.as_os_str().is_empty() {
         std::env::current_dir().context("current dir")?
     } else {
-        parent.canonicalize().context("parent")?
+        existing_ancestor_join(parent)?
     };
     ensure!(parent.starts_with(&root), "path escapes the root");
     let resolved = parent.join(name);
     ensure!(resolved.starts_with(&root), "path escapes the root");
     if !allow_root {
         ensure!(resolved != root, "refusing the repository root");
+    }
+    Ok(resolved)
+}
+
+/// `parent` resolved through its deepest existing ancestor; missing folders
+/// (a deleted tracked folder) follow as plain names, never `.` or `..`.
+fn existing_ancestor_join(parent: &Path) -> Result<PathBuf> {
+    let mut existing = parent;
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        missing.push(existing.file_name().context("missing parent")?);
+        existing = existing.parent().context("missing parent")?;
+    }
+    let mut resolved = existing.canonicalize().context("parent")?;
+    for name in missing.into_iter().rev() {
+        ensure!(name != "." && name != "..", "folder name is not allowed");
+        resolved.push(name);
     }
     Ok(resolved)
 }

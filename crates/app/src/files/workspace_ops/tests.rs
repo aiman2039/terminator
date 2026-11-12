@@ -188,9 +188,13 @@ fn shelve_unshelve_and_drop_roundtrip() {
         panic!("shelves report");
     };
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0].0, "stash@{0}");
+    assert_eq!(
+        list[0].0,
+        git_text(root, &["rev-parse", "stash@{0}"]).unwrap().trim()
+    );
     assert!(list[0].1.contains("Shelve (Terminator)"));
-    perform(root, Op::Unshelve("stash@{0}".into())).unwrap();
+    assert!(perform(root, Op::Unshelve("--all".into())).is_err());
+    perform(root, Op::Unshelve(list[0].0.clone())).unwrap();
     assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "shelved\n");
     let Report::Shelves(list) = perform(root, Op::Shelves).unwrap() else {
         panic!("shelves report");
@@ -199,12 +203,38 @@ fn shelve_unshelve_and_drop_roundtrip() {
     // Drop removes a shelf without touching the worktree.
     perform(root, Op::Stage(root.join("a.txt"))).unwrap();
     perform(root, Op::Shelve(vec![root.join("a.txt")])).unwrap();
-    perform(root, Op::DropShelf("stash@{0}".into())).unwrap();
+    let Report::Shelves(list) = perform(root, Op::Shelves).unwrap() else {
+        panic!("shelves report");
+    };
+    perform(root, Op::DropShelf(list[0].0.clone())).unwrap();
     let Report::Shelves(list) = perform(root, Op::Shelves).unwrap() else {
         panic!("shelves report");
     };
     assert!(list.is_empty());
     assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "base\n");
+}
+
+#[test]
+fn drop_after_a_new_stash_elsewhere_drops_the_listed_shelf() {
+    let dir = repo();
+    let root = dir.path();
+    fs::write(root.join("a.txt"), "mine\n").unwrap();
+    perform(root, Op::Stage(root.join("a.txt"))).unwrap();
+    perform(root, Op::Shelve(vec![root.join("a.txt")])).unwrap();
+    let Report::Shelves(listed) = perform(root, Op::Shelves).unwrap() else {
+        panic!("shelves report");
+    };
+    // An agent stashes in its terminal: every position moves by one.
+    fs::write(root.join("a.txt"), "agent\n").unwrap();
+    git(root, &["stash", "push", "-q", "-m", "agent work"]);
+    perform(root, Op::DropShelf(listed[0].0.clone())).unwrap();
+    let left = git_text(root, &["stash", "list", "--format=%gs"]).unwrap();
+    assert!(left.contains("agent work"), "{left}");
+    assert!(!left.contains("Shelve (Terminator)"), "{left}");
+    assert!(
+        perform(root, Op::Unshelve(listed[0].0.clone())).is_err(),
+        "a shelf that is gone is refused"
+    );
 }
 
 #[test]
@@ -382,6 +412,36 @@ fn stage_all_stages_every_path_in_one_operation() {
     assert_eq!(staged.lines().count(), 301);
     assert!(staged.lines().any(|line| line == "a.txt"));
     assert!(!staged.lines().any(|line| line == "*"));
+}
+
+#[test]
+fn files_of_a_deleted_folder_can_be_staged_and_restored() {
+    let dir = repo();
+    let root = dir.path();
+    fs::create_dir(root.join("old")).unwrap();
+    fs::write(root.join("old/a.rs"), "a\n").unwrap();
+    fs::write(root.join("old/b.rs"), "b\n").unwrap();
+    git(root, &["add", "old"]);
+    git(root, &["commit", "-qm", "old"]);
+    fs::remove_dir_all(root.join("old")).unwrap();
+    perform(
+        root,
+        Op::Discard {
+            path: root.join("old/a.rs"),
+            untracked: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(root.join("old/a.rs")).unwrap(), "a\n");
+    fs::remove_dir_all(root.join("old")).unwrap();
+    perform(
+        root,
+        Op::StageAll(vec![root.join("old/a.rs"), root.join("old/b.rs")]),
+    )
+    .unwrap();
+    let staged = git_text(root, &["diff", "--cached", "--name-only"]).unwrap();
+    assert_eq!(staged.lines().collect::<Vec<_>>(), ["old/a.rs", "old/b.rs"]);
+    assert!(perform(root, Op::Stage(root.join("gone/../../escape.rs"))).is_err());
 }
 
 #[cfg(unix)]

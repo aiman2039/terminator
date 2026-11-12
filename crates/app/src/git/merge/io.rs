@@ -10,6 +10,11 @@ use terminator_core::async_service::{CancellationToken, OperationContext, Policy
 /// Merge tabs by tab key.
 pub(crate) type MergeTabs = HashMap<String, MergeTab>;
 
+/// Why a merge tab does not save the deleted side of a modify/delete
+/// conflict.
+pub(super) const DELETION_REFUSED: &str =
+    "Keeping a deletion is not saved here; run `git rm` on the file in a terminal";
+
 pub(crate) type Done<T> = tokio::sync::mpsc::UnboundedReceiver<Result<T, String>>;
 
 /// The result of a [`App::file_pool_job`], once there is one. A job that
@@ -239,14 +244,18 @@ impl App {
         if stage && self.refuse_during_commit(repository.as_deref(), risk) {
             return;
         }
-        let Some(text) = self
-            .merge
-            .get(key)
-            .and_then(|state| state.doc.as_ref())
-            .map(MergeDoc::result_text)
-        else {
+        let Some(doc) = self.merge.get(key).and_then(|state| state.doc.as_ref()) else {
             return;
         };
+        let text = doc.result_text();
+        // Accepting the deleted side of a modify/delete conflict leaves an
+        // empty result; a write plus `git add` would keep an empty file.
+        if text.is_empty() && !(doc.ours.present && doc.theirs.present) {
+            if let Some(state) = self.merge.get_mut(key) {
+                state.error = Some(DELETION_REFUSED.into());
+            }
+            return;
+        }
         let writing = path.to_path_buf();
         let rx = self.file_pool_job(path.display().to_string(), move || {
             std::fs::write(&writing, text)

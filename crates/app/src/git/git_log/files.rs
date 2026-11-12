@@ -144,6 +144,7 @@ pub fn commit_files(cwd: &Path, hash: &str) -> Result<Vec<(char, std::path::Path
         &[
             "show",
             "--name-status",
+            "-z",
             "--format=",
             "--first-parent",
             "-m",
@@ -155,16 +156,30 @@ pub fn commit_files(cwd: &Path, hash: &str) -> Result<Vec<(char, std::path::Path
         },
     )
     .map_err(|error| format!("git show: {error}"))?;
-    Ok(String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split('\t');
-            let status = fields.next()?.chars().next()?;
-            // Renames and copies list old then new: show the new path.
-            let path = fields.next_back()?;
-            Some((status, root.join(path)))
-        })
-        .collect())
+    Ok(parse_name_status_z(&root, &String::from_utf8_lossy(&bytes)))
+}
+
+/// `--name-status -z` records: names arrive raw, never C-quoted.
+fn parse_name_status_z(root: &Path, text: &str) -> Vec<(char, std::path::PathBuf)> {
+    let mut fields = text
+        .split('\0')
+        .map(|field| field.trim_start_matches('\n'))
+        .filter(|field| !field.is_empty());
+    let mut files = Vec::new();
+    while let Some(status) = fields.next() {
+        let Some(letter) = status.chars().next() else {
+            continue;
+        };
+        let Some(mut path) = fields.next() else {
+            break;
+        };
+        // Renames and copies list old then new: show the new path.
+        if matches!(letter, 'R' | 'C') {
+            path = fields.next().unwrap_or(path);
+        }
+        files.push((letter, root.join(path)));
+    }
+    files
 }
 
 /// `path` at `revision`, or `None` when it did not exist there.
@@ -199,6 +214,7 @@ fn name_at(root: &Path, relative: &str, revision: &str) -> String {
             "log",
             "--follow",
             "--name-status",
+            "-z",
             "--format=%x1e%H",
             "--",
             relative,
@@ -212,19 +228,20 @@ fn name_at(root: &Path, relative: &str, revision: &str) -> String {
     };
     let text = String::from_utf8_lossy(&bytes);
     for record in text.split('\u{1e}') {
-        let mut lines = record.lines().filter(|line| !line.trim().is_empty());
-        let Some(hash) = lines.next() else {
+        // `<hash>`, then `R100`, old, new for a rename, or `M`, path; with
+        // `-z` names arrive raw, never C-quoted.
+        let fields: Vec<&str> = record
+            .split('\0')
+            .map(|field| field.trim_start_matches('\n'))
+            .filter(|field| !field.is_empty())
+            .collect();
+        let Some((hash, fields)) = fields.split_first() else {
             continue;
         };
         if !hash.starts_with(commit) {
             continue;
         }
-        // `R100\told\tnew` for a rename, `M\tpath` otherwise.
-        let Some(status) = lines.next() else {
-            break;
-        };
-        let fields: Vec<&str> = status.split('\t').collect();
-        let name = match fields.as_slice() {
+        let name = match fields {
             [kind, old, new] if kind.starts_with(['R', 'C']) => {
                 if before {
                     old
