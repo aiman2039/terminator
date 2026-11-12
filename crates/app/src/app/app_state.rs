@@ -246,6 +246,8 @@ pub struct App {
     /// The new-worktree form; kept only on the worktree center pages.
     pub(crate) worktree_draft: Option<worktree_ui::WorktreeDraft>,
     pub(crate) worktree_remove: Option<String>,
+    /// The Remove worktree dialog's read-only Git check.
+    pub(crate) worktree_remove_check: crate::chrome::dialogs_ui::RemoveCheck,
     pub(crate) theme: AppearanceConfig,
     pub(crate) terminal_theme: Option<(String, String, egui_term::TerminalTheme)>,
     pub(crate) theme_committed: AppearanceConfig,

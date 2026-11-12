@@ -3,6 +3,8 @@ mod pickers;
 mod session_close;
 #[cfg(test)]
 mod tests;
+mod worktree_remove;
+pub(crate) use worktree_remove::RemoveCheck;
 
 use crate::{AttentionAction, AttentionCard, attention_card, *};
 
@@ -24,19 +26,15 @@ impl App {
                 ui.set_width(300.0);
                 ui.label("Choose a folder to begin. You can add more projects later.");
                 ui.add_space(8.0);
-                let width = ui.available_width();
-                if ui
-                    .add_sized([width, 28.0], egui::Button::new("Choose project folder"))
-                    .clicked()
-                {
-                    self.request_pick(PickKind::Project);
-                }
-                if ui
-                    .add_sized([width, 28.0], egui::Button::new("Skip"))
-                    .clicked()
-                {
-                    self.preferences.setup_completed = true;
-                }
+                ui.vertical_centered(|ui| {
+                    if appearance::primary_button(ui, "Choose project folder").clicked() {
+                        self.request_pick(PickKind::Project);
+                    }
+                    ui.add_space(4.0);
+                    if ui.link("Skip").clicked() {
+                        self.preferences.setup_completed = true;
+                    }
+                });
             });
     }
 
