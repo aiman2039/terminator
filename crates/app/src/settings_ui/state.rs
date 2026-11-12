@@ -9,10 +9,24 @@ pub(super) struct SettingsFrame {
     pub(super) grant_folder: bool,
 }
 
+/// A question the Settings draft waits on. Only closing with unsaved
+/// changes asks; a section change keeps the draft and never asks.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SettingsPending {
-    Section(SettingsSection),
     Close,
+}
+
+/// Top-level fields that differ between two serialized values.
+fn changed_fields(draft: &impl serde::Serialize, saved: &impl serde::Serialize) -> usize {
+    let (Ok(serde_json::Value::Object(draft)), Ok(serde_json::Value::Object(saved))) =
+        (serde_json::to_value(draft), serde_json::to_value(saved))
+    else {
+        return 0;
+    };
+    draft
+        .iter()
+        .filter(|(key, value)| saved.get(*key) != Some(*value))
+        .count()
 }
 
 pub(crate) use super::sections::SettingsSection;
@@ -71,13 +85,23 @@ impl App {
                 || self.theme_draft != self.theme_committed)
     }
 
-    pub(crate) fn request_settings_section(&mut self, section: SettingsSection) {
-        let section = section.canonical();
-        if section == self.settings_section.canonical() || !self.settings_dirty() {
-            self.settings_section = section;
-            return;
+    /// How many settings the draft changes (Apply saves them all).
+    pub(crate) fn settings_change_count(&self) -> usize {
+        if !self.settings_session {
+            return 0;
         }
-        self.settings_pending = Some(SettingsPending::Section(section));
+        changed_fields(&self.settings_draft, &self.state.settings)
+            .saturating_add(changed_fields(&self.theme_draft, &self.theme_committed))
+    }
+
+    /// The draft is kept across sections, so a section change never asks.
+    pub(crate) fn request_settings_section(&mut self, section: SettingsSection) {
+        self.settings_section = section.canonical();
+    }
+
+    /// Discard changes: back to the saved settings, without a question.
+    pub(super) fn discard_settings_draft(&mut self) {
+        self.revert_settings_draft();
     }
 
     pub(crate) fn request_settings_close(&mut self) {
@@ -119,7 +143,6 @@ impl App {
             self.revert_settings_draft();
         }
         match pending {
-            SettingsPending::Section(section) => self.settings_section = section,
             SettingsPending::Close => self.end_settings_session(),
         }
     }
@@ -130,15 +153,20 @@ impl App {
         }
         let invalid = self.settings_validation().err();
         let window = self.popups.window(ctx, "Unsaved settings");
+        let count = self.settings_change_count();
         let dialog = appearance::Confirm::new(
-            "You changed settings on this page. Save them before moving on?",
+            format!(
+                "{} not applied. Apply before closing?",
+                appearance::count_noun(count, "settings change")
+            ),
             "",
         )
+        .cancel(appearance::ConfirmButton::new("Keep editing"))
         .destructive(
-            appearance::ConfirmButton::new("Discard changes").id("settings-unsaved-discard"),
+            appearance::ConfirmButton::new("Discard and close").id("settings-unsaved-discard"),
         )
         .default_action(
-            appearance::ConfirmButton::new("Save")
+            appearance::ConfirmButton::new("Apply and close")
                 .id("settings-unsaved-save")
                 .disabled(invalid.as_deref()),
         );
@@ -162,10 +190,34 @@ impl App {
     pub(super) fn field_visible(&self, label: &str, keywords: &str) -> bool {
         #[cfg(test)]
         super::settings_tests::seen_row(label, keywords);
-        settings_controls::matches_search(
+        let shown = settings_controls::matches_search(
             &self.settings_search,
             &[self.settings_section.title(), label, keywords],
-        )
+        );
+        if shown && !self.settings_search.trim().is_empty() {
+            let mut probes = self.settings_probes.borrow_mut();
+            let count = probes
+                .matches
+                .entry(self.settings_section.canonical().title())
+                .or_default();
+            *count = count.saturating_add(1);
+        }
+        shown
+    }
+
+    /// Rows of `section` the search matched when the body last painted.
+    pub(super) fn section_match_count(&self, section: SettingsSection) -> usize {
+        self.settings_probes
+            .borrow()
+            .matches
+            .get(section.title())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Start a new count of matched rows for this frame's body.
+    pub(super) fn reset_section_matches(&self) {
+        self.settings_probes.borrow_mut().matches.clear();
     }
 
     pub(super) fn settings_validation(&self) -> Result<(), String> {
@@ -222,6 +274,8 @@ pub(crate) struct Probes {
         Vec<settings_controls::BinaryOption>,
         Vec<settings_controls::BinaryOption>,
     )>,
+    /// Search matches per section title, from the last painted body.
+    matches: std::collections::HashMap<&'static str, usize>,
 }
 
 impl Probes {

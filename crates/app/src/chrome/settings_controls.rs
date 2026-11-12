@@ -70,6 +70,31 @@ pub fn description_line(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+/// The one reason a control that needs a newer session service is off.
+pub const NEEDS_SERVICE: &str = "Needs the updated session service.";
+
+/// One caption line under a control that the running session service
+/// cannot use yet: an icon, [`NEEDS_SERVICE`], and an Open Updates link.
+/// Returns true when the link was clicked.
+pub fn needs_service_caption(ui: &mut egui::Ui) -> bool {
+    let tint = ui.visuals().weak_text_color();
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::Image::new(crate::icons::source("RefreshCw"))
+                .tint(tint)
+                .fit_to_exact_size(egui::Vec2::splat(appearance::FONT_CAPTION)),
+        );
+        ui.label(
+            egui::RichText::new(NEEDS_SERVICE)
+                .size(appearance::FONT_CAPTION)
+                .color(tint),
+        );
+        ui.link(egui::RichText::new("Open Updates").size(appearance::FONT_CAPTION))
+            .clicked()
+    })
+    .inner
+}
+
 /// A group title inside a section, with a rule under it.
 pub fn sub_heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(6.0);

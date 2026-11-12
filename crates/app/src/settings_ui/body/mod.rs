@@ -20,55 +20,82 @@ impl App {
         frame: &mut SettingsFrame,
     ) {
         let section = self.settings_section.canonical();
+        let searching = !self.settings_search.trim().is_empty();
         ui.vertical(|ui| {
             ui.set_width(ui.available_width());
             if self.settings_search_empty() {
                 self.paint_settings_no_match(ui);
                 return;
             }
+            self.reset_section_matches();
             egui::ScrollArea::vertical()
-                .id_salt(("settings-section", section as u8))
+                .id_salt(("settings-section", section as u8, searching))
                 .max_height(height)
                 .auto_shrink([false, false])
-                .show(ui, |ui| match section {
-                    SettingsSection::Appearance => self.appearance_settings(ui),
-                    SettingsSection::Terminal => {
-                        self.terminal_settings(ui, &mut frame.grant_folder, &mut frame.browse);
+                .show(ui, |ui| {
+                    if !searching {
+                        self.paint_settings_section(ui, section, frame);
+                        return;
                     }
-                    SettingsSection::Editor => self.editor_settings(ui, &mut frame.browse),
-                    SettingsSection::Languages => self.language_settings(ui, &mut frame.browse),
-                    SettingsSection::Git => self.git_settings(ui),
-                    SettingsSection::Browser => {
-                        ui.heading("Browser");
-                        self.browser_settings_rows(ui);
-                    }
-                    SettingsSection::Keymap => self.keymap_settings(ui),
-                    SettingsSection::Notifications => self.notification_settings(ui),
-                    SettingsSection::History => self.history_settings(ui),
-                    SettingsSection::Agents | SettingsSection::AgentHooks => {
-                        self.agent_settings(ui);
+                    // A search lists the matching rows of every section,
+                    // each under its own heading.
+                    for shown in SettingsSection::ALL {
+                        if !self.section_visible(shown) {
+                            continue;
+                        }
+                        self.settings_section = shown;
+                        self.paint_settings_section(ui, shown, frame);
                         ui.add_space(12.0);
-                        self.hook_settings(ui);
                     }
-                    SettingsSection::Remote => {
-                        self.ssh_settings(ui);
-                        settings_controls::sub_heading(ui, "VNC");
-                        self.vnc_detach_setting(ui);
-                    }
-                    SettingsSection::Updates => {
-                        self.installation_settings(ui);
-                        ui.add_space(12.0);
-                        ui.separator();
-                        #[cfg(any(not(target_os = "macos"), test))]
-                        self.windows_updates.settings(
-                            ui,
-                            &mut self.settings_draft.automatic_update_checks,
-                            &mut self.preferences.skipped_update_version,
-                        );
-                        #[cfg(target_os = "macos")]
-                        self.updater.settings(ui);
-                    }
+                    self.settings_section = section;
                 });
+        });
+    }
+
+    fn paint_settings_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        section: SettingsSection,
+        frame: &mut SettingsFrame,
+    ) {
+        ui.push_id(("settings-body", section as u8), |ui| match section {
+            SettingsSection::Appearance => self.appearance_settings(ui),
+            SettingsSection::Terminal => {
+                self.terminal_settings(ui, &mut frame.grant_folder, &mut frame.browse);
+            }
+            SettingsSection::Editor => self.editor_settings(ui, &mut frame.browse),
+            SettingsSection::Languages => self.language_settings(ui, &mut frame.browse),
+            SettingsSection::Git => self.git_settings(ui),
+            SettingsSection::Browser => {
+                ui.heading("Browser");
+                self.browser_settings_rows(ui);
+            }
+            SettingsSection::Keymap => self.keymap_settings(ui),
+            SettingsSection::Notifications => self.notification_settings(ui),
+            SettingsSection::History => self.history_settings(ui),
+            SettingsSection::Agents | SettingsSection::AgentHooks => {
+                self.agent_settings(ui);
+                ui.add_space(12.0);
+                self.hook_settings(ui);
+            }
+            SettingsSection::Remote => {
+                self.ssh_settings(ui);
+                settings_controls::sub_heading(ui, "VNC");
+                self.vnc_detach_setting(ui);
+            }
+            SettingsSection::Updates => {
+                self.installation_settings(ui);
+                ui.add_space(12.0);
+                ui.separator();
+                #[cfg(any(not(target_os = "macos"), test))]
+                self.windows_updates.settings(
+                    ui,
+                    &mut self.settings_draft.automatic_update_checks,
+                    &mut self.preferences.skipped_update_version,
+                );
+                #[cfg(target_os = "macos")]
+                self.updater.settings(ui);
+            }
         });
     }
 
@@ -166,7 +193,8 @@ impl App {
             });
         })
         .response
-        .on_disabled_hover_text("Requires an updated daemon; older ones disconnect after 30 minutes.");
+        .on_disabled_hover_text(settings_controls::NEEDS_SERVICE);
+        self.service_caption(ui, supported);
     }
 
     /// The JetBrains keymap switch, then every shortcut.

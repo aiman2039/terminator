@@ -1,8 +1,7 @@
 use crate::*;
 
-/// Why a daemon-gated control is disabled.
-const OLDER_DAEMON_HINT: &str =
-    "Requires an updated session service. Restart the session service to enable it.";
+/// Why a control gated on the session service is disabled.
+const OLDER_DAEMON_HINT: &str = settings_controls::NEEDS_SERVICE;
 
 impl App {
     pub(super) fn notification_settings(&mut self, ui: &mut egui::Ui) {
@@ -75,9 +74,8 @@ impl App {
             self.settings_draft.ntfy_enabled = false;
         }
         self.ntfy_fields(ui);
-        if !self.state.capabilities.iter().any(|c| c == NTFY_CAPABILITY) {
-            ui.small("Activate an updated daemon to enable ntfy. Older sessions need a supporting daemon.");
-        }
+        let ntfy = self.state.capabilities.iter().any(|c| c == NTFY_CAPABILITY);
+        self.service_caption(ui, ntfy);
         ui.horizontal(|ui| self.ntfy_test_buttons(ui));
         ui.small("Test posts directly to ntfy.sh with this channel; no Apply needed. Real alerts need the toggle on plus Apply, and no hook reinstall.");
     }
