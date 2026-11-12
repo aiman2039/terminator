@@ -13,7 +13,18 @@ pub(crate) fn bytes_for_pressed_key(
     modifiers: Modifiers,
     terminal_mode: TerminalMode,
 ) -> Option<Vec<u8>> {
-    match bindings.get_action(InputKind::KeyCode(key), modifiers, terminal_mode) {
+    let action = bindings.get_action(InputKind::KeyCode(key), modifiers, terminal_mode);
+    if terminal_mode.contains(TerminalMode::DISAMBIGUATE_ESC_CODES)
+        && !matches!(
+            action,
+            BindingAction::Copy | BindingAction::Paste | BindingAction::LinkOpen
+        )
+    {
+        if let Some(bytes) = kitty_disambiguated(key, modifiers) {
+            return Some(bytes);
+        }
+    }
+    match action {
         BindingAction::Char(c) => {
             let mut buf = [0; 4];
             Some(c.encode_utf8(&mut buf).as_bytes().to_vec())
@@ -53,6 +64,29 @@ fn encode_unbound_modified_key(key: Key, modifiers: Modifiers) -> Option<Vec<u8>
         return None;
     }
     Some(format!("\x1b[{code};{mods}{suffix}").into_bytes())
+}
+
+/// Kitty keyboard protocol, flag 1 ("disambiguate escape codes"), for the
+/// keys whose legacy bytes are ambiguous: Esc is `CSI 27 u`, and Enter,
+/// Tab and Backspace with a modifier are `CSI code ; mods u` (Shift+Enter
+/// is `CSI 13;2u`). Unmodified Enter, Tab and Backspace keep their legacy
+/// bytes, as the spec requires; Shift+Tab stays `CSI Z`. Other keys use the
+/// legacy table (Ctrl+letter C0 bytes, Alt via text): programs that ask
+/// for the flag still read those.
+fn kitty_disambiguated(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {
+    let mods = kitty_modifiers(modifiers);
+    let code = match key {
+        Key::Escape => 27,
+        Key::Enter if mods > 1 => 13,
+        Key::Backspace if mods > 1 => 127,
+        Key::Tab if mods > 2 => 9,
+        _ => return None,
+    };
+    Some(if mods > 1 {
+        format!("\x1b[{code};{mods}u").into_bytes()
+    } else {
+        format!("\x1b[{code}u").into_bytes()
+    })
 }
 
 fn text_omitted(modifiers: Modifiers) -> bool {
@@ -288,6 +322,91 @@ mod tests {
     #[test]
     fn alt_letter_is_left_to_text_events() {
         assert_eq!(encode_unbound_modified_key(Key::E, Modifiers::ALT), None);
+    }
+
+    fn encode(key: Key, modifiers: Modifiers, mode: TerminalMode) -> Option<Vec<u8>> {
+        bytes_for_pressed_key(&BindingsLayout::default(), key, modifiers, mode)
+    }
+
+    #[test]
+    fn kitty_disambiguate_makes_modified_enter_and_escape_distinct() {
+        let kitty = TerminalMode::DISAMBIGUATE_ESC_CODES;
+        let alt = Modifiers::ALT;
+        for (key, modifiers, expected) in [
+            (Key::Enter, Modifiers::SHIFT, "\x1b[13;2u"),
+            (Key::Enter, Modifiers::CTRL, "\x1b[13;5u"),
+            (Key::Enter, alt, "\x1b[13;3u"),
+            (Key::Escape, Modifiers::NONE, "\x1b[27u"),
+            (Key::Escape, Modifiers::SHIFT, "\x1b[27;2u"),
+            (Key::Backspace, Modifiers::CTRL, "\x1b[127;5u"),
+            (Key::Tab, Modifiers::CTRL, "\x1b[9;5u"),
+        ] {
+            assert_eq!(
+                encode(key, modifiers, kitty),
+                Some(expected.as_bytes().to_vec()),
+                "{key:?} {modifiers:?}"
+            );
+        }
+        // Plain keys keep their legacy bytes even with the flag.
+        assert_eq!(encode(Key::Enter, Modifiers::NONE, kitty), Some(vec![0x0d]));
+        assert_eq!(encode(Key::Tab, Modifiers::NONE, kitty), Some(vec![0x09]));
+        assert_eq!(
+            encode(Key::Backspace, Modifiers::NONE, kitty),
+            Some(vec![0x7f])
+        );
+        assert_eq!(
+            encode(Key::Tab, Modifiers::SHIFT, kitty),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(encode(Key::E, Modifiers::CTRL, kitty), Some(vec![0x05]));
+        assert_eq!(
+            encode(Key::ArrowUp, Modifiers::NONE, kitty),
+            Some(b"\x1b[A".to_vec())
+        );
+    }
+
+    /// The program's push and pop drive the mode the encoder reads (the
+    /// backend turns on `kitty_keyboard` tracking).
+    #[test]
+    fn a_pushed_kitty_flag_sets_the_mode_and_a_pop_clears_it() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::{test::TermSize, Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+        let config = Config {
+            kitty_keyboard: true,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &TermSize::new(20, 5), VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        parser.advance(&mut term, b"\x1b[>1u");
+        assert!(term.mode().contains(TerminalMode::DISAMBIGUATE_ESC_CODES));
+        parser.advance(&mut term, b"\x1b[<u");
+        assert!(!term.mode().contains(TerminalMode::DISAMBIGUATE_ESC_CODES));
+    }
+
+    #[test]
+    fn without_the_kitty_flag_encoding_is_unchanged() {
+        let none = TerminalMode::empty();
+        assert_eq!(encode(Key::Enter, Modifiers::SHIFT, none), Some(vec![0x0d]));
+        assert_eq!(encode(Key::Escape, Modifiers::NONE, none), Some(vec![0x1b]));
+        assert_eq!(
+            encode(Key::Enter, Modifiers::CTRL, none),
+            Some(b"\x1b[13;5u".to_vec())
+        );
+        assert_eq!(encode(Key::Enter, Modifiers::ALT, none), None);
+    }
+
+    #[test]
+    fn kitty_flag_does_not_take_the_copy_chord() {
+        let modifiers = if cfg!(target_os = "macos") {
+            command_letter()
+        } else {
+            Modifiers::SHIFT | Modifiers::COMMAND
+        };
+        assert_eq!(
+            encode(Key::C, modifiers, TerminalMode::DISAMBIGUATE_ESC_CODES),
+            None
+        );
     }
 
     #[test]

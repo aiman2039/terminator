@@ -265,7 +265,12 @@ impl TerminalBackend {
             working_directory: settings.working_directory,
             ..tty::Options::default()
         };
-        let config = term::Config::default();
+        // Track kitty keyboard flags (`CSI > flags u`) so keys encode the
+        // way the program asked; see `keyboard::kitty_disambiguated`.
+        let config = term::Config {
+            kitty_keyboard: true,
+            ..term::Config::default()
+        };
         let pty = tty::new(&pty_config, terminal_size.into(), id)?;
         #[cfg(not(windows))]
         let pty_id = pty.child().id();

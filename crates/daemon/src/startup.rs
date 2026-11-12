@@ -178,6 +178,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::terminal_title::CAPABILITY.into(),
         terminator_core::local_history::LIMITS_CAPABILITY.into(),
         terminator_core::NTFY_SERVER_CAPABILITY.into(),
+        crate::terminal_events::kitty_keys::CAPABILITY.into(),
     ];
     if catalog {
         state.daemon_build = Some(generations::build_identity(

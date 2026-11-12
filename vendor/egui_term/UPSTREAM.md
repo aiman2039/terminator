@@ -382,3 +382,21 @@ visible row count. `lib.rs` re-exports `CopyCommand`, alacritty's
 `SelectionType` and `ViMotion`.
 
 Test: `copy_mode_moves_a_cursor_and_selects_lines_without_input` (real PTY).
+
+## Kitty keyboard protocol, disambiguate flag (2026-11-12)
+
+The backend turns on alacritty's `Config::kitty_keyboard`, so the program's
+`CSI > flags u` / `CSI < u` / `CSI = flags ; mode u` set
+`TermMode::DISAMBIGUATE_ESC_CODES` and friends. Query replies stay with the
+owning daemon (`kitty-keyboard-v1`), which also replays the pushed flags on
+reattach. With flag 1 on, `keyboard::kitty_disambiguated` sends Esc as
+`CSI 27 u` and modified Enter, Tab and Backspace as `CSI code ; mods u`
+(Shift+Enter is `CSI 13;2u`). Plain Enter/Tab/Backspace, Shift+Tab
+(`CSI Z`), Ctrl+letter (C0) and Alt text keep their legacy bytes; flags 2,
+4, 8 and 16 are not implemented. Without the flag the encoding is
+unchanged.
+
+Tests: `kitty_disambiguate_makes_modified_enter_and_escape_distinct`,
+`without_the_kitty_flag_encoding_is_unchanged`,
+`kitty_flag_does_not_take_the_copy_chord`,
+`a_pushed_kitty_flag_sets_the_mode_and_a_pop_clears_it`.

@@ -7,6 +7,7 @@ use base64::{
 use std::collections::{BTreeMap, VecDeque};
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
+pub(crate) mod kitty_keys;
 pub(crate) mod osc_limit;
 
 /// VT420 + 132-col + printer + selective erase + ANSI color.
@@ -46,6 +47,7 @@ pub struct Events {
     extra_modes: BTreeMap<u16, bool>,
     escape_pending: bool,
     title: Title,
+    kitty: kitty_keys::KittyKeys,
 }
 /// Last OSC 0/2 window title. Display only; never a notice or lifecycle
 /// source. Publication is throttled so spinner titles do not flood snapshots.
@@ -89,6 +91,7 @@ pub fn process(parser: &mut vt100::Parser<Events>, bytes: &[u8]) {
                 };
                 parser.process(chunk);
                 parser.callbacks_mut().extra_modes.clear();
+                parser.callbacks_mut().kitty.clear();
                 start = index.saturating_add(1);
                 escaped = false;
             }
@@ -111,9 +114,12 @@ pub struct SnapshotSource {
 
 /// Cheap copy of the state `attachment_snapshot` needs.
 pub fn snapshot_source(parser: &vt100::Parser<Events>) -> SnapshotSource {
+    let mut modes = parser.callbacks().modes_formatted();
+    // Kitty keyboard flags survive a GUI reattach (`kitty-keyboard-v1`).
+    modes.extend(parser.callbacks().kitty.replay());
     SnapshotSource {
         screen: parser.screen().clone(),
-        modes: parser.callbacks().modes_formatted(),
+        modes,
     }
 }
 
@@ -379,6 +385,11 @@ impl vt100::Callbacks for Events {
                 }
             }
             (Some(b'?'), Some(b'$'), 'p') => self.reply_decrqm(screen, params),
+            (Some(marker @ (b'?' | b'>' | b'<' | b'=')), None, 'u') => {
+                if let Some(reply) = self.kitty.apply(marker, params) {
+                    self.reply(reply);
+                }
+            }
             (_, Some(_), _) => {}
             (i1, None, c) => self.reply_csi(ReplyCsiInput {
                 screen,
