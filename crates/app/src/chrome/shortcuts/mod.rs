@@ -130,6 +130,14 @@ actions! {
     RerunTask => "rerun_task", "Rerun last task", "RefreshCw";
     ShowWelcome => "show_welcome", "Welcome and setup", "Info";
     ShowWhatsNew => "show_whats_new", "What's New", "Info";
+    // Shell integration (OSC 133) command navigation in a terminal.
+    PrevPrompt => "prev_prompt", "Previous prompt", "ArrowUp";
+    NextPrompt => "next_prompt", "Next prompt", "ArrowDown";
+    SelectCommand => "select_command", "Select command with output", "TextSelect";
+    CopyLastOutput => "copy_last_output", "Copy last command output", "Copy";
+    // Keyboard selection modes; their keys never reach the PTY.
+    HintsMode => "hints_mode", "Terminal hints (open or copy by label)", "ExternalLink";
+    CopyMode => "copy_mode", "Terminal copy mode", "Keyboard";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

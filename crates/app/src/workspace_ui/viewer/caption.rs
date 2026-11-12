@@ -230,6 +230,7 @@ impl Viewer<'_> {
             },
         );
         appearance::paint_usage_chips(ui, bar.bar.rect, bar.controls_left, &usage);
+        self.app.paint_program_status(ui, sid, &bar);
         bar
     }
 

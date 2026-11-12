@@ -1,3 +1,7 @@
+pub mod copy_mode;
+mod hints;
+pub mod marks;
+mod prompts;
 pub mod settings;
 pub mod typeahead;
 
@@ -171,6 +175,11 @@ impl TerminalSize {
     pub fn is_empty(&self) -> bool {
         self.num_cols == 0 || self.num_lines == 0
     }
+
+    /// Visible rows.
+    pub fn rows(&self) -> u16 {
+        self.num_lines
+    }
 }
 
 impl Dimensions for TerminalSize {
@@ -237,6 +246,10 @@ pub struct TerminalBackend {
     type_ahead: typeahead::TypeAhead,
     /// URI of the hovered OSC 8 hyperlink; `None` for a regex match.
     hovered_uri: Option<String>,
+    /// Shell commands that ended (from the PTY reader's mark rewrite).
+    command_log: marks::CommandLog,
+    /// Prompt marks of the whole grid, rebuilt when output arrived.
+    prompt_cache: prompts::PromptCache,
 }
 
 impl TerminalBackend {
@@ -252,7 +265,12 @@ impl TerminalBackend {
             working_directory: settings.working_directory,
             ..tty::Options::default()
         };
-        let config = term::Config::default();
+        // Track kitty keyboard flags (`CSI > flags u`) so keys encode the
+        // way the program asked; see `keyboard::kitty_disambiguated`.
+        let config = term::Config {
+            kitty_keyboard: true,
+            ..term::Config::default()
+        };
         let pty = tty::new(&pty_config, terminal_size.into(), id)?;
         #[cfg(not(windows))]
         let pty_id = pty.child().id();
@@ -280,6 +298,11 @@ impl TerminalBackend {
             predictions: Vec::new(),
         };
         let term = Arc::new(FairMutex::new(term));
+        let command_log = marks::CommandLog::default();
+        let wake = app_context.clone();
+        let rewriter =
+            marks::MarkRewriter::new(command_log.clone()).on_end(move || wake.request_repaint());
+        let pty = marks::MarkedPty::new(pty, rewriter);
         let pty_event_loop = EventLoop::new(term.clone(), event_proxy, pty, false, false)?;
         let notifier = Notifier(pty_event_loop.channel());
 
@@ -347,6 +370,8 @@ impl TerminalBackend {
             drag_anchor: None,
             type_ahead: typeahead::TypeAhead::default(),
             hovered_uri: None,
+            command_log,
+            prompt_cache: prompts::PromptCache::default(),
         })
     }
 
@@ -587,6 +612,7 @@ impl TerminalBackend {
             self.last_content.selected_text = terminal.selection_to_string().unwrap_or_default();
         }
         self.last_content.selectable_range = selectable_range;
+        self.prompt_cache.mark_stale();
         self.last_content.cursor = cursor;
         self.last_content.terminal_mode = *terminal.mode();
         self.last_content.terminal_size = self.size;
@@ -1817,6 +1843,12 @@ fn selected_text(content: &RenderableContent) -> String {
     }
     output
 }
+/// The cell's OSC 8 hyperlink, unless a shell mark made it (see [`marks`]).
+fn user_link(cell: &Cell) -> Option<alacritty_terminal::term::cell::Hyperlink> {
+    cell.hyperlink()
+        .filter(|link| !marks::is_mark_uri(link.uri()))
+}
+
 /// The OSC 8 hyperlink at `point`: its cells on that row and its URI.
 fn hyperlink_at(grid: &Grid<Cell>, point: Point) -> Option<(RangeInclusive<Point>, String)> {
     if point.line < grid.topmost_line()
@@ -1825,12 +1857,9 @@ fn hyperlink_at(grid: &Grid<Cell>, point: Point) -> Option<(RangeInclusive<Point
     {
         return None;
     }
-    let link = grid[point].hyperlink()?;
+    let link = user_link(&grid[point])?;
     let same = |column: usize| {
-        grid[Point::new(point.line, Column(column))]
-            .hyperlink()
-            .as_ref()
-            == Some(&link)
+        user_link(&grid[Point::new(point.line, Column(column))]).as_ref() == Some(&link)
     };
     let start = (0..=point.column.0).rev().take_while(|c| same(*c)).last()?;
     let end = (point.column.0..=grid.last_column().0)
@@ -1902,11 +1931,11 @@ fn target_at_content(content: &RenderableContent, x: f32, y: f32) -> Option<Link
     let hit = hit?;
     // An OSC 8 hyperlink under the pointer wins over the text: its target
     // is the URI, and its cells are the underlined range.
-    let link = points.get(hit).and_then(|p| grid[*p].hyperlink());
+    let link = points.get(hit).and_then(|p| user_link(&grid[*p]));
     let hyperlink = link.is_some();
     let (range, text) = match link {
         Some(link) => {
-            let same = |p: &Point| grid[*p].hyperlink().as_ref() == Some(&link);
+            let same = |p: &Point| user_link(&grid[*p]).as_ref() == Some(&link);
             let start = (0..=hit).rev().take_while(|i| same(&points[*i])).last()?;
             let end = (hit..points.len())
                 .take_while(|i| same(&points[*i]))

@@ -410,6 +410,8 @@ pub struct App {
     pub(crate) targets: HashMap<String, Option<services::Target>>,
     pub(crate) hover_popup: Option<HoverPopup>,
     pub(crate) hover_popup_blocks_input: bool,
+    /// Terminal hints and copy mode (keys never reach the PTY).
+    pub(crate) key_modes: crate::workspace_ui::KeyModes,
     pub(crate) last_heartbeat: Instant,
     /// Env-gated (`TERMINATOR_REPAINT_LOG`) idle-CPU probe. `None` unless the
     /// variable is set, so release builds pay nothing for it.

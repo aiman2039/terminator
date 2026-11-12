@@ -2001,6 +2001,7 @@ dependencies = [
  "anyhow",
  "egui",
  "open",
+ "polling",
 ]
 
 [[package]]

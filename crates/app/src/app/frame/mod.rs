@@ -151,6 +151,7 @@ impl eframe::App for App {
         self.onboarding_tick();
         self.prune_unpainted(&ctx);
         self.sync_terminal_focus();
+        self.notice_long_commands(&ctx);
         self.sync_metadata_request();
         self.sync_resource_sample();
         self.sync_refresh_request();

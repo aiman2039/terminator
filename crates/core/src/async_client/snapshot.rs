@@ -275,6 +275,12 @@ fn merge_inventory(aggregate: &mut State, (owner, state, error): Inventory) {
             .iter()
             .map(|(id, title)| (id.clone(), title.clone())),
     );
+    aggregate.program_status.extend(
+        state
+            .program_status
+            .iter()
+            .map(|(id, status)| (id.clone(), status.clone())),
+    );
     if present {
         aggregate.presence.extend(state.presence.iter().cloned());
     }

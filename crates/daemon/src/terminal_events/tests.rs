@@ -243,3 +243,28 @@ fn window_title_changes_are_throttled_until_a_flush() {
         Some("three")
     );
 }
+
+#[test]
+fn kitty_keyboard_flags_answer_queries_and_survive_reattach() {
+    let mut parser = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+    process(&mut parser, b"\x1b[?u\x1b[>1u\x1b[?u");
+    let replies: Vec<String> = parser.callbacks().replies.iter().cloned().collect();
+    assert_eq!(replies, ["\x1b[?0u", "\x1b[?1u"]);
+    let push = b"\x1b[>1u".as_slice();
+    let snapshot = attachment_snapshot(&parser);
+    assert!(
+        snapshot.windows(push.len()).any(|w| w == push),
+        "the reattach snapshot replays the push"
+    );
+    let mut replay = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+    process(&mut replay, &snapshot);
+    process(&mut replay, b"\x1b[?u");
+    assert_eq!(
+        replay.callbacks().replies.back().map(String::as_str),
+        Some("\x1b[?1u")
+    );
+    // A full reset drops the flags: nothing is replayed after it.
+    process(&mut parser, b"\x1bc");
+    let snapshot = attachment_snapshot(&parser);
+    assert!(!snapshot.windows(push.len()).any(|w| w == push));
+}

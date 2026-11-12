@@ -154,6 +154,10 @@ pub struct UiPreferences {
     /// Shell terminal type-ahead prediction (#83).
     #[serde(default)]
     pub type_ahead: super::TypeAhead,
+    /// A shell command that ran at least this long and ends in a pane
+    /// without focus raises a terminal notice. 0 is off.
+    #[serde(default)]
+    pub long_command_notice_secs: u32,
     #[serde(deserialize_with = "lenient_tool")]
     pub tool: SidebarTool,
     pub visible: bool,

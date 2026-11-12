@@ -24,6 +24,7 @@ mod terminal_panes;
 mod terminal_style;
 pub(crate) use terminal_style::TITLE_COLORS;
 mod terminal_view;
+pub(crate) use terminal_view::{KeyModes, TERMINAL_ACTIONS};
 mod viewer;
 mod views;
 mod window_header;

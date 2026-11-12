@@ -340,3 +340,63 @@ first. `target_at` returns the URI as the target text, the linked cells as
 the underline rects, and `LinkTarget::hyperlink = true`. Link hover and
 open (`LinkAction::Hover`/`Open`) also prefer the hyperlink URI over the URL
 regex. Test: `osc8_hyperlink_target_is_its_uri_not_the_text`.
+
+## Shell integration marks (2026-11-12)
+
+alacritty ignores OSC 133 / OSC 633 `A`/`B`/`C`/`D`. `backend/marks.rs`
+wraps the PTY (`MarkedPty`, an `EventedPty`/`EventedReadWrite` over
+`tty::Pty`) and rewrites each mark into an OSC 8 hyperlink with the private
+URI scheme `terminator-mark:` (prompt text `A`..`B`, command output
+`C`..`D`; the next prompt URI carries the last exit code as `?last=N`).
+The links live in the cells, so prompt positions follow scrollback, reflow
+and history trimming. A mark split across reads is held back (at most 64
+bytes); longer, unknown or malformed OSCs pass through unchanged. Reads are
+sized so the rewritten bytes always fit the event loop buffer. Hover, link
+hit testing and link open ignore mark links (`user_link`).
+`backend/prompts.rs` adds `prompt_marks` (cached full-grid scan, at most
+every 250 ms), `jump_to_prompt`, `select_command`, `last_command_output`
+and `take_ended_commands` (command durations from `C` to `D`). All are
+local: nothing writes to the PTY. New dependency: `polling` (already used by
+alacritty_terminal) for the wrapper traits.
+
+Tests: `prompt_and_output_marks_become_private_links`,
+`marks_split_at_every_byte_rewrite_like_whole_reads`,
+`other_sequences_pass_through_unchanged`,
+`malformed_and_oversized_marks_pass_through_unchanged`,
+`only_a_started_command_is_logged_when_it_ends`,
+`prompts_are_found_with_the_exit_code_of_their_command`,
+`prompts_keep_their_place_after_scrolling_into_history`,
+`mark_links_are_not_link_targets`, and the real-PTY check
+`marks_from_a_real_pty_drive_jumps_selection_and_output_copy`.
+
+## Keyboard hints and copy mode (2026-11-12)
+
+`backend/hints.rs` adds `TerminalBackend::visible_targets`: every token on
+screen that pointer hover would find (same `target_at_content` rules, OSC 8
+links included, mark links excluded). `backend/copy_mode.rs` drives
+alacritty's vi mode from the embedding app: `set_copy_mode`,
+`copy_mode_command` (`CopyCommand`: vi motions, scroll, top/bottom,
+select simple/lines/block, clear), `copy_mode_cursor` and `has_selection`.
+Nothing in either writes to the PTY. `TerminalSize::rows` exposes the
+visible row count. `lib.rs` re-exports `CopyCommand`, alacritty's
+`SelectionType` and `ViMotion`.
+
+Test: `copy_mode_moves_a_cursor_and_selects_lines_without_input` (real PTY).
+
+## Kitty keyboard protocol, disambiguate flag (2026-11-12)
+
+The backend turns on alacritty's `Config::kitty_keyboard`, so the program's
+`CSI > flags u` / `CSI < u` / `CSI = flags ; mode u` set
+`TermMode::DISAMBIGUATE_ESC_CODES` and friends. Query replies stay with the
+owning daemon (`kitty-keyboard-v1`), which also replays the pushed flags on
+reattach. With flag 1 on, `keyboard::kitty_disambiguated` sends Esc as
+`CSI 27 u` and modified Enter, Tab and Backspace as `CSI code ; mods u`
+(Shift+Enter is `CSI 13;2u`). Plain Enter/Tab/Backspace, Shift+Tab
+(`CSI Z`), Ctrl+letter (C0) and Alt text keep their legacy bytes; flags 2,
+4, 8 and 16 are not implemented. Without the flag the encoding is
+unchanged.
+
+Tests: `kitty_disambiguate_makes_modified_enter_and_escape_distinct`,
+`without_the_kitty_flag_encoding_is_unchanged`,
+`kitty_flag_does_not_take_the_copy_chord`,
+`a_pushed_kitty_flag_sets_the_mode_and_a_pop_clears_it`.

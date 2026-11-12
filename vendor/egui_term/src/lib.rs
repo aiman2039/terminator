@@ -7,6 +7,10 @@ mod theme;
 mod types;
 mod view;
 
+pub use alacritty_terminal::selection::SelectionType;
+pub use alacritty_terminal::vi_mode::ViMotion;
+pub use backend::copy_mode::CopyCommand;
+pub use backend::marks::{CommandEnded, PromptMark};
 pub use backend::settings::BackendSettings;
 pub use backend::typeahead::TypeAheadMode;
 pub use backend::{
