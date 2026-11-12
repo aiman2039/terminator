@@ -201,39 +201,25 @@ impl App {
         if self.settings_pending.is_none() {
             return;
         }
-        let mut save = false;
-        let mut discard = false;
-        let mut cancel = false;
-        let valid = self.settings_validation().is_ok();
-        self.popups
-            .window(ctx, "Unsaved settings")
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label("You changed settings on this page. Save them before moving on?");
-                ui.horizontal(|ui| {
-                    let save_button = ui.add_enabled(valid, egui::Button::new("Save"));
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), "settings-unsaved-save", save_button.rect);
-                    if save_button.clicked() {
-                        save = true;
-                    }
-                    let discard_button = ui.button("Discard changes");
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), "settings-unsaved-discard", discard_button.rect);
-                    if discard_button.clicked() {
-                        discard = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
-            });
-        if save {
-            self.resolve_settings_pending(true);
-        } else if discard {
-            self.resolve_settings_pending(false);
-        } else if cancel {
-            self.settings_pending = None;
+        let invalid = self.settings_validation().err();
+        let window = self.popups.window(ctx, "Unsaved settings");
+        let dialog = appearance::Confirm::new(
+            "You changed settings on this page. Save them before moving on?",
+            "",
+        )
+        .destructive(
+            appearance::ConfirmButton::new("Discard changes").id("settings-unsaved-discard"),
+        )
+        .default_action(
+            appearance::ConfirmButton::new("Save")
+                .id("settings-unsaved-save")
+                .disabled(invalid.as_deref()),
+        );
+        match appearance::confirm(ctx, window, dialog, |_| {}) {
+            Some(appearance::ConfirmAnswer::Default) => self.resolve_settings_pending(true),
+            Some(appearance::ConfirmAnswer::Destructive) => self.resolve_settings_pending(false),
+            Some(appearance::ConfirmAnswer::Cancel) => self.settings_pending = None,
+            None => {}
         }
     }
 

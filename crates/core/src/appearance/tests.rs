@@ -118,6 +118,32 @@ fn config_without_font_keys_keeps_bundled_font_and_writes_no_key() {
     assert!(!saved.source.contains("cjk_font"));
 }
 #[test]
+fn saved_theme_without_primary_keeps_the_accent_and_unset_removes_the_key() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("config.toml");
+    fs::write(&p, "[appearance]\naccent = '#EF625A'\nother = 1 # keep\n").unwrap();
+    let file = AppearanceFile::load(&p).unwrap();
+    assert_eq!(file.config.primary, None, "a saved theme stays as it was");
+    assert_eq!(file.config.primary_color(), "#EF625A");
+    let mut chosen = file.config.clone();
+    chosen.primary = Some("#EEEDEB".into());
+    let saved = AppearanceFile::save(&p, &chosen, &file.source).unwrap();
+    assert!(saved.source.contains("primary = \"#EEEDEB\""));
+    let mut cleared = chosen.clone();
+    cleared.primary = None;
+    let saved = AppearanceFile::save(&p, &cleared, &saved.source).unwrap();
+    assert!(!saved.source.contains("primary"));
+    assert!(saved.source.contains("other = 1 # keep"));
+    let mut bad = cleared;
+    bad.primary = Some("red".into());
+    assert!(bad.validate().is_err());
+    assert_eq!(
+        AppearanceConfig::carbon().primary.as_deref(),
+        Some("#EEEDEB")
+    );
+    assert_eq!(AppearanceConfig::intellij_light().primary, None);
+}
+#[test]
 fn font_choice_round_trips_and_clearing_removes_the_key() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("config.toml");

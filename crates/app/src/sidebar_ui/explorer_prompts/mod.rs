@@ -119,27 +119,19 @@ impl App {
             ),
             paths => format!("Move {} items to Trash?", paths.len()),
         };
-        let mut confirm = false;
-        let mut cancel = false;
-        let modal = egui::Modal::new(egui::Id::unique("confirm-delete")).show(ui.ctx(), |ui| {
-            ui.set_width(320.0);
-            ui.heading("Move to Trash");
-            ui.add_space(8.0);
-            ui.label(label);
-            ui.add_space(12.0);
-            appearance::footer_row(ui, |ui| {
-                confirm = ui.button("Move to Trash").clicked();
-                cancel = ui.button("Cancel").clicked();
-            });
-        });
-        cancel |= modal.should_close();
-        if confirm {
-            for path in std::mem::take(&mut self.pending_delete) {
-                self.queue_workspace(workspace_ops::Op::Delete(path));
+        let ctx = ui.ctx().clone();
+        let window = self.popups.window(&ctx, "Move to Trash");
+        let dialog = appearance::Confirm::new(label, "")
+            .destructive(appearance::ConfirmButton::new("Move to Trash").id("confirm-delete"));
+        match appearance::confirm(&ctx, window, dialog, |_| {}) {
+            Some(appearance::ConfirmAnswer::Destructive) => {
+                for path in std::mem::take(&mut self.pending_delete) {
+                    self.queue_workspace(workspace_ops::Op::Delete(path));
+                }
+                self.explorer_selection.clear();
             }
-            self.explorer_selection.clear();
-        } else if cancel {
-            self.pending_delete.clear();
+            Some(_) => self.pending_delete.clear(),
+            None => {}
         }
     }
 

@@ -218,34 +218,22 @@ impl App {
             self.missing_folder.offer = None;
             return;
         };
-        let mut open = true;
-        let mut done = false;
-        self.popups
-            .window(ctx, "Remove missing project?")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(format!(
-                    "{} points to {}, which was moved or deleted.",
-                    missing.name,
-                    missing.path.display()
-                ));
-                ui.label("Remove it from the sidebar? Its terminals keep running.");
-                ui.horizontal(|ui| {
-                    let remove = ui.button("Remove Project");
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record_ui(ui, "missing-offer-remove", remove.rect);
-                    if remove.clicked() {
-                        self.hide_project(&project);
-                        done = true;
-                    }
-                    if ui.button("Keep").clicked() {
-                        done = true;
-                    }
-                });
-            });
-        if done || !open {
+        let window = self.popups.window(ctx, "Remove missing project?");
+        let dialog = appearance::Confirm::new(
+            format!(
+                "{} points to {}, which was moved or deleted.",
+                missing.name,
+                missing.path.display()
+            ),
+            "Remove it from the sidebar? Its terminals keep running.",
+        )
+        .cancel(appearance::ConfirmButton::new("Keep"))
+        .destructive(appearance::ConfirmButton::new("Remove Project").id("missing-offer-remove"));
+        let answer = appearance::confirm(ctx, window, dialog, |_| {});
+        if answer == Some(appearance::ConfirmAnswer::Destructive) {
+            self.hide_project(&project);
+        }
+        if answer.is_some() {
             self.missing_folder.offer = None;
         }
     }

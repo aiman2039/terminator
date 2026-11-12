@@ -2,9 +2,13 @@ use super::scale::{RADIUS_XSMALL, WIDGET_RADIUS};
 use super::theme::icon_color;
 use eframe::egui::{self, Color32};
 
+mod buttons;
+mod confirm;
 mod menus;
 mod popup_list;
 mod tabs;
+pub use buttons::*;
+pub use confirm::*;
 pub use menus::*;
 pub use popup_list::*;
 pub use tabs::*;

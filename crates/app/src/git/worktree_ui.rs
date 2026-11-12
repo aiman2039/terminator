@@ -356,30 +356,21 @@ impl App {
             .find(|project| project.id == project_id)
             .map(|project| project.name.clone())
             .unwrap_or_else(|| "Worktree".into());
-        let mut open = true;
-        self.popups
-            .window(ctx, "Remove worktree?")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label(format!(
-                    "Remove {name} at {}? Git refuses dirty or locked checkouts. Live sessions must be stopped first. The branch is kept.",
-                    record.path.display()
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("Remove worktree").clicked() {
-                        self.send(Request::WorktreeRemove {
-                            project: project_id.clone(),
-                        });
-                        self.worktree_remove = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.worktree_remove = None;
-                    }
+        let window = self.popups.window(ctx, "Remove worktree?");
+        let dialog = appearance::Confirm::new(
+            format!("Remove {name} at {}?", record.path.display()),
+            "Git refuses dirty or locked checkouts. Live sessions must be stopped first. The branch is kept.",
+        )
+        .destructive(appearance::ConfirmButton::new("Remove worktree"));
+        match appearance::confirm(ctx, window, dialog, |_| {}) {
+            Some(appearance::ConfirmAnswer::Destructive) => {
+                self.send(Request::WorktreeRemove {
+                    project: project_id.clone(),
                 });
-            });
-        if !open {
-            self.worktree_remove = None;
+                self.worktree_remove = None;
+            }
+            Some(_) => self.worktree_remove = None,
+            None => {}
         }
     }
 }

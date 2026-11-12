@@ -8,10 +8,18 @@ pub(crate) struct Popups {
     visible: HashMap<String, (Pos2, u8)>,
     seen: HashSet<String>,
     reserved: HashMap<String, Option<Pos2>>,
+    confirm_open: bool,
 }
 
 impl Popups {
+    /// A confirmation dialog showed last frame: terminals take no input and
+    /// its Enter and Esc were taken for it (`appearance::confirm`).
+    pub fn confirm_open(&self) -> bool {
+        self.confirm_open
+    }
+
     pub fn begin_frame(&mut self, ctx: &egui::Context) {
+        self.confirm_open = crate::appearance::begin_confirm_frame(ctx);
         ctx.input(|input| {
             if input.pointer.any_pressed() || input.pointer.any_released() {
                 self.origin = input.pointer.interact_pos();

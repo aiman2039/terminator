@@ -71,44 +71,31 @@ impl App {
             .iter()
             .filter(|session| session.lifecycle.live())
             .count();
-        let mut open = true;
-        self.popups
-            .window(ctx, "Restart session service?")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(
-                    RichText::new(format!("All {live} live session(s) will be stopped."))
-                        .strong()
-                        .color(appearance::color(&self.theme.status_failed)),
-                );
-                ui.label(
-                    RichText::new("Unsaved editor changes will be lost. Running shells, agents, and jobs will stop.")
-                        .strong()
-                        .color(appearance::color(&self.theme.status_failed)),
-                );
-                ui.add_space(8.0);
-                ui.label("Terminator will quit and reopen. Saved history is kept, but stopped sessions cannot be restored.");
-                ui.horizontal(|ui| self.restart_confirm_buttons(ui));
-            });
-        if !open {
-            self.cancel_session_restart();
-        }
-    }
-
-    fn restart_confirm_buttons(&mut self, ui: &mut egui::Ui) {
-        let confirm = ui.button("Stop all sessions and restart");
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "confirm-restart-session", confirm.rect);
-        if confirm.clicked() {
-            self.begin_session_restart();
-        }
-        let cancel = ui.button("Cancel");
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "cancel-restart-session", cancel.rect);
-        if cancel.clicked() {
-            self.cancel_session_restart();
+        let failed = appearance::color(&self.theme.status_failed);
+        let window = self.popups.window(ctx, "Restart session service?");
+        let dialog = appearance::Confirm::new(
+            "",
+            "Terminator will quit and reopen. Saved history is kept, but stopped sessions cannot be restored.",
+        )
+        .cancel(appearance::ConfirmButton::new("Cancel").id("cancel-restart-session"))
+        .destructive(
+            appearance::ConfirmButton::new("Stop all sessions and restart")
+                .id("confirm-restart-session"),
+        );
+        let answer = appearance::confirm(ctx, window, dialog, |ui| {
+            let sessions = appearance::count_noun(live, "live session");
+            for line in [
+                format!("{sessions} will be stopped."),
+                "Unsaved editor changes will be lost. Running shells, agents, and jobs will stop."
+                    .to_owned(),
+            ] {
+                ui.label(RichText::new(line).strong().color(failed));
+            }
+        });
+        match answer {
+            Some(appearance::ConfirmAnswer::Destructive) => self.begin_session_restart(),
+            Some(_) => self.cancel_session_restart(),
+            None => {}
         }
     }
 

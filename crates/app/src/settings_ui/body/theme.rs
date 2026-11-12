@@ -183,8 +183,28 @@ impl App {
             ui.end_row();
         }
         if group == 0 {
+            self.primary_field(ui, failed);
             self.border_width_fields(ui);
         }
+    }
+
+    /// Optional main-button fill; unset follows the accent.
+    fn primary_field(&mut self, ui: &mut egui::Ui, failed: egui::Color32) {
+        ui.label("Main button");
+        ui.horizontal(|ui| {
+            if let Some(value) = &mut self.theme_draft.primary {
+                ThemeHelpers::color_field(ui, value, failed);
+                if ui.button("Use accent").clicked() {
+                    self.theme_draft.primary = None;
+                }
+            } else {
+                ui.weak("Accent");
+                if ui.button("Set color").clicked() {
+                    self.theme_draft.primary = Some(self.theme_draft.accent.clone());
+                }
+            }
+        });
+        ui.end_row();
     }
 
     fn border_width_fields(&mut self, ui: &mut egui::Ui) {
