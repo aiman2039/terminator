@@ -95,25 +95,8 @@ impl Shared {
         let Some(checkout) = worktrees::existing(common, path, branch)? else {
             return Ok(None);
         };
-        let state = relock(&self.state);
-        let known: Vec<PathBuf> = state
-            .projects
-            .iter()
-            .map(|p| p.path.clone())
-            .chain(
-                state
-                    .worktrees
-                    .iter()
-                    .filter(|w| !w.removed)
-                    .map(|w| w.path.clone()),
-            )
-            .collect();
-        drop(state);
-        let used = known.iter().any(|known| {
-            *known == checkout.path
-                || std::fs::canonicalize(known).is_ok_and(|real| real == checkout.path)
-        });
-        Ok((!used).then_some(checkout))
+        let known = known_paths(&relock(&self.state));
+        Ok((!checkout_in_use(&known, &checkout.path)).then_some(checkout))
     }
 
     pub(super) fn on_worktree_remove(&self, project: &str) -> Result<Outcome> {
@@ -136,23 +119,15 @@ impl Shared {
     }
 
     fn register_worktree(&self, common_dir: PathBuf, path: PathBuf) {
+        let known = known_paths(&relock(&self.state));
+        if checkout_in_use(&known, &path) {
+            return;
+        }
+        // Again under the lock: both adds name the checkout as Git lists it.
         let mut state = relock(&self.state);
-        let project_id = id();
-        let project = Project {
-            id: project_id.clone(),
-            name: Self::checkout_name(&path),
-            path: path.clone(),
-            layout: serde_json::Value::Null,
-        };
-        state.projects.push(project);
-        state.worktrees.push(worktrees::Registration {
-            project_id,
-            common_dir,
-            path,
-            created: now(),
-            removed: false,
-        });
-        state.revision = state.revision.saturating_add(1);
+        if !known_paths(&state).contains(&path) {
+            register_checkout(&mut state, common_dir, path);
+        }
     }
 
     fn checkout_name(path: &Path) -> String {
@@ -207,5 +182,65 @@ impl Shared {
                 .map(|candidate| candidate.id.clone());
         }
         state.revision = state.revision.saturating_add(1);
+    }
+}
+
+/// The paths projects and live worktree records use.
+fn known_paths(state: &State) -> Vec<PathBuf> {
+    let projects = state.projects.iter().map(|p| p.path.clone());
+    let records = state
+        .worktrees
+        .iter()
+        .filter(|w| !w.removed)
+        .map(|w| w.path.clone());
+    projects.chain(records).collect()
+}
+
+/// Whether one of `known` is `path`. Reads the disk: call it without the
+/// state lock.
+fn checkout_in_use(known: &[PathBuf], path: &Path) -> bool {
+    known
+        .iter()
+        .any(|known| known == path || std::fs::canonicalize(known).is_ok_and(|real| real == path))
+}
+
+/// Add `path` as a project and a worktree record. The caller checked it is
+/// not in use, so two adds of one path (a retry that adopted the checkout
+/// while the first add waited for the lock) leave one project.
+fn register_checkout(state: &mut State, common_dir: PathBuf, path: PathBuf) {
+    let project_id = id();
+    state.projects.push(Project {
+        id: project_id.clone(),
+        name: Shared::checkout_name(&path),
+        path: path.clone(),
+        layout: serde_json::Value::Null,
+    });
+    state.worktrees.push(worktrees::Registration {
+        project_id,
+        common_dir,
+        path,
+        created: now(),
+        removed: false,
+    });
+    state.revision = state.revision.saturating_add(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_registered_checkout_is_in_use_until_its_record_is_removed() {
+        let mut state = State::default();
+        let path = PathBuf::from("/w/task");
+        assert!(!checkout_in_use(&known_paths(&state), &path));
+        register_checkout(&mut state, PathBuf::from("/r/.git"), path.clone());
+        assert!(
+            checkout_in_use(&known_paths(&state), &path),
+            "a second add of the same checkout does not register it again"
+        );
+        state.projects.clear();
+        state.worktrees[0].removed = true;
+        assert!(!checkout_in_use(&known_paths(&state), &path));
     }
 }

@@ -22,14 +22,29 @@ pub(crate) fn run(args: &[String]) -> Result<()> {
     };
     let client = find_executable("mosh-client")
         .context("mosh-client is not installed. Install Mosh on this computer (for example `brew install mosh`).")?;
-    let address = endpoint(options, host)?;
+    let endpoint = endpoint(options, host)?;
     let (port, key) = start_server(options, host, remote)?;
+    // The host the SSH connection reached, which `mosh-server -s` bound;
+    // the DNS answer only when the master's socket cannot tell.
+    let address = endpoint
+        .direct_port
+        .and_then(|ssh_port| peer::master_peer(options, host, ssh_port))
+        .unwrap_or(endpoint.resolved);
     connect(&client, address, port, &key)
+}
+
+mod peer;
+
+/// Where Mosh sends UDP: the resolved host address, and the SSH port when
+/// OpenSSH connects to the host itself (no proxy).
+struct Endpoint {
+    resolved: IpAddr,
+    direct_port: Option<u16>,
 }
 
 /// The address OpenSSH would connect to after `~/.ssh/config`, resolved
 /// here: Mosh talks UDP to it directly, not through a jump host.
-fn endpoint(options: &[String], host: &str) -> Result<IpAddr> {
+fn endpoint(options: &[String], host: &str) -> Result<Endpoint> {
     let output = ssh::resolve_command(options, host)
         .output()
         .context("Run ssh -G")?;
@@ -37,13 +52,18 @@ fn endpoint(options: &[String], host: &str) -> Result<IpAddr> {
         output.status.success(),
         "Cannot read the SSH host configuration"
     );
-    let resolved = ssh::parse_resolved(std::str::from_utf8(&output.stdout)?)?;
+    let text = std::str::from_utf8(&output.stdout)?;
+    let resolved = ssh::parse_resolved(text)?;
     let addresses = (resolved.hostname.as_str(), 0)
         .to_socket_addrs()
         .with_context(|| format!("Cannot resolve {}", resolved.hostname))?
         .map(|address| address.ip());
-    pick_address(addresses, resolved.address_family.as_deref())
-        .with_context(|| format!("{} has no usable address", resolved.hostname))
+    let address = pick_address(addresses, resolved.address_family.as_deref())
+        .with_context(|| format!("{} has no usable address", resolved.hostname))?;
+    Ok(Endpoint {
+        resolved: address,
+        direct_port: (!peer::proxied(text)).then_some(resolved.port),
+    })
 }
 
 /// The first address of the family `AddressFamily` allows: with `inet`

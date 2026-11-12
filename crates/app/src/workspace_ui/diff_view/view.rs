@@ -35,7 +35,7 @@ impl App {
             ..DiffPass::default()
         };
         let frame = self.diff_frame(ui, source, &pass.review);
-        self.diff_change_keys(&frame, &mut pass);
+        self.diff_change_keys(ui, &frame, &mut pass);
         Self::diff_local_keys(ui, &frame, &mut pass);
         ui.horizontal(|ui| self.diff_toolbar(ui, &frame, &mut pass));
         Self::diff_open_source_key(ui, &frame, &mut pass);
@@ -126,7 +126,32 @@ impl App {
     /// changes. Keys follow the pointer or the active pane, so F7 works
     /// without hovering the diff once it is the focused tab.
     fn diff_tab_active(&self, tab: &Tab) -> bool {
-        self.main_pane_active(tab)
+        self.main_pane_active(tab) || self.float_pane_active(tab)
+    }
+
+    /// `tab` is the focused pane of the floating window under render. That
+    /// window has its own keyboard input.
+    pub(in super::super) fn float_pane_active(&self, tab: &Tab) -> bool {
+        self.float_focus.as_ref() == Some(tab)
+    }
+
+    /// Global shortcuts run in the main window only, so a diff in a
+    /// floating window reads the diff navigation chords from its own input.
+    fn float_diff_nav(&self, ctx: &egui::Context) -> Option<Action> {
+        if ctx.egui_wants_keyboard_input() {
+            return None;
+        }
+        [
+            Action::DiffNextChange,
+            Action::DiffPrevChange,
+            Action::DiffNextFile,
+            Action::DiffPrevFile,
+        ]
+        .into_iter()
+        .find(|action| {
+            let key = shortcuts::binding(&self.state.settings.keybindings, action.id());
+            !key.is_empty() && shortcuts::consume(ctx, &key)
+        })
     }
 
     /// `tab` is the focused pane of the selected project's main dock. That
@@ -180,12 +205,19 @@ impl App {
     /// Diff navigation shortcuts (F7 / Shift+F7 by default) walk changes,
     /// and past the last (or first) change of this file continue into the
     /// next (or previous) file. The file actions jump straight to it.
-    fn diff_change_keys(&mut self, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+    fn diff_change_keys(&mut self, ui: &egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
         if !frame.focused {
             return;
         }
-        let Some((action, _)) = self.diff_nav.take() else {
-            return;
+        let action = match self.diff_nav.take() {
+            Some((action, _)) => action,
+            None if self.float_pane_active(frame.tab) => {
+                let Some(action) = self.float_diff_nav(ui.ctx()) else {
+                    return;
+                };
+                action
+            }
+            None => return,
         };
         match action {
             Action::DiffNextChange => pass.step_change(frame, true),
