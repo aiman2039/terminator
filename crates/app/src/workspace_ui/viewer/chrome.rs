@@ -234,6 +234,9 @@ impl Viewer<'_> {
         // session connected and the VNC sidebar reattaches it.
         // Buffer pruning runs after the dock is checked back in and keeps
         // the buffer (including undo history) while another view exists.
+        if matches!(tab, Tab::NativeEditor { .. }) {
+            self.app.native_prune_wanted = true;
+        }
         OnCloseResponse::Close
     }
 

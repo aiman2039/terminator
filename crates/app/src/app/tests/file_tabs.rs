@@ -154,6 +154,29 @@ fn a_file_moved_in_the_explorer_hints_from_its_new_path() {
 }
 
 #[test]
+fn a_rename_in_the_explorer_follows_a_floating_editor_and_keeps_its_buffer() {
+    let (mut app, _, _dir) = fixture();
+    let (old, new) = (PathBuf::from("/a/x/a.rs"), PathBuf::from("/a/x/b.rs"));
+    app.native_docs
+        .insert(old.clone(), NativeDoc::dirty_for_test(old.clone()));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "rename-float",
+        project: "a",
+        home: "t",
+        tabs: vec![native("/a/x/a.rs")],
+    }));
+    app.remap_moved_path(&old, &new);
+    let dock = app.floating[0].dock.as_ref().expect("dock");
+    let tabs: Vec<&Tab> = dock.iter_all_tabs().map(|(_, tab)| tab).collect();
+    assert_eq!(tabs, [&native("/a/x/b.rs")]);
+    app.prune_native_docs();
+    assert!(
+        app.native_docs.contains_key(&new),
+        "the unsaved buffer stays"
+    );
+}
+
+#[test]
 fn remote_file_hints_show_only_remote_folders() {
     let (app, _, _dir) = fixture();
     // Local copies of SSH files live under the project's cache folder.

@@ -304,22 +304,27 @@ impl App {
     /// After a rename or move, point open tabs, editor buffers, and the
     /// Explorer at the new location, so nothing edits a vanished path.
     pub(crate) fn remap_moved_path(&mut self, from: &Path, to: &Path) {
-        for workspace in self.layouts.values_mut() {
-            for group in &mut workspace.tabs {
-                let panes = group
+        let docked = self.layouts.values_mut().flat_map(|workspace| {
+            workspace.tabs.iter_mut().flat_map(|group| {
+                group
                     .layout
                     .iter_all_tabs_mut()
                     .map(|(_, pane)| pane)
-                    .chain(group.primary.as_mut());
-                for pane in panes {
-                    if let Tab::NativeEditor { path }
-                    | Tab::Image { path }
-                    | Tab::Document { path, .. } = pane
-                        && let Some(next) = moved(path, from, to)
-                    {
-                        *path = next;
-                    }
-                }
+                    .chain(group.primary.as_mut())
+            })
+        });
+        // Floating windows hold their panes outside the workspace docks.
+        let floating = self
+            .floating
+            .iter_mut()
+            .filter_map(|window| window.dock.as_mut())
+            .flat_map(|dock| dock.iter_all_tabs_mut().map(|(_, pane)| pane));
+        for pane in docked.chain(floating) {
+            if let Tab::NativeEditor { path } | Tab::Image { path } | Tab::Document { path, .. } =
+                pane
+                && let Some(next) = moved(path, from, to)
+            {
+                *path = next;
             }
         }
         let docs: Vec<PathBuf> = self

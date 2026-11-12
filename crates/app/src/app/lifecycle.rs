@@ -279,6 +279,7 @@ impl App {
             native_hover_markdown_cache: egui_commonmark::CommonMarkCache::default(),
             native_pending_line: HashMap::new(),
             native_pending_col: HashMap::new(),
+            native_prune_wanted: false,
             lsp,
             native_close_prompts: Vec::new(),
             native_close_after_save: Vec::new(),

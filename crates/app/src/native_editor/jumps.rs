@@ -129,7 +129,6 @@ impl App {
         let services = self.services.clone();
         for doc in self.native_docs.values_mut() {
             if doc.dirty() && !doc.saving {
-                doc.force_save = false;
                 doc.start_save(&services);
             }
         }

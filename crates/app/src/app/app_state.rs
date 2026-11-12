@@ -296,6 +296,9 @@ pub struct App {
     /// LSP (UTF-16) column for a pending jump, converted against the loaded
     /// line so the GUI thread never reads the target file itself.
     pub(crate) native_pending_col: HashMap<PathBuf, u32>,
+    /// A pane closed a clean native tab: prune buffers once the dock is
+    /// checked back in.
+    pub(crate) native_prune_wanted: bool,
     pub(crate) lsp: lsp_manager::LspManager,
     /// Dirty-editor close prompts, oldest first, each with the flow that
     /// asked (pane, quit, workspace close) and the issuing view, if any.

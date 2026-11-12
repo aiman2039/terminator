@@ -95,9 +95,9 @@ pub struct NativeDoc {
     pub(super) drawn: std::collections::HashMap<String, u64>,
     /// The file's line breaks (see [`LineEnding`]).
     pub(super) line_ending: LineEnding,
-    /// `(revision, dirty)` for the last revision checked against
-    /// `saved_hash`, so the full-text hash runs once per edit.
-    pub(super) dirty_memo: std::cell::Cell<(u64, bool)>,
+    /// `(revision, saved_hash, dirty)` for the last revision checked
+    /// against `saved_hash`, so the full-text hash runs once per edit.
+    pub(super) dirty_memo: std::cell::Cell<(u64, u64, bool)>,
     pub(super) loaded_mtime: Option<SystemTime>,
     pub(super) read_limit: u64,
     pub(super) mtime_check: Option<(Instant, Option<SystemTime>)>,
@@ -257,7 +257,7 @@ impl NativeDoc {
             focused_view: None,
             focused_at: None,
             drawn: std::collections::HashMap::new(),
-            dirty_memo: std::cell::Cell::new((0, false)),
+            dirty_memo: std::cell::Cell::new((0, 0, false)),
             loaded_mtime: None,
             read_limit: MAX_NATIVE_BYTES,
             new_file: false,
@@ -293,12 +293,14 @@ impl NativeDoc {
         if doc.len_chars() != self.saved_len {
             return true;
         }
-        let (revision, dirty) = self.dirty_memo.get();
-        if revision == doc.revision() {
+        // Keyed on the saved hash too: a save that lands changes it.
+        let (revision, saved, dirty) = self.dirty_memo.get();
+        if revision == doc.revision() && saved == self.saved_hash {
             return dirty;
         }
         let dirty = doc.content_hash() != self.saved_hash;
-        self.dirty_memo.set((doc.revision(), dirty));
+        self.dirty_memo
+            .set((doc.revision(), self.saved_hash, dirty));
         dirty
     }
 
