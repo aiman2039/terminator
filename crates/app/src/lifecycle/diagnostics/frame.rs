@@ -9,10 +9,16 @@ impl Diagnostics {
         if self.path.is_none() {
             return;
         }
-        if !self.scale_configured {
-            self.configure_window(ctx);
+        match self.scale {
+            None => self.configure_window(ctx),
+            // The Interface size setting zooms the window when the theme
+            // applies; the fixture keeps its own scale.
+            Some(scale) if (ctx.pixels_per_point() - scale).abs() > 0.001 => {
+                ctx.set_pixels_per_point(scale);
+            }
+            Some(_) => {}
         }
-        if self.scale_configured && !self.sized {
+        if self.scale.is_some() && !self.sized {
             self.size_window(ctx);
         }
         if std::env::var_os("TERMINATOR_TEST_INPUT").is_some() {
@@ -41,7 +47,7 @@ impl Diagnostics {
             // Synthetic fixtures must not intercept the user's real wheel or clicks.
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
         }
-        self.scale_configured = true;
+        self.scale = Some(scale);
         if std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_none() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
