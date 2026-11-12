@@ -94,6 +94,28 @@ fn run_presses_enter_for_shell_commands_but_never_for_agents() {
 }
 
 #[test]
+fn a_multi_line_command_typed_without_enter_runs_no_line() {
+    for task in [
+        task("echo hi\nclaude", TaskSource::User),
+        TaskDef {
+            enter: false,
+            ..task("make\r\nmake test", TaskSource::User)
+        },
+    ] {
+        let RunPlan::Type(post) = plan(&task, None, &words()) else {
+            panic!("a user task types");
+        };
+        assert!(!post.enter);
+        let bytes = egui_term::paste_input(&post.input, egui_term::TerminalMode::empty());
+        assert!(
+            !bytes.contains(&b'\r') && !bytes.contains(&b'\n'),
+            "{:?}",
+            post.input
+        );
+    }
+}
+
+#[test]
 fn agent_presets_count_as_agent_programs() {
     let preset = crate::preferences::AgentPreset {
         name: "Mine".into(),
