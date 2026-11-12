@@ -223,6 +223,10 @@ impl App {
             Action::NewVnc => self.open_new_vnc_tab(None),
             Action::NewAgentSession => self.open_agent_picker(),
             Action::NewDrawing => self.open_new_drawing(None),
+            Action::RunTask => self.open_task_picker(),
+            Action::RerunTask => self.rerun_last_task(),
+            Action::ShowWelcome => self.open_welcome(),
+            Action::ShowWhatsNew => self.show_center(CenterPage::WhatsNew),
             Action::SwitcherNext => self.step_switcher(false),
             Action::SwitcherBack => self.step_switcher(true),
             Action::ToolExplorer

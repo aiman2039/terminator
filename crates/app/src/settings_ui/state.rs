@@ -38,6 +38,8 @@ pub(crate) enum BrowseTarget {
     External,
     WorktreeDest,
     Lsp(&'static str),
+    /// A terminal theme file for Settings → Appearance import.
+    ThemeFile,
 }
 
 impl App {
@@ -258,6 +260,7 @@ impl App {
         } else {
             return;
         };
+        let next = next.for_os(appearance::os_dark(ctx));
         if self.theme != next {
             self.theme = next;
             appearance::apply(ctx, &self.theme);

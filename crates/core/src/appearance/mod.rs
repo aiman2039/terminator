@@ -47,6 +47,9 @@ pub struct AppearanceConfig {
     pub editor: crate::editor_prefs::EditorPrefs,
     #[serde(flatten)]
     pub fonts: FontPrefs,
+    /// Follow the OS light/dark setting with one preset for each.
+    #[serde(flatten)]
+    pub follow: ThemeFollow,
 }
 
 /// System font choices for terminal and editor text. `None` keeps the
@@ -346,6 +349,7 @@ impl AppearanceFile {
         }
         for key in FontPrefs::KEYS
             .iter()
+            .chain(&ThemeFollow::KEYS)
             .chain(&[AppearanceConfig::PRIMARY_KEY])
         {
             if !values.contains_key(key) {
@@ -417,6 +421,12 @@ pub enum AppearanceError {
     Io(#[from] std::io::Error),
 }
 
+mod follow;
+mod import;
 mod presets;
+pub use follow::{DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, PRESETS, Preset, ThemeFollow, preset};
+pub use import::{TerminalColors, ThemeImportError};
+#[cfg(test)]
+mod import_tests;
 #[cfg(test)]
 mod tests;

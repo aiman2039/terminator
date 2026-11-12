@@ -16,6 +16,8 @@ pub(crate) use hover::link_menu_modifier_pressed;
 mod menus;
 pub(crate) use menus::InlineRenameInput;
 mod start_panel;
+mod start_tools;
+pub(crate) use start_tools::ToolProbes;
 mod tab_menu;
 mod tabs;
 mod terminal_panes;

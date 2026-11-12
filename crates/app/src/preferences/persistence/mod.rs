@@ -140,6 +140,10 @@ pub struct LayoutPreset {
 pub struct UiPreferences {
     pub version: u32,
     pub setup_completed: bool,
+    /// The first-run Welcome page was closed.
+    pub welcome_seen: bool,
+    /// Version of the last run; another version opens What's New.
+    pub last_seen_version: Option<String>,
     pub expanded: HashMap<String, bool>,
     pub history_expanded: HashMap<String, bool>,
     /// Terminal title colors and icons, keyed by persistent session ID.

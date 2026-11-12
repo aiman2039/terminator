@@ -8,9 +8,10 @@
 //! pending hover/goto answers stay here for the views to poll. Servers
 //! die with the GUI (inbox drop plus actor cancellation on prune); a
 //! missing binary or a crash loop surfaces as a hover message, never a
-//! modal error. Only Rust and Python have servers (see
-//! `terminator_native_edit::lsp::server_candidates`); every other
-//! language edits exactly as before, without LSP.
+//! modal error. The server table is
+//! `terminator_native_edit::lsp::SERVER_FAMILIES` plus the user-defined
+//! servers from Settings → Languages; every other language edits
+//! exactly as before, without LSP.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -46,6 +47,8 @@ mod symbols;
 use docs::Slot;
 pub(crate) use docs::SubmitTextInput;
 mod responses;
+mod roots;
+use roots::project_root;
 mod spell;
 use spell::ActionWait;
 mod supervisor;
@@ -386,6 +389,8 @@ impl LspManager {
     /// only the servers whose path changed, so the new binary is used
     /// without restarting the app. Unchanged settings do nothing.
     pub fn set_server_overrides(&mut self, overrides: &std::collections::BTreeMap<String, String>) {
+        // User-defined servers share the map (`custom:` keys); a change
+        // there restarts the servers they replace or add.
         let normalized: std::collections::BTreeMap<String, String> = overrides
             .iter()
             .map(|(language, value)| (language.clone(), value.trim().to_owned()))
@@ -394,6 +399,9 @@ impl LspManager {
         if normalized == self.overrides {
             return;
         }
+        let before_custom = L::custom_families();
+        L::set_custom_servers(&L::parse_custom_servers(&normalized));
+        let after_custom = L::custom_families();
         let mut changed: Vec<&'static str> = Vec::new();
         for language in L::SERVER_FAMILIES.iter().map(|family| family.id) {
             let before = self.overrides.get(language);
@@ -402,6 +410,14 @@ impl LspManager {
                 changed.push(language);
             }
         }
+        if before_custom != after_custom {
+            // A user server can take a built-in family's files: restart
+            // every language server so documents re-key on the next sync.
+            changed.extend(self.servers.keys().map(|key| key.language));
+            changed.extend(before_custom.iter().map(|family| family.id));
+        }
+        changed.sort_unstable();
+        changed.dedup();
         self.overrides = normalized;
         for &language in &changed {
             self.unavailable.remove(language);
@@ -448,42 +464,6 @@ impl LspManager {
         }
         !self.pump_rx.is_empty()
     }
-}
-
-/// Workspace root for one file: nearest ancestor holding a language
-/// marker (`Cargo.toml`, `pyproject.toml`, …), else nearest with `.git`,
-/// else the file's own directory. Language markers win over a nearer
-/// `.git` (a nested repo inside a buildable workspace still analyzes
-/// with the workspace). Servers use the root for project-wide analysis.
-fn project_root(path: &Path, language: Language) -> PathBuf {
-    let markers: &[&str] = match language {
-        Language::Rust => &["Cargo.toml"],
-        Language::Python => &["pyproject.toml", "setup.py", "setup.cfg"],
-        Language::TypeScript | Language::JavaScript => {
-            &["tsconfig.json", "jsconfig.json", "package.json"]
-        }
-        Language::Markdown => &[".marksman.toml"],
-        Language::Html | Language::Css | Language::Scss | Language::Less | Language::Json => {
-            &["package.json"]
-        }
-        Language::Toml => &[".taplo.toml", "taplo.toml"],
-        _ => &[],
-    };
-    let mut fallback: Option<PathBuf> = None;
-    let mut current = path.parent();
-    for _ in 0..20 {
-        let Some(dir) = current else {
-            break;
-        };
-        if markers.iter().any(|name| dir.join(name).exists()) {
-            return dir.to_path_buf();
-        }
-        if fallback.is_none() && dir.join(".git").exists() {
-            fallback = Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    fallback.unwrap_or_else(|| path.parent().map(Path::to_path_buf).unwrap_or_default())
 }
 
 #[cfg(test)]

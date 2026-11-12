@@ -126,6 +126,10 @@ actions! {
     ReopenBrowserTab => "reopen_browser_tab", "Reopen closed browser tab", "Globe";
     NewAgentSession => "new_agent_session", "New agent session…", "AgentGeneric";
     NewDrawing => "new_drawing", "New drawing", "Pencil";
+    RunTask => "run_task", "Run task…", "Play";
+    RerunTask => "rerun_task", "Rerun last task", "RefreshCw";
+    ShowWelcome => "show_welcome", "Welcome and setup", "Info";
+    ShowWhatsNew => "show_whats_new", "What's New", "Info";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

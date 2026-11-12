@@ -784,13 +784,69 @@ fn server_table_covers_rust_python_and_typescript() {
         server_candidates(Language::JavaScript),
         &["typescript-language-server"]
     );
-    assert!(server_candidates(Language::Go).is_empty());
     assert_eq!(server_language(Language::Rust), Some("rust"));
     assert_eq!(server_language(Language::TypeScript), Some("typescript"));
     assert_eq!(server_language(Language::JavaScript), Some("typescript"));
-    assert_eq!(server_language(Language::Shell), None);
+    assert_eq!(server_language(Language::Plain), None);
     assert_eq!(server_args(Language::TypeScript), &["--stdio"]);
     assert!(server_args(Language::Rust).is_empty());
+}
+
+#[test]
+fn server_table_covers_go_c_java_lua_bash_ruby_and_php() {
+    let by_file = |name: &str| server_candidates(crate::highlight::language_for_path(name));
+    assert_eq!(by_file("main.go"), &["gopls"]);
+    assert_eq!(by_file("main.c"), &["clangd"]);
+    assert_eq!(by_file("main.cpp"), &["clangd"]);
+    assert_eq!(by_file("Main.java"), &["jdtls"]);
+    assert_eq!(by_file("init.lua"), &["lua-language-server"]);
+    assert_eq!(by_file("run.sh"), &["bash-language-server"]);
+    assert_eq!(by_file("app.rb"), &["ruby-lsp"]);
+    assert_eq!(by_file("index.php"), &["intelephense"]);
+    assert_eq!(server_args(Language::Shell), &["start"]);
+    // Every built-in family says how to install it and asks for trust
+    // (except the spell checker, which runs no project code).
+    for family in SERVER_FAMILIES {
+        assert!(!family.install.is_empty(), "{} has no hint", family.id);
+        assert_eq!(family.needs_trust, family.id != SPELL_SERVER);
+    }
+}
+
+#[test]
+fn new_server_file_ids_follow_the_language() {
+    let id = |name: &str| {
+        language_id_for_path(Path::new(name), crate::highlight::language_for_path(name))
+    };
+    assert_eq!(id("main.go"), Some("go"));
+    assert_eq!(id("main.c"), Some("c"));
+    assert_eq!(id("main.cpp"), Some("cpp"));
+    assert_eq!(id("Main.java"), Some("java"));
+    assert_eq!(id("init.lua"), Some("lua"));
+    assert_eq!(id("app.rb"), Some("ruby"));
+    assert_eq!(id("index.php"), Some("php"));
+}
+
+#[test]
+fn user_defined_server_takes_its_file_types() {
+    let server = CustomServer {
+        name: "kotlin-ls".into(),
+        extensions: vec!["kt".into()],
+        command: "kotlin-language-server".into(),
+        args: vec!["--stdio".into()],
+    };
+    let language = crate::highlight::language_for_path("Main.kt");
+    assert_ne!(language, Language::Plain, "Kotlin grammar is bundled");
+    set_custom_servers(std::slice::from_ref(&server));
+    assert_eq!(server_language(language), Some("custom:kotlin-ls"));
+    assert_eq!(server_candidates(language), &["kotlin-language-server"]);
+    assert_eq!(server_args(language), &["--stdio"]);
+    assert!(family_needs_trust("custom:kotlin-ls"));
+    assert_eq!(
+        language_id_for_path(Path::new("Main.kt"), language),
+        Some("kotlin")
+    );
+    set_custom_servers(&[]);
+    assert_eq!(server_language(language), None);
 }
 
 #[test]
@@ -847,7 +903,7 @@ fn typescript_file_ids_follow_the_extension() {
     );
     assert_eq!(
         language_id_for_path(Path::new("run.sh"), Language::Shell),
-        None
+        Some("shellscript")
     );
 }
 

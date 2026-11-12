@@ -100,7 +100,7 @@ impl App {
         self.theme_source = file.source;
         if !self.theme_conflict {
             self.theme_draft = file.config.clone();
-            self.theme = file.config;
+            self.theme = file.config.for_os(appearance::os_dark(ctx));
             appearance::apply(ctx, &self.theme);
             self.sync_fonts(ctx);
         }

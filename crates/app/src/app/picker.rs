@@ -40,6 +40,7 @@ impl PickKind {
             Self::Browse(BrowseTarget::External) => "Choose external editor",
             Self::Browse(BrowseTarget::WorktreeDest) => "Choose parent folder",
             Self::Browse(BrowseTarget::Lsp(_)) => "Choose language server",
+            Self::Browse(BrowseTarget::ThemeFile) => "Import terminal theme",
             Self::OpenFile => "Open file",
             Self::AudioFiles => "Add audio files",
             Self::VncFiles => "Import RealVNC connections",

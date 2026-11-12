@@ -233,12 +233,20 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
     Action::GitShowAllChanges,
 ];
 
+/// Task actions have no default keys either (bind them in Keymap).
+const TASK_ACTIONS: &[Action] = &[
+    Action::RunTask,
+    Action::RerunTask,
+    Action::ShowWelcome,
+    Action::ShowWhatsNew,
+];
+
 #[test]
 fn every_menu_action_has_a_unique_default_chord() {
     let defaults = terminator_core::Settings::default().keybindings;
     for action in Action::ALL
         .iter()
-        .filter(|action| !UNBOUND_BY_DEFAULT.contains(action))
+        .filter(|action| !UNBOUND_BY_DEFAULT.contains(action) && !TASK_ACTIONS.contains(action))
         .map(|action| action.id())
     {
         let value = defaults.get(action).unwrap_or_else(|| panic!("{action}"));

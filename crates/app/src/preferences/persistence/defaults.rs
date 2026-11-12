@@ -6,6 +6,8 @@ impl Default for UiPreferences {
         Self {
             version: 2,
             setup_completed: false,
+            welcome_seen: false,
+            last_seen_version: None,
             expanded: HashMap::new(),
             history_expanded: HashMap::new(),
             terminal_styles: HashMap::new(),
