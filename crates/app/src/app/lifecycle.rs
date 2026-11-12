@@ -339,6 +339,7 @@ impl App {
             last_focus: None,
             highlight_session: None,
             highlight_since: Instant::now(),
+            worktree_stats: Default::default(),
             presentations: std::cell::RefCell::default(),
             sidebar_projects: std::cell::RefCell::default(),
             sidebar_cache: std::cell::RefCell::default(),

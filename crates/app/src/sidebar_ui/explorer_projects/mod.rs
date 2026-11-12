@@ -11,7 +11,7 @@ pub(crate) use style::RenameDraft;
 pub(crate) use style::{ProjectNames, apply_project_names};
 
 use super::super::agent_presence::attention_status_icon;
-use super::attention::state_color;
+use super::attention::{state_color, state_counters};
 use super::explorer_rows::ExplorerLocal;
 #[cfg(feature = "test-support")]
 use crate::diagnostics;

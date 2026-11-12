@@ -91,7 +91,7 @@ pub(crate) fn row_state(state: AgentState, since: Option<u64>, now: u64) -> Opti
 }
 
 /// `12s`, `4m` or `2h`.
-fn short_age(since: u64, now: u64) -> String {
+pub(crate) fn short_age(since: u64, now: u64) -> String {
     let age = now.saturating_sub(since);
     if age < 60 {
         format!("{age}s")

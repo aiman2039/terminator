@@ -1,3 +1,5 @@
+mod marks;
+
 use super::super::super::*;
 use super::super::tab_menu::WorkspaceTabMenuSpec;
 use super::super::tabs::{TabFace, tab_attention_text, tab_label_job};
@@ -183,8 +185,9 @@ impl App {
         }
     }
 
-    /// Terminal color underline, then the focused terminal identity: stable
-    /// brand glyph beside the hook lifecycle status or the kind icon.
+    /// A user-chosen color line (none by default, so the accent underline
+    /// marks only the active tab), then the brand glyph beside the hook
+    /// lifecycle status or the kind icon.
     fn paint_strip_tab_identity(&self, ui: &mut egui::Ui, paint: &TabPaint<'_>) {
         let TabPaint {
             face, rect, active, ..
@@ -192,7 +195,7 @@ impl App {
         let terminal_tint = face
             .sid
             .as_deref()
-            .map(|sid| self.terminal_title_color(sid));
+            .and_then(|sid| self.terminal_chosen_title_color(sid));
         if let Some(color) = terminal_tint {
             ui.painter().hline(
                 rect.x_range(),
@@ -212,12 +215,11 @@ impl App {
                 spin: false,
             });
         }
-        let status_center = if face.brand.is_some() {
-            rect.left() + 24.0
+        let (status_center, status_size) = if face.brand.is_some() {
+            (rect.left() + 24.0, 13.0)
         } else {
-            rect.left() + 16.0
+            (rect.left() + 16.0, 16.0)
         };
-        let status_size = if face.brand.is_some() { 13.0 } else { 16.0 };
         let icon_rect = egui::Rect::from_center_size(
             egui::pos2(status_center, rect.center().y),
             egui::vec2(status_size, status_size),
@@ -236,12 +238,18 @@ impl App {
         } else if let Some(image) = &face.image {
             egui::Image::new(image.clone()).paint_at(ui, icon_rect.shrink(1.0));
         } else {
-            // File-type icons keep their own colors.
+            // File-type icons keep their own colors; an inactive terminal
+            // glyph is neutral secondary.
+            let neutral = match (face.sid.is_some() && !*active, terminal_tint) {
+                (_, Some(chosen)) => chosen,
+                (true, None) => appearance::color(&self.theme.secondary),
+                (false, None) => appearance::icon_color(),
+            };
             appearance::paint_status_icon(appearance::PaintStatusIconInput {
                 ui,
                 rect: icon_rect,
                 icon: face.icon,
-                tint: terminal_tint.unwrap_or(appearance::icon_color()),
+                tint: neutral,
                 spin: false,
             });
         }
@@ -291,64 +299,6 @@ impl App {
             tint,
         );
         false
-    }
-
-    /// Aggregate attention across the tab's terminals.
-    fn paint_strip_tab_badge(&self, ui: &egui::Ui, paint: &TabPaint<'_>) {
-        let TabPaint {
-            badge,
-            rect,
-            attention,
-            ..
-        } = paint;
-        let Some((count, _)) = badge else {
-            return;
-        };
-        let badge_rect = egui::Rect::from_min_max(
-            egui::pos2(rect.right() - 44.0, rect.center().y - 8.0),
-            egui::pos2(rect.right() - 26.0, rect.center().y + 8.0),
-        );
-        ui.painter().text(
-            badge_rect.right_center(),
-            egui::Align2::RIGHT_CENTER,
-            count,
-            egui::FontId::proportional(appearance::FONT_CAPTION),
-            appearance::color(if attention.waiting() > 0 {
-                &self.theme.status_waiting
-            } else {
-                &self.theme.status_failed
-            }),
-        );
-        #[cfg(feature = "test-support")]
-        diagnostics::record(
-            ui.ctx(),
-            &format!("workspace-tab-attention:{}", paint.face.label),
-            badge_rect,
-        );
-    }
-
-    fn paint_strip_tab_underline(&self, ui: &egui::Ui, paint: &TabPaint<'_>) {
-        if !paint.active {
-            return;
-        }
-        let rect = paint.rect;
-        // Inset from the bottom edge. A stroke centered on rect.bottom() is
-        // clipped away by the strip.
-        let underline = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 8.0, rect.bottom() - 3.0),
-            egui::pos2(rect.right() - 8.0, rect.bottom() - 1.0),
-        );
-        ui.painter().rect_filled(
-            underline,
-            appearance::RADIUS_XSMALL,
-            appearance::color(&self.theme.accent),
-        );
-        #[cfg(feature = "test-support")]
-        diagnostics::record(
-            ui.ctx(),
-            &format!("workspace-tab-underline:{}", paint.face.label),
-            underline,
-        );
     }
 
     /// The close glyph, or the unsaved dot or pin mark until hovered.

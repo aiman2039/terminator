@@ -13,8 +13,9 @@ mod presentation;
 mod queries;
 mod resume;
 pub(crate) use cache::PresentationCache;
-pub(crate) use counts::{AttentionCounts, attention_status_icon, notice_pending};
+pub(crate) use counts::{AttentionCounts, StateCounts, attention_status_icon, notice_pending};
 pub(crate) use presentation::AgentPresentation;
 #[cfg(test)]
 pub(crate) use presentation::row_state;
+pub(crate) use presentation::short_age;
 pub(crate) use queries::notice_preview;

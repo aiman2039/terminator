@@ -18,12 +18,8 @@ pub(crate) const TITLE_COLORS: &[(&str, &str)] = &[
 ];
 
 impl App {
-    pub(super) fn terminal_title_color(&self, sid: &str) -> Color32 {
-        self.terminal_chosen_title_color(sid)
-            .unwrap_or_else(|| appearance::color(&self.theme.accent))
-    }
-
-    /// The title color the user picked in Terminal appearance, if any.
+    /// The title color the user picked in Terminal appearance, if any. Only
+    /// a chosen color tints a terminal's tab line, glyph and title.
     pub(super) fn terminal_chosen_title_color(&self, sid: &str) -> Option<Color32> {
         self.preferences
             .terminal_styles

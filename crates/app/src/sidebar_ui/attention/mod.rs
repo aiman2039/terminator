@@ -14,7 +14,7 @@ use crate::{
     preferences::{AgentStateFilter, AgentsTab, SidebarTool},
     session_info,
 };
-pub(crate) use card::attention_card;
+pub(crate) use card::{attention_card, attention_card_in};
 use eframe::egui::{self, Color32, RichText};
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{AgentState, Notification, Request, Session, now};
@@ -52,45 +52,87 @@ impl App {
 
     pub(crate) fn agents_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Agents");
-        // The tab bar scrolls instead of widening narrow sidebars.
-        egui::ScrollArea::horizontal()
-            .id_salt("agents-tabs")
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (tab, icon, label, name) in [
-                        (
-                            AgentsTab::NeedsAttention,
-                            "CircleAlert",
-                            "Needs attention",
-                            "needs",
-                        ),
-                        (AgentsTab::AllLive, "CircleCheck", "All live", "live"),
-                        (AgentsTab::Unread, "Bell", "Unread", "unread"),
-                    ] {
-                        let selected = self.preferences.agents_tab == tab;
-                        let response =
-                            appearance::selectable_icon(appearance::SelectableIconInput {
-                                ui,
-                                icon,
-                                tip: label,
-                                selected,
-                            });
-                        #[cfg(feature = "test-support")]
-                        diagnostics::record(ui.ctx(), &format!("agent-tab:{name}"), response.rect);
-                        #[cfg(not(feature = "test-support"))]
-                        let _ = name;
-                        if response.clicked() {
-                            self.preferences.agents_tab = tab;
-                            self.unread_selected = None;
-                        }
-                    }
-                });
-            });
+        self.agents_tabs(ui);
         match self.preferences.agents_tab {
             AgentsTab::NeedsAttention => self.agents_needs_attention(ui),
             AgentsTab::AllLive => self.agents_all_live(ui),
             AgentsTab::Unread => self.agents_unread(ui),
+        }
+    }
+
+    /// Inbox | Live | Unread as a text segmented control with counts. A
+    /// narrow sidebar drops the counts, then shows the icons, so nothing
+    /// is clipped.
+    fn agents_tabs(&mut self, ui: &mut egui::Ui) {
+        let index = self.sidebar_index();
+        let inbox = index
+            .pending_groups
+            .len()
+            .saturating_add(index.terminal_pending.len());
+        let live = self.cached_live_rows();
+        let live = live
+            .groups
+            .iter()
+            .map(|(_, sessions)| sessions.len())
+            .sum::<usize>()
+            .saturating_add(live.unverified.len());
+        let unread = self.cached_unread_groups().len();
+        let tabs = [
+            (
+                AgentsTab::NeedsAttention,
+                "Inbox",
+                inbox,
+                "CircleAlert",
+                "Needs attention",
+                "needs",
+            ),
+            (
+                AgentsTab::AllLive,
+                "Live",
+                live,
+                "CircleCheck",
+                "All live",
+                "live",
+            ),
+            (
+                AgentsTab::Unread,
+                "Unread",
+                unread,
+                "Bell",
+                "Unread",
+                "unread",
+            ),
+        ];
+        let labels: Vec<String> = tabs
+            .iter()
+            .map(|(_, name, count, ..)| format!("{name} {count}"))
+            .collect();
+        let cells: Vec<appearance::SegmentCell<'_>> = tabs
+            .iter()
+            .zip(&labels)
+            .map(
+                |((_, short, _, icon, tip, _), label)| appearance::SegmentCell {
+                    label,
+                    short,
+                    icon,
+                    tip,
+                },
+            )
+            .collect();
+        let selected = tabs
+            .iter()
+            .position(|(tab, ..)| *tab == self.preferences.agents_tab)
+            .unwrap_or(0);
+        let responses = appearance::segmented(ui, &cells, selected);
+        for ((tab, .., name), response) in tabs.iter().zip(&responses) {
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), &format!("agent-tab:{name}"), response.rect);
+            #[cfg(not(feature = "test-support"))]
+            let _ = name;
+            if response.clicked() {
+                self.preferences.agents_tab = *tab;
+                self.unread_selected = None;
+            }
         }
     }
 
@@ -294,14 +336,37 @@ impl App {
     }
 }
 
+/// The one colour of an agent state. Completed uses the text colour, not the
+/// accent: the accent marks focus and unread results, and in Carbon it is
+/// almost the red of `status_failed`.
 pub(crate) fn state_color(state: AgentState, theme: &AppearanceConfig) -> Color32 {
     appearance::color(match state {
         AgentState::Running => &theme.status_running,
         AgentState::WaitingInput | AgentState::WaitingPermission => &theme.status_waiting,
         AgentState::Failed => &theme.status_failed,
-        AgentState::Completed => &theme.accent,
+        AgentState::Completed => &theme.text,
         _ => &theme.secondary,
     })
+}
+
+/// Row state counters: icon and count in the state color, in the order
+/// waiting, failed, working, done. Only the waiting counter is kept when
+/// a row is narrow.
+pub(crate) fn state_counters(
+    counts: crate::agent_presence::StateCounts,
+    theme: &AppearanceConfig,
+) -> Vec<appearance::StateCounter> {
+    counts
+        .ordered()
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(state, count)| appearance::StateCounter {
+            icon: attention_status_icon(state),
+            count,
+            color: state_color(state, theme),
+            keep: state == AgentState::WaitingPermission,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -422,15 +487,4 @@ pub(super) fn attention_status_detail(state: AgentState) -> &'static str {
         AgentState::Stopped => "The agent was stopped.",
         AgentState::Unknown => "No status has been reported yet.",
     }
-}
-
-/// Width left for the session label after the status glyph (and optional
-/// brand) are already placed. `remaining` is that leftover row width.
-pub(super) fn attention_label_width(remaining: f32, spacing: f32, show_read: bool) -> f32 {
-    let actions = if show_read {
-        ATTENTION_ACTION_READ_COUNT
-    } else {
-        ATTENTION_ACTION_COUNT
-    };
-    (remaining - spacing - ATTENTION_ACTION_SIZE * actions).max(0.0)
 }

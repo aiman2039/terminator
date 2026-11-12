@@ -265,13 +265,7 @@ impl App {
         let presented = self.present_session(&session.id);
         let theme = &self.theme;
         if let Some(state) = presented.lifecycle {
-            return Some(appearance::color(match state {
-                AgentState::Running => &theme.status_running,
-                AgentState::WaitingInput | AgentState::WaitingPermission => &theme.status_waiting,
-                AgentState::Failed => &theme.status_failed,
-                AgentState::Completed => &theme.accent,
-                _ => &theme.secondary,
-            }));
+            return Some(crate::sidebar_ui::state_color(state, theme));
         }
         session
             .lifecycle

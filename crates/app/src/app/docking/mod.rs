@@ -377,9 +377,42 @@ impl App {
                 egui::StrokeKind::Inside,
             );
         }
+        if let Some(pane) = self.focused_main_pane(dock.main_surface()) {
+            let rule = appearance::paint_focus_rule(
+                ui.painter(),
+                pane,
+                appearance::color(&self.theme.accent),
+            );
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "pane-focus-rule", rule);
+            let _ = rule;
+        }
         if self.highlight_since.elapsed() < Duration::from_millis(1200) {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
+    }
+
+    /// The rect of the pane that has the keys, when it is in `surface` and
+    /// `surface` has more than one pane. A terminal is found by its id, so
+    /// a strip or floating terminal marks nothing here; with no terminal
+    /// focused, the surface's focused leaf counts when its active tab is
+    /// not a terminal (editor, browser, diff).
+    pub(crate) fn focused_main_pane(&self, surface: &egui_dock::Tree<Tab>) -> Option<egui::Rect> {
+        let panes = surface
+            .iter()
+            .filter(|node| node.tabs().is_some_and(|tabs| !tabs.is_empty()))
+            .count();
+        if panes < 2 {
+            return None;
+        }
+        let node = match &self.active_session {
+            Some(sid) => surface.find_tab(&Tab::Terminal(sid.clone()))?.0,
+            None if self.non_terminal_selected => surface.focused_leaf()?,
+            None => return None,
+        };
+        let leaf = surface.leaf(node).ok()?;
+        let terminal = matches!(leaf.tabs.get(leaf.active.0), Some(Tab::Terminal(_)));
+        (self.active_session.is_some() || !terminal).then_some(leaf.rect)
     }
 }
 

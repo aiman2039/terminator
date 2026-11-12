@@ -66,6 +66,78 @@ mod tests {
     }
 
     #[test]
+    fn state_counters_go_waiting_failed_working_done_and_keep_waiting() {
+        use crate::agent_presence::StateCounts;
+        let theme = AppearanceConfig::default();
+        let counts = StateCounts::of([
+            AgentState::Running,
+            AgentState::Completed,
+            AgentState::WaitingInput,
+            AgentState::Failed,
+            AgentState::Running,
+            AgentState::Unknown,
+        ]);
+        let counters = state_counters(counts, &theme);
+        let shown: Vec<_> = counters.iter().map(|c| (c.icon, c.count, c.keep)).collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("ShieldQuestion", 1, true),
+                ("CircleAlert", 1, false),
+                ("LoaderCircle", 2, false),
+                ("CircleCheck", 1, false),
+            ]
+        );
+        assert_eq!(counters[0].color, appearance::color(&theme.status_waiting));
+        assert!(state_counters(StateCounts::default(), &theme).is_empty());
+    }
+
+    /// "waiting 2m" keeps the waiting color; other spaced trailing text
+    /// (outside session rows) stays weak.
+    #[test]
+    fn a_waiting_session_row_shows_its_words_in_the_waiting_color() {
+        let ctx = egui::Context::default();
+        appearance::install(&ctx);
+        let amber = egui::Color32::from_rgb(221, 184, 120);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                appearance::session_row_spec(
+                    ui,
+                    appearance::SessionRowSpec {
+                        label: "Terminal 1",
+                        icon: "ShieldQuestion",
+                        selected: false,
+                        trailing: "waiting 2m",
+                        tint: amber,
+                        icon_tint: Some(amber),
+                        spin: false,
+                        subtitle: None,
+                        brand: None,
+                    },
+                );
+            },
+        );
+        let color = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "waiting 2m" => {
+                    Some(text.galley.job.sections[0].format.color)
+                }
+                _ => None,
+            });
+        output.textures_delta.clear();
+        assert_eq!(color, Some(amber));
+    }
+
+    #[test]
     fn explorer_query_filter_is_case_insensitive_and_keeps_directories() {
         // The needle is the pre-lowercased query hoisted out of the per-file
         // loop; labels may use any case.
@@ -410,20 +482,6 @@ mod tests {
             assert!(!attention_status_detail(state).is_empty());
             assert!(!state.label().is_empty());
         }
-    }
-
-    #[test]
-    fn attention_label_width_leaves_the_action_row_intact() {
-        let spacing = 4.0;
-        let remaining = 200.0;
-        let width = attention_label_width(remaining, spacing, false);
-        let used = width + spacing + ATTENTION_ACTION_SIZE * ATTENTION_ACTION_COUNT;
-        assert!((used - remaining).abs() < f32::EPSILON);
-        assert_eq!(attention_label_width(10.0, spacing, false), 0.0);
-        let read = attention_label_width(remaining, spacing, true);
-        assert!(read < width);
-        let read_used = read + spacing + ATTENTION_ACTION_SIZE * ATTENTION_ACTION_READ_COUNT;
-        assert!((read_used - remaining).abs() < f32::EPSILON);
     }
 
     #[test]

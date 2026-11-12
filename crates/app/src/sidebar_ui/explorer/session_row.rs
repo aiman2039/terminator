@@ -279,40 +279,59 @@ impl App {
         }
     }
 
+    /// A two-line worktree row: branch leaf (else the folder name) and state
+    /// counters, then the newest agent state and `+added −deleted` from a
+    /// read-only local Git job (none for SSH projects).
     pub(in crate::sidebar_ui) fn worktree_card(&mut self, ui: &mut egui::Ui, project: &Project) {
-        let index = self.sidebar_index();
-        let live = index.live_counts.get(&project.id).copied().unwrap_or(0);
-        let (waiting, running) = index
-            .worktree_states
+        let live = self
+            .sidebar_index()
+            .live_counts
             .get(&project.id)
             .copied()
-            .unwrap_or_default();
-        let tint = appearance::color(if waiting {
-            &self.theme.status_waiting
-        } else if running {
-            &self.theme.status_running
-        } else {
-            &self.theme.secondary
-        });
+            .unwrap_or(0);
         let count = live.to_string();
         let selected = self.selected.as_ref() == Some(&project.id);
         // A deleted checkout: dim name and a warning icon, like other projects.
         let missing = self.project_folder_missing(&project.id);
+        self.ask_worktree_stats(project, missing);
+        let git = self.worktree_stats.get(&project.path);
+        let label = git
+            .and_then(|git| git.branch_leaf())
+            .unwrap_or(&project.name)
+            .to_owned();
+        let counters = self.project_state_counters(&project.id);
+        let detail = self.worktree_detail(project, git);
+        let detail: Vec<(&str, egui::Color32)> = detail
+            .iter()
+            .map(|(text, color)| (text.as_str(), *color))
+            .collect();
+        let height = if detail.is_empty() {
+            self.theme.row_height()
+        } else {
+            appearance::SESSION_ROW_DETAIL_HEIGHT
+        };
         let response = ui
             .scope(|ui| {
                 if missing {
                     ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
                 }
-                appearance::project_row(appearance::ProjectRowInput {
-                    color: None,
-                    ui,
-                    label: &project.name,
-                    icon: if missing { MISSING_ICON } else { "GitBranch" },
-                    selected,
-                    height: self.theme.row_height(),
-                    trailing: &count,
-                    tint,
-                })
+                appearance::project_row_with(
+                    appearance::ProjectRowInput {
+                        color: None,
+                        ui,
+                        label: &label,
+                        icon: if missing { MISSING_ICON } else { "GitBranch" },
+                        selected,
+                        height,
+                        trailing: &count,
+                        tint: appearance::color(&self.theme.secondary),
+                    },
+                    appearance::RowExtras {
+                        counters: &counters,
+                        detail: &detail,
+                        tint_words: false,
+                    },
+                )
             })
             .inner
             .on_hover_text(format!(
@@ -335,6 +354,66 @@ impl App {
             self.open_worktree_card(project);
         }
         appearance::context_menu(&response, |ui| self.worktree_card_menu(ui, project));
+    }
+
+    /// Starts the worktree's read-only Git job when due (rate-limited per
+    /// worktree). SSH and missing checkouts ask nothing.
+    fn ask_worktree_stats(&mut self, project: &Project, missing: bool) {
+        let remote = self
+            .state
+            .remote_projects
+            .iter()
+            .any(|remote| remote.id == project.id);
+        if !remote
+            && !missing
+            && self
+                .worktree_stats
+                .take_due(&project.path, std::time::Instant::now())
+        {
+            let _ = self
+                .jobs
+                .send(crate::Job::WorktreeStats(project.path.clone()));
+        }
+    }
+
+    /// The worktree row's second line: the newest agent state in its
+    /// color, then `+added −deleted` in the Git colors.
+    fn worktree_detail(
+        &self,
+        project: &Project,
+        git: Option<&crate::worktree_stats::WorktreeGit>,
+    ) -> Vec<(String, egui::Color32)> {
+        let index = self.sidebar_index();
+        let state = index
+            .by_project
+            .get(&project.id)
+            .into_iter()
+            .flatten()
+            .filter(|session| session.lifecycle.live())
+            .filter_map(|session| {
+                let presented = self.present_session(&session.id);
+                let state = presented.lifecycle?;
+                Some((state, presented.row_state(now())?))
+            })
+            .min_by_key(|(state, _)| detail_rank(*state));
+        let mut parts = Vec::new();
+        if let Some((state, text)) = state {
+            parts.push((text, state_color(state, &self.theme)));
+        }
+        if let Some(git) = git.filter(|git| git.added > 0 || git.deleted > 0) {
+            if !parts.is_empty() {
+                parts.push((" · ".to_owned(), appearance::color(&self.theme.secondary)));
+            }
+            parts.push((
+                format!("+{}", git.added),
+                appearance::color(&self.theme.git_added),
+            ));
+            parts.push((
+                format!(" −{}", git.deleted),
+                appearance::color(&self.theme.git_deleted),
+            ));
+        }
+        parts
     }
 
     /// A missing checkout with no live terminal cannot open; say why.
@@ -394,6 +473,17 @@ impl App {
             self.confirm_remove_worktree(&project.id);
             ui.close();
         }
+    }
+}
+
+/// Which agent state a worktree row names first: waiting, failed, working,
+/// done (the state counter order).
+fn detail_rank(state: AgentState) -> u8 {
+    match state {
+        AgentState::WaitingInput | AgentState::WaitingPermission => 0,
+        AgentState::Failed => 1,
+        AgentState::Running => 2,
+        _ => 3,
     }
 }
 

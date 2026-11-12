@@ -178,7 +178,11 @@ impl Viewer<'_> {
                 appearance::paint_unread_dot(ui, icon_rect);
             }
         } else if let Some(kind) = leading.kind {
-            paint(kind, self.app.terminal_title_color(sid), false);
+            let tint = self
+                .app
+                .terminal_chosen_title_color(sid)
+                .unwrap_or_else(appearance::icon_color);
+            paint(kind, tint, false);
         }
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), &format!("strip-tab-icon:{sid}"), rect);

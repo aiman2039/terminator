@@ -50,6 +50,11 @@ impl Services {
                 updates.push(Update::WorktreeProbe(draft, git));
                 Ok(())
             }
+            Job::WorktreeStats(path) => {
+                let git = self.worktree_git(&path).await;
+                updates.push(Update::WorktreeStats(path, git));
+                Ok(())
+            }
             Job::CommitFiles(cwd, hash) => {
                 self.commit_files(CommitFilesInput {
                     cwd,
@@ -92,6 +97,39 @@ impl Services {
             None => None,
         };
         Update::GitBase(path, generation, base, root)
+    }
+
+    /// The worktree's branch and uncommitted `+added −deleted` against
+    /// HEAD. Read-only Git (no optional locks); `None` when Git fails.
+    async fn worktree_git(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<crate::worktree_stats::WorktreeGit> {
+        let run = |args: &[&str]| {
+            terminator_git::run(
+                self.processes(),
+                self.fs(),
+                terminator_git::RunInput {
+                    cwd: path,
+                    args: args.iter().map(Into::into).collect(),
+                    options: terminator_core::CommandOptions::default(),
+                },
+            )
+        };
+        let stat = run(&["diff", "--shortstat", "HEAD", "--"]).await.ok()?;
+        let (added, deleted) =
+            crate::worktree_stats::parse_shortstat(&String::from_utf8_lossy(&stat));
+        // A detached HEAD has no branch; the row keeps the folder name.
+        let branch = run(&["symbolic-ref", "--short", "-q", "HEAD"])
+            .await
+            .ok()
+            .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+            .filter(|branch| !branch.is_empty());
+        Some(crate::worktree_stats::WorktreeGit {
+            branch,
+            added,
+            deleted,
+        })
     }
 
     /// `git rev-parse --git-common-dir` succeeds in `path`.
