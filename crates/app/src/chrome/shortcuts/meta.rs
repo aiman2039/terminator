@@ -99,3 +99,23 @@ fn shift_keeps_key(key: egui::Key) -> bool {
 pub fn terminal_keeps(value: &str) -> bool {
     cfg!(not(target_os = "macos")) && parse(value).is_some_and(types_text)
 }
+
+/// The saved token of a chord's key: punctuation as its character.
+pub(super) fn key_token(key: egui::Key) -> String {
+    use egui::Key;
+    match key {
+        Key::Comma => ",".into(),
+        Key::Period => ".".into(),
+        Key::OpenBracket => "[".into(),
+        Key::CloseBracket => "]".into(),
+        Key::Minus => "-".into(),
+        Key::Equals => "=".into(),
+        Key::Slash => "/".into(),
+        Key::Backslash => "\\".into(),
+        Key::Semicolon => ";".into(),
+        Key::Quote => "'".into(),
+        Key::Backtick => "`".into(),
+        Key::Space => "space".into(),
+        other => other.symbol_or_name().to_string(),
+    }
+}

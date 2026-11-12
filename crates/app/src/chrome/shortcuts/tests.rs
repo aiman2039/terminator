@@ -239,6 +239,12 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
     Action::ReviewLastTurn,
     Action::PromptComposer,
     Action::SearchAllScrollback,
+    // Broadcast, the system-wide quick terminal and launch layouts take
+    // no key until the user binds one.
+    Action::BroadcastInput,
+    Action::QuickTerminal,
+    Action::OpenLaunchLayout,
+    Action::SaveLaunchLayout,
 ];
 
 /// Task actions have no default keys either (bind them in Keymap).

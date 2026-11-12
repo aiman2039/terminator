@@ -77,6 +77,8 @@ chardetng = "0.1"
 shlex = "2"
 # Task files (`.terminator/tasks.toml`); the same version core uses.
 toml_edit = { version = "0.25", features = ["serde"] }
+# Quick terminal system-wide hotkey (macOS, X11, Windows); Apache-2.0 OR MIT.
+global-hotkey = "0.10"
 
 [features]
 default = ["wgpu", "webview"]

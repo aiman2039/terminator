@@ -307,6 +307,7 @@ impl App {
             ui.close();
         }
         self.restore_workspace_item(ui, &p.id);
+        self.launch_layout_items(ui, &p.id);
         if self.has_worktrees() || self.has_project_init() {
             ui.separator();
         }

@@ -264,6 +264,10 @@ impl App {
             Action::ReviewLastTurn => self.review_last_turn(),
             Action::PromptComposer => self.open_composer(),
             Action::SearchAllScrollback => self.open_scrollback_find(),
+            Action::BroadcastInput => self.toggle_broadcast(),
+            Action::QuickTerminal => self.quick_terminal_shortcut(ctx),
+            Action::OpenLaunchLayout => self.open_launch_layout(),
+            Action::SaveLaunchLayout => self.save_launch_layout(),
         }
     }
 

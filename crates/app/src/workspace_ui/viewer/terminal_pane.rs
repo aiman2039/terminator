@@ -59,6 +59,7 @@ impl Viewer<'_> {
             && self.render_path.is_some_and(|path| self.show_tab_bar(path))
             && !(session.remote.is_none() && markdown::available(session))
             && self.app.resume_chip_command(&session.id).is_none()
+            && !self.app.broadcasting_to(&session.id)
     }
 
     /// Native tab bars title strip panes, so there is no caption chrome

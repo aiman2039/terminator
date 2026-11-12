@@ -229,7 +229,11 @@ impl Viewer<'_> {
                 }),
             },
         );
-        appearance::paint_usage_chips(ui, bar.bar.rect, bar.controls_left, &usage);
+        let chips_left = appearance::paint_usage_chips(ui, bar.bar.rect, bar.controls_left, &usage);
+        if self.app.broadcasting_to(sid) {
+            let accent = appearance::color(&self.app.theme.status_waiting);
+            appearance::paint_broadcast_chip(ui, bar.bar.rect, chips_left, accent);
+        }
         self.app.paint_program_status(ui, sid, &bar);
         bar
     }

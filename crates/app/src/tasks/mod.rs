@@ -8,7 +8,7 @@ mod model;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use model::{LoadedTasks, RunPlan, TaskDef, TaskSource};
+pub(crate) use model::{LoadedTasks, RunPlan, TaskDef, TaskSource, agent_words, names_agent};
 
 use crate::*;
 use std::path::{Path, PathBuf};

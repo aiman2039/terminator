@@ -228,6 +228,7 @@ impl Viewer<'_> {
                 return OnCloseResponse::Ignore;
             }
             self.app.detach_backend(sid);
+            self.app.forget_dropped_ssh(sid);
         }
         if let Tab::NativeEditor { path } = tab
             && self.app.native_dirty(path)

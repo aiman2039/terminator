@@ -226,5 +226,35 @@ impl Viewer<'_> {
         }
         self.app.composer_menu_item(ui, sid);
         self.app.last_turn_menu_item(ui, sid);
+        self.broadcast_item(ui);
+    }
+
+    /// Broadcast input on or off for this pane's workspace tab.
+    fn broadcast_item(&mut self, ui: &mut egui::Ui) {
+        let (Some(project), Some(tab), false, None) = (
+            self.project.clone(),
+            self.tab.clone(),
+            self.strip,
+            self.window,
+        ) else {
+            return;
+        };
+        let on = self.app.broadcast_tab() == Some((project.as_str(), tab.as_str()));
+        let label = if on {
+            "Stop broadcast input"
+        } else {
+            Action::BroadcastInput.label()
+        };
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label,
+            icon: Action::BroadcastInput.icon(),
+            shortcut: &self.app.shortcut_label(Action::BroadcastInput),
+        })
+        .clicked()
+        {
+            self.app.toggle_broadcast_for(&project, &tab);
+            ui.close();
+        }
     }
 }

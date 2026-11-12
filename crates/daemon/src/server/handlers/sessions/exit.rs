@@ -64,10 +64,17 @@ impl Shared {
 
     fn record_exit(&self, sid: &str, exit_code: Option<u32>) {
         let mut s = relock(&self.state);
-        if let Some(rec) = s.sessions.iter_mut().find(|r| r.id == sid) {
+        let mut dropped = false;
+        let state = &mut *s;
+        if let Some(rec) = state.sessions.iter_mut().find(|r| r.id == sid) {
+            // A Stop request makes `ssh` exit too; only a running terminal
+            // that `ssh` itself ended lost its connection.
+            let running = rec.lifecycle == Lifecycle::Running;
             rec.lifecycle = Lifecycle::Ended;
             rec.exit_code = exit_code;
             rec.pid = None;
+            dropped = running
+                && terminator_core::remote::reconnect::connection_lost(rec, &state.remote_projects);
         }
         s.terminal_titles.remove(sid);
         s.program_status.remove(sid);
@@ -79,8 +86,10 @@ impl Shared {
         s.revision = s.revision.saturating_add(1);
         // Sessions without an agent resume command (plain shells,
         // file editors) are not worth keeping: reopening them
-        // restores nothing actionable.
-        if !s.session_has_resume(sid) {
+        // restores nothing actionable. An SSH terminal that lost its
+        // connection stays until its tab closes or the daemon restarts, so
+        // its pane can offer Reconnect.
+        if !dropped && !s.session_has_resume(sid) {
             s.sessions.retain(|r| r.id != sid);
             s.agents.retain(|a| a.session_id != sid);
             s.notifications.retain(|n| n.session_id != sid);
