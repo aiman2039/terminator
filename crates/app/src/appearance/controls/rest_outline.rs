@@ -86,7 +86,6 @@ mod tests {
     fn checkboxes_and_fields_get_the_rest_outline_but_buttons_do_not() {
         let ctx = egui::Context::default();
         crate::appearance::install(&ctx);
-        let line = control_line();
         let controls = |ui: &mut egui::Ui| {
             ui.checkbox(&mut false, "Option");
             ui.text_edit_singleline(&mut String::new());
@@ -106,7 +105,18 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let outlined = strokes.iter().filter(|color| **color == line).count();
-        assert_eq!(outlined, 2, "checkbox and text field: {strokes:?}");
+        // `control_line` is one value for the process, and a theme test on
+        // another thread can change it between frames. So compare the painted
+        // strokes with each other, not with a value read before the frame.
+        let painted: Vec<Color32> = strokes
+            .iter()
+            .copied()
+            .filter(|color| *color != Color32::TRANSPARENT)
+            .collect();
+        let [checkbox, field, button] = painted[..] else {
+            panic!("checkbox, text field and button: {strokes:?}");
+        };
+        assert_eq!(checkbox, field, "one rest outline: {strokes:?}");
+        assert_ne!(checkbox, button, "a button keeps the border: {strokes:?}");
     }
 }
