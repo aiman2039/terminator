@@ -14,6 +14,7 @@ use terminator_core::quote as shell_quote;
 const CONTROL_SIGNAL: &str = "printf '%s\\n' 'CONTROL_SEND_''PROOF'";
 const CROSS_PROJECT_SIGNAL: &str = "printf '%s\\n' 'CROSS_PROJECT_''READY'";
 const MCP_SIGNAL: &str = "printf '%s\\n' 'MCP_TYPED_''PROOF'";
+const SPAWN_SIGNAL: &str = "printf '%s\\n' 'SPAWN_TYPED_''PROOF'";
 const CHILD_SIGNAL: &str = "printf '%s\\n' 'CHILD_''READY'";
 const CHILD_STOPPED_SIGNAL: &str = "printf '%s\\n' 'CHILD_''STOPPED'";
 /// Additional daemon/CLI features use a fresh instance, including live-session

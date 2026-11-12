@@ -6,6 +6,7 @@ mod lookup;
 mod mcp_parity_tests;
 mod projects;
 mod sessions;
+mod spawn;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -43,6 +44,9 @@ enum Control {
     /// Create a shell/editor in a new tab. --background works without a GUI.
     Create(CreateArgs),
     Split(SplitArgs),
+    /// Create a child terminal of a live session (optionally in a new
+    /// worktree) and type --agent without Enter. Prints the child ID.
+    Spawn(SpawnArgs),
     Focus {
         session: String,
     },
@@ -148,6 +152,20 @@ struct SplitArgs {
     direction: String,
 }
 #[derive(Args)]
+struct SpawnArgs {
+    /// The parent session ID.
+    #[arg(long)]
+    parent: String,
+    /// Add worktree `terminator/NAME` beside the parent's project first.
+    #[arg(long)]
+    worktree: Option<String>,
+    /// Command typed into the child (one line, never followed by Enter).
+    #[arg(long)]
+    agent: Option<String>,
+    #[arg(long)]
+    background: bool,
+}
+#[derive(Args)]
 struct NotifyArgs {
     session: String,
     body: String,
@@ -237,6 +255,7 @@ fn execute(cli: Cli) -> Result<Outcome> {
         Control::AddProject { path } => ctl.add_project(path)?,
         Control::Create(args) => ctl.create(args)?,
         Control::Split(args) => ctl.split(args)?,
+        Control::Spawn(args) => ctl.spawn(args)?,
         Control::Focus { session } => ctl.focus(session)?,
         Control::Send(args) => ctl.send(args)?,
         Control::Read { session, screen } => return Ok(Outcome::Text(ctl.read(session, screen)?)),

@@ -25,6 +25,7 @@ pub mod recovery;
 pub mod remote;
 pub mod remote_apps;
 pub mod runtime_dir;
+pub mod session_parents;
 pub mod signals;
 pub mod snapshot;
 pub mod ssh;

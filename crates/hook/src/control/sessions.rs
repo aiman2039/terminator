@@ -110,7 +110,7 @@ impl Ctl {
             .context("Supply either literal text or --stdin")?
             .into_bytes())
     }
-    fn attach_and_input(&self, sid: String, bytes: Vec<u8>) -> Result<()> {
+    pub(super) fn attach_and_input(&self, sid: String, bytes: Vec<u8>) -> Result<()> {
         let rec = self.session(&sid)?;
         let owner = generations::owner_for(
             &self.paths,

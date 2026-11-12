@@ -6,6 +6,7 @@ fn readiness_markers_require_execution_and_cannot_match_input_echo() {
     for (command, marker) in [
         (CONTROL_SIGNAL, "CONTROL_SEND_PROOF"),
         (MCP_SIGNAL, "MCP_TYPED_PROOF"),
+        (SPAWN_SIGNAL, "SPAWN_TYPED_PROOF"),
         (CROSS_PROJECT_SIGNAL, "CROSS_PROJECT_READY"),
         (CHILD_SIGNAL, "CHILD_READY"),
         (CHILD_STOPPED_SIGNAL, "CHILD_STOPPED"),

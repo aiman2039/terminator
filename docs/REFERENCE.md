@@ -735,6 +735,25 @@ terminator-hook ctl wait SESSION_ID --state done --changed --timeout 600
 `updated` has a resolution of one second. A turn that starts and ends in the
 same second as the recorded record, with no hook sequence, is not seen.
 
+`ctl spawn --parent SESSION [--worktree NAME] [--agent COMMAND] [--background]`
+creates a child terminal of a live session: in the parent's project and
+folder, or with `--worktree` in a new worktree `terminator/NAME` beside the
+project (as New task names it). `--agent` is one line that is typed into the
+child; Enter is never pressed and there is no flag for it. It prints the child
+session ID, so the caller starts the agent explicitly:
+
+```sh
+child=$(terminator-hook ctl spawn --parent "$TERMINATOR_SESSION_ID" --agent claude | jq -r .session)
+terminator-hook ctl send "$child" '' --enter
+```
+
+With `session-parent-v1` the daemon records the link (display only; it never
+starts, stops or resumes a session). The project tree draws a child under its
+parent's row when both are in the same project, and each parent row shows one
+line that counts its live children by hook state (`2 child sessions · 1
+waiting`). An older daemon keeps no link: the child still runs and the reply
+says `"parent_linked": false`.
+
 ### Inbox in any terminal
 
 `terminator-hook inbox` shows the attention list in a terminal, for example

@@ -144,6 +144,22 @@ const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
+        name: "spawn",
+        command: &["spawn"],
+        about: "Create a child terminal of a live session, optionally in a new worktree. \
+                `agent` is typed without Enter; start it with `send` and `enter`.",
+        args: &[
+            req("parent", Kind::Option("--parent"), "Parent session ID"),
+            opt(
+                "worktree",
+                Kind::Option("--worktree"),
+                "Add worktree terminator/NAME first",
+            ),
+            opt("agent", Kind::Option("--agent"), "One-line command to type"),
+            opt("background", Flag("--background"), "Create without a GUI"),
+        ],
+    },
+    Tool {
         name: "focus",
         command: &["focus"],
         about: "Show and focus a session in the GUI.",

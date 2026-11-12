@@ -88,6 +88,16 @@ impl Shared {
         Ok(Outcome::Changed)
     }
 
+    /// `ctl spawn` links a child to its parent (`session-parent-v1`).
+    pub(super) fn on_set_session_parent(&self, session: &str, parent: &str) -> Result<Outcome> {
+        let mut s = relock(&self.state);
+        Ok(if session_parents::link(&mut s, session, parent)? {
+            Outcome::Changed
+        } else {
+            Outcome::Reply(Response::Ok)
+        })
+    }
+
     pub(super) fn on_select_project(&self, project: String) -> Result<Outcome> {
         let mut s = relock(&self.state);
         ensure!(

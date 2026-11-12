@@ -114,6 +114,7 @@ fn request_sessions(request: &Request) -> (Option<&str>, Option<&str>) {
         | Request::TerminalNotify { session, .. }
         | Request::ShellCommand { session }
         | Request::ShellPrompt { session, .. }
+        | Request::SetSessionParent { session, .. }
         | Request::ClearHistory {
             session: Some(session),
         } => Some(session.as_str()),

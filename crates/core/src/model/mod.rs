@@ -329,6 +329,10 @@ pub struct State {
     /// Last agent-reported model and mode by invocation id (`agent-usage-v1`).
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub agent_usage: std::collections::BTreeMap<String, crate::agent_workflow::AgentUsage>,
+    /// Parent session by child session ID (`session_parents::CAPABILITY`).
+    /// Display only; absent on older daemons.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub session_parents: std::collections::BTreeMap<String, String>,
 }
 impl State {
     /// True when at least one agent left a provider resume command for this
