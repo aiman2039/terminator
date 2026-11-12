@@ -10,7 +10,9 @@ use std::{
 use terminator_core::{
     AgentState, HookEvent, PROTOCOL_VERSION, Paths, Resume, atomic_write, id, quote,
 };
-pub const AGENTS: [&str; 6] = ["claude", "codex", "opencode", "muse", "grok", "cursor"];
+pub const AGENTS: [&str; 10] = [
+    "claude", "codex", "opencode", "muse", "grok", "cursor", "gemini", "copilot", "droid", "qwen",
+];
 const MARKER: &str = "terminator-managed:v1";
 pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
     Ok(home.join(match kind {
@@ -20,6 +22,10 @@ pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
         "muse" => ".muse/hooks.json",
         "grok" => ".grok/hooks/terminator.json",
         "cursor" => ".cursor/hooks.json",
+        "gemini" => ".gemini/settings.json",
+        "copilot" => ".copilot/hooks/terminator.json",
+        "droid" => ".factory/settings.json",
+        "qwen" => ".qwen/settings.json",
         _ => {
             return Err(Error::UnknownIntegration {
                 kind: kind.to_owned(),
@@ -181,6 +187,7 @@ impl Rewrite<'_> {
             "codex" => codex_config(self.before, self.command, self.remove),
             "cursor" if self.remove && self.before.trim().is_empty() => Ok(String::new()),
             "cursor" => cursor_config(self.before, self.invocation, self.remove),
+            "copilot" => copilot_config(self.before, self.command, self.remove),
             _ => json_config(self),
         }
     }
@@ -236,15 +243,19 @@ fn write_config(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 mod codex;
+mod copilot;
 mod error;
 mod json_hooks;
 mod normalize;
 mod opencode;
 use codex::codex_config;
+use copilot::copilot_config;
 pub use error::Error;
 use json_hooks::{cursor_config, json_config, sync_muse_settings};
 pub use normalize::{NormalizeInput, normalize};
 use opencode::opencode_plugin;
 
+#[cfg(test)]
+mod agents_tests;
 #[cfg(test)]
 mod tests;

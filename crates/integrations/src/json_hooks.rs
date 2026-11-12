@@ -1,4 +1,5 @@
-//! JSON hook files: Claude, Grok, Muse (`hooks.json` plus Muse settings), and Cursor.
+//! JSON hook files: Claude, Grok, Gemini, Droid, Qwen, Muse (`hooks.json`
+//! plus Muse settings), and Cursor.
 use super::*;
 
 const DEFAULT_EVENTS: [&str; 9] = [
@@ -13,16 +14,58 @@ const DEFAULT_EVENTS: [&str; 9] = [
     "SessionEnd",
 ];
 
+/// Factory Droid has no `PermissionRequest` or `StopFailure` event.
+const DROID_EVENTS: [&str; 7] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Notification",
+    "Stop",
+    "SessionEnd",
+];
+
+/// Gemini CLI lifecycle events. `BeforeAgent` follows a submitted prompt;
+/// `AfterAgent` ends a turn.
+const GEMINI_EVENTS: [&str; 6] = [
+    "SessionStart",
+    "BeforeAgent",
+    "AfterTool",
+    "Notification",
+    "AfterAgent",
+    "SessionEnd",
+];
+
+/// The events one kind installs.
+fn events(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "muse" => muse_hook_events(),
+        "droid" => &DROID_EVENTS,
+        "gemini" => &GEMINI_EVENTS,
+        _ => &DEFAULT_EVENTS,
+    }
+}
+
 /// Claude-style `{"hooks": {event: [group]}}`: managed groups are removed,
 /// then one group per event is added unless removing.
 pub(crate) fn json_config(rewrite: &Rewrite<'_>) -> Result<String> {
     let Rewrite {
         before,
         kind,
+        invocation,
         command,
         remove,
         ..
     } = *rewrite;
+    // Gemini parses hook stdout as JSON and times hooks in milliseconds.
+    let (command, timeout) = if kind == "gemini" {
+        (
+            format!("{invocation} ; printf '%s\\n' '{{}}' # {MARKER}"),
+            5000,
+        )
+    } else {
+        (command.to_owned(), 2)
+    };
     let mut doc: Value = if before.trim().is_empty() {
         json!({})
     } else {
@@ -47,12 +90,7 @@ pub(crate) fn json_config(rewrite: &Rewrite<'_>) -> Result<String> {
         clean_json_groups(groups)?;
     }
     if !remove {
-        let events = if kind == "muse" {
-            muse_hook_events()
-        } else {
-            &DEFAULT_EVENTS
-        };
-        add_groups(hooks, events, command)?;
+        add_groups(hooks, events(kind), &command, timeout)?;
     }
     Ok(serde_json::to_string_pretty(&doc)? + "\n")
 }
@@ -61,6 +99,7 @@ fn add_groups(
     hooks: &mut serde_json::Map<String, Value>,
     events: &[&str],
     command: &str,
+    timeout: u64,
 ) -> Result<()> {
     for event in events {
         let list = hooks
@@ -68,7 +107,7 @@ fn add_groups(
             .or_insert(json!([]))
             .as_array_mut()
             .ok_or(Error::GroupsNotArrays)?;
-        list.push(json!({"hooks":[{"type":"command","command":command,"timeout":2}]}));
+        list.push(json!({"hooks":[{"type":"command","command":command,"timeout":timeout}]}));
     }
     Ok(())
 }
@@ -111,7 +150,7 @@ pub(crate) fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Re
         clean_json_groups(groups)?;
     }
     if !remove {
-        add_groups(hooks, muse_hook_events(), command)?;
+        add_groups(hooks, muse_hook_events(), command, 2)?;
     }
     let after = serde_json::to_string_pretty(&doc)? + "\n";
     if !before.is_empty() && before != after {

@@ -139,7 +139,8 @@ impl SettingsSection {
             }
             Self::Agents | Self::AgentHooks => {
                 "agents presets preset launcher program arguments new agent session terminal \
-                 installed path detected hooks claude codex opencode muse grok cursor install hook \
+                 installed path detected hooks claude codex opencode muse grok cursor gemini \
+                 copilot droid factory qwen install hook \
                  hello test verify notification"
             }
             Self::Remote => {

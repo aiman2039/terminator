@@ -13,6 +13,7 @@ impl App {
             });
         ui.weak("See docs/INTEGRATIONS.md for event limitations.");
         ui.weak("Cursor reports completion and errors. Its permission and question dialogs have no notification hook. Select Completed under OS notifications to show completion alerts.");
+        ui.weak("Copilot reports working and done only: its permission and notification hooks give no event name.");
         ui.add_space(8.0);
         self.hello_test_buttons(ui);
     }
