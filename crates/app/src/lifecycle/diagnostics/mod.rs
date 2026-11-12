@@ -23,6 +23,8 @@ pub struct Diagnostics {
     action_index: usize,
     last_action: Option<(u64, Duration)>,
     release: Option<(egui::Pos2, egui::PointerButton)>,
+    /// A press that waits one frame after its pointer move.
+    press: Option<(egui::Pos2, egui::PointerButton, bool)>,
     held: Option<egui::PointerButton>,
     pointer: Option<egui::Pos2>,
     pending: wait::Pending,
@@ -53,6 +55,7 @@ impl Default for Diagnostics {
             action_index: 0,
             last_action: None,
             release: None,
+            press: None,
             held: None,
             pointer: None,
             pending: wait::Pending::default(),

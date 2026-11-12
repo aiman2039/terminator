@@ -262,41 +262,20 @@ fn tab_strip_sits_below_the_drag_band_and_beside_full_height_sidebars() {
 
 #[test]
 #[cfg(feature = "test-support")]
-fn narrow_header_puts_search_behind_the_overflow_menu() {
+fn narrow_header_keeps_its_window_controls_without_an_overflow_menu() {
     let (mut app, ctx, _dir) = fixture();
-    // Six header squares and the overflow menu fit; all eight actions do not.
-    app.preferences.width = 280.0;
+    // The narrowest right sidebar still fits Settings and IDE mode.
+    app.preferences.width = 220.0;
     paint_header(&mut app, &ctx, &[]);
     let rect = header_target(&ctx);
-    assert!(rect("tool-Info").is_some());
-    assert!(rect("palette").is_none(), "search must leave the bar");
     assert!(rect("settings").is_some());
-    let overflow = rect("header-overflow").expect("overflow menu");
-    let pos = overflow.center();
-    paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
-    paint_header(
-        &mut app,
-        &ctx,
-        &[egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: egui::Modifiers::default(),
-        }],
-    );
-    paint_header(
-        &mut app,
-        &ctx,
-        &[egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: egui::Modifiers::default(),
-        }],
-    );
-    // The opening frame is a sizing pass. Read the item after the menu settles.
-    paint_header(&mut app, &ctx, &[]);
-    let search = rect("palette").expect("search in the menu");
+    assert!(rect("tool-ide-mode").is_some());
+    assert!(rect("header-overflow").is_none());
+    // Tools live on the stripes; the centre Search is the header search.
+    for tool in ["tool-Explorer", "tool-Git", "tool-Info", "palette"] {
+        assert!(rect(tool).is_none(), "{tool} must not be in the header");
+    }
+    let search = rect("toolbar-search").expect("header search");
     assert!(!app.palette.open);
     let pos = search.center();
     paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
@@ -325,29 +304,25 @@ fn narrow_header_puts_search_behind_the_overflow_menu() {
 
 #[test]
 #[cfg(feature = "test-support")]
-fn wide_header_shows_search_without_an_overflow_menu() {
+fn wide_header_has_one_search_and_no_tool_buttons() {
     let (mut app, ctx, _dir) = fixture();
     app.preferences.width = 480.0;
     paint_header(&mut app, &ctx, &[]);
     let rect = header_target(&ctx);
-    assert!(rect("palette").is_some());
+    assert!(rect("toolbar-search").is_some());
+    assert!(rect("palette").is_none());
+    assert!(rect("tool-Explorer").is_none());
     assert!(rect("header-overflow").is_none());
 }
 
 /// Every window-header control with a glyph, left to right.
 #[cfg(feature = "test-support")]
-const HEADER_SQUARES: [&str; 13] = [
+const HEADER_SQUARES: [&str; 7] = [
     "toggle-left-sidebar",
     "player-chrome",
     "left-agent-bar",
     "toolbar-search",
-    "tool-Explorer",
-    "tool-Agents",
-    "tool-Git",
-    "tool-History",
-    "tool-Info",
     "settings",
-    "palette",
     "tool-ide-mode",
     "toggle-right-sidebar",
 ];
@@ -423,7 +398,7 @@ fn window_header_buttons_share_one_square_and_icon_size() {
     app.preferences.width = 220.0;
     header_icon_sizes(&mut app, &ctx);
     let icons = header_icon_sizes(&mut app, &ctx);
-    assert_one_header_size(&ctx, &["project-header-menu", "header-overflow"], &icons);
+    assert_one_header_size(&ctx, &["project-header-menu", "settings"], &icons);
 }
 
 #[test]

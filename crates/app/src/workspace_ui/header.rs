@@ -5,24 +5,16 @@ pub(super) const HEADER_GAP: f32 = 4.0;
 /// The right sidebar toggle and a gap on each side of it.
 pub(super) const HEADER_TOGGLE_RESERVE: f32 = HEADER_SLOT + 2.0 * HEADER_GAP;
 
+/// Window controls in the header's right cluster. Tool windows have one
+/// home, the stripes; Search Everywhere is the header's centre button.
 #[derive(Clone, Copy)]
 pub(super) enum HeaderAction {
-    Tool(SidebarTool),
     IdeMode,
     Settings,
-    Palette,
 }
 
-pub(super) const HEADER_ACTIONS: [HeaderAction; 8] = [
-    HeaderAction::Tool(SidebarTool::Explorer),
-    HeaderAction::Tool(SidebarTool::Agents),
-    HeaderAction::Tool(SidebarTool::Git),
-    HeaderAction::Tool(SidebarTool::History),
-    HeaderAction::Tool(SidebarTool::Info),
-    HeaderAction::Settings,
-    HeaderAction::Palette,
-    HeaderAction::IdeMode,
-];
+pub(super) const HEADER_ACTIONS: [HeaderAction; 2] =
+    [HeaderAction::Settings, HeaderAction::IdeMode];
 
 pub(super) struct HeaderActionView {
     pub(super) label: &'static str,
@@ -149,60 +141,6 @@ pub(super) fn header_visible_count(budget: f32, count: usize) -> usize {
 
 pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
     match action {
-        HeaderAction::Tool(SidebarTool::Explorer) => HeaderActionView {
-            label: "Explorer",
-            icon: "Files",
-            #[cfg(feature = "test-support")]
-            target: "tool-Explorer",
-        },
-        HeaderAction::Tool(SidebarTool::Agents) => HeaderActionView {
-            label: "Agents",
-            icon: "Bell",
-            #[cfg(feature = "test-support")]
-            target: "tool-Agents",
-        },
-        HeaderAction::Tool(SidebarTool::Git) => HeaderActionView {
-            label: "Git / Perforce",
-            icon: "GitBranch",
-            #[cfg(feature = "test-support")]
-            target: "tool-Git",
-        },
-        HeaderAction::Tool(SidebarTool::History) => HeaderActionView {
-            label: "History",
-            icon: "History",
-            #[cfg(feature = "test-support")]
-            target: "tool-History",
-        },
-        HeaderAction::Tool(SidebarTool::Info) => HeaderActionView {
-            label: "Info",
-            icon: "Info",
-            #[cfg(feature = "test-support")]
-            target: "tool-Info",
-        },
-        HeaderAction::Tool(SidebarTool::Problems) => HeaderActionView {
-            label: "Problems",
-            icon: "CircleAlert",
-            #[cfg(feature = "test-support")]
-            target: "tool-Problems",
-        },
-        HeaderAction::Tool(SidebarTool::Structure) => HeaderActionView {
-            label: "Structure",
-            icon: "ListTree",
-            #[cfg(feature = "test-support")]
-            target: "tool-Structure",
-        },
-        HeaderAction::Tool(SidebarTool::Vnc) => HeaderActionView {
-            label: "VNC",
-            icon: "Monitor",
-            #[cfg(feature = "test-support")]
-            target: "tool-Vnc",
-        },
-        HeaderAction::Tool(SidebarTool::Hosts) => HeaderActionView {
-            label: "Hosts",
-            icon: "Globe",
-            #[cfg(feature = "test-support")]
-            target: "tool-Hosts",
-        },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
             icon: Action::ToggleIdeMode.icon(),
@@ -214,12 +152,6 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
             icon: Action::OpenSettings.icon(),
             #[cfg(feature = "test-support")]
             target: "settings",
-        },
-        HeaderAction::Palette => HeaderActionView {
-            label: Action::OpenPalette.label(),
-            icon: Action::OpenPalette.icon(),
-            #[cfg(feature = "test-support")]
-            target: "palette",
         },
     }
 }

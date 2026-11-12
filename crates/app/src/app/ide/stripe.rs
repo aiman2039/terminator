@@ -51,7 +51,13 @@ impl App {
             )
             .show(ui, |ui| {
                 let bounds = ui.available_rect_before_wrap();
-                let search_height = bounds.height().clamp(0.0, 46.0);
+                // Search Everywhere has one stripe home, the left stripe;
+                // the header centre has the other.
+                let search_height = if right {
+                    0.0
+                } else {
+                    bounds.height().clamp(0.0, 46.0)
+                };
                 let search_rect = egui::Rect::from_min_max(
                     egui::pos2(bounds.left(), bounds.bottom() - search_height),
                     bounds.max,
@@ -65,7 +71,9 @@ impl App {
                 );
                 ui.allocate_rect(bounds, egui::Sense::hover());
                 self.stripe_tools(ui, right, tools_rect);
-                self.stripe_search(ui, right, search_rect);
+                if !right {
+                    self.stripe_search(ui, search_rect);
+                }
             });
     }
 
@@ -110,7 +118,12 @@ impl App {
         } else {
             label
         };
-        let tip = self.stripe_tip(tool, label);
+        let mut tip = self.stripe_tip(tool, label);
+        if tool == StripeTool::Tool(SidebarTool::Explorer) {
+            // The Explorer tip names the folder it shows.
+            let folder = self.explorer_tooltip();
+            tip.push_str(folder.strip_prefix("Explorer").unwrap_or(&folder));
+        }
         let response = appearance::stripe_button(appearance::StripeButtonInput {
             ui,
             icon,
@@ -253,10 +266,10 @@ impl App {
         }
     }
 
-    fn stripe_search(&mut self, ui: &mut egui::Ui, right: bool, search_rect: egui::Rect) {
+    fn stripe_search(&mut self, ui: &mut egui::Ui, search_rect: egui::Rect) {
         let mut search_ui = ui.new_child(
             egui::UiBuilder::new()
-                .id_salt(("stripe-search-region", right))
+                .id_salt("stripe-search-region")
                 .max_rect(search_rect)
                 .layout(egui::Layout::top_down(egui::Align::Center)),
         );
@@ -275,13 +288,8 @@ impl App {
                 badge: None,
             });
             #[cfg(feature = "test-support")]
-            diagnostics::record(
-                ui.ctx(),
-                &format!("stripe-{}-Search", if right { "right" } else { "left" }),
-                search.rect,
-            );
-            #[cfg(feature = "test-support")]
-            if !right {
+            {
+                diagnostics::record(ui.ctx(), "stripe-left-Search", search.rect);
                 diagnostics::record(ui.ctx(), "stripe-search", search.rect);
             }
             if search.clicked() {
@@ -350,133 +358,5 @@ impl App {
 }
 
 #[cfg(all(test, feature = "test-support"))]
-mod stripe_layout_tests {
-    use crate::*;
-
-    #[test]
-    fn more_opens_unpinned_tools_on_either_side() {
-        use crate::app::tests::support::{fixture, frame_press};
-        for right in [false, true] {
-            let (mut app, ctx, _dir) = fixture();
-            let draw = |app: &mut App, events| {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(900.0, 700.0),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| app.tool_stripe(ui, right),
-                );
-                output.textures_delta.clear();
-            };
-            draw(&mut app, vec![]);
-            draw(&mut app, vec![]);
-            let name = format!("stripe-{}-More", if right { "right" } else { "left" });
-            let more = diagnostics::current_rect(&ctx, &name).unwrap().center();
-            for events in [
-                vec![egui::Event::PointerMoved(more)],
-                vec![frame_press(more, true)],
-                vec![frame_press(more, false)],
-                vec![],
-                vec![],
-            ] {
-                draw(&mut app, events);
-            }
-            for (_, _, label) in super::STRIPE_TOOLS {
-                assert!(
-                    diagnostics::current_rect(&ctx, label).is_some(),
-                    "More contains {label}"
-                );
-            }
-            let history = diagnostics::current_rect(&ctx, "History").unwrap().center();
-            for events in [
-                vec![egui::Event::PointerMoved(history)],
-                vec![frame_press(history, true)],
-                vec![frame_press(history, false)],
-            ] {
-                draw(&mut app, events);
-            }
-            assert!(!app.stripe_pinned(right, "History"));
-            if right {
-                assert!(app.preferences.visible);
-                assert_eq!(app.preferences.tool, SidebarTool::History);
-            } else {
-                assert!(app.preferences.left_visible);
-                assert_eq!(
-                    app.preferences.left_content(),
-                    LeftContent::Tool(SidebarTool::History)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn tool_pins_survive_restart_and_do_not_change_sidebar_placement() {
-        let (mut app, _ctx, dir) = crate::app::tests::support::fixture();
-        let left = app.preferences.left_content();
-        let right = app.preferences.tool;
-        assert!(app.stripe_pinned(false, "Projects"));
-        assert!(!app.stripe_pinned(false, "History"));
-        app.set_stripe_pin(false, "History", true);
-        app.set_stripe_pin(false, "History", true);
-        app.set_stripe_pin(false, "Git", false);
-        app.set_stripe_pin(true, "Hosts", true);
-        app.preferences.save(dir.path()).unwrap();
-        let loaded = UiPreferences::load(dir.path()).unwrap();
-        assert_eq!(loaded.left_content(), left);
-        assert_eq!(loaded.tool, right);
-        assert_eq!(
-            loaded
-                .left_tool_pins
-                .iter()
-                .filter(|pin| *pin == "History")
-                .count(),
-            1
-        );
-        assert!(!loaded.left_tool_pins.iter().any(|pin| pin == "Git"));
-        assert_eq!(loaded.right_tool_pins, ["Hosts"]);
-        let old: UiPreferences = serde_json::from_str("{}").unwrap();
-        assert!(old.left_tool_pins.iter().any(|pin| pin == "Projects"));
-        assert!(old.right_tool_pins.is_empty());
-    }
-
-    #[test]
-    fn short_tool_stripes_clip_tools_above_the_search_button() {
-        let (mut app, ctx, _dir) = crate::app::tests::support::fixture();
-        for height in [650.0, 220.0, 90.0, 400.0, 70.0, 650.0] {
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(900.0, height),
-                    )),
-                    ..Default::default()
-                },
-                |ui| app.tool_stripe(ui, false),
-            );
-            output.textures_delta.clear();
-            let search = ctx.data(|data| {
-                data.get_temp::<egui::Rect>(egui::Id::unique((
-                    "fixture-target",
-                    "stripe-left-Search",
-                )))
-                .expect("Search remains available")
-            });
-            assert!(search.bottom() <= height);
-            assert_eq!(search.height(), 40.0);
-            for clipped in &output.shapes {
-                if let egui::epaint::Shape::Text(text) = &clipped.shape
-                    && matches!(text.galley.text(), "VNC" | "Structure")
-                {
-                    assert!(
-                        clipped.clip_rect.bottom() <= search.top(),
-                        "height={height}"
-                    );
-                }
-            }
-        }
-    }
-}
+#[path = "stripe_tests.rs"]
+mod stripe_layout_tests;

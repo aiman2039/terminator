@@ -24,6 +24,10 @@ impl Diagnostics {
         if let Some(pos) = self.pointer {
             input.events.push(egui::Event::PointerMoved(pos));
         }
+        if let Some(press) = self.press.take() {
+            self.press_at(input, press);
+            return;
+        }
         if let Some((pos, button)) = self.release.take() {
             input.events.push(pointer_button(pos, button, false));
             return;
@@ -137,19 +141,19 @@ impl Diagnostics {
         input: &mut egui::RawInput,
     ) {
         let pos = action_position(action, rect);
+        let moved = self.pointer != Some(pos);
         self.pointer = Some(pos);
         input.focused = true;
         input.events.push(egui::Event::PointerMoved(pos));
         match action_input(action) {
             ActionInput::Events(events) => input.events.extend(events),
-            ActionInput::Press(button) => {
-                input.events.push(pointer_button(pos, button, true));
-                if action.hold {
-                    self.held = Some(button);
-                } else {
-                    self.release = Some((pos, button));
-                }
+            // A pointer that moves presses one frame later, as a hand does:
+            // controls that show on hover (pane caption buttons) only take
+            // a click after they were painted.
+            ActionInput::Press(button) if moved => {
+                self.press = Some((pos, button, action.hold));
             }
+            ActionInput::Press(button) => self.press_at(input, (pos, button, action.hold)),
             // Ends a held drag (see `hold`): the press stays down
             // across the hover moves between the two actions.
             ActionInput::ReleaseHeld => {
@@ -158,6 +162,20 @@ impl Diagnostics {
                 }
             }
             ActionInput::None => {}
+        }
+    }
+
+    /// Press `button` at `pos`; it is released next frame unless `hold`.
+    fn press_at(
+        &mut self,
+        input: &mut egui::RawInput,
+        (pos, button, hold): (egui::Pos2, egui::PointerButton, bool),
+    ) {
+        input.events.push(pointer_button(pos, button, true));
+        if hold {
+            self.held = Some(button);
+        } else {
+            self.release = Some((pos, button));
         }
     }
 }

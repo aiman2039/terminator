@@ -84,8 +84,8 @@ fn editor_settings_draft(h: &Harness, o: &Options) -> Result<()> {
         h,
         opts: o,
         name: "editor-settings",
-        // The narrow Git sidebar leaves Settings in the header overflow menu.
-        actions: json!([{"at_ms":900,"target":"tool-Git"},{"at_ms":1400,"target":"header-overflow"},{"at_ms":1700,"target":"settings"},{"at_ms":2300,"target":"settings-section:Editor"},{"at_ms":2600,"target":"external-program"},{"at_ms":2900,"target":"external-program","text":"/draft/editor with spaces"}]),
+        // Git opens from the right stripe; Settings stays in the header.
+        actions: json!([{"at_ms":900,"target":"stripe-tool-Git"},{"at_ms":1700,"target":"settings"},{"at_ms":2300,"target":"settings-section:Editor"},{"at_ms":2600,"target":"external-program"},{"at_ms":2900,"target":"external-program","text":"/draft/editor with spaces"}]),
         after: 4600,
     })?;
     ensure!(

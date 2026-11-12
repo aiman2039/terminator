@@ -238,12 +238,7 @@ mod row_tests {
             let draw = || {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| match surface {
                     "tool" => {
-                        tool_button(ToolButtonInput {
-                            ui,
-                            tool: crate::preferences::SidebarTool::Git,
-                            label: "Git",
-                            active: false,
-                        });
+                        framed_icon(ui, "GitBranch", "Git");
                     }
                     "row" => {
                         row(RowInput {

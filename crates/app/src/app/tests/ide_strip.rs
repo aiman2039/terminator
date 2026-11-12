@@ -119,7 +119,9 @@ fn ide_stripes_switch_views_and_toggle_tools() {
     let left_git = header_target(&ctx)("stripe-left-Git").expect("left git stripe");
     let right_projects =
         header_target(&ctx)("stripe-right-Projects").expect("right projects stripe");
-    let right_search = header_target(&ctx)("stripe-right-Search").expect("right search");
+    // Search Everywhere is on the left stripe only.
+    assert!(header_target(&ctx)("stripe-right-Search").is_none());
+    let left_search = header_target(&ctx)("stripe-left-Search").expect("left search");
     click(&mut app, left_git);
     assert_eq!(
         app.preferences.left_content(),
@@ -135,7 +137,7 @@ fn ide_stripes_switch_views_and_toggle_tools() {
     click(&mut app, explorer_classic);
     assert!(!app.preferences.right_projects);
     assert_eq!(app.preferences.tool, SidebarTool::Explorer);
-    click(&mut app, right_search);
+    click(&mut app, left_search);
     assert!(app.palette.open);
     // Same view on both sides at once (Projects left + right) must not
     // clash widget IDs: the right copy's filter takes focus and text.

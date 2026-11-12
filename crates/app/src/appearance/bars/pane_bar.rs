@@ -138,8 +138,7 @@ pub(super) struct BarActionsInput<'a> {
 }
 
 /// The branch text, then split right, split down, zoom and close (or the
-/// one folded menu button). Hidden buttons still take clicks: the pointer
-/// on them shows them.
+/// one folded menu button). Hidden buttons take no click.
 pub(super) fn bar_actions(input: BarActionsInput<'_>) -> BarActions {
     let BarActionsInput {
         ui,
@@ -343,7 +342,9 @@ pub(super) struct BarButton<'a> {
     pub(super) icon: &'a str,
     pub(super) tip: &'a str,
     pub(super) hover_tint: Option<Color32>,
-    /// Paint the button; a hidden one still takes a click.
+    /// Paint the button and take clicks. egui hit-tests a press against
+    /// the previous frame's widgets, so a button takes a press only when it
+    /// was painted on the frame before: a hidden slot cannot be clicked.
     pub(super) show: bool,
     pub(super) on_fill: bool,
 }
@@ -359,8 +360,16 @@ pub(super) fn bar_button(ui: &egui::Ui, input: BarButton<'_>) -> egui::Response 
         show,
         on_fill,
     } = input;
+    let id = bar_id.with(id);
+    // A hidden button stays focusable from the keyboard, and keyboard
+    // focus shows it and makes it take a press.
+    let sense = if show || ui.memory(|m| m.has_focus(id)) {
+        egui::Sense::click()
+    } else {
+        egui::Sense::focusable_noninteractive()
+    };
     let response = ui
-        .interact(rect, bar_id.with(id), egui::Sense::click())
+        .interact(rect, id, sense)
         .on_hover_text(tip)
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));

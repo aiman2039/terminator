@@ -105,6 +105,10 @@ pub struct Playlist {
 /// width, without the overflow menu.
 const DEFAULT_SIDEBAR_WIDTH: f32 = 328.0;
 
+/// Tools pinned on the right stripe by default: the tools the window
+/// header used to hold.
+const DEFAULT_RIGHT_PINS: [&str; 4] = ["Explorer", "Git", "History", "Info"];
+
 /// A named layout preset capturing IDE mode, sidebar visibility, tool selection,
 /// sidebar widths, and terminal strip state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -181,6 +185,10 @@ pub struct UiPreferences {
     /// Pinned tool captions on each edge. Unknown entries are ignored.
     pub left_tool_pins: Vec<String>,
     pub right_tool_pins: Vec<String>,
+    /// The one-time default pins for an empty right stripe ran. Missing in
+    /// files saved before it, so those get the pins once.
+    #[serde(default)]
+    pub right_pins_migrated: bool,
     pub width: f32,
     /// Selected Agents sidebar view.
     #[serde(default)]
@@ -346,6 +354,14 @@ impl UiPreferences {
             prefs.ide_mode = false;
             prefs.version = 2;
         }
+        // The header no longer has tool buttons: give an empty right stripe
+        // the default pins once. An empty list after this is a user choice.
+        if !prefs.right_pins_migrated {
+            if prefs.right_tool_pins.is_empty() {
+                prefs.right_tool_pins = DEFAULT_RIGHT_PINS.map(str::to_owned).to_vec();
+            }
+            prefs.right_pins_migrated = true;
+        }
         prefs.width = clamp_sidebar_width(prefs.width);
         prefs.player_volume = if prefs.player_volume.is_finite() {
             prefs.player_volume.clamp(0.0, 1.0)
@@ -412,6 +428,7 @@ impl UiPreferences {
         )?;
         Ok(())
     }
+    #[cfg(test)]
     pub fn toggle(&mut self, tool: SidebarTool) {
         self.visible = self.tool != tool || !self.visible;
         self.tool = tool;

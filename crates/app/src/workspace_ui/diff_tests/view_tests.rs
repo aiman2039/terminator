@@ -107,12 +107,6 @@ fn ide_mode_icon_differs_from_sidebar_toggles() {
 }
 
 #[test]
-fn agents_header_uses_the_bell() {
-    let agents = header_action_view(HeaderAction::Tool(SidebarTool::Agents)).icon;
-    assert_eq!(agents, "Bell");
-}
-
-#[test]
 fn terminal_theme_cache_tracks_preview_and_revert() {
     let mut cache = None;
     let original = AppearanceConfig::default();

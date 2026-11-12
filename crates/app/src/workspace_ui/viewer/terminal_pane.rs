@@ -20,7 +20,7 @@ impl Viewer<'_> {
             return;
         };
         let editing = self.app.renaming(sid, RenameSurface::Pane);
-        if self.strip {
+        if self.strip || self.tab_row_titles_pane(&session) {
             self.strip_rename_row(ui, sid, editing);
         } else {
             self.pane_caption(ui, &session, editing);
@@ -46,6 +46,19 @@ impl Viewer<'_> {
         } else {
             self.terminal_view(ui, session);
         }
+    }
+
+    /// A main-dock leaf that shows its own tab bar (stacked tabs) already
+    /// gives the pane its title, close, New tab and split menu, so the
+    /// caption would repeat that row. The caption stays where it carries
+    /// something the tab bar has not: markdown mode buttons and the Resume
+    /// chip.
+    fn tab_row_titles_pane(&self, session: &Session) -> bool {
+        use egui_dock::TabViewer as _;
+        self.window.is_none()
+            && self.render_path.is_some_and(|path| self.show_tab_bar(path))
+            && !(session.remote.is_none() && markdown::available(session))
+            && self.app.resume_chip_command(&session.id).is_none()
     }
 
     /// Native tab bars title strip panes, so there is no caption chrome
