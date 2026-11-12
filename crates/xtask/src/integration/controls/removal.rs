@@ -16,8 +16,42 @@ impl Checkout {
             h.rpc(json!({"WorktreeRemove":{"project":id(p)}})).is_err(),
             "Dirty checkout was removed"
         );
+        let reply = self.mcp_call("worktree_remove", &json!({"project": id(p)}))?;
+        ensure!(
+            reply.pointer("/result/isError") == Some(&json!(true))
+                && destination.join("dirty").is_file(),
+            "MCP worktree_remove removed a dirty checkout: {reply}"
+        );
         fs::remove_file(destination.join("dirty"))?;
         Ok(())
+    }
+    /// One `tools/call` through `terminator-hook mcp` (protocol 2026-07-28).
+    pub(super) fn mcp_call(&self, tool: &str, arguments: &Value) -> Result<Value> {
+        use std::io::Write;
+        let mut command = self.h.command("terminator-hook");
+        command
+            .arg("mcp")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        let mut child = command.spawn()?;
+        let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": tool,
+            "arguments": arguments,
+            "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"},
+        }});
+        // Closing stdin after one line ends the server.
+        child
+            .stdin
+            .take()
+            .context("MCP stdin")?
+            .write_all(format!("{request}\n").as_bytes())?;
+        let output = child.wait_with_output()?;
+        let line = output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default();
+        Ok(serde_json::from_slice(line)?)
     }
     /// A shell from the parent project enters the checkout through an alias;
     /// returns that shell, its stream and the alias path.

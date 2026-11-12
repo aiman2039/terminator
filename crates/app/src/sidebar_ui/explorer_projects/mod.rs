@@ -1,3 +1,4 @@
+mod child_rows;
 mod init_command;
 mod list;
 mod project_dnd;

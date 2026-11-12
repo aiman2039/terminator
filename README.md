@@ -40,9 +40,33 @@ The side tool bars show pinned tools and the active tool. Click **More (…)** f
 all tools, then **Pinned tools** to choose which icons stay visible on that side.
 Right-click an icon to pin or unpin it. All tool shortcuts remain available.
 
+## Install
+
+> **Templates until a release ships them.** The package-manager channels below
+> are prepared in `packaging/` and by `cargo xtask package`, but no cask, AUR
+> package, `.deb` or `.rpm` is published yet. Today, download a release
+> archive or build from source.
+
+Linux distributions already ship an unrelated terminal emulator named
+`terminator`, so the packages, launcher and cask use the name
+`terminator-workspace`.
+
+| Channel | Command |
+| --- | --- |
+| macOS, Homebrew cask (template) | `brew install --cask terminator-workspace` |
+| Debian, Ubuntu `.deb` (template) | `sudo apt install ./terminator-workspace_VERSION_amd64.deb` |
+| Fedora, RHEL, openSUSE `.rpm` (template) | `sudo dnf install ./terminator-workspace-VERSION-1.x86_64.rpm` |
+| Arch Linux, AUR (template) | `yay -S terminator-workspace-bin` |
+| Any Linux, release archive | `tar xzf terminator-vVERSION-x86_64-unknown-linux-gnu.tar.gz && ./terminator/terminator` |
+| From source | the [build guide](docs/REFERENCE.md#build-and-run) |
+
+The macOS app updates itself (Sparkle). A `.deb`, `.rpm` or AUR install
+updates only through its package manager, and the **Update** chip says so. A
+release archive shows the chip with a download link.
+
 ## Get started
 
-1. Follow the [installation and build guide](docs/REFERENCE.md#build-and-run).
+1. Install Terminator (above) or follow the [installation and build guide](docs/REFERENCE.md#build-and-run).
 2. Add a project folder using **+** beside **Projects**.
 3. Open a terminal tab. Right-click a terminal to split your workspace.
 4. Click a file to open it, or launch your usual tools in the terminal.

@@ -358,6 +358,12 @@ pub enum Request {
     LocalHistoryTurn {
         session: String,
     },
+    /// Links a live child session to its parent (`ctl spawn`). Display
+    /// data only. Requires `session-parent-v1`.
+    SetSessionParent {
+        session: String,
+        parent: String,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {

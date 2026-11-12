@@ -109,6 +109,7 @@ impl Request {
             Self::NtfyToken { .. } => "NtfyToken",
             Self::CreateRestored { .. } => "CreateRestored",
             Self::LocalHistoryTurn { .. } => "LocalHistoryTurn",
+            Self::SetSessionParent { .. } => "SetSessionParent",
         }
     }
 }

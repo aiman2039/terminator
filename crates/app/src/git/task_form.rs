@@ -17,15 +17,23 @@ pub(crate) struct TaskStart {
     pub setup_command: String,
     /// What the `.worktreeinclude` copy did, for the status bar.
     pub setup_note: Option<String>,
+    /// Issue text the user chose to type after the agent command.
+    pub prompt: String,
 }
 
 impl TaskStart {
     /// The one line typed into the new terminal, never followed by Enter:
-    /// `setup && agent` when both are set. Line breaks become spaces.
+    /// `setup && agent` when both are set, and the ticked issue text as the
+    /// agent's quoted first argument. Line breaks become spaces.
     pub(crate) fn typed_input(&self) -> String {
-        let parts: Vec<&str> = [self.setup_command.as_str(), self.agent_command.as_str()]
+        let agent = match (self.agent_command.trim(), self.prompt.trim()) {
+            (agent, prompt) if !agent.is_empty() && !prompt.is_empty() => {
+                format!("{agent} {}", terminator_core::quote(prompt))
+            }
+            (agent, _) => agent.to_owned(),
+        };
+        let parts: Vec<&str> = [self.setup_command.trim(), agent.as_str()]
             .into_iter()
-            .map(str::trim)
             .filter(|part| !part.is_empty())
             .collect();
         crate::diff::notes::one_line(&parts.join(" && "))
@@ -40,6 +48,7 @@ impl WorktreeDraft {
             agent_command: self.agent_command.trim().to_owned(),
             browser_url: self.browser_url.trim().to_owned(),
             setup_command: self.setup_command.trim().to_owned(),
+            prompt: self.issue.prompt(),
             ..TaskStart::default()
         }
     }

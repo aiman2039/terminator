@@ -28,6 +28,9 @@ xshell = "0.2"
 plist = "1"
 tar = "0.4"
 flate2 = "1"
+# Linux .deb (ar container) and .rpm packages, built in-process.
+ar = "0.9"
+rpm = { version = "0.30", default-features = false, features = ["payload", "gzip-compression"] }
 resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 

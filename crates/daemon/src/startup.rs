@@ -149,6 +149,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
         PROJECT_INIT_CAPABILITY.into(),
+        terminator_core::session_parents::CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
         terminator_core::agent_workflow::TRIAGE_CAPABILITY.into(),
         terminator_core::agent_workflow::RESTORE_CAPABILITY.into(),

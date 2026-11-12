@@ -110,7 +110,7 @@ impl Ctl {
             .context("Supply either literal text or --stdin")?
             .into_bytes())
     }
-    fn attach_and_input(&self, sid: String, bytes: Vec<u8>) -> Result<()> {
+    pub(super) fn attach_and_input(&self, sid: String, bytes: Vec<u8>) -> Result<()> {
         let rec = self.session(&sid)?;
         let owner = generations::owner_for(
             &self.paths,
@@ -157,7 +157,7 @@ impl Ctl {
         }
         Ok(())
     }
-    pub(super) fn read(&self, session: String, screen: bool) -> Result<()> {
+    pub(super) fn read(&self, session: String, screen: bool) -> Result<String> {
         if screen {
             self.capability(SCREEN_CAPABILITY)?;
         }
@@ -167,10 +167,7 @@ impl Ctl {
             Request::History { session }
         };
         match rpc(&self.paths, request)?.checked()? {
-            Response::Text(text) => {
-                crate::output::Output::text(text);
-                Ok(())
-            }
+            Response::Text(text) => Ok(text),
             _ => anyhow::bail!("No terminal text returned"),
         }
     }

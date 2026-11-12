@@ -60,6 +60,21 @@ Settings → Agent hooks installs, repairs, and removes managed hooks for Claude
 
 Settings → Agents lists the catalog agents found on PATH and keeps agent presets (name, icon, program, arguments) in `ui-preferences.json`. Preset changes save at once. Arguments are shell words: quote a word with spaces. The workspace **+** menu, Search Everywhere / Find Action and **New agent session…** (⌥⌘N; Ctrl+Shift+Alt+N on Linux; rebind it in Settings → Keymap) show **New terminal with <agent>** for each preset and installed agent, the last used first. A pick opens a terminal tab in the current project and types the command there without Enter: press Enter to start the agent. The New task form's agent list fills **Agent command** the same way.
 
+The New task form has an optional **From issue/PR** field: type a number
+(`12`, `#12`, `!12` for a GitLab merge request) or an issue, pull request or
+merge request URL, then click **Fetch**. The GUI runs `gh issue view`/`gh pr
+view` (or `glab issue view`/`glab mr view`), picked by the `origin` host as
+Create PR does, as a background read with the 20-second cap. Only the number
+reaches the CLI, and it is looked up in `origin`'s repository; a bare number
+is tried as an issue, then as a pull request. The answer fills the task name
+(`12-fix-the-login-page`) and its branch and folder. For a pull request,
+**Start from** shows `PR #12 head`: on **Create task** the GUI runs `git fetch
+origin refs/pull/12/head` (`refs/merge-requests/12/head` on GitLab) into
+`FETCH_HEAD` only, and the worktree starts at that commit. Change Start from
+to skip the fetch. **Type the issue text as the first prompt** (off by
+default) types the title and body on one line, quoted, after the agent
+command. Nothing is sent: you press Enter.
+
 Read [the integration contract and capability notes](INTEGRATIONS.md) before connecting a custom agent. Installed hooks are inert outside terminals owned by this application. Notification defaults cover input, permission, completion, and failure events where the agent exposes them; opening the relevant terminal dismisses the notification without changing agent state. Settings → Notifications can play a system sound with desktop banners (default on). The in-app Agents inbox stays silent. The control requires a daemon that advertises `notification-sound-v1`.
 
 ## Local state and updates
@@ -758,6 +773,89 @@ terminator-hook ctl wait SESSION_ID --state done --changed --timeout 600
 
 `updated` has a resolution of one second. A turn that starts and ends in the
 same second as the recorded record, with no hook sequence, is not seen.
+
+`ctl spawn --parent SESSION [--worktree NAME] [--agent COMMAND] [--background]`
+creates a child terminal of a live session: in the parent's project and
+folder, or with `--worktree` in a new worktree `terminator/NAME` beside the
+project (as New task names it). `--agent` is one line that is typed into the
+child; Enter is never pressed and there is no flag for it. It prints the child
+session ID, so the caller starts the agent explicitly:
+
+```sh
+child=$(terminator-hook ctl spawn --parent "$TERMINATOR_SESSION_ID" --agent claude | jq -r .session)
+terminator-hook ctl send "$child" '' --enter
+```
+
+With `session-parent-v1` the daemon records the link (display only; it never
+starts, stops or resumes a session). The project tree draws a child under its
+parent's row when both are in the same project, and each parent row shows one
+line that counts its live children by hook state (`2 child sessions · 1
+waiting`). An older daemon keeps no link: the child still runs and the reply
+says `"parent_linked": false`.
+
+### Inbox in any terminal
+
+`terminator-hook inbox` shows the attention list in a terminal, for example
+over SSH from a phone. It needs no web or mobile client, no account and no
+relay. Rows are sessions sorted by attention: waiting, failed, working, done
+with an unread notice, then idle. Each row shows the project, the session
+label, the age of the last hook report and the notice text. It reads the
+daemon snapshot every 2 seconds (hook state and notices, never terminal text).
+
+| Key | Action |
+| --- | --- |
+| Up/Down, `j`/`k` | Select a row |
+| Enter | Read-only screen view of the session (`screen-v1`; else its history) |
+| `r` | Type a one-line reply. Enter shows the confirm step |
+| `s` (confirm step) | Send the reply and press Enter, like `ctl send --enter` |
+| `t` (confirm step) | Type the reply without Enter |
+| `d` | Dismiss the notice |
+| `s` (list) | Snooze the agent notice for 10 minutes |
+| `q`, Esc, Ctrl-C | Quit or go back |
+
+No other key sends text. Dismiss or snooze moves the session to idle until a
+newer notice arrives. The inbox never starts an agent.
+
+```sh
+ssh desk.example.invalid -t terminator-hook inbox
+```
+
+### MCP server
+
+`terminator-hook mcp` is a stdio [Model Context Protocol](https://modelcontextprotocol.io)
+server. Each tool runs the `ctl` command of the same name, so it has the same
+limits and refusals:
+
+| Tool | ctl command |
+| --- | --- |
+| `list`, `agents`, `wait`, `read` | `ctl list`, `ctl agents`, `ctl wait`, `ctl read` |
+| `send` | `ctl send`; Enter only when `"enter": true` |
+| `create`, `split`, `focus`, `open_file`, `notify` | the ctl command |
+| `worktree_list`, `worktree_add`, `worktree_remove` | `ctl worktree list/add/remove`; removal refuses dirty, locked and live-session checkouts |
+
+No tool starts an agent, shuts down the daemon, controls the window or the
+browser. Agent state comes from hooks, never from terminal text. A refusal or a
+`wait` timeout returns a tool result with `isError: true`. Give `wait` a
+`timeout`: the server answers one request at a time.
+
+The server speaks protocol `2026-07-28` (version in each request's `_meta`,
+`server/discover`) and the `initialize` handshake of `2025-11-25`, `2025-06-18`,
+`2025-03-26` and `2024-11-05`. Messages are newline-delimited JSON-RPC on
+stdin and stdout. `--data-dir` and `--runtime-dir` work as for `ctl`.
+
+Terminator does not add the server to any agent configuration. To use it, add
+it yourself, for example in a client's `mcpServers` setting:
+
+```json
+{
+  "mcpServers": {
+    "terminator": {
+      "command": "/absolute/path/to/terminator-hook",
+      "args": ["mcp"]
+    }
+  }
+}
+```
 
 Run shutdown from Terminal.app or another terminal outside Terminator. The default
 refuses live sessions. Explicit `--stop-all` closes the GUI through its normal

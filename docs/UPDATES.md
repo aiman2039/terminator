@@ -263,6 +263,17 @@ Development and isolated launches (`TERMINATOR_DATA_DIR`, `--data-dir`,
 `TERMINATOR_CONFIG_DIR`, `TERMINATOR_RUNTIME_DIR`, debug builds) never touch
 the feed.
 
+Linux has no self-update. A `.deb`, `.rpm` or AUR install (the GUI runs from
+`/usr/lib/terminator-workspace`) updates only through its package manager,
+and the chip tooltip says so. A release archive keeps the download link. An
+in-app download and replace is not added because (1) Linux release archives
+carry no update signature (Sparkle verifies an EdDSA signature; nothing
+equivalent exists for the tarball), so the GUI could not verify what it
+installs, and (2) the archive can live in any folder, often one the user cannot
+write as a normal user, and the GUI would have to replace its own folder while
+it runs. Sessions are not at risk either way: a new GUI never replaces a
+running daemon, and generations keep live older daemons attached.
+
 When a newer release is available, the status bar shows an **Update vX** chip;
 a click opens Settings → Updates. There, the release `body` from the same feed
 reply renders as Markdown under **Release notes**, and **Skip this version**

@@ -253,6 +253,18 @@ impl Services {
         cancel: CancellationToken,
         updates: &mut Vec<Update>,
     ) -> Result<()> {
+        let mut draft = draft;
+        // A pull request task starts at its head, fetched now (on Create)
+        // into FETCH_HEAD only: no branch or ref changes.
+        if let Some((root, head)) = draft.issue.head_to_fetch(&draft.start) {
+            draft.start = self
+                .fs()
+                .run(&cancel, move || {
+                    crate::git::task_issue::fetch_head(&root, &head)
+                })
+                .await
+                .context("Could not fetch the pull request head")?;
+        }
         let mut start = draft.task_start();
         let revision = draft.start.clone();
         let source_id = draft.source.clone();
