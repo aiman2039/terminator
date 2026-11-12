@@ -1,10 +1,12 @@
 mod pane_bar;
+mod resume;
 
 use super::rows::{PaintStatusIconInput, paint_status_icon, u8_from_f32};
 use super::scale::{FONT_SMALL, WIDGET_RADIUS};
 use super::theme::{color, icon_color};
 use eframe::egui::{self, Color32, FontId, RichText};
 use pane_bar::*;
+use resume::{resume_chip, resume_chip_width};
 use terminator_core::appearance::AppearanceConfig;
 
 pub struct UnsavedCloseBar<'a> {
@@ -83,30 +85,37 @@ pub fn unsaved_close_bar(ui: &mut egui::Ui, input: UnsavedCloseBar<'_>) -> Unsav
     response.inner
 }
 
-/// Terminal pane top bar: title, Git, vertical split, horizontal split, close.
+/// Terminal pane top bar: glyphs, title, branch, then split right, split
+/// down, zoom and close. Those four show only while the pane has focus or
+/// the pointer is on the caption, and fold into one menu button (`more`)
+/// when the pane is narrow.
 pub struct TerminalBar {
     pub bar: egui::Response,
-    pub git: egui::Response,
-    pub stack: Option<egui::Response>,
-    pub split_vertical: egui::Response,
-    pub split_horizontal: egui::Response,
+    /// The branch text; a click opens Git.
+    pub branch: Option<egui::Response>,
+    pub split_vertical: Option<egui::Response>,
+    pub split_horizontal: Option<egui::Response>,
     pub zoom: Option<egui::Response>,
-    pub close: egui::Response,
+    pub close: Option<egui::Response>,
+    /// The folded menu button: the caller opens the pane menu from it.
+    pub more: Option<egui::Response>,
     /// The Resume chip, when `TerminalBarSpec::resume_tip` asked for it.
     pub resume: Option<egui::Response>,
+    /// Where the title area ends (an inline rename field stops here).
+    pub controls_left: f32,
 }
 
 pub struct TerminalBarSpec<'a> {
     pub title: &'a str,
     pub title_tint: Option<Color32>,
+    /// The pane has focus: text-colored title and visible buttons.
     pub active: bool,
+    /// Steady focus mark behind the caption; None for no fill (no focus, or
+    /// a lone pane).
+    pub focus_fill: Option<Color32>,
     pub branch: Option<&'a str>,
+    /// Status dot; callers pass it only when no status glyph shows.
     pub status: Option<Color32>,
-    pub git_tip: &'a str,
-    /// Stack-new-tab affordance for lone panes (whose leaf tab bar, with
-    /// its own `+`, is hidden). None hides the button, e.g. when the pane
-    /// has no leaf to stack into.
-    pub stack_tip: Option<&'a str>,
     /// Zoom (or Restore) button tip; None hides it (panes that cannot zoom).
     pub zoom_tip: Option<&'a str>,
     pub vertical_tip: &'a str,
@@ -124,7 +133,8 @@ pub struct TerminalBarSpec<'a> {
     pub unread: bool,
     /// Weak text after the title where room allows (a window title).
     pub subtitle: Option<&'a str>,
-    /// The Resume chip before the Git button; None hides the chip.
+    /// The Resume chip before the branch; None hides the chip. It shows
+    /// with or without focus.
     pub resume_tip: Option<ResumeChip<'a>>,
 }
 
@@ -143,116 +153,137 @@ const TERMINAL_BAR_HEIGHT: f32 = 26.0;
 /// Pane bar buttons use the shared compact toolbar square.
 pub(crate) const TERMINAL_BUTTON: f32 = super::TOOLBAR_BUTTON;
 pub(crate) const TERMINAL_BRANCH_MAX: f32 = 96.0;
+/// The narrowest title a caption keeps: the branch text yields first,
+/// then the buttons fold into one menu button.
+pub(crate) const TERMINAL_TITLE_MIN: f32 = 96.0;
 
-/// Fixed width of the Git and split cluster on a tab bar, where the branch
-/// slot cannot be measured per leaf.
+/// Fixed width of the branch and split cluster on a tab bar, where the
+/// branch slot cannot be measured per leaf.
 pub fn strip_terminal_actions_width() -> f32 {
-    14.0 + TERMINAL_BUTTON
-        + 4.0
-        + TERMINAL_BRANCH_MAX
-        + 4.0
-        + TERMINAL_BUTTON
-        + 4.0
-        + TERMINAL_BUTTON
+    14.0 + TERMINAL_BRANCH_MAX + 4.0 + TERMINAL_BUTTON + 4.0 + TERMINAL_BUTTON
 }
 
-/// Title color when the caller gives no tint: accent while active, weak otherwise.
+/// Title color when the caller gives no tint: text while active, weak otherwise.
 fn default_title_tint(ui: &egui::Ui, active: bool) -> egui::Color32 {
     if active {
-        ui.visuals().selection.stroke.color
+        ui.visuals().text_color()
     } else {
         ui.visuals().weak_text_color()
     }
 }
 
+/// The focus fill behind a caption, out to the pane edges: the caption
+/// sits inside the dock body margin.
+fn paint_focus_fill(ui: &egui::Ui, rect: egui::Rect, fill: Color32) {
+    let margin = ui.style().spacing.window_margin;
+    let area = egui::Rect::from_min_max(
+        egui::pos2(
+            rect.left() - f32::from(margin.left),
+            rect.top() - f32::from(margin.top),
+        ),
+        egui::pos2(rect.right() + f32::from(margin.right), rect.bottom()),
+    );
+    egui::Painter::new(ui.ctx().clone(), ui.layer_id(), area).rect_filled(
+        area,
+        egui::CornerRadius::ZERO,
+        fill,
+    );
+}
+
+/// The steady focus mark of a pane: a 2 px accent rule on its top edge.
+pub fn paint_focus_rule(painter: &egui::Painter, pane: egui::Rect, accent: Color32) -> egui::Rect {
+    let rule = egui::Rect::from_min_size(pane.min, egui::vec2(pane.width(), 2.0));
+    painter.rect_filled(rule, egui::CornerRadius::ZERO, accent);
+    rule
+}
+
 pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar {
-    let TerminalBarSpec {
-        title,
-        title_tint,
-        active,
-        branch,
-        status,
-        git_tip,
-        stack_tip,
-        zoom_tip,
-        vertical_tip,
-        horizontal_tip,
-        brand,
-        status_icon,
-        status_tint,
-        spin,
-        kind,
-        unread,
-        subtitle,
-        resume_tip,
-    } = spec;
     let (rect, bar) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), TERMINAL_BAR_HEIGHT),
         egui::Sense::click_and_drag(),
     );
-    let git_width = TERMINAL_BUTTON + branch_width(ui, branch);
-    let slots = BarSlots::layout(rect, git_width, (stack_tip.is_some(), zoom_tip.is_some()));
-    let resume_rect = resume_tip.map(|chip| resume_chip_rect(ui, slots.git, chip.unsure));
-    let tint = title_tint.unwrap_or_else(|| default_title_tint(ui, active));
+    if let Some(fill) = spec.focus_fill {
+        paint_focus_fill(ui, rect, fill);
+    }
+    let show = spec.active || ui.rect_contains_pointer(rect);
+    let tint = spec
+        .title_tint
+        .unwrap_or_else(|| default_title_tint(ui, spec.active));
     let lead = paint_leading_icons(
         ui,
         rect,
         LeadingIcons {
-            brand,
-            status_icon,
-            status_tint,
-            spin,
-            kind,
+            brand: spec.brand,
+            status_icon: spec.status_icon,
+            status_tint: spec.status_tint,
+            spin: spec.spin,
+            kind: spec.kind,
             title_tint: Some(tint),
-            unread,
+            unread: spec.unread,
         },
     );
+    let layout = BarLayout::new(LayoutInput {
+        rect,
+        lead,
+        branch_width: branch_width(ui, spec.branch),
+        resume_width: spec
+            .resume_tip
+            .map(|chip| resume_chip_width(ui, chip.unsure)),
+        zoom: spec.zoom_tip.is_some(),
+        show,
+        dot: spec.status.is_some(),
+    });
     paint_title(
         ui,
         BarTitle {
             rect,
-            git_left: resume_rect.map_or(slots.git.left(), |chip| chip.left() - 2.0),
+            right: layout.title_right,
             lead,
-            title,
-            subtitle: subtitle.filter(|_| !title.is_empty()),
+            title: spec.title,
+            subtitle: spec.subtitle.filter(|_| !spec.title.is_empty()),
             tint,
-            status,
+            status: spec.status,
         },
     );
-    let resume = resume_rect
-        .zip(resume_tip)
+    let resume = layout
+        .resume
+        .zip(spec.resume_tip)
         .map(|(rect, chip)| resume_chip(ui, bar.id, rect, chip));
     bar.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, title)
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), spec.active, spec.title)
     });
     let actions = bar_actions(BarActionsInput {
         ui,
         bar_id: bar.id,
-        slots: &slots,
-        tips: BarTips {
-            branch,
-            git: git_tip,
-            stack: stack_tip,
-            zoom: zoom_tip,
-            vertical: vertical_tip,
-            horizontal: horizontal_tip,
-        },
+        layout: &layout,
+        spec: &spec,
+        show,
     });
-    let bar = bar_hover(bar.on_hover_cursor(egui::CursorIcon::Grab), title, subtitle);
-    TerminalBar::new(bar, actions, resume)
+    let bar = bar_hover(
+        bar.on_hover_cursor(egui::CursorIcon::Grab),
+        spec.title,
+        spec.subtitle,
+    );
+    TerminalBar::new(bar, actions, resume, layout.title_right)
 }
 
 impl TerminalBar {
-    fn new(bar: egui::Response, actions: BarActions, resume: Option<egui::Response>) -> Self {
+    fn new(
+        bar: egui::Response,
+        actions: BarActions,
+        resume: Option<egui::Response>,
+        controls_left: f32,
+    ) -> Self {
         Self {
             bar,
-            git: actions.git,
-            stack: actions.stack,
+            branch: actions.branch,
             split_vertical: actions.split_vertical,
             split_horizontal: actions.split_horizontal,
             zoom: actions.zoom,
             close: actions.close,
+            more: actions.more,
             resume,
+            controls_left,
         }
     }
 }
@@ -272,7 +303,8 @@ fn bar_hover(bar: egui::Response, title: &str, subtitle: Option<&str>) -> egui::
     }
 }
 
-/// Brief focus emphasis that fades out; the pane title carries steady focus.
+/// Brief focus emphasis that fades out; the steady mark is
+/// [`paint_focus_rule`] plus the caption fill and text-colored title.
 pub fn focus_stroke(accent: Color32, elapsed: std::time::Duration) -> egui::Stroke {
     let progress = ((elapsed.as_secs_f32() - 0.2) / 1.0).clamp(0.0, 1.0);
     let strength = (1.0 - progress).powi(2);

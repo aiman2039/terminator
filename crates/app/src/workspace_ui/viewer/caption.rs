@@ -2,14 +2,6 @@ use super::super::super::*;
 use super::super::tabs::snapshot_rows;
 use super::Viewer;
 
-/// Git, stack, vertical split, and horizontal split buttons.
-type CaptionActions = (
-    egui::Response,
-    Option<egui::Response>,
-    egui::Response,
-    egui::Response,
-);
-
 /// Per-frame facts about one main-dock terminal caption.
 struct CaptionFrame<'a> {
     session: &'a Session,
@@ -25,8 +17,17 @@ struct CaptionFrame<'a> {
 struct Caption {
     response: egui::Response,
     close: Option<egui::Response>,
-    actions: Option<CaptionActions>,
+    bar: Option<CaptionBar>,
     clicks: CaptionClicks,
+}
+
+/// The terminal bar's own controls (none on a markdown header).
+struct CaptionBar {
+    branch: Option<egui::Response>,
+    split_vertical: Option<egui::Response>,
+    split_horizontal: Option<egui::Response>,
+    more: Option<egui::Response>,
+    controls_left: f32,
 }
 
 /// What the caption's buttons reported this frame.
@@ -34,7 +35,6 @@ struct Caption {
 struct CaptionClicks {
     closing: bool,
     git: bool,
-    stack: bool,
     split_vertical: bool,
     split_horizontal: bool,
     zoom: bool,
@@ -42,32 +42,40 @@ struct CaptionClicks {
     on_control: bool,
 }
 
+fn clicked(response: Option<&egui::Response>) -> bool {
+    response.is_some_and(egui::Response::clicked)
+}
+
+fn hovered(response: Option<&egui::Response>) -> bool {
+    response.is_some_and(egui::Response::hovered)
+}
+
 impl CaptionClicks {
     fn read(
         close: Option<&egui::Response>,
         zoom: Option<&egui::Response>,
-        actions: Option<&CaptionActions>,
+        bar: Option<&CaptionBar>,
         resume: Option<&egui::Response>,
     ) -> Self {
+        let controls = bar.map_or([None; 4], |bar| {
+            [
+                bar.branch.as_ref(),
+                bar.split_vertical.as_ref(),
+                bar.split_horizontal.as_ref(),
+                bar.more.as_ref(),
+            ]
+        });
         Self {
-            resume: resume.is_some_and(eframe::egui::Response::clicked),
-            zoom: zoom.is_some_and(eframe::egui::Response::clicked),
-            closing: close.is_some_and(eframe::egui::Response::clicked),
-            git: actions.is_some_and(|(git, _, _, _)| git.clicked()),
-            stack: actions.is_some_and(|(_, stack, _, _)| {
-                stack.as_ref().is_some_and(eframe::egui::Response::clicked)
-            }),
-            split_vertical: actions.is_some_and(|(_, _, split, _)| split.clicked()),
-            split_horizontal: actions.is_some_and(|(_, _, _, split)| split.clicked()),
-            on_control: close.is_some_and(eframe::egui::Response::hovered)
-                || zoom.is_some_and(eframe::egui::Response::hovered)
-                || resume.is_some_and(eframe::egui::Response::hovered)
-                || actions.is_some_and(|(git, stack, vertical, horizontal)| {
-                    git.hovered()
-                        || stack.as_ref().is_some_and(eframe::egui::Response::hovered)
-                        || vertical.hovered()
-                        || horizontal.hovered()
-                }),
+            resume: clicked(resume),
+            zoom: clicked(zoom),
+            closing: clicked(close),
+            git: clicked(controls[0]),
+            split_vertical: clicked(controls[1]),
+            split_horizontal: clicked(controls[2]),
+            on_control: hovered(close)
+                || hovered(zoom)
+                || hovered(resume)
+                || controls.into_iter().any(hovered),
         }
     }
 }
@@ -99,6 +107,14 @@ impl Viewer<'_> {
                 self.context_menu(ui, &mut Tab::Terminal(sid.clone()), pane);
             }
         });
+        // A narrow pane folds its buttons into one menu: the pane menu.
+        if let Some(more) = caption.bar.as_ref().and_then(|bar| bar.more.as_ref())
+            && let Some(pane) = frame.pane
+        {
+            egui::Popup::menu(more)
+                .style(appearance::menu_style)
+                .show(|ui| self.context_menu(ui, &mut Tab::Terminal(sid.clone()), pane));
+        }
     }
 
     fn lone_pane(&self) -> bool {
@@ -118,25 +134,27 @@ impl Viewer<'_> {
     }
 
     fn paint_caption(&mut self, ui: &mut egui::Ui, frame: &CaptionFrame<'_>) -> Caption {
-        let (response, close, zoom, actions, resume) = if frame.is_markdown {
+        let (response, close, zoom, bar, resume) = if frame.is_markdown {
             let header = self.markdown_header(ui, frame.session, frame.editing);
             (header.0, header.1, None, None, None)
         } else {
             let bar = self.terminal_caption_bar(ui, frame);
             (
                 bar.bar,
-                Some(bar.close),
+                bar.close,
                 bar.zoom,
-                Some((bar.git, bar.stack, bar.split_vertical, bar.split_horizontal)),
+                Some(CaptionBar {
+                    branch: bar.branch,
+                    split_vertical: bar.split_vertical,
+                    split_horizontal: bar.split_horizontal,
+                    more: bar.more,
+                    controls_left: bar.controls_left,
+                }),
                 bar.resume,
             )
         };
-        let clicks = CaptionClicks::read(
-            close.as_ref(),
-            zoom.as_ref(),
-            actions.as_ref(),
-            resume.as_ref(),
-        );
+        let clicks =
+            CaptionClicks::read(close.as_ref(), zoom.as_ref(), bar.as_ref(), resume.as_ref());
         #[cfg(feature = "test-support")]
         if let Some(zoom) = &zoom {
             let sid = &frame.session.id;
@@ -145,7 +163,7 @@ impl Viewer<'_> {
         Caption {
             response,
             close,
-            actions,
+            bar,
             clicks,
         }
     }
@@ -158,10 +176,7 @@ impl Viewer<'_> {
         let session = frame.session;
         let sid = &session.id;
         let branch = self.app.branch_at(&session.cwd);
-        let git_tip = match &branch {
-            Some(name) => format!("{name}\nOpen Git"),
-            None => "Open Git".into(),
-        };
+        let active = self.app.active_session.as_ref() == Some(sid);
         let vertical_tip = self.app.action_tip("Split vertically", Action::SplitRight);
         let horizontal_tip = self.app.action_tip("Split horizontally", Action::SplitDown);
         // Floating windows cannot zoom; their pane already has a window.
@@ -181,13 +196,18 @@ impl Viewer<'_> {
                     &session.label
                 },
                 title_tint: self.app.terminal_chosen_title_color(sid),
-                active: self.app.active_session.as_ref() == Some(sid),
+                active,
+                // A lone pane already has the active workspace tab's mark.
+                focus_fill: (active && !frame.lone)
+                    .then(|| appearance::color(&self.app.theme.hover)),
                 branch: branch.as_deref(),
-                status: self.app.terminal_status_color(session),
-                git_tip: &git_tip,
-                // No leaf tab bar on a lone pane, so its `+` lives here
-                // instead. Hidden without a leaf to avoid dead clicks.
-                stack_tip: frame.pane.is_some().then_some("New tab in this split"),
+                // The status glyph already shows the state; the dot is for
+                // panes without one.
+                status: leading
+                    .status
+                    .is_none()
+                    .then(|| self.app.terminal_status_color(session))
+                    .flatten(),
                 zoom_tip: zoom_tip.as_deref(),
                 vertical_tip: &vertical_tip,
                 horizontal_tip: &horizontal_tip,
@@ -241,9 +261,9 @@ impl Viewer<'_> {
         }
         let response = &caption.response;
         let controls_left = caption
-            .actions
+            .bar
             .as_ref()
-            .map(|(git, _, _, _)| git.rect.left() - 4.0)
+            .map(|bar| bar.controls_left)
             .unwrap_or_else(|| {
                 response.rect.right()
                     - if caption.close.is_some() && !frame.is_markdown {
@@ -270,21 +290,17 @@ impl Viewer<'_> {
             diagnostics::record(ui.ctx(), &format!("editor-close:{sid}"), close.rect);
             diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
         }
-        if let Some((git, stack, vertical, horizontal)) = &caption.actions {
-            diagnostics::record(ui.ctx(), &format!("pane-git:{sid}"), git.rect);
-            if let Some(stack) = stack {
-                diagnostics::record(ui.ctx(), &format!("pane-stack:{sid}"), stack.rect);
+        if let Some(bar) = &caption.bar {
+            for (name, response) in [
+                ("pane-git", &bar.branch),
+                ("pane-split-vertical", &bar.split_vertical),
+                ("pane-split-horizontal", &bar.split_horizontal),
+                ("pane-more", &bar.more),
+            ] {
+                if let Some(response) = response {
+                    diagnostics::record(ui.ctx(), &format!("{name}:{sid}"), response.rect);
+                }
             }
-            diagnostics::record(
-                ui.ctx(),
-                &format!("pane-split-vertical:{sid}"),
-                vertical.rect,
-            );
-            diagnostics::record(
-                ui.ctx(),
-                &format!("pane-split-horizontal:{sid}"),
-                horizontal.rect,
-            );
         }
         diagnostics::record(ui.ctx(), &format!("pane-drag:{sid}"), caption.response.rect);
     }
@@ -341,7 +357,7 @@ impl Viewer<'_> {
             self.app
                 .queue_zoom(Some(Tab::Terminal(sid.clone())), frame.pane);
         }
-        if clicks.split_vertical || clicks.split_horizontal || clicks.stack {
+        if clicks.split_vertical || clicks.split_horizontal {
             self.app.focus_terminal(sid.clone());
             self.queue_focus_tab(Tab::Terminal(sid.clone()));
         }
@@ -363,13 +379,10 @@ impl Viewer<'_> {
         }
     }
 
-    /// The caption `+` queues the same leaf-anchored request as the leaf
-    /// tab bar `+`: a stacked tab in this split, never a new top-level
-    /// tab. Floating splits land in the issuing window's dock.
+    /// The caption splits queue the same leaf-anchored request as the leaf
+    /// tab bar menu. Floating splits land in the issuing window's dock.
+    /// New tab in this split stays in the pane context menu.
     fn queue_caption_adds(&mut self, pane: egui_dock::NodePath, clicks: CaptionClicks) {
-        if clicks.stack {
-            self.queue_add_tab(pane, None);
-        }
         if clicks.split_vertical {
             self.queue_add_tab(pane, Some("right".into()));
         }
