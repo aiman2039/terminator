@@ -17,9 +17,24 @@
 
 Not added: Kiro CLI (`~/.kiro/hooks/*.json`) does not document its stdin
 fields, and Amp's hook or plugin API was not found in official documentation.
-Use `terminator-hook emit` for them. The new agents have no presence
-(process) detection or resume template yet; their hook events show as last
-reported state.
+Use `terminator-hook emit` for them. Gemini CLI, Copilot CLI, Factory Droid and
+Qwen Code have presence (process) detection by executable name (`gemini`,
+`copilot`, `droid`, `qwen`; the Node CLIs also as `node <bin>/gemini`,
+`…/copilot`, `…/qwen`), use the generic agent icon (no brand glyph is bundled),
+and leave a resume command from the hook `session_id`: `gemini --resume <id>`,
+`copilot --resume=<id>`, `droid --resume <id>`, `qwen --resume <id>`, as each
+CLI documents. Being in the catalog also lets Settings → Agent hooks find their
+CLIs on PATH before it installs hooks, and lists them in New agent session. No
+installed CLI of these four was run to confirm the process names or that the
+hook `session_id` is the ID `--resume` takes.
+
+Agent usage (`agent-usage-v1`): the normalizer keeps `model` and
+`permission_mode` from the hook input when the agent sends them (Claude Code:
+`model` on SessionStart and `permission_mode`; Codex: `model` and
+`permission_mode`; Factory Droid: `permission_mode`). Gemini CLI puts the model
+only in `BeforeModel`/`AfterModel` `llm_request`, which is not installed, and
+Copilot CLI documents neither field. No agent's hook input documents context
+fullness or cost.
 
 These are capability targets, not an assertion that all providers report identical lifecycle events. A missing callback cannot reliably be replaced with “the terminal was silent.” In particular, failures and clarification prompts are only reported when the integration receives an appropriate event. CLI upgrades may change their configuration or payloads.
 

@@ -105,6 +105,13 @@ fn hook_state(input: HookStateInput<'_>) -> Option<AgentState> {
 }
 
 fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
+    if kind == "copilot" {
+        // The documented form; the session ID is optional after `--resume`.
+        return Some(Resume {
+            program: "copilot".into(),
+            args: vec![format!("--resume={provider}")],
+        });
+    }
     let (program, arg) = match kind {
         "claude" => ("claude", "--resume"),
         "codex" => ("codex", "resume"),
@@ -112,6 +119,9 @@ fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
         "muse" => ("muse", "resume"),
         "grok" => ("grok", "--resume"),
         "cursor" => ("cursor-agent", "--resume"),
+        "gemini" => ("gemini", "--resume"),
+        "droid" => ("droid", "--resume"),
+        "qwen" => ("qwen", "--resume"),
         _ => return None,
     };
     Some(Resume {

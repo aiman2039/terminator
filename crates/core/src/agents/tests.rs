@@ -47,6 +47,10 @@ fn catalog_matchers_cover_exact_executables() {
         ("grok", "grok"),
         ("muse", "muse"),
         ("cursor", "cursor-agent"),
+        ("gemini", "gemini"),
+        ("copilot", "copilot"),
+        ("droid", "droid"),
+        ("qwen", "qwen"),
     ] {
         assert_eq!(match_agent(exe, &[exe]), Some(kind), "{exe}");
         assert_eq!(
@@ -55,7 +59,7 @@ fn catalog_matchers_cover_exact_executables() {
             "path {exe}"
         );
     }
-    assert_eq!(CATALOG.len(), 7);
+    assert_eq!(CATALOG.len(), 11);
     // Bare `agent` is also Grok's PATH shim. Identity stays on `cursor-agent`.
     assert_eq!(match_agent("agent", &["agent"]), None);
     assert_eq!(
@@ -85,6 +89,21 @@ fn wrappers_match_exact_names_and_known_entrypoints() {
     assert_eq!(
         match_agent("node", &["node", "/opt/opencode.mjs"]),
         Some("opencode")
+    );
+}
+
+#[test]
+fn node_cli_agents_match_by_their_bin_name_and_get_the_generic_icon() {
+    for kind in ["gemini", "copilot", "qwen"] {
+        let bin = format!("/opt/homebrew/bin/{kind}");
+        assert_eq!(match_agent("node", &["node", &bin, "-p"]), Some(kind));
+        assert_eq!(icon_key(kind), GENERIC_ICON);
+    }
+    assert_eq!(display_name("droid"), "Factory Droid");
+    // Arguments never match: a script named after an agent's flag does not.
+    assert_eq!(
+        match_agent("node", &["node", "/opt/index.js", "gemini"]),
+        None
     );
 }
 
