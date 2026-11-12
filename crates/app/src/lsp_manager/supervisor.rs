@@ -131,12 +131,12 @@ impl LspManager {
             .filter(|value| !value.is_empty())
         {
             return format!(
-                "Language server not found: {custom}. Fix the path in Settings → Terminal & Editor."
+                "Language server not found: {custom}. Fix the path in Settings → Languages."
             );
         }
         let candidates = L::family_candidates(language);
         format!(
-            "No language server on PATH ({}); install it or set a path in Settings → Terminal & Editor.",
+            "No language server on PATH ({}); install it or set a path in Settings → Languages.",
             candidates.join(", ")
         )
     }

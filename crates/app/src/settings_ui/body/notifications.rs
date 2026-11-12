@@ -11,10 +11,17 @@ impl App {
         self.ntfy_settings(ui);
         self.dismissal_row(ui);
         if self.field_visible("Place notifications at the side", "position side corner") {
-            ui.checkbox(
-                &mut self.settings_draft.notifications_side,
-                "Place notifications at the side",
-            );
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Position",
+                description: "Where in-app agent alerts show.",
+                add_control: |ui| {
+                    ui.checkbox(
+                        &mut self.settings_draft.notifications_side,
+                        "Place notifications at the side",
+                    );
+                },
+            });
         }
         self.notification_sound_row(ui);
         self.terminal_notice_toggles(ui);
@@ -146,14 +153,21 @@ impl App {
             .capabilities
             .iter()
             .any(|c| c == NOTIFICATION_SOUND_CAPABILITY);
-        ui.add_enabled(
-            enabled,
-            egui::Checkbox::new(
-                &mut self.settings_draft.notification_sound,
-                "Play sound with desktop notifications",
-            ),
-        )
-        .on_disabled_hover_text(OLDER_DAEMON_HINT);
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Sound",
+            description: "The in-app Agents inbox stays silent.",
+            add_control: |ui| {
+                ui.add_enabled(
+                    enabled,
+                    egui::Checkbox::new(
+                        &mut self.settings_draft.notification_sound,
+                        "Play sound with desktop notifications",
+                    ),
+                )
+                .on_disabled_hover_text(OLDER_DAEMON_HINT);
+            },
+        });
     }
 
     fn terminal_notice_toggles(&mut self, ui: &mut egui::Ui) {
@@ -166,22 +180,29 @@ impl App {
             .iter()
             .any(|c| c == TERMINAL_NOTICES_CAPABILITY);
         let draft = &mut self.settings_draft;
-        ui.add_enabled(
-            enabled,
-            egui::Checkbox::new(
-                &mut draft.terminal_notifications,
-                "Show terminal OSC notifications",
-            ),
-        )
-        .on_disabled_hover_text(OLDER_DAEMON_HINT);
-        ui.add_enabled(
-            enabled,
-            egui::Checkbox::new(
-                &mut draft.terminal_notifications_os,
-                "Also send terminal notifications to the desktop",
-            ),
-        )
-        .on_disabled_hover_text(OLDER_DAEMON_HINT);
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Terminal notifications",
+            description: "Notifications that programs in a terminal send with OSC escape codes.",
+            add_control: |ui| {
+                ui.add_enabled(
+                    enabled,
+                    egui::Checkbox::new(
+                        &mut draft.terminal_notifications,
+                        "Show terminal OSC notifications",
+                    ),
+                )
+                .on_disabled_hover_text(OLDER_DAEMON_HINT);
+                ui.add_enabled(
+                    enabled,
+                    egui::Checkbox::new(
+                        &mut draft.terminal_notifications_os,
+                        "Also send terminal notifications to the desktop",
+                    ),
+                )
+                .on_disabled_hover_text(OLDER_DAEMON_HINT);
+            },
+        });
     }
 
     fn send_ntfy_test(&mut self, channel: String, machine: String) -> Result<(), String> {

@@ -1,5 +1,19 @@
 use crate::*;
 
+thread_local! {
+    /// Rows `field_visible` was asked about on this thread.
+    static SEEN: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Record a row the open section asks about (tests only).
+pub(super) fn seen_row(label: &str, keywords: &str) {
+    SEEN.with(|seen| {
+        seen.borrow_mut()
+            .push((label.to_owned(), keywords.to_owned()));
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,34 +72,152 @@ mod tests {
     }
 
     #[test]
-    fn section_titles_match_fixture_targets() {
-        assert_eq!(SettingsSection::Terminal.title(), "Terminal & Editor");
-        assert_eq!(SettingsSection::Updates.title(), "Updates");
-        assert_eq!(SettingsSection::ALL.len(), 10);
-        assert_eq!(SettingsSection::Agents.title(), "Agents");
-        assert_eq!(SettingsSection::Editor.title(), "Editor");
-        assert_eq!(SettingsSection::Ssh.title(), "SSH");
+    fn sections_are_grouped_by_subject_with_distinct_icons() {
+        let titles: Vec<_> = SettingsSection::ALL.iter().map(|s| s.title()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Appearance",
+                "Terminal",
+                "Editor",
+                "Languages",
+                "Git & Diff",
+                "Browser",
+                "Keymap",
+                "Notifications",
+                "Agents",
+                "Remote",
+                "History",
+                "Updates",
+            ]
+        );
+        let icons: std::collections::HashSet<_> =
+            SettingsSection::ALL.iter().map(|s| s.icon()).collect();
+        assert_eq!(icons.len(), SettingsSection::ALL.len());
+        for section in SettingsSection::ALL {
+            assert!(
+                crate::icons::source(section.icon()).uri().is_some(),
+                "{section:?} uses a bundled icon"
+            );
+        }
+        // The old hooks deep link opens Agents.
+        assert_eq!(
+            SettingsSection::AgentHooks.canonical(),
+            SettingsSection::Agents
+        );
+        assert_eq!(
+            SettingsSection::Editor.fixture_aliases(),
+            &["Terminal & Editor"]
+        );
     }
 
     #[test]
-    fn diff_layout_and_close_timeout_keywords_match_field_names() {
-        let keywords = SettingsSection::Terminal.keywords();
+    fn git_and_diff_search_finds_the_diff_layout_and_close_timeout() {
+        let (mut app, _ctx, _dir) = app();
+        for query in ["diff split", "close timeout", "pull requests"] {
+            app.settings_search = query.into();
+            assert!(app.section_visible(SettingsSection::Git), "{query}");
+        }
+    }
+
+    #[test]
+    fn search_finds_rows_in_any_section_with_words_in_any_order() {
+        let (mut app, _ctx, _dir) = app();
+        for (query, section) in [
+            ("spell", SettingsSection::Languages),
+            ("rust", SettingsSection::Languages),
+            ("devtools", SettingsSection::Browser),
+            ("vnc", SettingsSection::Remote),
+            ("autosave", SettingsSection::Editor),
+            ("font terminal", SettingsSection::Terminal),
+            ("notification sound", SettingsSection::Notifications),
+            ("keymap", SettingsSection::Keymap),
+            ("open file", SettingsSection::Keymap),
+        ] {
+            app.settings_search = query.into();
+            assert!(app.section_visible(section), "{query} finds {section:?}");
+        }
+    }
+
+    /// Every row a section paints is in that section's search text, so a
+    /// search for a row's label finds its section.
+    #[test]
+    fn every_painted_row_is_found_by_its_section_search() {
+        let (mut app, ctx, _dir) = app();
+        app.settings_draft.editor_mode = EditorMode::Native;
+        let mut missed = Vec::new();
+        for section in SettingsSection::ALL {
+            app.settings_section = section;
+            app.settings_search.clear();
+            SEEN.with(|seen| seen.borrow_mut().clear());
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 4000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.settings_center(ui),
+            );
+            output.textures_delta.clear();
+            let rows = SEEN.with(|seen| std::mem::take(&mut *seen.borrow_mut()));
+            for (label, _) in rows {
+                app.settings_search = label.clone();
+                if !app.section_visible(section) {
+                    missed.push(format!("{section:?}: {label}"));
+                }
+                app.settings_search.clear();
+            }
+        }
         assert!(
-            keywords.contains("diff"),
-            "Terminal section keywords should mention diff"
+            missed.is_empty(),
+            "searches that miss their section: {missed:?}"
         );
+    }
+
+    #[test]
+    fn a_search_with_no_match_says_so_and_clear_search_restores_the_page() {
+        let (mut app, ctx, _dir) = app();
+        app.settings_search = "zzqqxx".into();
+        let paint = |app: &mut App, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 820.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.settings_center(ui),
+            );
+            output.textures_delta.clear();
+            crate::app::painted_text(&output.shapes)
+        };
+        paint(&mut app, vec![]);
+        let texts = paint(&mut app, vec![]);
         assert!(
-            keywords.contains("timeout"),
-            "Terminal section keywords should mention timeout"
+            texts
+                .iter()
+                .any(|(_, text)| text == "No settings match “zzqqxx”."),
+            "{texts:?}"
         );
-        assert!(
-            keywords.contains("split"),
-            "Terminal section keywords should mention split"
-        );
-        assert!(
-            keywords.contains("close"),
-            "Terminal section keywords should mention close"
-        );
+        let clear = texts
+            .iter()
+            .find(|(_, text)| text == "Clear search")
+            .map(|(at, _)| *at)
+            .expect("Clear search");
+        let press = |pressed| egui::Event::PointerButton {
+            pos: clear,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        paint(&mut app, vec![egui::Event::PointerMoved(clear)]);
+        paint(&mut app, vec![press(true)]);
+        paint(&mut app, vec![press(false)]);
+        assert!(app.settings_search.is_empty());
     }
 
     #[test]
@@ -159,7 +291,7 @@ mod tests {
     #[test]
     fn showing_the_shortcuts_page_leaves_settings_unchanged() {
         let (mut app, ctx, _dir) = app();
-        app.settings_section = SettingsSection::Shortcuts;
+        app.settings_section = SettingsSection::Keymap;
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
