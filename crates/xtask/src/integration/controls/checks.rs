@@ -1,6 +1,6 @@
 use super::super::super::harness::{id, output, session_present};
 use super::super::run::symlink;
-use super::{CONTROL_SIGNAL, Checkout};
+use super::{CONTROL_SIGNAL, Checkout, MCP_SIGNAL};
 use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::fs;
@@ -25,6 +25,36 @@ impl Checkout {
             String::from_utf8_lossy(&output(read)?).contains("CONTROL_SEND_PROOF"),
             "Screen read did not return live content"
         );
+        self.mcp_send_enter_only_on_request(s)
+    }
+    /// MCP `send` types without Enter unless `enter` is true.
+    fn mcp_send_enter_only_on_request(&self, s: &Value) -> Result<()> {
+        let h = &self.h;
+        let typed = self.mcp_call("send", &json!({"session": id(s), "text": MCP_SIGNAL}))?;
+        ensure!(
+            typed.pointer("/result/isError") == Some(&json!(false)),
+            "MCP send failed: {typed}"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        ensure!(
+            !h.history(id(s))?.contains("MCP_TYPED_PROOF"),
+            "MCP send pressed Enter without `enter`"
+        );
+        let enter = self.mcp_call(
+            "send",
+            &json!({"session": id(s), "text": "", "enter": true}),
+        )?;
+        ensure!(
+            enter.pointer("/result/isError") == Some(&json!(false)),
+            "MCP Enter failed: {enter}"
+        );
+        h.wait(
+            |_| {
+                h.history(id(s))
+                    .is_ok_and(|text| text.contains("MCP_TYPED_PROOF"))
+            },
+            5,
+        )?;
         Ok(())
     }
     /// CLI and OSC notices stay separate from agent state; returns the attached stream.

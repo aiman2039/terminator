@@ -747,6 +747,43 @@ newer notice arrives. The inbox never starts an agent.
 ssh desk.example.invalid -t terminator-hook inbox
 ```
 
+### MCP server
+
+`terminator-hook mcp` is a stdio [Model Context Protocol](https://modelcontextprotocol.io)
+server. Each tool runs the `ctl` command of the same name, so it has the same
+limits and refusals:
+
+| Tool | ctl command |
+| --- | --- |
+| `list`, `agents`, `wait`, `read` | `ctl list`, `ctl agents`, `ctl wait`, `ctl read` |
+| `send` | `ctl send`; Enter only when `"enter": true` |
+| `create`, `split`, `focus`, `open_file`, `notify` | the ctl command |
+| `worktree_list`, `worktree_add`, `worktree_remove` | `ctl worktree list/add/remove`; removal refuses dirty, locked and live-session checkouts |
+
+No tool starts an agent, shuts down the daemon, controls the window or the
+browser. Agent state comes from hooks, never from terminal text. A refusal or a
+`wait` timeout returns a tool result with `isError: true`. Give `wait` a
+`timeout`: the server answers one request at a time.
+
+The server speaks protocol `2026-07-28` (version in each request's `_meta`,
+`server/discover`) and the `initialize` handshake of `2025-11-25`, `2025-06-18`,
+`2025-03-26` and `2024-11-05`. Messages are newline-delimited JSON-RPC on
+stdin and stdout. `--data-dir` and `--runtime-dir` work as for `ctl`.
+
+Terminator does not add the server to any agent configuration. To use it, add
+it yourself, for example in a client's `mcpServers` setting:
+
+```json
+{
+  "mcpServers": {
+    "terminator": {
+      "command": "/absolute/path/to/terminator-hook",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 Run shutdown from Terminal.app or another terminal outside Terminator. The default
 refuses live sessions. Explicit `--stop-all` closes the GUI through its normal
 workspace checkpoint, stops every live shell/editor through the daemon, waits for

@@ -2,6 +2,8 @@
 mod agents;
 pub(crate) mod inbox;
 mod lookup;
+#[cfg(test)]
+mod mcp_parity_tests;
 mod projects;
 mod sessions;
 
@@ -200,6 +202,25 @@ pub fn run(args: &[String]) -> Result<()> {
         Outcome::Exit(code) => std::process::exit(code),
     }
     Ok(())
+}
+/// Parses `args` exactly as `terminator-hook ctl ARGS`.
+fn parse(args: &[String]) -> Result<Cli> {
+    let cli = Cli::try_parse_from(
+        std::iter::once("terminator-hook ctl".to_owned()).chain(args.iter().cloned()),
+    )?;
+    anyhow::ensure!(
+        !matches!(
+            cli.command,
+            Control::Browser { .. } | Control::Shutdown(_) | Control::Window { .. }
+        ),
+        "This control is not available here"
+    );
+    Ok(cli)
+}
+/// Runs a ctl command line. Used by `terminator-hook mcp`, so every tool
+/// keeps the ctl limits and refusals.
+pub(crate) fn execute_args(args: &[String]) -> Result<Outcome> {
+    execute(parse(args)?)
 }
 fn execute(cli: Cli) -> Result<Outcome> {
     let paths = cli_paths(cli.data_dir, cli.runtime_dir)?;
