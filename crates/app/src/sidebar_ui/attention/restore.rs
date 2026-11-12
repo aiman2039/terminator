@@ -167,6 +167,7 @@ impl App {
             retarget_dock(dock, old, new);
         }
         self.detach_backend(old);
+        self.forget_dropped_ssh(old);
         self.pending_layout_save = true;
     }
 }

@@ -15,6 +15,7 @@ impl Viewer<'_> {
                 session.lifecycle
             ),
         );
+        self.app.reconnect_bar(ui, session);
         self.agent_resume_rows(ui, session);
         if ui.button("Open a fresh shell here").clicked() {
             self.open_fresh_shell(session);
