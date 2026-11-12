@@ -764,6 +764,61 @@ fn deleted_worktree_card_is_marked_and_a_click_says_the_folder_is_gone() {
     );
 }
 
+/// A worktree row names its branch leaf and shows `+added −deleted` from
+/// the read-only Git job, which a painted row asks for at most once per
+/// refresh period.
+#[test]
+fn a_worktree_row_shows_its_branch_leaf_and_diff_stats() {
+    let (mut app, ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    let mut state = *with_project(&app, "w", Path::new("/a--task"));
+    state.worktrees.push(worktrees::Registration {
+        project_id: "w".into(),
+        common_dir: "/a/.git".into(),
+        path: "/a--task".into(),
+        created: 0,
+        removed: false,
+    });
+    app.apply_state(state);
+    app.apply_project_directories(vec![("w".into(), "/a--task".into(), true)]);
+    let paint = |app: &mut App| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.projects(ui),
+        );
+        output.textures_delta.clear();
+        painted_strings(&output.shapes).join("\n")
+    };
+    paint(&mut app);
+    paint(&mut app);
+    let asked = requests
+        .try_iter()
+        .filter(|job| matches!(job, Job::WorktreeStats(path) if path == Path::new("/a--task")))
+        .count();
+    assert_eq!(asked, 1, "one Git job per refresh period");
+    app.worktree_stats.apply(
+        "/a--task".into(),
+        Some(crate::worktree_stats::WorktreeGit {
+            branch: Some("user/fix-login".into()),
+            added: 128,
+            deleted: 12,
+        }),
+    );
+    let text = paint(&mut app);
+    assert!(text.contains("fix-login"), "branch leaf in {text}");
+    assert!(
+        text.contains("+128") && text.contains("−12"),
+        "stats in {text}"
+    );
+}
+
 /// A managed worktree `w` under project `a`, with its folder deleted.
 fn deleted_worktree(app: &mut App, live: bool) {
     let mut state = *with_project(app, "w", Path::new("/a--task"));

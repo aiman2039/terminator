@@ -108,6 +108,13 @@ impl App {
             }
             _ => {}
         }
+        if let Some(state) = presented.lifecycle {
+            index
+                .state_counts
+                .entry(session.project_id.clone())
+                .or_default()
+                .add(state);
+        }
         if session.kind == SessionKind::Editor {
             return;
         }
@@ -123,12 +130,13 @@ impl App {
     }
 }
 
-/// Lower ranks win the project's face: running, waiting, failed, done.
+/// Lower ranks win the project's face: waiting, failed, running, done,
+/// the order of the state counters.
 fn face_rank(state: AgentState) -> u8 {
     match state {
-        AgentState::Running => 0,
-        AgentState::WaitingInput | AgentState::WaitingPermission => 1,
-        AgentState::Failed => 2,
+        AgentState::WaitingInput | AgentState::WaitingPermission => 0,
+        AgentState::Failed => 1,
+        AgentState::Running => 2,
         AgentState::Completed => 3,
         _ => 4,
     }

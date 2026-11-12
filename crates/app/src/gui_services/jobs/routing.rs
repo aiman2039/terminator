@@ -116,6 +116,12 @@ impl JobRouting {
                 format!("worktree-probe:{}", path.display()),
                 Policy::ReplaceableRead,
             ),
+            // A newer ask for the same worktree replaces the one queued.
+            Job::WorktreeStats(path) => (
+                "git",
+                format!("worktree-stats:{}", path.display()),
+                Policy::ReplaceableRead,
+            ),
             Job::CommitFiles(_, hash) => (
                 "git",
                 format!("commit-files:{hash}"),

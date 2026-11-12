@@ -307,6 +307,26 @@ pub(crate) fn state_color(state: AgentState, theme: &AppearanceConfig) -> Color3
     })
 }
 
+/// Row state counters: icon and count in the state color, in the order
+/// waiting, failed, working, done. Only the waiting counter is kept when
+/// a row is narrow.
+pub(crate) fn state_counters(
+    counts: crate::agent_presence::StateCounts,
+    theme: &AppearanceConfig,
+) -> Vec<appearance::StateCounter> {
+    counts
+        .ordered()
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(state, count)| appearance::StateCounter {
+            icon: attention_status_icon(state),
+            count,
+            color: state_color(state, theme),
+            keep: state == AgentState::WaitingPermission,
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttentionAction {
     None,

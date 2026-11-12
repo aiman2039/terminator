@@ -1,9 +1,13 @@
+mod counters;
 mod list;
 mod markdown_header;
+mod tree_rows;
 
-use super::scale::{FONT_CAPTION, FONT_LARGE, FONT_SMALL, RADIUS_SMALL};
+use super::scale;
+use super::scale::{FONT_CAPTION, FONT_SMALL, RADIUS_SMALL};
 use super::theme::icon_color;
-use eframe::egui::{self, Color32, FontId, TextStyle};
+pub use counters::{RowExtras, StateCounter};
+use eframe::egui::{self, Color32, FontId};
 pub(crate) use list::RowInput;
 pub use list::row;
 use list::{RowSpec, row_ext};
@@ -12,6 +16,11 @@ pub use markdown_header::MarkdownHeader;
 pub(crate) use markdown_header::MarkdownHeaderInput;
 pub use markdown_header::markdown_header;
 use std::time::Duration;
+pub(crate) use tree_rows::ProjectRowInput;
+pub use tree_rows::{
+    SESSION_ROW_DETAIL_HEIGHT, SESSION_ROW_HEIGHT, SessionRowSpec, project_row, project_row_with,
+    session_row_spec, session_row_with,
+};
 
 pub fn target_header(ui: &mut egui::Ui, label: &str, tooltip: &str) {
     wrapping_path_tooltip(WrappingPathTooltipInput {
@@ -164,6 +173,7 @@ pub fn file_row_marked(input: FileRowInput<'_>, after_label: Option<&str>) -> eg
                 brand: None,
                 reserve_brand: false,
                 after_label,
+                extras: RowExtras::default(),
             },
         )
     })
@@ -208,6 +218,7 @@ pub fn folder_row(input: FolderRowInput<'_>) -> egui::Response {
                     brand: None,
                     reserve_brand: false,
                     after_label: None,
+                    extras: RowExtras::default(),
                 },
             )
         })
@@ -219,103 +230,6 @@ pub fn folder_row(input: FolderRowInput<'_>) -> egui::Response {
         );
     }
     response
-}
-pub(crate) struct ProjectRowInput<'a> {
-    pub ui: &'a mut egui::Ui,
-    pub label: &'a str,
-    pub icon: &'a str,
-    /// Label and icon color; `None` keeps the theme colors.
-    pub color: Option<Color32>,
-    pub selected: bool,
-    pub height: f32,
-    pub trailing: &'a str,
-    pub tint: Color32,
-}
-
-pub fn project_row(input: ProjectRowInput<'_>) -> egui::Response {
-    let ProjectRowInput {
-        ui,
-        label,
-        icon,
-        color,
-        selected,
-        height,
-        trailing,
-        tint,
-    } = input;
-    ui.scope(|ui| {
-        ui.style_mut()
-            .text_styles
-            .insert(TextStyle::Body, FontId::proportional(FONT_LARGE));
-        if color.is_some() {
-            ui.visuals_mut().override_text_color = color;
-        }
-        row_ext(
-            ui,
-            RowSpec {
-                label,
-                icon,
-                selected,
-                height,
-                trailing,
-                tint,
-                icon_tint: color,
-                spin: false,
-                subtitle: None,
-                brand: None,
-                reserve_brand: false,
-                after_label: None,
-            },
-        )
-    })
-    .inner
-}
-/// Session row with an optional status-tinted (and spinning) icon and a
-/// muted second line. The subtitle gets its own line; it never overlaps the label.
-/// `brand` paints the stable agent glyph beside the status icon.
-pub struct SessionRowSpec<'a> {
-    pub label: &'a str,
-    pub icon: &'a str,
-    pub selected: bool,
-    pub trailing: &'a str,
-    pub tint: Color32,
-    pub icon_tint: Option<Color32>,
-    pub spin: bool,
-    pub subtitle: Option<&'a str>,
-    pub brand: Option<&'a str>,
-}
-
-pub const SESSION_ROW_HEIGHT: f32 = 24.0;
-pub const SESSION_ROW_DETAIL_HEIGHT: f32 = 38.0;
-
-pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Response {
-    ui.scope(|ui| {
-        if !spec.selected {
-            ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
-        }
-        row_ext(
-            ui,
-            RowSpec {
-                label: spec.label,
-                icon: spec.icon,
-                selected: spec.selected,
-                height: if spec.subtitle.is_some() {
-                    SESSION_ROW_DETAIL_HEIGHT
-                } else {
-                    SESSION_ROW_HEIGHT
-                },
-                trailing: spec.trailing,
-                tint: spec.tint,
-                icon_tint: spec.icon_tint,
-                spin: spec.spin,
-                subtitle: spec.subtitle,
-                brand: spec.brand,
-                reserve_brand: true,
-                after_label: None,
-            },
-        )
-    })
-    .inner
 }
 
 /// Working icons rotate slowly: one turn per `STATUS_SPIN_PERIOD`, sampled at

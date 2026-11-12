@@ -231,6 +231,7 @@ impl App {
             Update::LocalHistory(reply) => self.handle_local_history(reply),
             Update::Fonts(reply) => self.handle_fonts(ctx, reply),
             Update::WorktreeProbe(draft, git) => self.apply_worktree_probe(draft, git),
+            Update::WorktreeStats(path, git) => self.worktree_stats.apply(path, git),
             Update::CommitFiles(hash, files) => {
                 self.commit_files.insert(hash, Some(files));
             }

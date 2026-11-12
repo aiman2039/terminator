@@ -401,6 +401,8 @@ pub struct App {
     pub(crate) last_focus: Option<String>,
     pub(crate) highlight_session: Option<String>,
     pub(crate) highlight_since: Instant,
+    /// Branch and diff stats of worktree rows, from read-only Git jobs.
+    pub(crate) worktree_stats: crate::worktree_stats::WorktreeStats,
     /// Shared render data, invalidated by snapshots and local notice changes.
     pub(crate) presentations: std::cell::RefCell<agent_presence::PresentationCache>,
     pub(crate) sidebar_projects: std::cell::RefCell<HashMap<String, std::sync::Arc<Project>>>,

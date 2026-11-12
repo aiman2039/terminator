@@ -21,7 +21,8 @@ struct TabGroupHeader<'a> {
     selected: bool,
     /// Agent states of the group's sessions, or their count.
     trailing: String,
-    waiting: bool,
+    /// The group's live agents by state: the row's state counters.
+    counts: crate::agent_presence::StateCounts,
 }
 
 /// Preferences key of a workspace tab's sidebar node; present (false)
@@ -221,12 +222,7 @@ impl App {
             renaming: renaming_group,
             selected: self.selected.as_deref() == Some(project_id) && active_tab,
             trailing: super::tree_dnd::group_activity(&states, sids.len()),
-            waiting: states.iter().flatten().any(|state| {
-                matches!(
-                    state,
-                    AgentState::WaitingInput | AgentState::WaitingPermission
-                )
-            }),
+            counts: crate::agent_presence::StateCounts::of(states.iter().flatten().copied()),
         };
         let (tab_left, rename_action) = ui
             .horizontal(|ui| self.tab_group_header(ui, &header, &mut tab_expanded))
@@ -319,21 +315,28 @@ impl App {
         header: &TabGroupHeader<'_>,
     ) -> (f32, GroupRenameAction) {
         let label = header.label;
-        let response = appearance::project_row(appearance::ProjectRowInput {
-            color: None,
-            ui,
-            label,
-            icon: "LayoutDashboard",
-            selected: header.selected,
-            height: self.theme.row_height(),
-            trailing: &header.trailing,
-            tint: appearance::color(if header.waiting {
-                &self.theme.status_waiting
-            } else {
-                &self.theme.secondary
-            }),
-        })
-        .on_hover_text(format!("Tab group\n{label}\nDouble-click to rename"));
+        // Agents show as state counters; without one, the terminal count.
+        let counters = state_counters(header.counts, &self.theme);
+        let response = appearance::project_row_with(
+            appearance::ProjectRowInput {
+                color: None,
+                ui,
+                label,
+                icon: "LayoutDashboard",
+                selected: header.selected,
+                height: self.theme.row_height(),
+                trailing: &header.trailing,
+                tint: appearance::color(&self.theme.secondary),
+            },
+            appearance::RowExtras {
+                counters: &counters,
+                ..appearance::RowExtras::default()
+            },
+        )
+        .on_hover_text(format!(
+            "Tab group\n{label}\n{}\nDouble-click to rename",
+            header.trailing
+        ));
         #[cfg(feature = "test-support")]
         diagnostics::record(
             ui.ctx(),

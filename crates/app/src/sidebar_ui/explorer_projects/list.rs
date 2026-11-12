@@ -182,15 +182,21 @@ impl App {
     }
 
     /// A warning icon and a dim name when the folder is missing, else the
-    /// agent face when a live session runs an agent, else a folder.
+    /// agent face when a live session runs an agent, else a folder. Live
+    /// agents show as state counters in place of the terminal count.
     fn project_row(&self, ui: &mut egui::Ui, p: &Project, state: (usize, bool)) -> egui::Response {
         let (count, expanded) = state;
         let selected = self.selected.as_ref() == Some(&p.id);
         if self.project_folder_missing(&p.id) {
             return self.missing_project_row(ui, p, (count, selected));
         }
+        let counters = self.project_state_counters(&p.id);
+        let extras = appearance::RowExtras {
+            counters: &counters,
+            ..appearance::RowExtras::default()
+        };
         if let Some((brand, agent)) = self.project_agent_face(&p.id) {
-            return appearance::session_row_spec(
+            return appearance::session_row_with(
                 ui,
                 appearance::SessionRowSpec {
                     label: &p.name,
@@ -203,19 +209,34 @@ impl App {
                     subtitle: None,
                     brand: Some(brand),
                 },
+                extras,
             );
         }
         let folder = if expanded { "FolderOpen" } else { "Folder" };
-        appearance::project_row(appearance::ProjectRowInput {
-            ui,
-            label: &p.name,
-            icon: self.project_icon(&p.id, folder),
-            color: self.project_color(&p.id),
-            selected,
-            height: self.theme.row_height(),
-            trailing: &count.to_string(),
-            tint: appearance::color(&self.theme.secondary),
-        })
+        appearance::project_row_with(
+            appearance::ProjectRowInput {
+                ui,
+                label: &p.name,
+                icon: self.project_icon(&p.id, folder),
+                color: self.project_color(&p.id),
+                selected,
+                height: self.theme.row_height(),
+                trailing: &count.to_string(),
+                tint: appearance::color(&self.theme.secondary),
+            },
+            extras,
+        )
+    }
+
+    /// The project's live agents as row state counters.
+    pub(crate) fn project_state_counters(&self, project: &str) -> Vec<appearance::StateCounter> {
+        let counts = self
+            .sidebar_index()
+            .state_counts
+            .get(project)
+            .copied()
+            .unwrap_or_default();
+        state_counters(counts, &self.theme)
     }
 
     /// `state` is the live-terminal count and the selected flag.
