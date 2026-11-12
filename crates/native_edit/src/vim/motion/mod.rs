@@ -88,9 +88,11 @@ impl Mo {
             Mo::Right => 'l',
             Mo::Down => 'j',
             Mo::Up => 'k',
-            Mo::Word { big: false } => 'w',
+            // `cw` records as `w`: the replay goes through the same `cw`
+            // special case, so `.` on a word's last char changes only it.
+            Mo::Word { big: false } | Mo::ChangeWord { big: false } => 'w',
             Mo::Back { big: false } => 'b',
-            Mo::End { big: false } | Mo::ChangeWord { big: false } => 'e',
+            Mo::End { big: false } => 'e',
             Mo::LineStart => '0',
             Mo::LineEnd => '$',
             Mo::FirstNonBlank => '^',

@@ -103,14 +103,7 @@ impl OccurrenceSearch {
         if from >= to {
             return None;
         }
-        let count = doc.line_count();
-        let mut text: Vec<char> = Vec::with_capacity(doc.len_chars());
-        for line in 0..count {
-            text.extend(doc.line_text(line).chars());
-            if line.saturating_add(1) < count {
-                text.push('\n');
-            }
-        }
+        let text = super::words::flat_text(doc);
         let needle = text.get(from..to).unwrap_or_default().to_vec();
         if needle.is_empty() {
             return None;

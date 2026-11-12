@@ -482,3 +482,61 @@ fn context_menu_git_items_report_the_compare_pick() {
     let (_, picked) = draw(vec![button(item, primary, false)]);
     assert_eq!(picked, Some(GitCompare::History));
 }
+
+#[test]
+fn long_highlighted_row_paints_only_pieces_inside_the_clip_at_tab_aware_cells() {
+    use super::geometry::{Geometry, MeasureInput};
+    use super::row_paint::RowPaint;
+    use crate::highlight::{Span, SpanStyle};
+    // A minified-style line: a tab, then one span per char.
+    let text = format!("\t{}", "x".repeat(20_000));
+    let spans: Vec<Span> = (1..=20_000)
+        .map(|start| Span {
+            start,
+            end: start + 1,
+            color: [200, 10, 10],
+            style: SpanStyle::default(),
+        })
+        .collect();
+    let ctx = egui::Context::default();
+    let mut painted = Vec::new();
+    let mut advance = 0.0;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let geometry = Geometry::measure(MeasureInput {
+            ui,
+            doc: &Doc::new("x\n"),
+            options: &SourceOptions::default(),
+            id: "long-row",
+        });
+        advance = geometry.advance;
+        let clip =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(geometry.advance * 10.0, 40.0));
+        RowPaint {
+            painter: &ui.painter().with_clip_rect(clip),
+            text: &text,
+            hints: &[],
+            spans: &spans,
+            x: 0.0,
+            y: 0.0,
+            geometry: &geometry,
+            plain: egui::Color32::WHITE,
+            theme_plain: None,
+        }
+        .paint();
+    });
+    output.textures_delta.clear();
+    for clipped in &output.shapes {
+        if let egui::Shape::Text(shape) = &clipped.shape {
+            painted.push(shape.pos.x);
+        }
+    }
+    // Only the pieces in the 10 visible cells are painted, not 20k.
+    assert!(painted.len() <= 12, "painted {} pieces", painted.len());
+    // The first span char sits after the 4-cell tab stop.
+    let first = painted
+        .iter()
+        .copied()
+        .filter(|x| *x > 0.0)
+        .fold(f32::MAX, f32::min);
+    assert!((first - advance * 4.0).abs() < 1.0, "first at {first}");
+}

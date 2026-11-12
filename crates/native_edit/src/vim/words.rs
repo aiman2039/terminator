@@ -47,9 +47,19 @@ fn is_blank<S: CharSource>(s: &mut S, i: usize, big: bool) -> bool {
     s.at(i).is_none_or(|c| class_of(c, big) == WordClass::Blank)
 }
 
+/// `i` starts a line break: `\n`, or the `\r` of a `\r\n` pair (kept in
+/// mixed-ending buffers).
+fn break_at<S: CharSource>(s: &mut S, i: usize) -> bool {
+    match s.at(i) {
+        Some('\n') => true,
+        Some('\r') => s.at(i.saturating_add(1)) == Some('\n'),
+        _ => false,
+    }
+}
+
 /// `i` is the newline of an empty line: vim stops `w`/`b`/`ge` there.
 fn empty_line_at<S: CharSource>(s: &mut S, i: usize) -> bool {
-    s.at(i) == Some('\n') && i.checked_sub(1).is_none_or(|prev| s.at(prev) == Some('\n'))
+    break_at(s, i) && i.checked_sub(1).is_none_or(|prev| s.at(prev) == Some('\n'))
 }
 
 /// `w` / `W`: start of the `count`th next word; empty lines are words.
@@ -70,7 +80,7 @@ pub(crate) fn word_forward<S: CharSource>(
         while let Some(c) = s.at(i) {
             if c == '\n' {
                 i = i.saturating_add(1);
-                if s.at(i) == Some('\n') {
+                if break_at(s, i) {
                     break;
                 }
             } else if class_of(c, big) == WordClass::Blank {
@@ -199,7 +209,8 @@ pub(crate) fn flat_text<B: Buffer>(doc: &B) -> Vec<char> {
     let mut out = Vec::new();
     for line in 0..doc.line_count() {
         if line > 0 {
-            out.push('\n');
+            // The rope's own break: indexes match buffer offsets.
+            out.extend(super::helpers::line_break(doc, line.saturating_sub(1)).chars());
         }
         out.extend(doc.line_text(line).chars());
     }

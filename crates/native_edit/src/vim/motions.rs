@@ -1,4 +1,5 @@
 use super::super::doc::Buffer;
+use super::block::block_insert_col;
 use super::mode::{BlockPending, Cursor, Mode, Place};
 use super::state::VimEngine;
 use super::words::line_len;
@@ -61,32 +62,41 @@ impl VimEngine {
     /// edge, `c` after deleting): parks on the top row and stages the
     /// replay dims. The caller owns the undo unit.
     pub(super) fn start_block_insert<B: Buffer>(&mut self, doc: &mut B, append: bool) {
-        let (top, bottom, left, right) = match self.block_span() {
-            Some(span) => span,
-            None => return,
-        };
+        // Display cells, not char columns: rows with tabs or wide chars
+        // take the text at the same screen column.
+        if let Some(span) = self.block_cells(doc) {
+            self.start_block_insert_at(doc, append, span);
+        }
+    }
+
+    /// [`Self::start_block_insert`] on cells measured before an edit (`c`
+    /// deletes the block first).
+    pub(super) fn start_block_insert_at<B: Buffer>(
+        &mut self,
+        doc: &mut B,
+        append: bool,
+        (top, bottom, left, right): (usize, usize, usize, usize),
+    ) {
         // `$A` appends at every line end.
         let right = if self.x.block_eol {
             usize::MAX.saturating_sub(1)
         } else {
             right.saturating_sub(1)
         };
-        self.block_pending = Some(BlockPending {
+        let block = BlockPending {
             top,
             bottom,
             left,
             right,
             append,
             skip_first: true,
-        });
-        let col = if append {
-            right.saturating_add(1)
-        } else {
-            left
         };
+        self.block_pending = Some(block);
+        let tab = doc.indent_style().tab_cells();
+        let col = block_insert_col(&doc.line_text(top), &block, tab);
         self.cursor = Cursor {
             line: top,
-            col: col.min(line_len(doc, top)),
+            col: col.unwrap_or_else(|| line_len(doc, top)),
         };
         self.preferred_col = self.cursor.col;
         self.begin_insert_session(doc);

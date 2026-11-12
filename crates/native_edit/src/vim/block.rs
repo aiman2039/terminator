@@ -65,12 +65,10 @@ impl VimEngine {
         Some((top, bottom, left, right.saturating_add(1)))
     }
 
-    /// Per-row char ranges of the live block, by display cells (see
-    /// [`cell_row_ranges`]). `$` reaches each line end.
-    pub(super) fn block_row_ranges<B: Buffer>(
-        &self,
-        doc: &B,
-    ) -> Option<Vec<(usize, usize, usize)>> {
+    /// The live block as (top line, bottom line, left cell, right-exclusive
+    /// cell): display cells, so tabs and wide chars keep their columns.
+    /// Repeat records store these cells, never char columns.
+    pub(super) fn block_cells<B: Buffer>(&self, doc: &B) -> Option<(usize, usize, usize, usize)> {
         let (top, bottom, _, _) = self.block_span()?;
         let tab = doc.indent_style().tab_cells();
         let cells = |c: Cursor| {
@@ -82,8 +80,22 @@ impl VimEngine {
         };
         let (a0, a1) = cells(self.anchor);
         let (c0, c1) = cells(self.cursor);
-        let cells = (a0.min(c0), a1.max(c1));
-        Some(cell_row_ranges(doc, top..=bottom, cells, self.x.block_eol))
+        Some((top, bottom, a0.min(c0), a1.max(c1)))
+    }
+
+    /// Per-row char ranges of the live block, by display cells (see
+    /// [`cell_row_ranges`]). `$` reaches each line end.
+    pub(super) fn block_row_ranges<B: Buffer>(
+        &self,
+        doc: &B,
+    ) -> Option<Vec<(usize, usize, usize)>> {
+        let (top, bottom, left, right) = self.block_cells(doc)?;
+        Some(cell_row_ranges(
+            doc,
+            top..=bottom,
+            (left, right),
+            self.x.block_eol,
+        ))
     }
 
     /// One entry per row in `[top..=bottom]`: short rows contribute what
@@ -128,7 +140,7 @@ impl VimEngine {
         rest
     }
 
-    /// Delete a replayed rectangle (`.`): columns `left..=right` on rows
+    /// Delete a replayed rectangle (`.`): cells `left..=right` on rows
     /// `top..=bottom`, the same per-row ranges as a live block delete.
     pub(super) fn delete_block_rect<B: Buffer>(&mut self, doc: &mut B, block: &BlockPending) {
         let cells = (block.left, block.right.saturating_add(1));
@@ -215,21 +227,33 @@ impl VimEngine {
         } else {
             block.top
         };
+        let tab = doc.indent_style().tab_cells();
         for line in first..=block.bottom {
             if line >= doc.line_count() {
                 break;
             }
-            let len = line_len(doc, line);
-            // Vim parity: `I` skips rows that end before the block.
-            if !block.append && len < block.left {
+            let Some(col) = block_insert_col(&doc.line_text(line), block, tab) else {
                 continue;
-            }
-            let col = if block.append {
-                block.right.saturating_add(1).min(len)
-            } else {
-                block.left.min(len)
             };
             doc.insert(doc.char_at_line_col(line, col), text);
         }
     }
+}
+
+/// Char column on a row of `text` where a block insert lands: `I` at the
+/// left cell, `A` just past the right cell, clamped to the row. `None`
+/// when `I` meets a row that ends before the block (vim parity).
+pub(super) fn block_insert_col(text: &str, block: &BlockPending, tab: usize) -> Option<usize> {
+    let len = text.chars().count();
+    if block.append {
+        return Some(
+            col_at_display_x(text, block.right, tab)
+                .saturating_add(1)
+                .min(len),
+        );
+    }
+    if display_x(text, len, tab) < block.left {
+        return None;
+    }
+    Some(col_at_display_x(text, block.left, tab))
 }

@@ -281,6 +281,17 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn dot_repeat_of_cw_on_one_char_word_changes_only_that_word() {
+        let (mut eng, mut doc) = engine("x y z\n");
+        keys(&mut eng, &mut doc, "cw");
+        eng.type_text(&mut doc, "foo");
+        eng.press_key(&mut doc, Key::Escape);
+        assert_eq!(doc.text().as_str(), "foo y z\n");
+        keys(&mut eng, &mut doc, "w.");
+        assert_eq!(doc.text().as_str(), "foo foo z\n");
+    }
+
+    #[test]
     fn dot_repeats_block_insert() {
         let (mut eng, mut doc) = engine("ab\ncd\nef\n");
         eng.press_key(&mut doc, Key::CtrlV);

@@ -45,6 +45,10 @@ impl VimEngine {
             self.clipboard = Some(text.clone());
             self.clipboard_seen = Some(text.clone());
             self.clipboard_snapshot = false;
+        } else if linewise {
+            // One blank line: keep it over older clipboard text, like a
+            // register-only delete does.
+            self.clipboard_snapshot = self.clipboard.is_none();
         }
         self.register.text = text;
         self.register.linewise = linewise;
@@ -181,13 +185,14 @@ impl VimEngine {
     }
 
     /// The register `p`/`P` read: the selected one, else the unnamed one
-    /// (which already adopted the clipboard for `"+`). `None` when empty.
+    /// (which already adopted the clipboard for `"+`). `None` when empty;
+    /// a linewise register of one blank line is not empty.
     pub(super) fn put_source(&self) -> Option<Register> {
         let reg = match self.x.reg_sel {
             None | Some('"' | '+' | '*') => self.register.clone(),
             Some('_') => return None,
             Some(c) => self.x.registers.get(&c.to_ascii_lowercase())?.clone(),
         };
-        (!reg.text.is_empty()).then_some(reg)
+        (reg.linewise || !reg.text.is_empty()).then_some(reg)
     }
 }
