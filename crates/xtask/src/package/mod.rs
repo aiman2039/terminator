@@ -1,11 +1,14 @@
 mod assemble;
+mod distro;
 mod dmg;
+mod manifests;
 mod platform;
 
 use crate::harness::root;
 use anyhow::{Context, Result, anyhow, ensure};
 pub use assemble::{AssembleInput, assemble};
 pub use dmg::{LocalDmgInput, dmg, local_dmg};
+pub use manifests::run as manifests;
 use serde_json::Value;
 use std::{
     fs,
@@ -180,7 +183,7 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>, portable: bo
     } else if cfg!(target_os = "windows") {
         platform::windows(&app, staging.path(), &destination)?;
     } else {
-        platform::linux(&app, staging.path(), &destination)?;
+        platform::linux(&app, staging.path(), &destination, portable)?;
     }
     Ok(())
 }

@@ -1,0 +1,34 @@
+# AUR PKGBUILD TEMPLATE. `cargo xtask package-manifests` fills its
+# placeholders for one release. Nothing here is published or pushed.
+# The upstream name collides with the `terminator` terminal emulator package,
+# so this package and its launcher use @PACKAGE@.
+pkgname=@PACKAGE@-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Native terminal workspace with persistent sessions and agent hooks"
+arch=('x86_64' 'aarch64')
+url="@HOMEPAGE@"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'fontconfig' 'libxkbcommon' 'alsa-lib')
+optdepends=('neovim: default editor and CodeDiff reviews'
+            'git: Git panel and worktrees')
+provides=('@PACKAGE@')
+conflicts=('@PACKAGE@')
+source_x86_64=("@LINUX_X86_64_URL@")
+sha256sums_x86_64=('@LINUX_X86_64_SHA256@')
+source_aarch64=("@LINUX_AARCH64_URL@")
+sha256sums_aarch64=('@LINUX_AARCH64_SHA256@')
+
+package() {
+  # The GUI, daemon and hook helper stay side by side, as the app expects.
+  install -d "$pkgdir/usr/lib/@PACKAGE@" "$pkgdir/usr/bin"
+  cp -a terminator/. "$pkgdir/usr/lib/@PACKAGE@/"
+  ln -s "/usr/lib/@PACKAGE@/terminator" "$pkgdir/usr/bin/@PACKAGE@"
+  ln -s "/usr/lib/@PACKAGE@/terminator-hook" "$pkgdir/usr/bin/@PACKAGE@-hook"
+  install -Dm644 terminator/terminator.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/@PACKAGE@.png"
+  sed -e 's|^Exec=.*|Exec=/usr/lib/@PACKAGE@/terminator|' \
+      -e 's|^Icon=.*|Icon=@PACKAGE@|' terminator/terminator.desktop \
+    | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/@PACKAGE@.desktop"
+  install -Dm644 terminator/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

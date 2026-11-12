@@ -11,6 +11,7 @@ pub mod async_process;
 pub mod async_service;
 pub mod command_blocks;
 pub mod crash;
+pub mod distribution;
 pub mod editor_prefs;
 pub mod generations;
 pub mod git;

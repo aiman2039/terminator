@@ -1,0 +1,23 @@
+# Homebrew cask TEMPLATE. `cargo xtask package-manifests` fills its
+# placeholders for one release. Nothing here is published or tapped.
+cask "@PACKAGE@" do
+  version "@VERSION@"
+  sha256 "@MACOS_SHA256@"
+
+  url "@MACOS_URL@"
+  name "Terminator"
+  desc "Native terminal workspace with persistent sessions and agent hooks"
+  homepage "@HOMEPAGE@"
+
+  depends_on arch: :arm64
+  depends_on macos: ">= :monterey"
+
+  # Sparkle updates the app itself; Homebrew does not upgrade it.
+  auto_updates true
+
+  app "Terminator.app"
+  binary "#{appdir}/Terminator.app/Contents/MacOS/terminator-hook"
+
+  # No zap stanza: sessions, scrollback and settings stay unless the user
+  # removes them on purpose.
+end
