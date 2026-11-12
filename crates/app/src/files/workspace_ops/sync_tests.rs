@@ -45,6 +45,24 @@ async fn push_without_an_upstream_sets_it_on_origin_and_fetch_pull_follow() {
     ));
 }
 
+#[test]
+fn compare_counts_commits_ahead_of_the_origin_default_branch() {
+    let dir = repo();
+    let root = dir.path();
+    assert_eq!(super::super::compare(root, None).unwrap().pr_ahead, None);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    let url = origin.path().to_string_lossy().into_owned();
+    git(root, &["remote", "add", "origin", &url]);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-qc", "topic"]);
+    git(root, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(root, &["push", "-q", "-u", "origin", "topic"]);
+    let data = super::super::compare(root, None).unwrap();
+    // Pushed (nothing ahead of the upstream), yet one commit for a PR.
+    assert_eq!((data.ahead, data.pr_ahead), (0, Some(1)));
+}
+
 #[tokio::test]
 async fn push_with_no_remote_says_why() {
     let dir = repo();

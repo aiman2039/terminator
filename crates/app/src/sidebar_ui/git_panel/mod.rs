@@ -7,6 +7,7 @@ mod committed;
 mod footer_tests;
 mod group_header;
 mod name_row;
+mod readiness;
 mod rows;
 mod sync_progress;
 #[cfg(test)]
@@ -27,6 +28,7 @@ use committed::*;
 use eframe::egui::{self, Color32, RichText};
 use group_header::*;
 use name_row::*;
+pub(crate) use readiness::{KnownPr, publish as publish_known_pr};
 #[cfg(test)]
 pub(super) use rows::GIT_TREE_ROW_HEIGHT;
 use rows::*;
@@ -159,6 +161,8 @@ pub struct GitPanelOutcome {
     pub commit_push: bool,
     /// Create PR was clicked.
     pub create_pr: bool,
+    /// Open this link in the browser (the known pull request).
+    pub open_url: Option<String>,
     /// Stop the commit or push in flight.
     pub cancel_commit: bool,
     /// Hide the last failure's output.

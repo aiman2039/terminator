@@ -566,6 +566,7 @@ mod tests {
                 added: 3,
                 deleted: 1,
             }],
+            pr_ahead: None,
         };
         let branches = vec!["main".to_string(), "dev".to_string()];
         let theme = AppearanceConfig::default();
@@ -646,6 +647,7 @@ mod tests {
             behind: 0,
             base: Some("origin/main".into()),
             files: vec![],
+            pr_ahead: None,
         };
         let branches = vec!["main".to_string(), "dev".to_string()];
         let theme = AppearanceConfig::default();

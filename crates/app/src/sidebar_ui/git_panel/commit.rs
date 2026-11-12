@@ -99,7 +99,7 @@ impl GitPanelPass<'_, '_> {
         ui.separator();
         ui.horizontal(|ui| self.commit_options(ui));
         self.commit_message(ui, blocked);
-        self.diff_summary(ui);
+        self.readiness_line(ui);
         ui.horizontal_wrapped(|ui| self.commit_buttons(ui, blocked));
         self.commit_progress(ui);
         self.commit_failure(ui);
@@ -135,29 +135,6 @@ impl GitPanelPass<'_, '_> {
         if self.input.focus_message {
             message.request_focus();
         }
-    }
-
-    /// One weak line above the buttons: file count and total diffstat.
-    /// Counts are shown only when the refresh carried diffstats.
-    fn diff_summary(&self, ui: &mut egui::Ui) {
-        let context = &self.input.context;
-        if context.changes.is_empty() {
-            return;
-        }
-        let (added, deleted) = context
-            .stats
-            .values()
-            .fold((0u32, 0u32), |(a, d), &(add, del)| {
-                (a.saturating_add(add), d.saturating_add(del))
-            });
-        let files = context.changes.len();
-        let noun = if files == 1 { "file" } else { "files" };
-        let text = if context.stats.is_empty() {
-            format!("{files} {noun}")
-        } else {
-            format!("{files} {noun}  +{added} −{deleted}")
-        };
-        ui.weak(RichText::new(text).small());
     }
 
     /// Amend, recent messages, and sign-off.
@@ -218,7 +195,6 @@ impl GitPanelPass<'_, '_> {
     /// disabled one says why on hover.
     fn commit_buttons(&mut self, ui: &mut egui::Ui, blocked: Option<&str>) {
         ui.spacing_mut().item_spacing.x = 6.0;
-        let input = &*self.input;
         let outcome = &mut *self.outcome;
         let commit =
             appearance::enabled_unless(ui, blocked, |ui| appearance::primary_button(ui, "Commit"))
@@ -234,16 +210,6 @@ impl GitPanelPass<'_, '_> {
         diagnostics::record(ui.ctx(), "git-commit-push", commit_push.rect);
         if commit_push.clicked() {
             outcome.commit_push = true;
-        }
-        let create_pr = ui
-            .add_enabled(input.commit_run.is_none(), egui::Button::new("Create PR"))
-            .on_hover_text(
-                "Create a pull request (gh) or merge request (glab) for the pushed branch",
-            );
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "git-create-pr", create_pr.rect);
-        if create_pr.clicked() {
-            outcome.create_pr = true;
         }
     }
 

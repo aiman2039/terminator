@@ -169,6 +169,9 @@ pub struct CompareData {
     pub behind: u32,
     pub base: Option<String>,
     pub files: Vec<CommittedFile>,
+    /// Commits on `HEAD` that `origin`'s default branch lacks, when that
+    /// branch is known: what a new pull request would carry.
+    pub pr_ahead: Option<u32>,
 }
 
 #[derive(Clone, Debug)]

@@ -440,6 +440,7 @@ fn header_rects(width: f32, branch: &str) -> (egui::Rect, egui::Rect) {
         behind: 12,
         base: Some("origin/main".into()),
         files: vec![],
+        pr_ahead: None,
     };
     let theme = AppearanceConfig::default();
     let ctx = egui::Context::default();

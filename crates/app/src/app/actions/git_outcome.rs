@@ -98,6 +98,9 @@ impl App {
         if outcome.create_pr {
             self.queue_workspace(workspace_ops::Op::CreatePr);
         }
+        if let Some(url) = outcome.open_url.take() {
+            let _ = self.jobs.send(Job::Browser(url));
+        }
         if outcome.shelve {
             let paths =
                 self.changed_paths(|change| change.in_group(terminator_git::GitGroup::Staged));

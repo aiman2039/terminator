@@ -11,7 +11,7 @@ mod view;
 use crate::merge::{Done, take_done};
 use crate::*;
 pub(crate) use fetch::PrState;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 
 /// The PR tab's data and its load in flight.
@@ -24,6 +24,41 @@ pub(crate) struct PrPanel {
 }
 
 impl App {
+    /// The pull request of `root` (on `branch`, when given) that the GUI
+    /// already read: the PR tab's last answer or the focused terminal's
+    /// metadata. Never starts a read. `(number, url)`.
+    pub(crate) fn known_pr(&self, root: &Path, branch: Option<&str>) -> Option<(u64, String)> {
+        let branch_matches = |known: &str| branch.is_none_or(|branch| branch == known);
+        let panel = &self.git_extras.pull_request;
+        if let (Some((key_root, key_branch)), Some(PrState::Ready(info))) =
+            (&panel.key, &panel.state)
+            && key_root == root
+            && branch_matches(key_branch)
+        {
+            return Some((info.number, info.url.clone()));
+        }
+        let metadata = self.metadata.as_ref()?;
+        let pr = metadata.pull_request.as_ref()?;
+        (metadata.root.as_deref() == Some(root)
+            && metadata.branch.as_deref().is_some_and(branch_matches))
+        .then(|| (pr.number, pr.url.clone()))
+    }
+
+    /// Shares the known pull request of the shown repository with the Git
+    /// panel (its Create PR link). The app calls it each frame.
+    pub(crate) fn publish_known_pr(&self, ctx: &egui::Context) {
+        let known = self.context.as_ref().and_then(|context| {
+            let root = context.root.as_deref()?;
+            let (number, url) = self.known_pr(root, Some(&context.branch))?;
+            Some(sidebar_ui::KnownPr {
+                root: root.to_path_buf(),
+                number,
+                url,
+            })
+        });
+        sidebar_ui::publish_known_pr(ctx, known);
+    }
+
     /// Starts a load of the pull request of `root` on `branch`. A newer
     /// load replaces the one that still runs.
     fn load_pull_request(&mut self, root: PathBuf, branch: String) {
