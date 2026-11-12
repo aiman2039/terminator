@@ -12,12 +12,37 @@ pub const SUPPORTED: u16 = 1;
 /// terminal to bound the stack).
 const MAX_DEPTH: usize = 16;
 
+/// The main and alternate screens keep their own stacks, as the spec and
+/// the GUI's alacritty do: `stack` is the stack of the screen in `alt`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KittyKeys {
     stack: Vec<u16>,
+    other: Vec<u16>,
+    alt: bool,
 }
 
 impl KittyKeys {
+    /// Follow a switch to (or from) the alternate screen.
+    pub fn set_screen(&mut self, alt: bool) {
+        if self.alt != alt {
+            std::mem::swap(&mut self.stack, &mut self.other);
+            self.alt = alt;
+        }
+    }
+
+    /// Pushes that rebuild the stack of one screen in a fresh terminal.
+    pub fn replay_screen(&self, alt: bool) -> Vec<u8> {
+        let stack = if self.alt == alt {
+            &self.stack
+        } else {
+            &self.other
+        };
+        stack
+            .iter()
+            .flat_map(|flags| format!("\x1b[>{flags}u").into_bytes())
+            .collect()
+    }
+
     /// Active flags: the top of the stack.
     pub fn flags(&self) -> u16 {
         self.stack.last().copied().unwrap_or(0)
@@ -61,14 +86,13 @@ impl KittyKeys {
 
     pub fn clear(&mut self) {
         self.stack.clear();
+        self.other.clear();
     }
 
-    /// Pushes that rebuild the stack in a fresh terminal.
+    /// Pushes that rebuild the active screen's stack in a fresh terminal.
+    #[cfg(test)]
     pub fn replay(&self) -> Vec<u8> {
-        self.stack
-            .iter()
-            .flat_map(|flags| format!("\x1b[>{flags}u").into_bytes())
-            .collect()
+        self.replay_screen(self.alt)
     }
 }
 

@@ -115,16 +115,27 @@ pub fn process(parser: &mut vt100::Parser<Events>, bytes: &[u8]) {
 pub struct SnapshotSource {
     screen: vt100::Screen,
     modes: Vec<u8>,
+    /// Kitty keyboard pushes of the main and the alternate screen.
+    kitty: (Vec<u8>, Vec<u8>),
 }
 
 /// Cheap copy of the state `attachment_snapshot` needs.
 pub fn snapshot_source(parser: &vt100::Parser<Events>) -> SnapshotSource {
-    let mut modes = parser.callbacks().modes_formatted();
-    // Kitty keyboard flags survive a GUI reattach (`kitty-keyboard-v1`).
-    modes.extend(parser.callbacks().kitty.replay());
+    // Kitty keyboard flags survive a GUI reattach (`kitty-keyboard-v1`),
+    // each screen's on that screen.
+    let kitty = &parser.callbacks().kitty;
+    let alt = parser.screen().alternate_screen();
     SnapshotSource {
         screen: parser.screen().clone(),
-        modes,
+        modes: parser.callbacks().modes_formatted(),
+        kitty: (
+            kitty.replay_screen(false),
+            if alt {
+                kitty.replay_screen(true)
+            } else {
+                Vec::new()
+            },
+        ),
     }
 }
 
@@ -137,7 +148,11 @@ pub fn attachment_snapshot(parser: &vt100::Parser<Events>) -> Vec<u8> {
 
 impl SnapshotSource {
     pub fn render(self) -> Vec<u8> {
-        let Self { mut screen, modes } = self;
+        let Self {
+            mut screen,
+            modes,
+            kitty: (main_keys, alt_keys),
+        } = self;
         let (rows, cols) = screen.size();
         let mut snapshot = Vec::new();
         screen.set_scrollback(10_000);
@@ -157,11 +172,13 @@ impl SnapshotSource {
                 snapshot.extend_from_slice(b"\r\n");
             }
         }
+        snapshot.extend(main_keys);
         if screen.alternate_screen() {
             snapshot.extend_from_slice(b"\x1b[?1049h");
         }
         snapshot.extend(screen.state_formatted());
         snapshot.extend(modes);
+        snapshot.extend(alt_keys);
         snapshot
     }
 }
@@ -399,6 +416,7 @@ impl vt100::Callbacks for Events {
             }
             (Some(b'?'), Some(b'$'), 'p') => self.reply_decrqm(screen, params),
             (Some(marker @ (b'?' | b'>' | b'<' | b'=')), None, 'u') => {
+                self.kitty.set_screen(screen.alternate_screen());
                 if let Some(reply) = self.kitty.apply(marker, params) {
                     self.reply(reply);
                 }
