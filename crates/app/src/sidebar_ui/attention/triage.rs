@@ -10,6 +10,8 @@ pub(crate) struct Triage {
     pub peek: Option<String>,
     /// The last dismiss or snooze, for Undo.
     pub undo: Option<TriageUndo>,
+    /// Interrupted shells waiting for their saved output before a restore.
+    pub restores: Vec<super::restore::PendingRestore>,
 }
 
 /// One undoable inbox action and the notices it changed.

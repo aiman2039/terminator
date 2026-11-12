@@ -52,6 +52,7 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 - The default editor is real Neovim, rendered inside the native terminal widget and controlled through Neovim RPC for save/compare actions. Your Neovim configuration and plugins load normally. An editor-side tree can therefore come from your own configuration.
 - Closing a tab with live shells or agents asks whether to terminate or background them. Clean file-only tabs close directly. Closing the GUI leaves the daemon and sessions running. The status bar counts them ("1 session running", "2 sessions running").
 - After a reboot or daemon loss, historical tabs show retained output and known resume commands. Agents are never restarted automatically.
+- **Restore workspace** (project right-click menu, Find Action, and the interrupted-pane view) is one explicit action per project. With the daemon capability `restore-shell-v1` it opens each interrupted shell pane of the project again in the same pane position: a fresh shell in the same folder and with the same name, with the pane's saved output (at most the last 1 MiB) above its first prompt. The saved output is display only and nothing is typed except the project's init command. Agents are not launched; the interrupted session stays in History with its Resume conversation command. Older daemons do not show the action.
 
 ## Agent setup
 

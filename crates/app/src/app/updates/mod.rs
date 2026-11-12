@@ -194,6 +194,7 @@ impl App {
                     anchors,
                 });
             }
+            Update::Restored(session, old) => self.handle_restored(session, &old),
             Update::Text(key, text) => self.handle_text(key, text),
             Update::CommandBlocks(sid, blocks) => self.handle_command_blocks(sid, blocks),
             Update::LoadFailed(key, error) => self.handle_load_failed(key, error),

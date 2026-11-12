@@ -392,6 +392,9 @@ impl App {
             PaletteItem::ReportProblem => self.report_problem(ctx),
             PaletteItem::ToggleIdeSidebarHeight => self.toggle_ide_sidebar_height(),
             PaletteItem::SaveLayout => self.save_layout_dialog(),
+            PaletteItem::RestoreWorkspace(project) => {
+                self.restore_workspace(&project);
+            }
             PaletteItem::ApplyLayout(name) => {
                 if let Some(preset) = self.preferences.apply_layout(&name) {
                     self.pending_left_width =

@@ -195,6 +195,7 @@ impl Shared {
                 } else {
                     Launch::Shell
                 },
+                seed: None,
             }),
             Request::CreateReview {
                 project,
@@ -208,6 +209,7 @@ impl Shared {
                 line: None,
                 column: None,
                 launch: Launch::Review { staged },
+                seed: None,
             }),
             Request::ProbeRemoteProject { project } => self.on_probe_remote_project(&project),
             Request::ScanHostKey { ssh } => self.on_scan_host_key(&ssh),
@@ -267,6 +269,7 @@ impl Shared {
                 limit,
             } => self.on_local_history_page(&path, offset, limit),
             Request::NtfyToken { token } => self.on_ntfy_token(token),
+            request @ Request::CreateRestored { .. } => self.on_create_restored(request),
             Request::LocalHistoryRead { path, id } => self.on_local_history_read(&path, &id),
             Request::LocalHistoryLabel { project, label } => {
                 self.on_local_history_label(&project, label)

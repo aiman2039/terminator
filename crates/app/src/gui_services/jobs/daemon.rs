@@ -232,6 +232,7 @@ impl Services {
                     After::Float(viewport, anchors, split) => {
                         updates.push(Update::FloatCreated(session, viewport, split, anchors));
                     }
+                    After::Restore(old) => updates.push(Update::Restored(session, old)),
                     _ => {}
                 }
             }

@@ -128,6 +128,8 @@ pub(crate) enum PaletteItem {
     ReportProblem,
     ToggleIdeSidebarHeight,
     SaveLayout,
+    /// Restore workspace of this project (`restore-shell-v1`).
+    RestoreWorkspace(String),
     ApplyLayout(String),
     /// "New terminal with <agent>": types the command without Enter.
     AgentLaunch(crate::agent_launch::AgentLauncher),
@@ -253,6 +255,7 @@ impl PaletteItem {
             Self::ReportProblem => "Report a problem…".into(),
             Self::ToggleIdeSidebarHeight => "Toggle IDE sidebar height".into(),
             Self::SaveLayout => "Save layout".into(),
+            Self::RestoreWorkspace(_) => "Restore workspace".into(),
             Self::ApplyLayout(name) => name.clone(),
             Self::AgentLaunch(launcher) => launcher.title(),
         }
@@ -269,6 +272,7 @@ impl PaletteItem {
             | Self::ReportProblem
             | Self::ToggleIdeSidebarHeight
             | Self::SaveLayout
+            | Self::RestoreWorkspace(_)
             | Self::AgentLaunch(_) => self.title(),
             Self::Action(action) if pinned_action(*action) => self.title(),
             _ => format!("{}  {}", self.category(), self.title()),

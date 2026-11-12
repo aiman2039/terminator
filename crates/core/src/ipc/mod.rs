@@ -342,6 +342,16 @@ pub enum Request {
     NtfyToken {
         token: String,
     },
+    /// A new local shell in `cwd` that shows `seed` (saved output of an
+    /// interrupted session) above its prompt. Sent only on an explicit
+    /// Restore workspace click. Replies `Response::Created`. Requires
+    /// `restore-shell-v1`.
+    CreateRestored {
+        project: String,
+        cwd: PathBuf,
+        label: String,
+        seed: String,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {

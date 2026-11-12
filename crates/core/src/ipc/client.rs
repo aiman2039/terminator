@@ -129,6 +129,7 @@ pub(crate) fn redirect_allowed(request: &Request) -> bool {
     matches!(
         request,
         Request::Create { .. }
+            | Request::CreateRestored { .. }
             | Request::CreateReview { .. }
             | Request::AddProject { .. }
             | Request::AddRemoteProject { .. }

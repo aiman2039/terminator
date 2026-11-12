@@ -69,6 +69,39 @@ impl Shared {
         Ok(Outcome::Reply(Response::Created(self.create(input)?)))
     }
 
+    /// A fresh local shell with saved output above its prompt. Nothing is
+    /// typed into it but the project's init command; no agent is launched.
+    pub(super) fn on_create_restored(self: &Arc<Self>, request: Request) -> Result<Outcome> {
+        let Request::CreateRestored {
+            project,
+            cwd,
+            label,
+            seed,
+        } = request
+        else {
+            anyhow::bail!("Expected a restore request");
+        };
+        ensure!(label.len() <= 256, "Label too long");
+        ensure!(
+            seed.len() <= agent_workflow::MAX_RESTORE_SEED.saturating_mul(2),
+            "Saved output too long"
+        );
+        let mut session = self.create(super::super::sessions::CreateInput {
+            project,
+            cwd: Some(cwd),
+            file: None,
+            line: None,
+            column: None,
+            launch: crate::Launch::Shell,
+            seed: Some(seed),
+        })?;
+        if !label.trim().is_empty() {
+            self.on_rename(&session.id, label.clone())?;
+            session.label = label;
+        }
+        Ok(Outcome::Reply(Response::Created(session)))
+    }
+
     pub(super) fn on_cwd(&self, session: &str, path: PathBuf) -> Result<Outcome> {
         let _worktree_guard = relock(&self.worktree_operations);
         ensure!(path.is_absolute(), "Expected absolute cwd");

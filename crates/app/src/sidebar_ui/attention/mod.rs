@@ -2,6 +2,9 @@ mod actions;
 mod card;
 mod card_actions;
 mod peek;
+mod restore;
+#[cfg(test)]
+mod restore_tests;
 mod status;
 mod triage;
 #[cfg(test)]

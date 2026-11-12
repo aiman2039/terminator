@@ -294,6 +294,7 @@ impl App {
             ui.close();
         }
         self.init_command_item(ui, p);
+        self.restore_workspace_item(ui, &p.id);
         if self.has_worktrees() || self.has_project_init() {
             ui.separator();
         }
