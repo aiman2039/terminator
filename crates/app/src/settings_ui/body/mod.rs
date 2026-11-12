@@ -33,7 +33,7 @@ impl App {
                 return;
             }
             self.reset_section_matches();
-            egui::ScrollArea::vertical()
+            egui::ScrollArea::both()
                 .id_salt(("settings-section", section as u8, searching))
                 .max_height(height)
                 .auto_shrink([false, false])

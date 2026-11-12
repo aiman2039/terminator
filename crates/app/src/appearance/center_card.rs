@@ -79,10 +79,15 @@ pub fn center_card_over<R>(
     ui.painter()
         .rect_filled(outer, egui::CornerRadius::ZERO, style.window);
     let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card));
+    // Wide content must not grow the card past the pane: that hides its
+    // right edge and the scroll bars of the page inside it.
+    card_ui.shrink_clip_rect(card);
     let inner = style
         .frame()
         .show(&mut card_ui, |ui| {
-            ui.set_max_size(card.shrink(f32::from(CENTER_CARD_PADDING)).size());
+            let size = card.shrink(f32::from(CENTER_CARD_PADDING)).size();
+            ui.set_max_size(size);
+            ui.shrink_clip_rect(egui::Rect::from_min_size(ui.max_rect().min, size));
             add(ui)
         })
         .inner;
@@ -129,6 +134,27 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(height > 0.0 && height < 60.0, "footer height {height}");
+    }
+
+    #[test]
+    fn wide_content_is_clipped_to_the_card() {
+        let ctx = egui::Context::default();
+        let outer = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
+        let card = center_card_rect(outer);
+        let mut clip = egui::Rect::NOTHING;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let style = CenterCardStyle {
+                window: egui::Color32::BLACK,
+                surface: egui::Color32::BLACK,
+                border: egui::Stroke::NONE,
+            };
+            center_card_over(ui, outer, style, |ui| {
+                ui.allocate_space(egui::vec2(2000.0, 20.0));
+                clip = ui.clip_rect();
+            });
+        });
+        output.textures_delta.clear();
+        assert!(card.contains_rect(clip), "clip {clip:?} card {card:?}");
     }
 
     #[test]

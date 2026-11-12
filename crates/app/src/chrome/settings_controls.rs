@@ -107,7 +107,7 @@ pub fn sub_heading(ui: &mut egui::Ui, text: &str) {
 }
 
 /// Mutually exclusive choices in one framed control, so the options read
-/// as one setting and stay on one line.
+/// as one setting. They wrap to more lines when the card is narrow.
 pub fn segmented<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     value: &mut T,
@@ -119,8 +119,8 @@ pub fn segmented<T: Copy + PartialEq>(
         .corner_radius(egui::CornerRadius::same(appearance::WIDGET_RADIUS))
         .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
                 for (label, option) in options {
                     let selected = *value == *option;
                     if ui.selectable_label(selected, *label).clicked() && !selected {
