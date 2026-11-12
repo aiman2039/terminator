@@ -17,6 +17,7 @@ mod task_form_tests;
 mod task_page;
 #[cfg(test)]
 mod task_tests;
+pub(super) mod worktree_cleanup;
 pub(super) mod worktree_include;
 pub(super) mod worktree_stats;
 pub(super) mod worktree_ui;
@@ -30,4 +31,6 @@ pub(crate) struct GitExtras {
     pub(crate) dialog: Option<branch_ui::PendingBranchDialog>,
     /// The Git panel's PR tab.
     pub(crate) pull_request: pull_request::PrPanel,
+    /// The Worktrees page: probes, ticks and Apply to source.
+    pub(crate) cleanup: worktree_cleanup::Cleanup,
 }
