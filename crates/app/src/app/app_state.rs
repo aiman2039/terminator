@@ -379,8 +379,8 @@ pub struct App {
     /// Vim navigation from native editors, run after check-in.
     pub(crate) native_nav: native_editor::NavPending,
     /// A diff navigation shortcut or palette command for the active diff
-    /// tab, applied when that tab paints next.
-    pub(crate) diff_nav: Option<Action>,
+    /// tab, applied when that tab paints next, with the pass it was set in.
+    pub(crate) diff_nav: Option<(Action, u64)>,
     pub(crate) path_text: String,
     pub(crate) last_save: Instant,
     pub(crate) refresh: tokio::sync::watch::Sender<Option<refresh::Request>>,

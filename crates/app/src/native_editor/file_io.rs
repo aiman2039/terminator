@@ -389,7 +389,8 @@ impl NativeFileIo {
     }
 
     /// The save step on the worker: refuse when the disk bytes are not
-    /// the ones last loaded or saved (unless forced), then write.
+    /// the ones last loaded or saved (unless forced, or the disk is still
+    /// at the modification time "Keep mine" accepted), then write.
     pub(super) fn save(request: SaveRequest) -> anyhow::Result<SavedFile> {
         let SaveRequest {
             path,
@@ -398,8 +399,12 @@ impl NativeFileIo {
             encoding,
             expected,
             force,
+            accepted,
         } = request;
-        if !force && Fingerprint::read(&path)? != expected {
+        if !force
+            && Fingerprint::read(&path)? != expected
+            && accepted != Some(super::disk::Stamp(Self::disk_mtime(&path)))
+        {
             return Err(ChangedOnDisk.into());
         }
         let text_hash = terminator_native_edit::doc::hash_text(&text);
@@ -460,4 +465,7 @@ pub(super) struct SaveRequest {
     pub(super) encoding: TextEncoding,
     pub(super) expected: Option<Fingerprint>,
     pub(super) force: bool,
+    /// "Keep mine": overwrite only while the disk still has this
+    /// modification time; a newer change is refused again.
+    pub(super) accepted: Option<super::disk::Stamp>,
 }

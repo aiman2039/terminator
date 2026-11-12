@@ -57,11 +57,29 @@ impl App {
             }
         }
         self.explorer_type_to_search(ui, &typed, &nav);
-        ui.input_mut(|input| {
-            for (key, modifiers) in consumed {
-                input.consume_key(modifiers, key);
+        ui.input_mut(|input| Self::consume_tree_keys(input, &consumed));
+    }
+
+    /// Take the keys the tree handled out of the queue, with the clipboard
+    /// events that stand for Cmd/Ctrl+C, X and V: a terminal must not copy
+    /// its own selection over the copied paths.
+    pub(super) fn consume_tree_keys(
+        input: &mut egui::InputState,
+        consumed: &[(egui::Key, egui::Modifiers)],
+    ) {
+        for &(key, modifiers) in consumed {
+            input.consume_key(modifiers, key);
+            if modifiers.command {
+                input.events.retain(|event| {
+                    !matches!(
+                        (key, event),
+                        (egui::Key::C, egui::Event::Copy)
+                            | (egui::Key::X, egui::Event::Cut)
+                            | (egui::Key::V, egui::Event::Paste(_))
+                    )
+                });
             }
-        });
+        }
     }
 
     /// Keep arrows and Escape on the tree instead of moving focus.

@@ -823,8 +823,32 @@ fn diff_navigation_shortcuts_apply_only_to_an_active_diff() {
     ] {
         assert!(app.shortcut_applies(action), "{action:?}");
         app.run_shortcut(&ctx, action);
-        assert_eq!(app.diff_nav.take(), Some(action));
+        assert_eq!(app.diff_nav.take().map(|(nav, _)| nav), Some(action));
     }
+}
+
+#[test]
+fn a_palette_diff_action_survives_into_the_next_frame_only() {
+    let (mut app, ctx, _dir) = fixture();
+    let pass = |app: &mut App| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.dispatch_shortcuts(ui.ctx(), true);
+        });
+        output.textures_delta.clear();
+    };
+    // As the palette does: the action runs after this pass's diff painted.
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.run_shortcut(ui.ctx(), Action::DiffNextChange);
+    });
+    output.textures_delta.clear();
+    pass(&mut app);
+    assert_eq!(
+        app.diff_nav.map(|(nav, _)| nav),
+        Some(Action::DiffNextChange),
+        "the next frame's diff view still takes it"
+    );
+    pass(&mut app);
+    assert_eq!(app.diff_nav, None, "an untaken diff key does not stay");
 }
 
 #[test]

@@ -577,13 +577,44 @@ fn keep_mine_makes_save_all_overwrite_the_newer_disk_text() {
     std::fs::write(&path, "theirs\n").unwrap();
     native.doc.as_mut().unwrap().insert(0, "mine ");
     // What the conflict bar's Keep mine sets.
-    native.force_save = true;
+    native.disk.keep_mine = Some(super::disk::Stamp(
+        super::file_io::NativeFileIo::disk_mtime(&path),
+    ));
     app.native_docs.insert(path.clone(), native);
     app.native_save_all();
     let mut native = app.native_docs.remove(&path).unwrap();
     pump(&mut native, &app, |native| !native.saving);
     assert_eq!(native.save_error, None);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine old\n");
+}
+
+#[test]
+fn keep_mine_does_not_overwrite_a_later_disk_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keep.txt");
+    std::fs::write(&path, "old\n").unwrap();
+    let mut app = app(dir.path());
+    let mut native = open(&app, &path);
+    std::fs::write(&path, "theirs\n").unwrap();
+    native.doc.as_mut().unwrap().insert(0, "mine ");
+    native.disk.keep_mine = Some(super::disk::Stamp(
+        super::file_io::NativeFileIo::disk_mtime(&path),
+    ));
+    // A third version lands after Keep mine, with a newer modification time.
+    std::fs::write(&path, "newest\n").unwrap();
+    let later = SystemTime::now() + std::time::Duration::from_mins(1);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    app.native_docs.insert(path.clone(), native);
+    app.native_save_all();
+    let mut native = app.native_docs.remove(&path).unwrap();
+    pump(&mut native, &app, |native| !native.saving);
+    assert_eq!(native.save_error, Some(SaveError::ChangedOnDisk));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "newest\n");
 }
 
 #[cfg(unix)]

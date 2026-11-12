@@ -38,3 +38,20 @@ fn clipboard_events_reach_the_tree_as_copy_cut_and_paste_keys() {
         ]
     );
 }
+
+#[test]
+fn a_copy_the_tree_handled_does_not_reach_the_terminal() {
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        events: vec![egui::Event::Copy, egui::Event::Text("x".into())],
+        ..Default::default()
+    };
+    let mut left = Vec::new();
+    let mut output = ctx.run_ui(raw, |ui| {
+        let keys = App::tree_key_events(ui).0;
+        ui.input_mut(|input| App::consume_tree_keys(input, &keys));
+        left = ui.input(|input| input.events.clone());
+    });
+    output.textures_delta.clear();
+    assert_eq!(left, vec![egui::Event::Text("x".into())]);
+}

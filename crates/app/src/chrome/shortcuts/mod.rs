@@ -97,12 +97,10 @@ actions! {
     AskAgent => "ask_agent", "Ask agent…", "Terminal";
     NewBrowser => "new_browser", "New browser tab", "Globe";
     NewVnc => "new_vnc", "New VNC viewer", "Monitor";
-    // Previous first: egui ignores an extra Shift, so F7 would also take
-    // Shift+F7 (and Alt+F7 Alt+Shift+F7).
-    DiffPrevChange => "diff_prev_change", "Diff: previous change", "ArrowUp";
     DiffNextChange => "diff_next_change", "Diff: next change", "ArrowDown";
-    DiffPrevFile => "diff_prev_file", "Diff: previous file", "ArrowLeft";
+    DiffPrevChange => "diff_prev_change", "Diff: previous change", "ArrowUp";
     DiffNextFile => "diff_next_file", "Diff: next file", "ArrowRight";
+    DiffPrevFile => "diff_prev_file", "Diff: previous file", "ArrowLeft";
     GitCommit => "git_commit", "Git: Commit…", "CircleCheck";
     GitCommitPush => "git_commit_push", "Git: Commit and Push", "Upload";
     GitRefresh => "git_refresh", "Git: Refresh", "RefreshCw";
@@ -330,19 +328,7 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
     let Some(chord) = parse(value) else {
         return false;
     };
-    // egui matches ignoring extra Alt; an Alt chord is its own shortcut
-    // (`Cmd+Alt+L` reformats, it does not toggle the sidebar on `Cmd+L`).
-    let alt_variant = !chord.modifiers.alt
-        && ctx.input(|input| {
-            input.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Key { key, pressed: true, modifiers, .. }
-                        if *key == chord.key && modifiers.alt
-                )
-            })
-        });
-    if alt_variant {
+    if ctx.input(|input| meta::modifier_variant(input, chord)) {
         return false;
     }
     if meta::types_text(chord) {

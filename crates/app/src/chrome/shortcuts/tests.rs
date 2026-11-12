@@ -89,6 +89,37 @@ fn alt_variants_do_not_trigger_the_plain_shortcut() {
 }
 
 #[test]
+fn shift_variants_do_not_trigger_the_plain_shortcut() {
+    let ctx = egui::Context::default();
+    let press = |key: Key, modifiers: Modifiers| egui::RawInput {
+        events: vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }],
+        ..Default::default()
+    };
+    let fired = |raw, chord: &str| {
+        let mut fired = None;
+        let mut output = ctx.run_ui(raw, |ui| fired = Some(consume(ui.ctx(), chord)));
+        output.textures_delta.clear();
+        fired
+    };
+    assert_eq!(fired(press(Key::F7, Modifiers::SHIFT), "F7"), Some(false));
+    assert_eq!(fired(press(Key::F7, Modifiers::NONE), "F7"), Some(true));
+    let alt_shift = Modifiers::ALT | Modifiers::SHIFT;
+    assert_eq!(fired(press(Key::F7, alt_shift), "alt+F7"), Some(false));
+    assert_eq!(fired(press(Key::F7, alt_shift), "alt+shift+F7"), Some(true));
+    // A symbol key may need Shift to type: the plain chord still takes it.
+    assert_eq!(
+        fired(press(Key::Plus, Modifiers::SHIFT), "plus"),
+        Some(true)
+    );
+}
+
+#[test]
 fn tab_step_defaults_take_no_chord_another_action_uses() {
     let defaults = terminator_core::Settings::default().keybindings;
     for tab in ["next_tab", "prev_tab"] {
@@ -755,6 +786,35 @@ fn enter_or_esc_in_a_sidebar_field_never_reaches_the_terminal() {
         // Once it has focus, the terminal reads its own keys.
         assert!(field_then_terminal(&ctx, &mut text, false, Some(key)));
     }
+}
+
+#[test]
+fn a_terminal_takes_focus_after_a_sidebar_field_without_more_input() {
+    let ctx = egui::Context::default();
+    let mut text = String::from("filter");
+    field_then_terminal(&ctx, &mut text, true, None);
+    field_then_terminal(&ctx, &mut text, false, Some(Key::Enter));
+    // Paint only the frames egui asks for, as the window loop does.
+    for _ in 0..10 {
+        if terminal_has_focus(&ctx) {
+            break;
+        }
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            note_frame_focus(ui.ctx());
+            let terminal = ui.allocate_response(egui::vec2(40.0, 20.0), egui::Sense::click());
+            mark_terminal(ui.ctx(), terminal.id);
+            let free = ui.memory(|memory| memory.focused().is_none());
+            if free && !focus_left_another_widget(ui.ctx()) {
+                terminal.request_focus();
+            }
+        });
+        output.textures_delta.clear();
+        let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        if delay > std::time::Duration::ZERO {
+            break;
+        }
+    }
+    assert!(terminal_has_focus(&ctx), "the terminal waits for input");
 }
 
 #[test]

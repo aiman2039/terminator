@@ -234,7 +234,7 @@ impl App {
             | Action::DiffPrevChange
             | Action::DiffNextFile
             | Action::DiffPrevFile => {
-                self.diff_nav = Some(action);
+                self.diff_nav = Some((action, ctx.cumulative_pass_nr()));
                 ctx.request_repaint();
             }
             Action::GitCommit

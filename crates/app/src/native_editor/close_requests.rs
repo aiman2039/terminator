@@ -126,6 +126,7 @@ impl App {
             }
             NativeCloseChoice::SaveClose => {
                 if let Some(doc) = self.native_docs.get_mut(&request.path) {
+                    doc.force_save = false;
                     doc.start_save(&self.services.clone());
                 }
                 self.native_close_after_save.retain(|r| !r.same(&request));

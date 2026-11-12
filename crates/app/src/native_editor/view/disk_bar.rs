@@ -49,8 +49,6 @@ impl ViewPass<'_> {
     }
 
     fn conflict_bar(&mut self, ui: &mut egui::Ui, on_disk: Option<std::time::SystemTime>) {
-        // A new change on disk: an earlier "Keep mine" no longer covers it.
-        self.doc.force_save = false;
         let text = ui.visuals().text_color();
         let fill = ui
             .visuals()
@@ -92,9 +90,9 @@ impl ViewPass<'_> {
             Some(1) => self.start_compare(),
             Some(2) => {
                 self.doc.extras.compare = None;
+                // A save overwrites this disk version on purpose; a later
+                // change on disk is refused again.
                 self.doc.disk.keep_mine = Some(Stamp(on_disk));
-                // The next save overwrites the newer disk text on purpose.
-                self.doc.force_save = true;
             }
             _ => {}
         }

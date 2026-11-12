@@ -184,7 +184,7 @@ impl App {
         if !frame.focused {
             return;
         }
-        let Some(action) = self.diff_nav.take() else {
+        let Some((action, _)) = self.diff_nav.take() else {
             return;
         };
         match action {

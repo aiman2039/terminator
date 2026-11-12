@@ -71,8 +71,8 @@ impl ViewPass<'_> {
     }
 
     pub(super) fn save(&mut self, force: bool) {
-        // Keep a pending "Keep mine": that save overwrites the disk.
-        self.doc.force_save |= force;
+        // "Keep mine" travels as `disk.keep_mine`, tied to its disk version.
+        self.doc.force_save = force;
         self.doc.start_save(&self.frame.services);
     }
 
