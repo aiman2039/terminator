@@ -70,6 +70,8 @@ pub(crate) struct WorktreeDraft {
     pub agent_command: String,
     /// Optional http(s) URL opened in a Browser tab.
     pub browser_url: String,
+    /// Optional project setup command, typed before the agent command.
+    pub setup_command: String,
     /// Identifies this opening of the wizard; a submission's reply only
     /// closes or unlocks the draft it came from.
     pub id: u64,
@@ -187,6 +189,12 @@ impl App {
             task: String::new(),
             agent_command: self.preferences.task_agent_command.clone(),
             browser_url: String::new(),
+            setup_command: self
+                .preferences
+                .task_setup_commands
+                .get(&project.path)
+                .cloned()
+                .unwrap_or_default(),
             id: next_draft_id(),
             submitting: false,
         };

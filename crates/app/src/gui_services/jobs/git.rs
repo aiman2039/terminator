@@ -280,20 +280,21 @@ impl Services {
         };
         let project = checkout_project(&state, &canonical)
             .context("Created worktree missing from inventory")?;
-        // Read-only Git in the new checkout: the commit the task starts at.
+        // On the file pool: the commit the task starts at (read-only Git),
+        // then the `.worktreeinclude` copy into the new checkout.
         if let Some(source) = state.projects.iter().find(|p| p.id == source_id) {
             let (source, checkout) = (source.path.clone(), canonical.clone());
-            start.base = self
+            let (base, report) = self
                 .fs()
                 .run(&cancel, move || {
-                    anyhow::Ok(crate::task_changes::task_base(
-                        &source, &checkout, &revision,
-                    ))
+                    let base = crate::task_changes::task_base(&source, &checkout, &revision);
+                    let report = crate::worktree_include::copy_included(&source, &checkout);
+                    anyhow::Ok((base, report))
                 })
                 .await
-                .ok()
-                .flatten()
-                .map(|base| (canonical.clone(), base));
+                .unwrap_or_default();
+            start.base = base.map(|base| (canonical.clone(), base));
+            start.setup_note = report.summary();
         }
         updates.push(Update::WorktreeCreated(state, project, start));
         Ok(())

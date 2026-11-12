@@ -13,6 +13,23 @@ pub(crate) struct TaskStart {
     /// The new checkout and the commit it started from, read after
     /// `git worktree add`.
     pub base: Option<(PathBuf, crate::worktree_stats::TaskBase)>,
+    /// The project's setup command, typed before the agent command.
+    pub setup_command: String,
+    /// What the `.worktreeinclude` copy did, for the status bar.
+    pub setup_note: Option<String>,
+}
+
+impl TaskStart {
+    /// The one line typed into the new terminal, never followed by Enter:
+    /// `setup && agent` when both are set. Line breaks become spaces.
+    pub(crate) fn typed_input(&self) -> String {
+        let parts: Vec<&str> = [self.setup_command.as_str(), self.agent_command.as_str()]
+            .into_iter()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect();
+        crate::diff::notes::one_line(&parts.join(" && "))
+    }
 }
 
 impl WorktreeDraft {
@@ -22,7 +39,8 @@ impl WorktreeDraft {
             open_terminal: self.open_terminal,
             agent_command: self.agent_command.trim().to_owned(),
             browser_url: self.browser_url.trim().to_owned(),
-            base: None,
+            setup_command: self.setup_command.trim().to_owned(),
+            ..TaskStart::default()
         }
     }
 
@@ -71,6 +89,20 @@ pub(super) fn task_extras(
                         .desired_width(260.0),
                 );
                 agent_choice(ui, &mut draft.agent_command, launchers);
+            },
+        });
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Setup command",
+            description: "Optional, for this project. Typed before the agent command \
+                          as `setup && agent`. Ignored files named in .worktreeinclude \
+                          are copied first.",
+            add_control: |ui| {
+                ui.add(
+                    appearance::singleline(&mut draft.setup_command)
+                        .hint_text("npm install")
+                        .desired_width(260.0),
+                );
             },
         });
     }
@@ -132,6 +164,18 @@ impl App {
         if draft.open_terminal {
             self.preferences.task_agent_command = start.agent_command;
         }
+        // The setup command belongs to the source project (GUI-only; it
+        // never comes from a file in the repository).
+        if let Some(source) = self.state.projects.iter().find(|p| p.id == draft.source) {
+            let path = source.path.clone();
+            if start.setup_command.is_empty() {
+                self.preferences.task_setup_commands.remove(&path);
+            } else {
+                self.preferences
+                    .task_setup_commands
+                    .insert(path, start.setup_command);
+            }
+        }
         true
     }
 
@@ -142,6 +186,9 @@ impl App {
         // numbers and the Changes since task start page.
         if let Some((path, base)) = start.base.take() {
             self.preferences.task_bases.insert(path, base);
+        }
+        if let Some(note) = start.setup_note.take() {
+            self.info = Some(note);
         }
         if self.selected.as_deref() != Some(project) {
             return;
@@ -154,7 +201,7 @@ impl App {
         }
         if start.open_terminal {
             let post = PostCreate {
-                input: start.agent_command,
+                input: start.typed_input(),
                 enter: false,
             };
             self.create_workspace_tab_with(None, None, Some(post));
