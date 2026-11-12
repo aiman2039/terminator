@@ -338,6 +338,7 @@ impl App {
             targets: HashMap::new(),
             hover_popup: None,
             hover_popup_blocks_input: false,
+            key_modes: Default::default(),
             last_heartbeat: Instant::now(),
             repaint_probe: RepaintProbe::enabled(),
             last_focus: None,

@@ -13,6 +13,8 @@ pub(crate) const TERMINAL_ACTIONS: &[Action] = &[
     Action::NextPrompt,
     Action::SelectCommand,
     Action::CopyLastOutput,
+    Action::HintsMode,
+    Action::CopyMode,
 ];
 
 const NO_MARKS: &str = "No shell prompt marks in this terminal (shell integration is off)";
@@ -35,6 +37,12 @@ impl App {
     }
 
     fn terminal_action_on(&mut self, ctx: &egui::Context, sid: &str, action: Action) {
+        // The modes follow keyboard focus: they start on the active terminal.
+        match action {
+            Action::HintsMode => return self.toggle_hints_mode(),
+            Action::CopyMode => return self.toggle_copy_mode(),
+            _ => {}
+        }
         let Some(backend) = self.backends.get_mut(sid) else {
             return;
         };

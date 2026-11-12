@@ -1,3 +1,5 @@
+pub mod copy_mode;
+mod hints;
 pub mod marks;
 mod prompts;
 pub mod settings;

@@ -255,6 +255,8 @@ impl App {
             | Action::NextPrompt
             | Action::SelectCommand
             | Action::CopyLastOutput => self.run_terminal_action(ctx, action),
+            Action::HintsMode => self.toggle_hints_mode(),
+            Action::CopyMode => self.toggle_copy_mode(),
         }
     }
 

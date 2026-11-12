@@ -162,6 +162,9 @@ impl Settings {
             ("new_drawing".into(), "command+alt+X".into()),
             ("prev_prompt".into(), prompt_jump_key(false)),
             ("next_prompt".into(), prompt_jump_key(true)),
+            // Free in both keymaps (Linux: Ctrl+Shift+H / X).
+            ("hints_mode".into(), "command+shift+H".into()),
+            ("copy_mode".into(), "command+shift+X".into()),
         ]
         .into()
     }

@@ -368,3 +368,17 @@ Tests: `prompt_and_output_marks_become_private_links`,
 `prompts_keep_their_place_after_scrolling_into_history`,
 `mark_links_are_not_link_targets`, and the real-PTY check
 `marks_from_a_real_pty_drive_jumps_selection_and_output_copy`.
+
+## Keyboard hints and copy mode (2026-11-12)
+
+`backend/hints.rs` adds `TerminalBackend::visible_targets`: every token on
+screen that pointer hover would find (same `target_at_content` rules, OSC 8
+links included, mark links excluded). `backend/copy_mode.rs` drives
+alacritty's vi mode from the embedding app: `set_copy_mode`,
+`copy_mode_command` (`CopyCommand`: vi motions, scroll, top/bottom,
+select simple/lines/block, clear), `copy_mode_cursor` and `has_selection`.
+Nothing in either writes to the PTY. `TerminalSize::rows` exposes the
+visible row count. `lib.rs` re-exports `CopyCommand`, alacritty's
+`SelectionType` and `ViMotion`.
+
+Test: `copy_mode_moves_a_cursor_and_selects_lines_without_input` (real PTY).
