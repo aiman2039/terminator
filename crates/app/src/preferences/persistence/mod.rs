@@ -269,6 +269,10 @@ pub struct UiPreferences {
     /// Last agent command typed in the New task form.
     #[serde(default)]
     pub task_agent_command: String,
+    /// The commit each New task worktree started from, by worktree path.
+    /// Functional state kept here because the daemon has no place for it.
+    #[serde(default)]
+    pub task_bases: HashMap<PathBuf, crate::worktree_stats::TaskBase>,
     /// Settings → Agents presets, shown with the installed agents.
     pub agent_presets: Vec<AgentPreset>,
     /// Agent launcher keys (`preset:<name>`, `agent:<kind>`), newest first.

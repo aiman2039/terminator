@@ -41,6 +41,7 @@ impl App {
             CenterPage::LocalHistory => self.local_history_center(ui),
             CenterPage::Ssh => self.ssh_page_center(ui),
             CenterPage::Vnc => self.vnc_page_center(ui),
+            CenterPage::TaskChanges => self.task_changes_center(ui),
         }
         false
     }

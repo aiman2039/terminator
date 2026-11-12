@@ -10,6 +10,9 @@ pub(crate) struct TaskStart {
     pub browser_url: String,
     /// The [`WorktreeDraft::id`] that was submitted.
     pub draft: u64,
+    /// The new checkout and the commit it started from, read after
+    /// `git worktree add`.
+    pub base: Option<(PathBuf, crate::worktree_stats::TaskBase)>,
 }
 
 impl WorktreeDraft {
@@ -19,6 +22,7 @@ impl WorktreeDraft {
             open_terminal: self.open_terminal,
             agent_command: self.agent_command.trim().to_owned(),
             browser_url: self.browser_url.trim().to_owned(),
+            base: None,
         }
     }
 
@@ -133,7 +137,12 @@ impl App {
 
     /// Opens what the New task form asked for in the new project. The agent
     /// command is typed without Enter: the user starts the agent.
-    pub(crate) fn start_task(&mut self, project: &str, start: TaskStart) {
+    pub(crate) fn start_task(&mut self, project: &str, mut start: TaskStart) {
+        // The task base outlives this selection: it counts the row's
+        // numbers and the Changes since task start page.
+        if let Some((path, base)) = start.base.take() {
+            self.preferences.task_bases.insert(path, base);
+        }
         if self.selected.as_deref() != Some(project) {
             return;
         }

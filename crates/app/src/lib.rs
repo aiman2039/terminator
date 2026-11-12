@@ -28,6 +28,7 @@ pub(crate) use git::git_log;
 pub(crate) use git::local_history;
 pub(crate) use git::merge;
 pub(crate) use git::revision_compare;
+pub(crate) use git::task_changes;
 pub(crate) use git::worktree_stats;
 pub(crate) use git::worktree_ui;
 pub(crate) use install::daemon_upgrade;

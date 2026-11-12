@@ -214,6 +214,7 @@ impl App {
             diff_preview: HashSet::new(),
             diff_reviews: HashMap::new(),
             diff_notes: Default::default(),
+            task_changes: None,
             loading: HashSet::new(),
             git_views: HashMap::new(),
             selected_commit: None,

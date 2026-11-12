@@ -253,7 +253,9 @@ impl Services {
         cancel: CancellationToken,
         updates: &mut Vec<Update>,
     ) -> Result<()> {
-        let start = draft.task_start();
+        let mut start = draft.task_start();
+        let revision = draft.start.clone();
+        let source_id = draft.source.clone();
         let client = self.client();
         anyhow::ensure!(
             matches!(
@@ -278,6 +280,21 @@ impl Services {
         };
         let project = checkout_project(&state, &canonical)
             .context("Created worktree missing from inventory")?;
+        // Read-only Git in the new checkout: the commit the task starts at.
+        if let Some(source) = state.projects.iter().find(|p| p.id == source_id) {
+            let (source, checkout) = (source.path.clone(), canonical.clone());
+            start.base = self
+                .fs()
+                .run(&cancel, move || {
+                    anyhow::Ok(crate::task_changes::task_base(
+                        &source, &checkout, &revision,
+                    ))
+                })
+                .await
+                .ok()
+                .flatten()
+                .map(|base| (canonical.clone(), base));
+        }
         updates.push(Update::WorktreeCreated(state, project, start));
         Ok(())
     }

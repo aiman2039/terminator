@@ -65,6 +65,7 @@ impl Default for UiPreferences {
             history_sort: HistorySort::LatestActivity,
             history_filter: String::new(),
             task_agent_command: String::new(),
+            task_bases: HashMap::new(),
             agent_presets: Vec::new(),
             agent_launch_recent: Vec::new(),
             hosts_filter: String::new(),

@@ -24,6 +24,8 @@ pub(crate) enum CenterPage {
     Commands(String),
     /// The page data is `App::local_history`.
     LocalHistory,
+    /// Changes since task start of a worktree; data is `App::task_changes`.
+    TaskChanges,
 }
 
 impl CenterPage {
@@ -49,6 +51,9 @@ impl App {
         }
         if page != CenterPage::LocalHistory {
             self.local_history = None;
+        }
+        if page != CenterPage::TaskChanges {
+            self.task_changes = None;
         }
         self.shortcut_capture = None;
         if self.palette.open {
