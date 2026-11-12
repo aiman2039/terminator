@@ -454,4 +454,34 @@ mod tests {
             "nothing saved before Apply"
         );
     }
+
+    /// Each Find Action settings row names a row its section paints, and
+    /// picking it searches Settings down to that row.
+    #[test]
+    fn find_action_settings_rows_name_real_rows() {
+        let (mut app, ctx, _dir) = app();
+        for (section, label) in super::super::SETTINGS_ROWS {
+            app.settings_section = *section;
+            app.settings_search.clear();
+            SEEN.with(|seen| seen.borrow_mut().clear());
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 4000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.settings_center(ui),
+            );
+            output.textures_delta.clear();
+            let rows = SEEN.with(|seen| std::mem::take(&mut *seen.borrow_mut()));
+            assert!(
+                rows.iter().any(|(seen, _)| seen == label),
+                "{section:?} has no row {label}"
+            );
+            app.settings_search = (*label).to_owned();
+            assert!(app.section_visible(*section), "{label} finds {section:?}");
+        }
+    }
 }

@@ -116,6 +116,8 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let focus_rect = self.focused_pane_rect();
+        self.popups.set_focus_rect(focus_rect);
         self.popups.begin_frame(&ctx);
         // Clear before the exit early return too, so the last-painted terminals
         // stop scheduling repaints while the exit screen is shown.

@@ -372,6 +372,11 @@ impl App {
                 self.open_settings();
                 self.request_settings_section(section);
             }
+            PaletteItem::SettingsRow(section, label) => {
+                self.open_settings();
+                self.request_settings_section(section);
+                label.clone_into(&mut self.settings_search);
+            }
             PaletteItem::AddProject => {
                 self.request_pick(PickKind::Project);
             }

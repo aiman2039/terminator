@@ -56,6 +56,7 @@ impl App {
     pub(crate) fn workspace_blank(&mut self, ui: &mut egui::Ui) {
         let mut chosen = None;
         let mut setup_hooks = false;
+        let mut editor_settings = false;
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.2);
             ui.heading("Your workspace, ready.");
@@ -86,8 +87,13 @@ impl App {
                     }
                 }
                 setup_hooks = self.start_setup_block(ui);
+                editor_settings = self.start_tool_rows(ui);
             });
         });
+        if editor_settings {
+            self.open_settings();
+            self.request_settings_section(SettingsSection::Editor);
+        }
         if setup_hooks {
             self.open_settings();
             self.request_settings_section(SettingsSection::AgentHooks);
@@ -116,6 +122,41 @@ impl App {
             ui.weak("Agent hooks are not installed.");
             clicked = ui.button("Set up hooks").clicked();
         });
+        clicked
+    }
+}
+
+impl App {
+    /// Setup rows for tools missing from PATH, probed off the GUI thread.
+    /// Returns true when Editor settings was clicked.
+    fn start_tool_rows(&mut self, ui: &mut egui::Ui) -> bool {
+        let checks = super::start_tools::tool_checks(
+            self.state.settings.editor_mode,
+            &self.state.settings.editor_program,
+        );
+        let missing: Vec<_> = checks
+            .into_iter()
+            .filter(|check| self.tool_probes.found(&check.program) == Some(false))
+            .collect();
+        if self.tool_probes.waiting() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        if missing.is_empty() {
+            return false;
+        }
+        ui.add_space(16.0);
+        settings_controls::sub_heading(ui, "Missing tools");
+        let mut clicked = false;
+        for check in missing {
+            ui.weak(check.note);
+            if !check.install.is_empty() {
+                settings_controls::description_line(ui, &format!("Install: {}", check.install));
+            }
+            if check.program != "git" && ui.button("Editor settings").clicked() {
+                clicked = true;
+            }
+        }
         clicked
     }
 }

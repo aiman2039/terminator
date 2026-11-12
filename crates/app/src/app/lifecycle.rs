@@ -260,6 +260,7 @@ impl App {
             installed_agents: Vec::new(),
             tasks: crate::tasks::TaskState::default(),
             onboarding: crate::onboarding::Onboarding::default(),
+            tool_probes: crate::workspace_ui::ToolProbes::default(),
             theme_import: crate::settings_ui::ThemeImport::default(),
             detail: None,
             close_session: None,

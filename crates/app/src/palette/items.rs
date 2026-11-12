@@ -128,6 +128,9 @@ impl App {
         for section in SettingsSection::ALL {
             items.push(PaletteItem::Settings(section));
         }
+        for (section, label) in crate::settings_ui::SETTINGS_ROWS {
+            items.push(PaletteItem::SettingsRow(*section, label));
+        }
         items.push(PaletteItem::AddProject);
         items.extend(
             PINNED_ACTIONS

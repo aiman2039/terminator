@@ -267,6 +267,8 @@ pub struct App {
     pub(crate) tasks: crate::tasks::TaskState,
     /// Welcome and What's New pages.
     pub(crate) onboarding: crate::onboarding::Onboarding,
+    /// Start panel PATH probes (Neovim, Git).
+    pub(crate) tool_probes: crate::workspace_ui::ToolProbes,
     /// Settings → Appearance theme file import.
     pub(crate) theme_import: crate::settings_ui::ThemeImport,
     pub(crate) detail: Option<String>,
