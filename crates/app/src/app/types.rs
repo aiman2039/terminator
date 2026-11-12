@@ -159,6 +159,8 @@ pub(crate) enum Job {
     StartSessionService,
     CreateWorktree(worktree_ui::WorktreeDraft),
     WorktreeProbe(PathBuf, worktree_ui::WorktreeDraft),
+    /// Read-only branch and diff stats of a worktree row (local Git).
+    WorktreeStats(PathBuf),
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
     Preferences(UiPreferences),
@@ -455,6 +457,7 @@ pub(crate) enum Update {
     EditorBlame(PathBuf, u64, Result<git_log::BlameData, String>),
     CommitFiles(String, Result<Vec<(char, PathBuf)>, String>),
     WorktreeProbe(worktree_ui::WorktreeDraft, bool),
+    WorktreeStats(PathBuf, Option<crate::worktree_stats::WorktreeGit>),
     GitView(String, GitView),
     LocalHistory(crate::local_history::Reply),
     Fonts(crate::appearance::fonts::Reply),

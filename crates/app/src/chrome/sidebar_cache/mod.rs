@@ -45,6 +45,8 @@ pub(crate) struct Index {
     pub live_counts: HashMap<String, usize>,
     pub faces: HashMap<String, (&'static str, AgentState)>,
     pub worktree_states: HashMap<String, (bool, bool)>,
+    /// Live agents per project by hook state (row state counters).
+    pub state_counts: HashMap<String, crate::agent_presence::StateCounts>,
     pub history_brands: HashMap<(String, String), (&'static str, String)>,
     pub kinds: HashMap<String, Vec<String>>,
     pub pending: Vec<Notification>,

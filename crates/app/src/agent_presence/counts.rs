@@ -54,6 +54,49 @@ impl AttentionCounts {
     }
 }
 
+/// Live agents by hook state, for the state counters on project, tab group
+/// and worktree rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StateCounts {
+    pub waiting: usize,
+    pub failed: usize,
+    pub working: usize,
+    pub done: usize,
+}
+
+impl StateCounts {
+    pub fn add(&mut self, state: AgentState) {
+        let slot = match state {
+            AgentState::WaitingInput | AgentState::WaitingPermission => &mut self.waiting,
+            AgentState::Failed => &mut self.failed,
+            AgentState::Running => &mut self.working,
+            AgentState::Completed => &mut self.done,
+            AgentState::Unknown | AgentState::Stopped => return,
+        };
+        *slot = slot.saturating_add(1);
+    }
+
+    #[must_use]
+    pub fn of(states: impl IntoIterator<Item = AgentState>) -> Self {
+        let mut counts = Self::default();
+        for state in states {
+            counts.add(state);
+        }
+        counts
+    }
+
+    /// Counter order: waiting, failed, working, done.
+    #[must_use]
+    pub fn ordered(self) -> [(AgentState, usize); 4] {
+        [
+            (AgentState::WaitingPermission, self.waiting),
+            (AgentState::Failed, self.failed),
+            (AgentState::Running, self.working),
+            (AgentState::Completed, self.done),
+        ]
+    }
+}
+
 #[must_use]
 pub(crate) fn notice_pending(notice: &terminator_core::Notification, now: u64) -> bool {
     !notice.dismissed && !notice.resolved && notice.snoozed_until <= now

@@ -1,5 +1,6 @@
 //! The shared full-width sidebar row.
 use super::super::scale::{FONT_CAPTION, FONT_SMALL, RADIUS_SMALL};
+use super::counters::{self, RowExtras};
 use super::{PaintStatusIconInput, icon_color, paint_status_icon};
 use eframe::egui::{self, Color32, FontId, TextStyle};
 
@@ -20,6 +21,7 @@ pub(super) struct RowSpec<'a> {
     pub(super) reserve_brand: bool,
     /// A small dim icon right after the label (Explorer File Nesting).
     pub(super) after_label: Option<&'a str>,
+    pub(super) extras: RowExtras<'a>,
 }
 
 /// Consistent full-width native sidebar row with fixed icon and status columns.
@@ -58,6 +60,7 @@ pub fn row(input: RowInput<'_>) -> egui::Response {
             brand: None,
             reserve_brand: false,
             after_label: None,
+            extras: RowExtras::default(),
         },
     )
 }
@@ -80,18 +83,13 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         brand,
         reserve_brand,
         after_label,
+        extras,
     } = spec;
     // A reserved brand slot keeps the status icon and the label in one column
     // whether or not this row paints a brand glyph.
     let reserved = reserve_brand || brand.is_some();
     let label_left = if reserved { 36.0 } else { 26.0 };
-    let previous_height = ui.spacing().interact_size.y;
-    ui.spacing_mut().interact_size.y = height;
-    let response = ui.add_sized(
-        [ui.available_width(), height],
-        egui::Button::new("").frame(false),
-    );
-    ui.spacing_mut().interact_size.y = previous_height;
+    let response = row_response(ui, height);
     // Keep geometry and interaction IDs stable while avoiding text layout and
     // image loading for rows outside the sidebar viewport.
     if !ui.is_rect_visible(response.rect) {
@@ -102,14 +100,19 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     paint_row_fill(ui, &response, selected);
     // A tool window key or Tab can focus a row; arrow keys then move it.
     crate::appearance::paint_focus(ui, &response);
-    let trailing = fitted_trailing(ui, label, trailing, response.rect.width() - label_left);
-    let right = response.rect.right() - trailing_width(ui, trailing, tint);
+    let (shown, trailing, right) = row_trailing(
+        ui,
+        (response.rect, label_left),
+        (label, trailing, tint),
+        extras.counters,
+    );
     let rect = label_rect(response.rect, label_left, right, after_label.is_some());
     let text = RowText::layout(LayoutInput {
         ui,
         rect,
         label,
         subtitle,
+        detail: extras.detail,
     });
     let label_center = text.top + text.label.size().y * 0.5;
     if let Some(icon) = after_label {
@@ -129,14 +132,50 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         },
     );
     text.paint(ui, rect);
+    let anchor = egui::pos2(response.rect.right(), label_center);
+    counters::paint(ui, anchor, &shown);
     paint_trailing(PaintTrailingInput {
         ui,
-        anchor: egui::pos2(response.rect.right(), label_center),
+        anchor,
         trailing,
         tint,
+        tint_words: extras.tint_words,
     });
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
+}
+
+/// The full-width row button at `height`.
+fn row_response(ui: &mut egui::Ui, height: f32) -> egui::Response {
+    let previous_height = ui.spacing().interact_size.y;
+    ui.spacing_mut().interact_size.y = height;
+    let response = ui.add_sized(
+        [ui.available_width(), height],
+        egui::Button::new("").frame(false),
+    );
+    ui.spacing_mut().interact_size.y = previous_height;
+    response
+}
+
+/// State counters replace the trailing text; a waiting counter stays even
+/// when the label must shrink. Returns the counters shown, the trailing
+/// text kept, and where the label must end.
+fn row_trailing<'c, 't>(
+    ui: &egui::Ui,
+    (row, label_left): (egui::Rect, f32),
+    (label, trailing, tint): (&str, &'t str, Color32),
+    counters: &'c [counters::StateCounter],
+) -> (Vec<&'c counters::StateCounter>, &'t str, f32) {
+    let room = row.width() - label_left;
+    let shown = counters::fitted(ui, counters, room - label_width(ui, label));
+    if shown.is_empty() {
+        let trailing = fitted_trailing(ui, label, trailing, room);
+        let right = row.right() - trailing_width(ui, trailing, tint);
+        (shown, trailing, right)
+    } else {
+        let right = row.right() - counters::total_width(ui, &shown);
+        (shown, "", right)
+    }
 }
 
 /// The label's rect in `row`, from `label_left` to `right`. It leaves room
@@ -186,17 +225,22 @@ fn fitted_trailing<'t>(ui: &egui::Ui, label: &str, trailing: &'t str, room: f32)
     if trailing.is_empty() || trailing == "●" {
         return trailing;
     }
-    let color = Color32::PLACEHOLDER;
-    let label_width = ui
-        .painter()
-        .layout_no_wrap(label.into(), TextStyle::Body.resolve(ui.style()), color)
-        .size()
-        .x;
-    if label_width + trailing_width(ui, trailing, color) <= room {
+    if label_width(ui, label) + trailing_width(ui, trailing, Color32::PLACEHOLDER) <= room {
         trailing
     } else {
         ""
     }
+}
+
+fn label_width(ui: &egui::Ui, label: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            label.into(),
+            TextStyle::Body.resolve(ui.style()),
+            Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
 }
 
 fn trailing_width(ui: &egui::Ui, trailing: &str, tint: Color32) -> f32 {
@@ -227,6 +271,28 @@ struct LayoutInput<'a> {
     rect: egui::Rect,
     label: &'a str,
     subtitle: Option<&'a str>,
+    /// A second line in colored parts; wins over `subtitle`.
+    detail: &'a [(&'a str, Color32)],
+}
+
+/// One caption-size line of colored parts, cut to one row.
+fn detail_line(
+    ui: &egui::Ui,
+    parts: &[(&str, Color32)],
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::default();
+    for (text, color) in parts {
+        job.append(
+            text,
+            0.0,
+            egui::TextFormat::simple(FontId::proportional(FONT_CAPTION), *color),
+        );
+    }
+    job.wrap.max_width = width;
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    ui.painter().layout_job(job)
 }
 
 impl RowText {
@@ -236,6 +302,7 @@ impl RowText {
             rect,
             label,
             subtitle,
+            detail,
         } = input;
         let single_line = |text: &str, font: FontId, color: Color32| {
             let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, rect.width());
@@ -248,13 +315,17 @@ impl RowText {
             TextStyle::Body.resolve(ui.style()),
             ui.visuals().text_color(),
         );
-        let subtitle = subtitle.map(|text| {
-            single_line(
-                text,
-                FontId::proportional(FONT_CAPTION),
-                ui.visuals().weak_text_color(),
-            )
-        });
+        let subtitle = if detail.is_empty() {
+            subtitle.map(|text| {
+                single_line(
+                    text,
+                    FontId::proportional(FONT_CAPTION),
+                    ui.visuals().weak_text_color(),
+                )
+            })
+        } else {
+            Some(detail_line(ui, detail, rect.width()))
+        };
         let block = label.size().y + subtitle.as_ref().map_or(0.0, |s| SUBTITLE_GAP + s.size().y);
         let top = rect.center().y - block * 0.5;
         Self {
@@ -337,16 +408,19 @@ struct PaintTrailingInput<'a> {
     anchor: egui::Pos2,
     trailing: &'a str,
     tint: Color32,
+    tint_words: bool,
 }
 
 /// A `●` trailing marker is a dot; other text is right-aligned at `anchor`
-/// (the row's right edge and label center).
+/// (the row's right edge and label center). Text with a space is weak
+/// unless `tint_words` keeps the row tint.
 fn paint_trailing(input: PaintTrailingInput<'_>) {
     let PaintTrailingInput {
         ui,
         anchor,
         trailing,
         tint,
+        tint_words,
     } = input;
     if trailing == "●" {
         ui.painter()
@@ -357,7 +431,7 @@ fn paint_trailing(input: PaintTrailingInput<'_>) {
             egui::Align2::RIGHT_CENTER,
             trailing,
             FontId::proportional(FONT_SMALL),
-            if trailing.contains(' ') {
+            if trailing.contains(' ') && !tint_words {
                 ui.visuals().weak_text_color()
             } else {
                 tint
