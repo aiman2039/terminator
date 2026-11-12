@@ -25,7 +25,7 @@ impl App {
     }
 
     /// Drops images, VNC views, markdown, and backends no pane painted.
-    pub(super) fn prune_unpainted(&mut self, ctx: &egui::Context) {
+    pub(crate) fn prune_unpainted(&mut self, ctx: &egui::Context) {
         // Floating panes render after these prunes (`paint_floating` runs
         // last), so a frame that only marked docked panes would drop every
         // floated backend/image/preview and re-attach it on the next paint:
@@ -38,6 +38,9 @@ impl App {
         // View state and remote sessions both follow the tabs now that the
         // dock is checked back in and every copy has had its say.
         self.prune_vnc_views();
+        if std::mem::take(&mut self.native_prune_wanted) {
+            self.prune_native_docs();
+        }
         self.remote_apps_tick(ctx);
         self.markdown.end_frame(ctx);
         self.prune_hidden_backends();

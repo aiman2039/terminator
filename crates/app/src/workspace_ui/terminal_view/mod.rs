@@ -221,9 +221,12 @@ impl Viewer<'_> {
         if !find_open && self.terminal_copy_for(sid) {
             self.app.copy_terminal_selection(ui.ctx(), sid);
         }
+        // Enter or Esc that a sidebar field just used stays in the queue:
+        // the terminal waits a frame before it takes the free focus.
         let focused = input_enabled
             && !find_open
             && self.app.active_session.as_ref() == Some(sid)
+            && !shortcuts::focus_left_another_widget(ui.ctx())
             && self
                 .app
                 .markdown

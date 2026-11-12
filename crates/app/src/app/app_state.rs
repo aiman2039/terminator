@@ -296,6 +296,9 @@ pub struct App {
     /// LSP (UTF-16) column for a pending jump, converted against the loaded
     /// line so the GUI thread never reads the target file itself.
     pub(crate) native_pending_col: HashMap<PathBuf, u32>,
+    /// A pane closed a clean native tab: prune buffers once the dock is
+    /// checked back in.
+    pub(crate) native_prune_wanted: bool,
     pub(crate) lsp: lsp_manager::LspManager,
     /// Dirty-editor close prompts, oldest first, each with the flow that
     /// asked (pane, quit, workspace close) and the issuing view, if any.
@@ -369,12 +372,15 @@ pub struct App {
     pub(crate) file_index_roots: Vec<PathBuf>,
     pub(crate) file_index_at: Option<std::time::Instant>,
     pub(crate) pending_unavailable_close: Vec<String>,
+    /// `Some` while the main dock paints (out of `layouts`): Git view tabs
+    /// opened from a pane wait here until check-in.
+    pub(crate) pending_git_tabs: Option<Vec<Tab>>,
     pub(crate) pending_quit_all: Option<bool>,
     /// Vim navigation from native editors, run after check-in.
     pub(crate) native_nav: native_editor::NavPending,
     /// A diff navigation shortcut or palette command for the active diff
-    /// tab, applied when that tab paints next.
-    pub(crate) diff_nav: Option<Action>,
+    /// tab, applied when that tab paints next, with the pass it was set in.
+    pub(crate) diff_nav: Option<(Action, u64)>,
     pub(crate) path_text: String,
     pub(crate) last_save: Instant,
     pub(crate) refresh: tokio::sync::watch::Sender<Option<refresh::Request>>,

@@ -74,6 +74,32 @@ fn staged_diff_switches_to_working_tree_after_dock_returns() {
 }
 
 #[test]
+fn the_focused_diff_tab_is_active_while_its_dock_paints() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+    app.selected = Some("project".into());
+    let diff = Tab::Diff {
+        remote: None,
+        cwd: "/repo".into(),
+        path: "/repo/file.rs".into(),
+        staged: false,
+    };
+    let mut workspace = Workspace::from_layout(egui_dock::DockState::new(vec![diff.clone()]));
+    workspace
+        .main_surface_mut()
+        .set_focused_node(egui_dock::NodeIndex::root());
+    app.layouts.insert("project".into(), workspace);
+    assert!(app.main_pane_active(&diff));
+    // As in `workspace_project`: the dock is out of `layouts` while it paints.
+    let mut dock = app.layouts.remove("project").unwrap();
+    app.sync_active_session(&mut dock);
+    assert!(app.main_pane_active(&diff), "diff keys need an active diff");
+    let other = Tab::Terminal("shell".into());
+    assert!(!app.main_pane_active(&other));
+}
+
+#[test]
 fn ide_mode_icon_differs_from_sidebar_toggles() {
     let ide = header_action_view(HeaderAction::IdeMode).icon;
     assert_ne!(ide, "PanelRight");

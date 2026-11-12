@@ -1,6 +1,7 @@
 //! Lazy char access over a [`Buffer`]: one line is cached at a time, so
 //! motions never copy the whole buffer.
 use super::super::super::doc::Buffer;
+use super::super::helpers::line_break;
 use super::super::words::CharSource;
 
 pub(crate) struct Stream<'a, B> {
@@ -33,13 +34,17 @@ impl<B: Buffer> CharSource for Stream<'_, B> {
             return None;
         }
         let end = self.start.saturating_add(self.chars.len());
-        if !self.loaded || i < self.start || i > end {
+        if !self.loaded || i < self.start || i >= end {
             let (line, _) = self.doc.line_col_at(i);
             self.start = self.doc.char_at_line_col(line, 0);
             self.chars = self.doc.line_text(line).chars().collect();
+            // The line's own break (`\r\n` is two chars in the rope).
+            if line.saturating_add(1) < self.doc.line_count() {
+                self.chars.extend(line_break(self.doc, line).chars());
+            }
             self.loaded = true;
         }
-        // One past the line's chars is its newline.
+        // Past the last line's chars reads as a newline.
         Some(
             self.chars
                 .get(i.saturating_sub(self.start))

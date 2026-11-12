@@ -348,4 +348,18 @@ impl Workspace {
         self.tabs.insert(index, tab);
         true
     }
+
+    /// Moves a tab to the insertion `slot` between tabs, counted with the
+    /// tab itself still in place (as the strip shows the drop bar).
+    pub fn reorder_group_to_slot(&mut self, group_id: &str, slot: usize) -> bool {
+        let Some(from) = self.tabs.iter().position(|tab| tab.id == group_id) else {
+            return false;
+        };
+        let index = if from < slot {
+            slot.saturating_sub(1)
+        } else {
+            slot
+        };
+        self.reorder_group(group_id, index)
+    }
 }

@@ -126,11 +126,21 @@ impl App {
     /// changes. Keys follow the pointer or the active pane, so F7 works
     /// without hovering the diff once it is the focused tab.
     fn diff_tab_active(&self, tab: &Tab) -> bool {
-        self.selected
+        self.main_pane_active(tab)
+    }
+
+    /// `tab` is the focused pane of the selected project's main dock. That
+    /// dock is out of `layouts` while it paints, so use the focus that
+    /// `sync_active_session` noted just before.
+    pub(in super::super) fn main_pane_active(&self, tab: &Tab) -> bool {
+        match self
+            .selected
             .as_ref()
             .and_then(|project| self.layouts.get(project))
-            .and_then(|workspace| workspace.active_pane())
-            == Some(tab)
+        {
+            Some(workspace) => workspace.active_pane() == Some(tab),
+            None => self.last_main_focus.as_ref() == Some(tab),
+        }
     }
 
     /// Sibling files on the same side (staged or working tree), in Git's
@@ -174,7 +184,7 @@ impl App {
         if !frame.focused {
             return;
         }
-        let Some(action) = self.diff_nav.take() else {
+        let Some((action, _)) = self.diff_nav.take() else {
             return;
         };
         match action {

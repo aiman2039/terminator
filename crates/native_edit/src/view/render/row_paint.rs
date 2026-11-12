@@ -1,7 +1,7 @@
 //! Text painting for one row: highlight spans, plain gaps and inlay hints.
 use super::geometry::{Geometry, snap};
 use crate::highlight::{Span, SpanStyle};
-use crate::rows::{RowCells, RowHint, display_x, expand_tabs};
+use crate::rows::{RowCells, RowHint, advance_cell, expand_tabs};
 use egui::{Color32, FontId, Pos2, Rect, Vec2};
 
 /// One run of row text in a single style, starting at char `col`.
@@ -43,9 +43,12 @@ impl RowPaint<'_> {
         }
     }
 
-    /// Paint `piece` (row text from char `col`) in one style, split at
-    /// every hint inside it so the hint gaps open between chars.
-    fn piece(&self, input: PieceInput<'_>) {
+    /// Paint `piece` (row text from char `col`, display cell `cell`) in one
+    /// style, split at every hint inside it so the hint gaps open between
+    /// chars. Returns the display cell after the piece, so the caller walks
+    /// the row once instead of rescanning it from column 0 for each span.
+    /// Parts outside the painter's clip rect are skipped.
+    fn piece(&self, input: PieceInput<'_>, cell: usize) -> usize {
         let PieceInput {
             col,
             piece,
@@ -68,38 +71,52 @@ impl RowPaint<'_> {
             .collect();
         breaks.dedup();
         breaks.push(end);
+        let clip = self.painter.clip_rect();
+        let advance = self.geometry.advance;
         let mut chars = piece.chars();
         let mut from = col;
+        let mut cell = cell;
         for to in breaks {
             let part: String = chars.by_ref().take(to.saturating_sub(from)).collect();
+            let next = part.chars().fold(cell, |at, c| advance_cell(at, c, tab));
             if !part.is_empty() {
-                let x = self.x + geometry.char_x(from) as f32 * self.geometry.advance;
-                let ppp = self.geometry.ppp;
-                self.painter.text(
-                    Pos2::new(snap(x, ppp), snap(self.y, ppp)),
-                    egui::Align2::LEFT_TOP,
-                    expand_tabs(&part, display_x(self.text, from, tab), tab),
-                    font.clone(),
-                    color,
-                );
+                let shift = geometry.hint_shift(from);
+                let x = self.x + cell.saturating_add(shift) as f32 * advance;
+                let right = self.x + next.saturating_add(shift) as f32 * advance;
+                if right >= clip.left() && x <= clip.right() {
+                    let ppp = self.geometry.ppp;
+                    self.painter.text(
+                        Pos2::new(snap(x, ppp), snap(self.y, ppp)),
+                        egui::Align2::LEFT_TOP,
+                        expand_tabs(&part, cell, tab),
+                        font.clone(),
+                        color,
+                    );
+                }
             }
             from = to;
+            cell = next;
         }
+        cell
     }
 
     pub fn paint(&self) {
         self.paint_hints();
         if self.spans.is_empty() {
-            self.piece(PieceInput {
-                col: 0,
-                piece: self.text,
-                font: &self.geometry.font,
-                color: self.plain,
-            });
+            self.piece(
+                PieceInput {
+                    col: 0,
+                    piece: self.text,
+                    font: &self.geometry.font,
+                    color: self.plain,
+                },
+                0,
+            );
             return;
         }
         let mut chars = self.text.chars();
         let mut col = 0usize;
+        let mut cell = 0usize;
         for span in self.spans {
             // Unstyled gaps between spans paint plain: spans need not
             // partition the row (tree-sitter emits styled ranges only).
@@ -108,12 +125,15 @@ impl RowPaint<'_> {
                 .take(span.start.saturating_sub(col))
                 .collect();
             if !gap.is_empty() {
-                self.piece(PieceInput {
-                    col,
-                    piece: &gap,
-                    font: &self.geometry.font,
-                    color: self.plain,
-                });
+                cell = self.piece(
+                    PieceInput {
+                        col,
+                        piece: &gap,
+                        font: &self.geometry.font,
+                        color: self.plain,
+                    },
+                    cell,
+                );
                 col = span.start;
             }
             let piece: String = chars.by_ref().take(span.end.saturating_sub(col)).collect();
@@ -124,23 +144,29 @@ impl RowPaint<'_> {
                 } else {
                     Color32::from_rgb(red, green, blue)
                 };
-                self.piece(PieceInput {
-                    col,
-                    piece: &piece,
-                    font: &self.font_for(span.style),
-                    color,
-                });
+                cell = self.piece(
+                    PieceInput {
+                        col,
+                        piece: &piece,
+                        font: &self.font_for(span.style),
+                        color,
+                    },
+                    cell,
+                );
             }
             col = span.end;
         }
         let tail: String = chars.collect();
         if !tail.is_empty() {
-            self.piece(PieceInput {
-                col,
-                piece: &tail,
-                font: &self.geometry.font,
-                color: self.plain,
-            });
+            self.piece(
+                PieceInput {
+                    col,
+                    piece: &tail,
+                    font: &self.geometry.font,
+                    color: self.plain,
+                },
+                cell,
+            );
         }
     }
 

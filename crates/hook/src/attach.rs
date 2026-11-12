@@ -40,6 +40,9 @@ impl Attach {
             None,
         )?;
         stream.set_read_timeout(None)?;
+        // A long paste waits while the session program does not read its
+        // input; the request write limit must not drop the connection.
+        stream.set_write_timeout(None)?;
         let writer = Arc::new(Mutex::new(stream.try_clone()?));
         Self::spawn_input(Arc::clone(&writer));
         Self::spawn_resize(&writer, (rows, cols))?;

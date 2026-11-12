@@ -68,8 +68,8 @@ impl Shared {
         Ok(())
     }
 
-    /// Refuses while a terminal, editor, VNC session, transfer or active
-    /// forward still belongs to `id`. Takes the forwards lock after
+    /// Refuses while a terminal, editor, VNC session, transfer, active
+    /// forward or remote-apps session still belongs to `id`. Takes the forwards lock after
     /// `state`, the established order.
     pub(crate) fn ensure_project_idle(&self, state: &State, id: &str, action: &str) -> Result<()> {
         ensure!(
@@ -94,6 +94,11 @@ impl Shared {
                 .iter()
                 .any(|a| a.project == id),
             "Stop this SSH project's port forwards before {action}"
+        );
+        // State, then remote apps: the order removal also uses.
+        ensure!(
+            !self.remote_apps_live_for(id),
+            "Disconnect this SSH project's remote apps before {action}"
         );
         Ok(())
     }

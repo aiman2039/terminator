@@ -14,10 +14,13 @@ fn main() -> Result<()> {
     if args.first().map(String::as_str) != Some("--health-check")
         && let Ok(paths) = Paths::discover()
     {
+        // Dumps go to the workspace root's crashes folder, not a generation
+        // folder that is deleted when the generation is pruned.
+        let data_dir = generations::workspace_paths(&paths).map_or(paths.data, |root| root.data);
         crash::install(crash::CrashInstall {
             binary: "terminator-hook",
             version: env!("CARGO_PKG_VERSION"),
-            data_dir: paths.data,
+            data_dir,
             notify: None,
         });
     }

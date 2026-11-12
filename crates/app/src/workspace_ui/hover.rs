@@ -220,7 +220,11 @@ impl App {
     /// Copy is local to the selected terminal. A file menu may block PTY input
     /// while the terminal's selection remains available to the clipboard.
     pub(crate) fn copy_terminal_selection(&self, ctx: &egui::Context, sid: &str) {
-        if self.active_session.as_deref() != Some(sid) || self.text_input_focused(ctx) {
+        // A focused Explorer tree copies file paths, not the terminal text.
+        if self.active_session.as_deref() != Some(sid)
+            || self.text_input_focused(ctx)
+            || crate::native_editor::explorer_has_focus(ctx)
+        {
             return;
         }
         let Some(backend) = self.backends.get(sid) else {

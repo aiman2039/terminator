@@ -192,13 +192,26 @@ impl App {
         } else {
             entry.force_full = true;
         }
-        if let Some(clipboard) = decoded.clipboard
-            && entry.remote_clipboard.as_ref() != Some(&clipboard)
-        {
-            entry.remote_clipboard = Some(clipboard.clone());
+        if let Some(clipboard) = take_remote_clipboard(entry, decoded.clipboard) {
             ctx.copy_text(clipboard);
         }
     }
+}
+
+/// Returns remote clipboard text to put on the local clipboard. Frames
+/// repeat the last remote text, so only a change counts, and the first
+/// frame of a view (a reattach or GUI restart) only sets the baseline.
+pub(super) fn take_remote_clipboard(
+    entry: &mut VncViewState,
+    clipboard: Option<String>,
+) -> Option<String> {
+    let first = !std::mem::replace(&mut entry.clipboard_seeded, true);
+    let clipboard = clipboard?;
+    if entry.remote_clipboard.as_ref() == Some(&clipboard) {
+        return None;
+    }
+    entry.remote_clipboard = Some(clipboard.clone());
+    (!first).then_some(clipboard)
 }
 
 /// Apply shared-memory rectangles on top of a texture of the same size.

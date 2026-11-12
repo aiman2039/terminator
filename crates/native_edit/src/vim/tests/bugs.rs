@@ -233,6 +233,76 @@ fn visual_block_columns_follow_display_width() {
 }
 
 #[test]
+fn visual_block_dot_repeat_keeps_display_columns_after_tabs() {
+    let (mut eng, mut doc) = engine("\tfoo\n\tbar\n");
+    keys(&mut eng, &mut doc, "l");
+    eng.press_key(&mut doc, Key::CtrlV);
+    keys(&mut eng, &mut doc, "ld");
+    assert_eq!(doc.text(), "\to\n\tbar\n");
+    keys(&mut eng, &mut doc, "j.");
+    assert_eq!(doc.text(), "\to\n\tr\n");
+}
+
+#[test]
+fn visual_block_change_dot_repeat_keeps_display_columns_after_tabs() {
+    let (mut eng, mut doc) = engine("\tfoo\n\tbar\n");
+    keys(&mut eng, &mut doc, "l");
+    eng.press_key(&mut doc, Key::CtrlV);
+    keys(&mut eng, &mut doc, "lc");
+    eng.type_text(&mut doc, "X");
+    esc(&mut eng, &mut doc);
+    assert_eq!(doc.text(), "\tXo\n\tbar\n");
+    keys(&mut eng, &mut doc, "j0.");
+    assert_eq!(doc.text(), "\tXo\n\tXr\n");
+}
+
+#[test]
+fn dd_then_p_on_a_blank_line_pastes_the_blank_line() {
+    let (mut eng, mut doc) = engine("a\n\nb\n");
+    keys(&mut eng, &mut doc, "jdd");
+    assert_eq!(doc.text(), "a\nb\n");
+    // The host notes the clipboard after a register-only write.
+    assert!(eng.take_clipboard_snapshot());
+    eng.note_clipboard(Some("older"));
+    eng.adopt_clipboard("older");
+    keys(&mut eng, &mut doc, "p");
+    assert_eq!(doc.text(), "a\nb\n\n");
+    let (mut eng, mut doc) = engine("a\n\nb\n");
+    keys(&mut eng, &mut doc, "jyyp");
+    assert_eq!(doc.text(), "a\n\n\nb\n");
+}
+
+#[test]
+fn charwise_visual_takes_the_whole_last_grapheme() {
+    let (mut eng, mut doc) = engine("e\u{301}z\n");
+    keys(&mut eng, &mut doc, "vd");
+    assert_eq!(doc.text(), "z\n");
+    let (mut eng, mut doc) = engine("ab\n");
+    keys(&mut eng, &mut doc, "lvd");
+    assert_eq!(doc.text(), "a\n");
+}
+
+#[test]
+fn crlf_breaks_in_mixed_files_keep_copied_text_and_word_motions_exact() {
+    let (mut eng, mut doc) = engine("ab\r\ncd\n");
+    // `vl` on `cd` (rope offsets 4..6): the copy is the selected text.
+    keys(&mut eng, &mut doc, "jvl");
+    assert_eq!(eng.copy_text(&doc), "cd");
+    esc(&mut eng, &mut doc);
+    // `~` changes the char under the cursor, not its neighbor.
+    keys(&mut eng, &mut doc, "0~");
+    assert_eq!(doc.text(), "ab\r\nCd\n");
+    // `w` leaves a CRLF line.
+    keys(&mut eng, &mut doc, "gg");
+    keys(&mut eng, &mut doc, "w");
+    assert_eq!(eng.cursor(), Cursor { line: 1, col: 0 });
+    // An empty CRLF line is still a word stop.
+    let (mut eng, mut doc) = engine("a\r\n\r\nb\n");
+    keys(&mut eng, &mut doc, "w");
+    assert_eq!(eng.cursor(), Cursor { line: 1, col: 0 });
+}
+
+#[test]
 fn word_motions_work_on_large_buffers_without_reading_everything() {
     let text = "word ".repeat(20_000);
     let (mut eng, mut doc) = engine(&text);

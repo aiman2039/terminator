@@ -89,15 +89,19 @@ pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocume
         old: left.split_inclusive('\n').collect(),
         new: right.split_inclusive('\n').collect(),
     };
-    let diff = if options.exact() {
-        TextDiff::configure()
-            .timeout(DIFF_TIMEOUT)
-            .diff_lines(left, right)
+    // Split lines at `\n` only, like the hunk actions and Git do:
+    // `diff_lines` also ends a line at a bare `\r`, which shifts hunks.
+    let (compare_old, compare_new): (Vec<&str>, Vec<&str>) = if options.exact() {
+        (originals.old.clone(), originals.new.clone())
     } else {
-        TextDiff::configure()
-            .timeout(DIFF_TIMEOUT)
-            .diff_lines(compare_left.as_str(), compare_right.as_str())
+        (
+            compare_left.split_inclusive('\n').collect(),
+            compare_right.split_inclusive('\n').collect(),
+        )
     };
+    let diff = TextDiff::configure()
+        .timeout(DIFF_TIMEOUT)
+        .diff_slices(&compare_old, &compare_new);
     let mut doc = DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
         right_label: if staged { "Index" } else { "Working tree" }.into(),

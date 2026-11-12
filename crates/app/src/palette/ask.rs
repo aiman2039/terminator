@@ -71,6 +71,12 @@ impl App {
         let Some(session) = ask.target.as_deref() else {
             return;
         };
+        // The agent can exit while the dialog is open: never type into
+        // what is now a plain shell.
+        if !self.ask_targets().iter().any(|(id, _)| id == session) {
+            self.info = Some("The agent is no longer running. Nothing was sent.".into());
+            return;
+        }
         let text = ask_text(ask);
         if text.is_empty() {
             return;

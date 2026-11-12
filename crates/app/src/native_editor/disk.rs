@@ -10,8 +10,7 @@ use terminator_core::async_service::{CancellationToken, OperationContext, Policy
 use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::indent::{EditorConfig, IndentStyle};
 use terminator_native_edit::vim::{Key as VimKey, ModalEngine};
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError};
 
 /// Failed loads retry this many times, doubling the wait each time.
 const MAX_RETRIES: u32 = 8;
@@ -437,6 +436,7 @@ impl NativeDoc {
             encoding: self.encoding,
             expected: self.disk.fingerprint,
             force: self.force_save,
+            accepted: self.disk.keep_mine,
         };
         self.save_error = None;
         // A write is a mutation: no read deadline cancels it half-way.

@@ -61,11 +61,7 @@ impl App {
     }
 
     fn merge_tab_active(&self, tab: &Tab) -> bool {
-        self.selected
-            .as_ref()
-            .and_then(|project| self.layouts.get(project))
-            .and_then(|workspace| workspace.active_pane())
-            == Some(tab)
+        self.main_pane_active(tab)
     }
 }
 
@@ -95,16 +91,17 @@ fn merge_toolbar(ui: &mut egui::Ui, tab: &Tab, state: &mut MergeTab, clicks: &mu
 }
 
 fn merge_keys(ui: &egui::Ui, state: &mut MergeTab) {
-    let (next, previous) = ui.input_mut(|input| {
+    // Shift+F7 first: egui ignores an extra Shift, so F7 would take it.
+    let (previous, next) = ui.input_mut(|input| {
         (
-            input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
             input.consume_key(egui::Modifiers::SHIFT, egui::Key::F7),
+            input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
         )
     });
-    if next {
-        step(state, true);
-    } else if previous {
+    if previous {
         step(state, false);
+    } else if next {
+        step(state, true);
     }
 }
 

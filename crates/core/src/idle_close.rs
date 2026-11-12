@@ -20,7 +20,9 @@ pub struct Outcome {
     pub reason: String,
 }
 
-fn process_inventory() -> sysinfo::System {
+/// One full process scan. Take it before any lock and share it between the
+/// targets of one batch; `verify_shell` refreshes the shell itself.
+pub fn process_inventory() -> sysinfo::System {
     use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
     // Linux task entries include a shell's own worker threads. Only child
     // processes represent jobs; fish keeps worker threads alive while idle.
@@ -33,8 +35,10 @@ fn process_inventory() -> sysinfo::System {
     )
 }
 
-/// A fresh process inventory, never a cached GUI observation.
+/// Checks against a fresh process inventory (`process_inventory`), never a
+/// cached GUI observation.
 pub fn verify_shell(
+    system: &mut sysinfo::System,
     session: &crate::Session,
     expected: &std::path::Path,
 ) -> Result<u32, ShellCheckError> {
@@ -49,7 +53,6 @@ pub fn verify_shell(
     let pid = session
         .pid
         .ok_or_else(|| refuse(ShellRefusal::NoIdentity))?;
-    let mut system = process_inventory();
     // sysinfo's first macOS inventory has BSD process state only; refresh the
     // owned shell once more to obtain its actual thread wait state.
     system.refresh_processes_specifics(

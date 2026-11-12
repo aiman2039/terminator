@@ -1,4 +1,5 @@
 use super::*;
+use rusqlite::Connection;
 #[test]
 fn rotation_retention_clear_and_remove_ordering() {
     let dir = tempfile::tempdir().unwrap();
@@ -51,6 +52,30 @@ fn idle_writer_of_ended_session_is_closed_on_flush() {
     let files = history_files(&paths, Some(&sid));
     assert_eq!(fs::read(&files[0]).unwrap(), b"bye");
     history.append(&sid, b"again").unwrap();
+    history.flush().unwrap();
+    assert_eq!(history_files(&paths, Some(&sid)).len(), 1);
+}
+#[test]
+fn output_after_an_idle_pause_appends_to_the_last_segment_until_it_ages() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path().into());
+    paths.init().unwrap();
+    let sid = id();
+    let mut history = History::new(paths.clone()).unwrap();
+    history.append(&sid, b"one").unwrap();
+    history
+        .flush_closing_idle(std::time::Duration::ZERO)
+        .unwrap();
+    history.append(&sid, b"two").unwrap();
+    history.flush().unwrap();
+    let files = history_files(&paths, Some(&sid));
+    assert_eq!(files.len(), 1);
+    assert_eq!(fs::read(&files[0]).unwrap(), b"onetwo");
+    history.writers.get_mut(&sid).unwrap().opened -= std::time::Duration::from_secs(301);
+    history
+        .flush_closing_idle(std::time::Duration::ZERO)
+        .unwrap();
+    history.append(&sid, b"three").unwrap();
     history.flush().unwrap();
     assert_eq!(history_files(&paths, Some(&sid)).len(), 2);
 }

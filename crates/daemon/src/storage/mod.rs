@@ -1,126 +1,14 @@
-use anyhow::{Context, Result, anyhow, bail, ensure};
-use rusqlite::{Connection, params};
+use anyhow::{Result, anyhow, bail};
 use std::{
     fs,
     io::{Read, Write},
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
 };
 use terminator_core::*;
 
 mod decode;
-pub struct Store {
-    conn: Connection,
-    owner: Option<String>,
-}
-impl Store {
-    pub fn open(paths: &Paths) -> Result<(Self, State)> {
-        // Probe the version first: a newer database must fail loudly and
-        // must never be clobbered by the quarantine path below. An
-        // unreadable probe (missing or garbage file) falls through to a
-        // fresh or quarantined open.
-        if let Ok(conn) = Connection::open(paths.data.join("state.sqlite3")) {
-            let version: u32 = conn
-                .query_row("PRAGMA user_version", [], |r| r.get(0))
-                .unwrap_or(0);
-            ensure!(version <= 1, "Database is newer than this application");
-        }
-        match Self::read(paths) {
-            Ok(opened) => Ok(opened),
-            // Disk full, read-only or busy is not damage: never quarantine a
-            // good store for it.
-            Err(error) if !decode::corrupt(&error) => Err(error),
-            Err(error) => {
-                // A damaged store must never prevent startup: quarantine the
-                // files for forensics and start from defaults. If the
-                // directory itself is unusable the fresh open fails too and
-                // that error propagates, as before.
-                let stamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                for suffix in ["", "-wal", "-shm", "-journal"] {
-                    let from = paths.data.join(format!("state.sqlite3{suffix}"));
-                    if from.exists() {
-                        let _ = fs::rename(
-                            &from,
-                            paths
-                                .data
-                                .join(format!("state.corrupt-{stamp}.sqlite3{suffix}")),
-                        );
-                    }
-                }
-                let (store, mut state) = Self::read(paths).context(
-                    "Saved state was unreadable and quarantine did not produce a fresh store",
-                )?;
-                state.degraded = Some(format!(
-                    "Saved state was unreadable and was quarantined; started with defaults: {error:#}"
-                ));
-                Ok((store, state))
-            }
-        }
-    }
-    fn read(paths: &Paths) -> Result<(Self, State)> {
-        let conn = Connection::open(paths.data.join("state.sqlite3"))?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=3000;",
-        )?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL); PRAGMA user_version=1;")?;
-        let mut state: State =
-            match conn.query_row::<String, _, _>("SELECT json FROM app_state WHERE id=1", [], |r| {
-                r.get(0)
-            }) {
-                Ok(json) => decode::state(&json)?,
-                Err(rusqlite::Error::QueryReturnedNoRows) => State::default(),
-                Err(e) => return Err(e.into()),
-            };
-        if state.settings.validate().is_err() {
-            // Persisted settings that fail current validation could never
-            // have been saved by this build (saves are validated), so they
-            // come from corruption or hand edits. Reset rather than running
-            // with values no code path accepts.
-            state.settings = Settings::default();
-            state.degraded =
-                Some("Stored settings failed validation and were reset to defaults.".into());
-        }
-        // Presence is live-only; nothing persisted may claim it.
-        state.presence.clear();
-        state.terminal_titles.clear();
-        Ok((Self { conn, owner: None }, state))
-    }
-    pub fn bind_owner(&mut self, owner: String) {
-        self.owner = Some(owner);
-    }
-    pub fn save(&self, state: &State) -> Result<()> {
-        let mut owned;
-        let mut stripped;
-        let state = if let Some(owner) = &self.owner {
-            ensure!(&state.generation == owner, "Session store owner changed");
-            ensure!(
-                state.sessions.iter().all(|s| &s.generation == owner),
-                "Foreign session in owner store"
-            );
-            owned = state.clone();
-            owned.projects.clear();
-            owned.init_commands.clear();
-            owned.worktrees.clear();
-            owned.vnc_profiles.clear();
-            owned.selected_project = None;
-            owned.generations.clear();
-            owned.presence.clear();
-            &owned
-        } else if state.presence.is_empty() {
-            state
-        } else {
-            // Presence is live-only and never persisted; no migration needed.
-            stripped = state.clone();
-            stripped.presence.clear();
-            &stripped
-        };
-        self.conn.execute("INSERT INTO app_state(id,json) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json WHERE json_extract(excluded.json,'$.revision') >= json_extract(app_state.json,'$.revision')",params![serde_json::to_string(state)?])?;
-        Ok(())
-    }
-}
+mod store;
+pub use store::Store;
 pub fn history_files(paths: &Paths, session: Option<&str>) -> Vec<PathBuf> {
     let mut files = fs::read_dir(paths.history_dir())
         .into_iter()
@@ -140,6 +28,9 @@ pub fn history_files(paths: &Paths, session: Option<&str>) -> Vec<PathBuf> {
     files.sort();
     files
 }
+/// A segment rotates at this size or age.
+const SEGMENT_BYTES: u64 = 4 * 1024 * 1024;
+const SEGMENT_AGE: std::time::Duration = std::time::Duration::from_mins(5);
 struct Segment {
     session: String,
     size: u64,
@@ -155,6 +46,9 @@ struct Writer {
 pub struct History {
     paths: Paths,
     writers: std::collections::HashMap<String, Writer>,
+    /// Last segment of each idle-closed writer, reopened while young and
+    /// small so a pause between commands does not start a new file.
+    idle: std::collections::HashMap<String, (PathBuf, std::time::Instant)>,
     segments: std::collections::BTreeMap<PathBuf, Segment>,
     removed: std::collections::HashSet<String>,
     total: u64,
@@ -166,6 +60,7 @@ impl History {
         let mut history = Self {
             paths,
             writers: std::collections::HashMap::default(),
+            idle: std::collections::HashMap::default(),
             segments: std::collections::BTreeMap::default(),
             removed: std::collections::HashSet::default(),
             total: 0,
@@ -209,7 +104,7 @@ impl History {
         Ok(())
     }
     fn append_chunk<'a>(&mut self, session: &str, data: &'a [u8]) -> Result<&'a [u8]> {
-        const LIMIT: u64 = 4 * 1024 * 1024;
+        const LIMIT: u64 = SEGMENT_BYTES;
         self.rotate_writer_if_needed(session, LIMIT)?;
         if !self.writers.contains_key(session) {
             self.open_writer(session)?;
@@ -261,7 +156,7 @@ impl History {
                 .get(&writer.path)
                 .map(|segment| segment.size)
                 .ok_or_else(|| anyhow!("Missing history segment"))?;
-            size >= limit || writer.opened.elapsed() >= std::time::Duration::from_mins(5)
+            size >= limit || writer.opened.elapsed() >= SEGMENT_AGE
         } else {
             false
         };
@@ -275,6 +170,25 @@ impl History {
         Ok(())
     }
     fn open_writer(&mut self, session: &str) -> Result<()> {
+        if let Some((path, opened)) = self.idle.remove(session)
+            && opened.elapsed() < SEGMENT_AGE
+            && self
+                .segments
+                .get(&path)
+                .is_some_and(|s| s.size < SEGMENT_BYTES)
+            && let Ok(file) = fs::OpenOptions::new().append(true).open(&path)
+        {
+            let file = std::io::BufWriter::with_capacity(65536, file);
+            let written = std::time::Instant::now();
+            let writer = Writer {
+                file,
+                path,
+                opened,
+                written,
+            };
+            self.writers.insert(session.into(), writer);
+            return Ok(());
+        }
         self.sequence = self.sequence.saturating_add(1).max(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -318,7 +232,11 @@ impl History {
         for writer in self.writers.values_mut() {
             writer.file.flush()?;
         }
-        self.writers.retain(|_, w| w.written.elapsed() < idle);
+        let closed = self.writers.extract_if(|_, w| w.written.elapsed() >= idle);
+        let closed: Vec<_> = closed.map(|(s, w)| (s, (w.path, w.opened))).collect();
+        self.idle.extend(closed);
+        self.idle
+            .retain(|_, (_, opened)| opened.elapsed() < SEGMENT_AGE);
         Ok(())
     }
     pub fn exceeds(&self, settings: &Settings) -> bool {

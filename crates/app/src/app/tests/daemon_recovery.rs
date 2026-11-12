@@ -509,6 +509,23 @@ fn exited_non_resumable_session_closes_its_tab() {
 }
 
 #[test]
+fn a_terminal_without_a_record_in_a_background_tab_is_reported() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.connected = true;
+    app.state
+        .sessions
+        .push(session_fixture("shell", SessionKind::Shell));
+    let mut workspace = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+        "shell".into(),
+    )]));
+    let shell_tab = workspace.active.clone();
+    workspace.add("ghost-tab".into(), Tab::Terminal("ghost".into()));
+    workspace.active = shell_tab;
+    app.layouts.insert("a".into(), workspace);
+    assert_eq!(app.unavailable_tabs(), vec!["ghost".to_owned()]);
+}
+
+#[test]
 fn restart_is_hidden_for_newer_daemons_and_idle_services() {
     let (mut app, _, _dir) = fixture();
     let (jobs, requests) = mpsc::channel();

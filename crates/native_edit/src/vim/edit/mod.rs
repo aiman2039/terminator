@@ -62,7 +62,7 @@ impl VimEngine {
 
     /// Exclusive end of an inclusive span ending at `b`: past its
     /// grapheme, or nothing on an empty line (`d$` keeps the newline).
-    fn inclusive_end<B: Buffer>(&self, doc: &B, b: Cursor) -> usize {
+    pub(super) fn inclusive_end<B: Buffer>(&self, doc: &B, b: Cursor) -> usize {
         let text = doc.line_text(b.line);
         let len = text.chars().count();
         if b.col >= len {

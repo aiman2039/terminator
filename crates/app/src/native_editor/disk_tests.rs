@@ -536,6 +536,104 @@ fn a_landed_save_sends_did_save_to_the_language_server() {
 }
 
 #[test]
+fn undo_of_a_crlf_conversion_saves_one_cr_per_break() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.txt");
+    std::fs::write(&path, "a\r\nb\nc\r\n").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    let buffer = native.doc.as_mut().unwrap();
+    let text = buffer.text();
+    apply_edits(buffer, &text_edits(&text, "a\nb\nc\n"));
+    native.line_ending = LineEnding::Crlf;
+    assert!(native.doc.as_mut().unwrap().undo());
+    save(&mut native, &app);
+    assert_eq!(std::fs::read(&path).unwrap(), b"a\r\nb\r\nc\r\n");
+}
+
+#[test]
+fn an_undo_during_a_save_keeps_the_buffer_dirty_when_it_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memo.txt");
+    std::fs::write(&path, "0\n").unwrap();
+    let app = app(dir.path());
+    let mut native = open(&app, &path);
+    apply_edits(native.doc.as_mut().unwrap(), &text_edits("0\n", "1\n"));
+    native.start_save(&app.services);
+    assert!(native.doc.as_mut().unwrap().undo());
+    assert!(!native.dirty(), "the buffer matches the old saved text");
+    pump(&mut native, &app, |native| !native.saving);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "1\n");
+    assert!(native.dirty(), "the buffer differs from the new disk text");
+}
+
+#[test]
+fn keep_mine_makes_save_all_overwrite_the_newer_disk_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keep.txt");
+    std::fs::write(&path, "old\n").unwrap();
+    let mut app = app(dir.path());
+    let mut native = open(&app, &path);
+    std::fs::write(&path, "theirs\n").unwrap();
+    native.doc.as_mut().unwrap().insert(0, "mine ");
+    // What the conflict bar's Keep mine sets.
+    native.disk.keep_mine = Some(super::disk::Stamp(
+        super::file_io::NativeFileIo::disk_mtime(&path),
+    ));
+    app.native_docs.insert(path.clone(), native);
+    app.native_save_all();
+    let mut native = app.native_docs.remove(&path).unwrap();
+    pump(&mut native, &app, |native| !native.saving);
+    assert_eq!(native.save_error, None);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine old\n");
+}
+
+#[test]
+fn keep_mine_does_not_overwrite_a_later_disk_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keep.txt");
+    std::fs::write(&path, "old\n").unwrap();
+    let mut app = app(dir.path());
+    let mut native = open(&app, &path);
+    std::fs::write(&path, "theirs\n").unwrap();
+    native.doc.as_mut().unwrap().insert(0, "mine ");
+    native.disk.keep_mine = Some(super::disk::Stamp(
+        super::file_io::NativeFileIo::disk_mtime(&path),
+    ));
+    // A third version lands after Keep mine, with a newer modification time.
+    std::fs::write(&path, "newest\n").unwrap();
+    let later = SystemTime::now() + std::time::Duration::from_mins(1);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    app.native_docs.insert(path.clone(), native);
+    app.native_save_all();
+    let mut native = app.native_docs.remove(&path).unwrap();
+    pump(&mut native, &app, |native| !native.saving);
+    assert_eq!(native.save_error, Some(SaveError::ChangedOnDisk));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "newest\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn opening_a_fifo_fails_at_once_and_does_not_block_the_file_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let Err(error) = super::file_io::NativeFileIo::read(&path, MAX_NATIVE_BYTES) else {
+        panic!("a FIFO is not a regular file");
+    };
+    assert!(error.to_string().contains("Not a regular file"), "{error}");
+}
+
+#[test]
 fn only_a_disk_conflict_offers_save_anyway_whatever_the_wording() {
     use super::file_io::ChangedOnDisk;
     let conflict = anyhow::Error::from(ChangedOnDisk).context("Save notes.txt");

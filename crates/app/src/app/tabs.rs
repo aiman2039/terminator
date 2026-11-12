@@ -239,6 +239,10 @@ impl App {
             }
         }
         self.forget_tab_expanded(project, tab_id);
+        // A Git view opened again loads fresh data (History, Blame).
+        for key in &keys {
+            self.git_views.remove(key);
+        }
         self.prune_native_docs();
         self.prune_diff_docs();
         // An idle close finishing late must not drop a newer close request.

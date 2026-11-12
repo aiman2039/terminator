@@ -100,6 +100,7 @@ impl Shared {
             inputs_in_flight: 0,
             shell_executable,
             commands: crate::commands::Commands::default(),
+            osc_limit: Default::default(),
         }));
         Ok(Spawned {
             child,

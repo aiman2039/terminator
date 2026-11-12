@@ -67,8 +67,8 @@ impl Shared {
                     .build()?;
                 rt.block_on(async {
                     tokio::time::timeout(
-                        Duration::from_mins(5),
-                        run(RunInput { runtime: &runtime, ssh: &options.ssh, control: control.as_deref(), transfer: &transfer }),
+                        transfer::OUTER_TIMEOUT,
+                        run(RunInput { runtime: &runtime, ssh: &options.ssh, control: control.as_deref(), transfer: &transfer, deadline: transfer::deadline() }),
                     )
                     .await
                     .context("SFTP transfer timed out; publication state is unknown; check the destination before retrying")?
@@ -118,6 +118,7 @@ struct RunInput<'a> {
     ssh: &'a terminator_core::vnc::SshOptions,
     control: Option<&'a std::path::Path>,
     transfer: &'a VncTransfer,
+    deadline: tokio::time::Instant,
 }
 async fn run(input: RunInput<'_>) -> Result<()> {
     let RunInput {
@@ -125,6 +126,7 @@ async fn run(input: RunInput<'_>) -> Result<()> {
         ssh,
         control,
         transfer,
+        deadline,
     } = input;
     let progress = Session {
         runtime,
@@ -139,6 +141,7 @@ async fn run(input: RunInput<'_>) -> Result<()> {
                     remote: &transfer.remote,
                     id: &transfer.id,
                     progress: &progress,
+                    deadline,
                 })
                 .await?;
             }

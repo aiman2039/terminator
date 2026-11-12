@@ -57,11 +57,29 @@ impl App {
             }
         }
         self.explorer_type_to_search(ui, &typed, &nav);
-        ui.input_mut(|input| {
-            for (key, modifiers) in consumed {
-                input.consume_key(modifiers, key);
+        ui.input_mut(|input| Self::consume_tree_keys(input, &consumed));
+    }
+
+    /// Take the keys the tree handled out of the queue, with the clipboard
+    /// events that stand for Cmd/Ctrl+C, X and V: a terminal must not copy
+    /// its own selection over the copied paths.
+    pub(super) fn consume_tree_keys(
+        input: &mut egui::InputState,
+        consumed: &[(egui::Key, egui::Modifiers)],
+    ) {
+        for &(key, modifiers) in consumed {
+            input.consume_key(modifiers, key);
+            if modifiers.command {
+                input.events.retain(|event| {
+                    !matches!(
+                        (key, event),
+                        (egui::Key::C, egui::Event::Copy)
+                            | (egui::Key::X, egui::Event::Cut)
+                            | (egui::Key::V, egui::Event::Paste(_))
+                    )
+                });
             }
-        });
+        }
     }
 
     /// Keep arrows and Escape on the tree instead of moving focus.
@@ -80,7 +98,7 @@ impl App {
     }
 
     /// Pressed keys and typed text this frame.
-    fn tree_key_events(ui: &egui::Ui) -> (Vec<(egui::Key, egui::Modifiers)>, String) {
+    pub(super) fn tree_key_events(ui: &egui::Ui) -> (Vec<(egui::Key, egui::Modifiers)>, String) {
         let mut keys: Vec<(egui::Key, egui::Modifiers)> = Vec::new();
         let mut typed = String::new();
         ui.input(|input| {
@@ -93,6 +111,11 @@ impl App {
                         ..
                     } => keys.push((*key, *modifiers)),
                     egui::Event::Text(text) => typed.push_str(text),
+                    // The window layer turns Cmd/Ctrl+C, X and V into
+                    // clipboard events, with no Key event.
+                    egui::Event::Copy => keys.push((egui::Key::C, egui::Modifiers::COMMAND)),
+                    egui::Event::Cut => keys.push((egui::Key::X, egui::Modifiers::COMMAND)),
+                    egui::Event::Paste(_) => keys.push((egui::Key::V, egui::Modifiers::COMMAND)),
                     _ => {}
                 }
             }

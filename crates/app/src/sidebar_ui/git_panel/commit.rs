@@ -219,7 +219,10 @@ impl GitPanelPass<'_, '_> {
             tint: appearance::icon_color(),
         });
         ui.add(egui::Label::new(message).truncate())
-            .on_hover_text(format!("{reference} {message}"));
+            .on_hover_text(format!(
+                "{} {message}",
+                crate::sidebar_ui::explorer_prompts::short_hash(reference)
+            ));
         let lock = self.input.commit_lock.stash;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let drop = appearance::enabled_unless(ui, lock, |ui| ui.small_button("Drop"));

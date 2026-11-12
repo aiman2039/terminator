@@ -7,7 +7,7 @@ mod shared;
 mod tests;
 mod tool_focus;
 
-pub use jetbrains::{JetBrainsCommand, jetbrains_app_chords, mark_terminal, terminal_has_focus};
+pub use jetbrains::*;
 pub use meta::terminal_keeps;
 pub use migrate::{
     CMD_E_MOVES, RENAME_TERMINAL_MOVES, fill_moved_defaults, migrate_moved_defaults,
@@ -328,19 +328,7 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
     let Some(chord) = parse(value) else {
         return false;
     };
-    // egui matches ignoring extra Alt; an Alt chord is its own shortcut
-    // (`Cmd+Alt+L` reformats, it does not toggle the sidebar on `Cmd+L`).
-    let alt_variant = !chord.modifiers.alt
-        && ctx.input(|input| {
-            input.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Key { key, pressed: true, modifiers, .. }
-                        if *key == chord.key && modifiers.alt
-                )
-            })
-        });
-    if alt_variant {
+    if ctx.input(|input| meta::modifier_variant(input, chord)) {
         return false;
     }
     if meta::types_text(chord) {

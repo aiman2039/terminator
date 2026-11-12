@@ -659,3 +659,57 @@ fn ending_a_session_rename_resets_its_field_state() {
     assert!(!app.rename_seen);
     assert!(app.rename_field_id.is_none());
 }
+
+fn layout_dialog_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+    let raw = egui::RawInput {
+        events,
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(raw, |ui| app.layout_save_dialog(ui.ctx()));
+    output.textures_delta.clear();
+}
+
+fn enter_key() -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[test]
+fn save_layout_dialog_stays_open_until_a_name_is_saved() {
+    let (mut app, ctx, _dir) = fixture();
+    app.save_layout_dialog();
+    // The Enter that chose the palette row does not save or close it.
+    layout_dialog_frame(&mut app, &ctx, vec![enter_key()]);
+    for _ in 0..3 {
+        layout_dialog_frame(&mut app, &ctx, Vec::new());
+    }
+    assert!(
+        app.layout_save_name.is_some(),
+        "the dialog closed by itself"
+    );
+    layout_dialog_frame(&mut app, &ctx, vec![egui::Event::Text("wide".into())]);
+    layout_dialog_frame(&mut app, &ctx, vec![enter_key()]);
+    assert!(app.layout_save_name.is_none());
+    assert!(app.preferences.named_layouts.contains_key("wide"));
+}
+
+#[test]
+fn ask_agent_sends_nothing_after_the_agent_exited() {
+    let (mut app, _ctx, _dir) = fixture();
+    // "shell" has no live agent (the agent exited after the dialog opened).
+    app.state
+        .sessions
+        .push(session_fixture("shell", SessionKind::Shell));
+    app.active_session = None;
+    let mut ask = crate::palette::AskAgent::default();
+    ask.prompt = "why does `rm -rf build` fail?".into();
+    ask.target = Some("shell".into());
+    app.send_ask(&ask, true);
+    assert!(app.info.is_some(), "the user sees why nothing was sent");
+    assert_eq!(app.active_session, None, "no jump to the shell");
+}

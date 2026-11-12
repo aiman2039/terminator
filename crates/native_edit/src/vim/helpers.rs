@@ -3,6 +3,19 @@ pub(crate) fn doc_is_empty<B: Buffer>(doc: &B) -> bool {
     doc.len_chars() == 0
 }
 
+/// The break after `line` as the rope holds it: `\r\n` (two chars) in a
+/// mixed-ending buffer, else one char read as `\n`. Char offsets of text
+/// rebuilt from lines then match [`Buffer::char_at_line_col`].
+pub(crate) fn line_break<B: Buffer>(doc: &B, line: usize) -> &'static str {
+    let end = doc.char_at_line_col(line, usize::MAX);
+    let next = doc.char_at_line_col(line.saturating_add(1), 0);
+    if next.saturating_sub(end) == 2 {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 pub(crate) fn range_text<B: Buffer>(doc: &B, from: usize, to: usize) -> String {
     let (from, to) = (from.min(to), from.max(to).min(doc.len_chars()));
     // Reconstruct from lines to avoid another full-text accessor on the trait.
@@ -10,10 +23,12 @@ pub(crate) fn range_text<B: Buffer>(doc: &B, from: usize, to: usize) -> String {
     let mut idx = 0;
     for line in 0..doc.line_count() {
         if line > 0 {
-            if idx >= from && idx < to {
-                out.push('\n');
+            for c in line_break(doc, line.saturating_sub(1)).chars() {
+                if idx >= from && idx < to {
+                    out.push(c);
+                }
+                idx = idx.checked_add(1).unwrap_or(idx);
             }
-            idx = idx.checked_add(1).unwrap_or(idx);
         }
         for c in doc.line_text(line).chars() {
             if idx >= from && idx < to {

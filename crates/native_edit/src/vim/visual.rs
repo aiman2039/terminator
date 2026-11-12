@@ -1,6 +1,6 @@
 //! Visual-mode keys and the selection helpers they share with operators.
 use super::super::doc::Buffer;
-use super::helpers::range_text;
+use super::helpers::{normalize_newlines, range_text};
 use super::mode::{Bit, Cursor, Effect, Key, Mode, PendingOp, Prefix, Repeat};
 use super::motion::{Count, Mo};
 use super::state::VimEngine;
@@ -244,7 +244,7 @@ impl VimEngine {
         }
         // Capture the rectangle before deleting: a blockwise delete
         // replays from dims, not from motion bits.
-        let span = self.block_span();
+        let span = self.block_cells(doc);
         if let Some((text, width)) = self.block_register(doc) {
             self.write_delete_shaped(text, false, Some(width));
         }
@@ -285,9 +285,12 @@ impl VimEngine {
         if let Some((text, width)) = self.block_register(doc) {
             self.write_delete_shaped(text, false, Some(width));
         }
+        let cells = self.block_cells(doc);
         self.delete_selection_block(doc);
         self.rec_bit(Bit::Key(Key::Char('c')));
-        self.start_block_insert(doc, false);
+        if let Some(cells) = cells {
+            self.start_block_insert_at(doc, false, cells);
+        }
         Vec::new()
     }
 
@@ -352,18 +355,21 @@ impl VimEngine {
         if self.modeless {
             return (a, b);
         }
-        b = b
-            .checked_add(1)
-            .map_or(doc.len_chars(), |next| next.min(doc.len_chars()));
+        // Inside a line the end takes the whole grapheme under it; at the
+        // line end it takes the line break.
+        let (line, col) = doc.line_col_at(b);
+        b = if col < doc.line_text(line).chars().count() {
+            self.inclusive_end(doc, Cursor { line, col })
+        } else {
+            b.checked_add(1)
+                .map_or(doc.len_chars(), |next| next.min(doc.len_chars()))
+        };
         (a.min(b), a.max(b))
     }
 
     pub(super) fn yank_selection<B: Buffer>(&mut self, doc: &mut B, linewise: bool) {
         let (from, to) = self.selection_range(doc, linewise);
-        let mut text = range_text(doc, from, to);
-        if linewise && text.ends_with('\n') {
-            text.pop();
-        }
+        let text = linewise_text(range_text(doc, from, to), linewise);
         self.write_yank(text, linewise, None);
         self.cursor = self.anchor;
     }
@@ -371,10 +377,7 @@ impl VimEngine {
     /// Delete the selection into the register (linewise or charwise).
     pub(super) fn delete_selection<B: Buffer>(&mut self, doc: &mut B, linewise: bool) {
         let (from, to) = self.selection_range(doc, linewise);
-        let mut text = range_text(doc, from, to);
-        if linewise && text.ends_with('\n') {
-            text.pop();
-        }
+        let text = linewise_text(range_text(doc, from, to), linewise);
         if from < to {
             self.write_delete(text, linewise);
         }
@@ -384,4 +387,17 @@ impl VimEngine {
             self.cursor.col = Self::first_non_blank(doc, self.cursor.line);
         }
     }
+}
+
+/// Register text of a selection: linewise text holds `\n` breaks (like
+/// `yy`) without the final one; charwise text stays as the buffer has it.
+fn linewise_text(text: String, linewise: bool) -> String {
+    if !linewise {
+        return text;
+    }
+    let mut text = normalize_newlines(&text).into_owned();
+    if text.ends_with('\n') {
+        text.pop();
+    }
+    text
 }

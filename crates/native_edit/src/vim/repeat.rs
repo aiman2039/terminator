@@ -1,7 +1,7 @@
 use super::super::doc::Buffer;
+use super::super::rows::col_at_display_x;
 use super::mode::{Bit, BlockPending, Cursor, Effect, Key, PendingOp, Place, Repeat};
 use super::state::VimEngine;
-use super::words::line_len;
 
 /// A recorded rectangle edit to replay from the cursor line.
 struct BlockReplay {
@@ -326,9 +326,10 @@ impl VimEngine {
             self.apply_block_insert(doc, &block, text);
         }
         doc.end_undo_group();
+        let tab = doc.indent_style().tab_cells();
         self.cursor = Cursor {
             line: block.top,
-            col: block.left.min(line_len(doc, block.top)),
+            col: col_at_display_x(&doc.line_text(block.top), block.left, tab),
         };
         if text.is_none() {
             self.preferred_col = self.cursor.col;

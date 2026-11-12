@@ -191,6 +191,40 @@ fn closing_a_clean_editor_copy_keeps_the_other_views_undo_history() {
 }
 
 #[test]
+fn closing_the_last_clean_pane_tab_drops_its_buffer_after_the_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+    let path = dir.path().join("closed.txt");
+    let pane = Tab::NativeEditor { path: path.clone() };
+    app.native_docs
+        .insert(path.clone(), NativeDoc::loaded(path.clone(), "clean"));
+    app.layouts.insert(
+        "a".into(),
+        Workspace::from_layout(egui_dock::DockState::new(vec![pane.clone()])),
+    );
+    let at = app.layouts["a"].find_tab(&pane).unwrap();
+    {
+        let mut viewer = Viewer {
+            app: &mut app,
+            strip: false,
+            project: Some("a".into()),
+            tab: None,
+            window: None,
+            render_path: None,
+            render_tab: None,
+        };
+        assert_eq!(
+            viewer.on_close(&mut pane.clone(), at.node_path()),
+            OnCloseResponse::Close
+        );
+    }
+    app.layouts.get_mut("a").unwrap().remove_tab(at);
+    app.prune_unpainted(&ctx);
+    assert!(!app.native_docs.contains_key(&path), "no tab shows it");
+}
+
+#[test]
 fn an_edit_during_a_save_stays_unsaved_when_the_write_lands() {
     let mut native = NativeDoc::new(PathBuf::from("/tmp/save-race.txt"), true);
     native.doc = Some(Doc::new("one"));

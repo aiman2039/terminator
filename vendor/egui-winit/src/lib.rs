@@ -1559,21 +1559,23 @@ fn is_printable_char(chr: char) -> bool {
     !is_in_private_use_area && !chr.is_ascii_control()
 }
 
+// Terminator: a chord with Alt (Cmd+Alt+V, Cmd+Alt+C) is an app shortcut,
+// not a clipboard command, so it stays a Key event.
 fn is_cut_command(modifiers: egui::Modifiers, keycode: egui::Key) -> bool {
     keycode == egui::Key::Cut
-        || (modifiers.command && keycode == egui::Key::X)
+        || (modifiers.command && !modifiers.alt && keycode == egui::Key::X)
         || (cfg!(target_os = "windows") && modifiers.shift && keycode == egui::Key::Delete)
 }
 
 fn is_copy_command(modifiers: egui::Modifiers, keycode: egui::Key) -> bool {
     keycode == egui::Key::Copy
-        || (modifiers.command && keycode == egui::Key::C)
+        || (modifiers.command && !modifiers.alt && keycode == egui::Key::C)
         || (cfg!(target_os = "windows") && modifiers.ctrl && keycode == egui::Key::Insert)
 }
 
 fn is_paste_command(modifiers: egui::Modifiers, keycode: egui::Key) -> bool {
     keycode == egui::Key::Paste
-        || (modifiers.command && keycode == egui::Key::V)
+        || (modifiers.command && !modifiers.alt && keycode == egui::Key::V)
         || (cfg!(target_os = "windows") && modifiers.shift && keycode == egui::Key::Insert)
 }
 
@@ -2491,7 +2493,23 @@ pub fn short_window_event_description(event: &winit::event::WindowEvent) -> &'st
 
 #[cfg(test)]
 mod control_character_tests {
-    use super::{apply_control_character, key_for_control_character};
+    use super::{
+        apply_control_character, is_copy_command, is_cut_command, is_paste_command,
+        key_for_control_character,
+    };
+
+    #[test]
+    fn command_alt_chords_stay_keys_not_clipboard_commands() {
+        let command = egui::Modifiers::COMMAND;
+        let command_alt = command | egui::Modifiers::ALT;
+        assert!(is_paste_command(command, egui::Key::V));
+        assert!(is_copy_command(command, egui::Key::C));
+        assert!(is_cut_command(command, egui::Key::X));
+        assert!(is_paste_command(command | egui::Modifiers::SHIFT, egui::Key::V));
+        assert!(!is_paste_command(command_alt, egui::Key::V));
+        assert!(!is_copy_command(command_alt, egui::Key::C));
+        assert!(!is_cut_command(command_alt, egui::Key::X));
+    }
 
     #[test]
     fn control_e_is_the_e_key() {

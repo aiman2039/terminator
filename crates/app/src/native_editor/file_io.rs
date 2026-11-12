@@ -183,9 +183,11 @@ impl LineEnding {
     }
 
     /// File text for buffer text (the inverse of [`LineEnding::decode`]).
+    /// A `\r\n` already in the buffer (for example after Undo of a
+    /// conversion) stays one break, never `\r\r\n`.
     pub(crate) fn encode(self, text: String) -> String {
         if self == Self::Crlf {
-            text.replace('\n', "\r\n")
+            text.replace("\r\n", "\n").replace('\n', "\r\n")
         } else {
             text
         }
@@ -238,7 +240,14 @@ impl NativeFileIo {
     }
 
     pub(super) fn read(path: &Path, limit: u64) -> anyhow::Result<LoadedFile> {
-        let file = std::fs::File::open(path).context("Open file")?;
+        #[cfg(unix)]
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        // A FIFO with no writer would block `open` and the file-pool thread.
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NONBLOCK);
+        let file = options.open(path).context("Open file")?;
         anyhow::ensure!(file.metadata()?.is_file(), "Not a regular file");
         let mut bytes = Vec::new();
         use std::io::Read as _;
@@ -380,7 +389,8 @@ impl NativeFileIo {
     }
 
     /// The save step on the worker: refuse when the disk bytes are not
-    /// the ones last loaded or saved (unless forced), then write.
+    /// the ones last loaded or saved (unless forced, or the disk is still
+    /// at the modification time "Keep mine" accepted), then write.
     pub(super) fn save(request: SaveRequest) -> anyhow::Result<SavedFile> {
         let SaveRequest {
             path,
@@ -389,8 +399,12 @@ impl NativeFileIo {
             encoding,
             expected,
             force,
+            accepted,
         } = request;
-        if !force && Fingerprint::read(&path)? != expected {
+        if !force
+            && Fingerprint::read(&path)? != expected
+            && accepted != Some(super::disk::Stamp(Self::disk_mtime(&path)))
+        {
             return Err(ChangedOnDisk.into());
         }
         let text_hash = terminator_native_edit::doc::hash_text(&text);
@@ -451,4 +465,7 @@ pub(super) struct SaveRequest {
     pub(super) encoding: TextEncoding,
     pub(super) expected: Option<Fingerprint>,
     pub(super) force: bool,
+    /// "Keep mine": overwrite only while the disk still has this
+    /// modification time; a newer change is refused again.
+    pub(super) accepted: Option<super::disk::Stamp>,
 }

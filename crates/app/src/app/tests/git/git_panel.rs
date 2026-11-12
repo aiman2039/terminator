@@ -449,6 +449,52 @@ fn git_views_load_asynchronously_and_reload_after_a_commit() {
 }
 
 #[test]
+fn a_git_tab_opened_from_a_pane_lands_in_the_painted_workspace() {
+    let (mut app, _ctx, _dir) = fixture();
+    app.selected = Some("a".into());
+    app.insert("a", Tab::Terminal("shell".into()), None);
+    let tab = Tab::FileHistory {
+        cwd: PathBuf::from("/a"),
+        path: PathBuf::from("/a/f.rs"),
+    };
+    // As in `workspace_project`: the dock is out of `layouts` while panes
+    // paint, and a Commit Log or File History click opens a tab then.
+    let dock = app.layouts.remove("a").unwrap();
+    app.pending_git_tabs = Some(Vec::new());
+    app.open_git_tab(tab.clone());
+    app.layouts.insert("a".into(), dock);
+    app.drain_pending_git_tabs();
+    assert!(app.layouts["a"].contains(&tab));
+    assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+    assert!(app.pending_git_tabs.is_none());
+}
+
+#[test]
+fn a_closed_blame_tab_loads_fresh_data_when_opened_again() {
+    let (mut app, _ctx, _dir) = fixture();
+    let tab = Tab::Blame {
+        cwd: PathBuf::from("/a"),
+        path: PathBuf::from("/a/f.rs"),
+    };
+    let key = tab.key();
+    app.insert("a", Tab::Terminal("shell".into()), None);
+    app.insert("a", tab.clone(), None);
+    app.git_views.insert(
+        key.clone(),
+        crate::GitView::Blame(Ok(crate::git_log::BlameData::default())),
+    );
+    let group = app.layouts["a"]
+        .tabs
+        .iter()
+        .find(|group| group.layout.find_tab(&tab).is_some())
+        .map(|group| group.id.clone())
+        .unwrap();
+    app.close_workspace_tab_now("a", &group);
+    assert!(!app.layouts["a"].contains(&tab));
+    assert!(!app.git_views.contains_key(&key));
+}
+
+#[test]
 fn discard_and_drop_wait_for_confirmation() {
     let (mut app, ctx, _dir) = fixture();
     let (jobs, requests) = std::sync::mpsc::channel();
@@ -777,8 +823,32 @@ fn diff_navigation_shortcuts_apply_only_to_an_active_diff() {
     ] {
         assert!(app.shortcut_applies(action), "{action:?}");
         app.run_shortcut(&ctx, action);
-        assert_eq!(app.diff_nav.take(), Some(action));
+        assert_eq!(app.diff_nav.take().map(|(nav, _)| nav), Some(action));
     }
+}
+
+#[test]
+fn a_palette_diff_action_survives_into_the_next_frame_only() {
+    let (mut app, ctx, _dir) = fixture();
+    let pass = |app: &mut App| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.dispatch_shortcuts(ui.ctx(), true);
+        });
+        output.textures_delta.clear();
+    };
+    // As the palette does: the action runs after this pass's diff painted.
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.run_shortcut(ui.ctx(), Action::DiffNextChange);
+    });
+    output.textures_delta.clear();
+    pass(&mut app);
+    assert_eq!(
+        app.diff_nav.map(|(nav, _)| nav),
+        Some(Action::DiffNextChange),
+        "the next frame's diff view still takes it"
+    );
+    pass(&mut app);
+    assert_eq!(app.diff_nav, None, "an untaken diff key does not stay");
 }
 
 #[test]

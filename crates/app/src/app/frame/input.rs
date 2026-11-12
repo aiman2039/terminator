@@ -62,6 +62,14 @@ impl App {
     /// every key. Esc out of a tool window comes first, before any pane
     /// can read it.
     pub(crate) fn dispatch_shortcuts(&mut self, ctx: &egui::Context, jetbrains: bool) {
+        shortcuts::note_frame_focus(ctx);
+        // A diff key lives through the pass it was set in and the next one
+        // (a palette command runs after the diff painted); one no diff took
+        // must not fire on a later hover.
+        let pass = ctx.cumulative_pass_nr();
+        self.diff_nav = self
+            .diff_nav
+            .filter(|(_, set)| set.saturating_add(1) >= pass);
         self.escape_tool_window(ctx);
         // A focused remote app window takes every key, like VNC capture;
         // F8 or a click elsewhere gives the keys back.

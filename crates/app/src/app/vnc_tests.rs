@@ -307,6 +307,8 @@ fn repeated_vnc_frames_do_not_overwrite_a_new_local_clipboard() {
             })
             .collect::<Vec<_>>()
     };
+    // The first frame of a view (a reattach) only sets the baseline.
+    assert!(receive("old remote text").is_empty());
     assert_eq!(receive("remote text"), ["remote text"]);
     assert!(receive("remote text").is_empty());
     assert_eq!(receive("new remote text"), ["new remote text"]);

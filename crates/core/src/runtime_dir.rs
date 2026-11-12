@@ -81,6 +81,28 @@ fn private_runtime() -> Option<PathBuf> {
     None
 }
 
+/// How often long-lived owners refresh their runtime files. macOS
+/// `tmp_cleaner` deletes `/tmp` files whose access, change and modify
+/// times are all older than 3 days, and a read does not refresh the access
+/// time on APFS.
+pub const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
+
+/// Refreshes the modify time of an existing runtime file. A missing file
+/// stays missing: a lock file must not get a new inode under its holder.
+pub fn touch(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.set_modified(std::time::SystemTime::now())
+}
+
+/// Writes `token` to a missing auth file, else refreshes its modify time.
+pub fn keep_token(path: &Path, token: &str) -> Result<(), crate::AtomicWriteError> {
+    match touch(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::atomic_write(path, token.as_bytes())
+        }
+        result => Ok(result?),
+    }
+}
+
 /// True for a real directory (not a symlink) owned by this user.
 pub(crate) fn owned_dir(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && owned(&m))
@@ -114,6 +136,41 @@ mod tests {
         assert_eq!(choose(legacy.clone(), None, shared.clone()), shared);
         std::fs::create_dir(&legacy).unwrap();
         assert_eq!(choose(legacy.clone(), None, shared), legacy);
+    }
+
+    #[test]
+    fn deleted_auth_file_comes_back_with_the_live_token() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = root.path().join("auth");
+        keep_token(&auth, "live").unwrap();
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "live");
+        std::fs::remove_file(&auth).unwrap();
+        keep_token(&auth, "live").unwrap();
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "live");
+    }
+
+    #[test]
+    fn keep_alive_refreshes_old_runtime_files_without_creating_locks() {
+        let root = tempfile::tempdir().unwrap();
+        let lock = root.path().join("daemon.lock");
+        assert!(touch(&lock).is_err());
+        assert!(!lock.exists());
+        let file = std::fs::File::create(&lock).unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs(1_000_000))
+            .unwrap();
+        file.set_modified(old).unwrap();
+        touch(&lock).unwrap();
+        assert!(std::fs::metadata(&lock).unwrap().modified().unwrap() > old);
+        let auth = root.path().join("auth");
+        std::fs::write(&auth, "other").unwrap();
+        std::fs::File::open(&auth)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        keep_token(&auth, "live").unwrap();
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "other");
+        assert!(std::fs::metadata(&auth).unwrap().modified().unwrap() > old);
     }
 
     #[test]

@@ -77,6 +77,23 @@ impl Shared {
         })
     }
 
+    /// Coordinates a shared workspace write that ran its slow part
+    /// without the lock: admission and catalog refresh run again.
+    pub(super) fn prepare_shared_write(self: &Arc<Self>) -> Result<PreparedRequest> {
+        let class = RequestClass {
+            shared_write: true,
+            admission: true,
+            coordinated: true,
+        };
+        let coordination = self.coordinate(class.coordinated)?;
+        let early = self.admit_and_refresh(&class)?;
+        Ok(PreparedRequest {
+            coordination,
+            shared_write: class.shared_write,
+            early,
+        })
+    }
+
     fn coordinate(&self, coordinated: bool) -> Result<Option<std::fs::File>> {
         if !coordinated {
             return Ok(None);

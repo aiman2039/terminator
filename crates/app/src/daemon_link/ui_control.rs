@@ -9,7 +9,7 @@ use std::{
 use terminator_core::{
     Paths,
     async_service::{CancellationToken, OperationContext, Policy},
-    transport,
+    runtime_dir, transport,
     ui_control::{Envelope, Response},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -31,6 +31,7 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
     handle.submit(context, cancel.clone(), async move {
         let socket = paths.runtime.join("gui.sock");
         let bind = socket.clone();
+        let runtime = paths.clone();
         // Tokio listeners panic when constructed without a runtime, and the
         // catalog pool is native worker threads. Bind synchronously there,
         // then adopt the socket on this Tokio task.
@@ -38,14 +39,24 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
             .client()
             .catalog
             .run(&token, move || {
+                keep_runtime_files(&runtime);
                 Ok::<_, anyhow::Error>(transport::Listener::bind_ipc(&bind)?)
             })
             .await?;
         let listener = transport::AsyncListener::from_std(std_listener)?;
         let mut clients = FuturesUnordered::new();
+        let mut keep_alive = tokio::time::interval(runtime_dir::KEEP_ALIVE_INTERVAL);
+        keep_alive.tick().await;
         loop {
             tokio::select! {
                 () = token.cancelled() => break,
+                _ = keep_alive.tick() => {
+                    let runtime = paths.clone();
+                    let _ = service.client().catalog.run(&token, move || {
+                        keep_runtime_files(&runtime);
+                        anyhow::Ok(())
+                    }).await;
+                }
                 accepted = listener.accept(), if clients.len() < 16 => {
                     // EMFILE / ECONNABORTED are transient: keep serving.
                     let Ok((stream, _)) = accepted else {
@@ -71,6 +82,15 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
         Ok(Vec::new())
     })?;
     Ok(Server { cancel })
+}
+
+/// `ctl` authenticates GUI requests with the root token, which only the
+/// first migration wrote; the OS temp cleaner and reboots remove it. Keep
+/// it and the root locks present while the GUI runs. Best effort.
+fn keep_runtime_files(paths: &Paths) {
+    let _ = runtime_dir::keep_token(&paths.auth(), &terminator_core::id());
+    let _ = runtime_dir::touch(&paths.runtime.join("ui.lock"));
+    let _ = runtime_dir::touch(&paths.runtime.join("daemon.lock"));
 }
 async fn serve(stream: transport::AsyncStream, service: Services, paths: Paths) -> Result<()> {
     serve_for(ServeForInput {
@@ -256,6 +276,22 @@ async fn write_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gui_control_restores_a_missing_root_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = Paths::at(directory.path().into());
+        paths.init().unwrap();
+        assert!(paths.token().is_err());
+        keep_runtime_files(&paths);
+        let token = paths.token().unwrap();
+        assert!(!token.is_empty());
+        keep_runtime_files(&paths);
+        assert_eq!(
+            paths.token().unwrap(),
+            token,
+            "A live token must not change"
+        );
+    }
     #[tokio::test]
     async fn catalogue_delay_cannot_execute_a_gui_request_after_its_deadline() {
         let directory = tempfile::tempdir().unwrap();

@@ -158,7 +158,9 @@ impl App {
         let mut missing: Vec<String> = self
             .layouts
             .values()
-            .flat_map(|workspace| workspace.iter_all_tabs())
+            // Every top-level tab, not only the active one (Deref).
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|group| group.layout.iter_all_tabs())
             .chain(
                 self.preferences
                     .ide_strip_docks

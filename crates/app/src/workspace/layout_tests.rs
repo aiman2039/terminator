@@ -930,6 +930,43 @@ mod tests {
     }
 
     #[test]
+    fn strip_drop_slot_puts_the_tab_where_the_drop_bar_shows() {
+        let three = || {
+            let mut workspace =
+                Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+            let first = workspace.tabs[0].id.clone();
+            workspace.add("tB".into(), Tab::Terminal("two".into()));
+            workspace.add("tC".into(), Tab::Terminal("three".into()));
+            (workspace, first)
+        };
+        // A dropped between B and C (slot 2): [B, A, C].
+        let (mut workspace, a) = three();
+        assert!(workspace.reorder_group_to_slot(&a, 2));
+        assert_eq!(
+            workspace.ids(),
+            vec!["tB".to_owned(), a.clone(), "tC".to_owned()]
+        );
+        // A released on its own right half (slot 1): no move.
+        let (mut workspace, a) = three();
+        assert!(workspace.reorder_group_to_slot(&a, 1));
+        assert_eq!(
+            workspace.ids(),
+            vec![a.clone(), "tB".to_owned(), "tC".to_owned()]
+        );
+        // A dropped after C (slot 3): last.
+        let (mut workspace, a) = three();
+        assert!(workspace.reorder_group_to_slot(&a, 3));
+        assert_eq!(
+            workspace.ids(),
+            vec!["tB".to_owned(), "tC".to_owned(), a.clone()]
+        );
+        // C dropped before A (slot 0): first.
+        let (mut workspace, a) = three();
+        assert!(workspace.reorder_group_to_slot("tC", 0));
+        assert_eq!(workspace.ids(), vec!["tC".to_owned(), a, "tB".to_owned()]);
+    }
+
+    #[test]
     fn adopt_dock_reuses_a_blank_tab_and_appends_beside_content() {
         let mut workspace = Workspace::empty();
         let layout = DockState::new(vec![Tab::Terminal("shell".into())]);

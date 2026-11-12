@@ -55,6 +55,7 @@ impl Default for UiPreferences {
             attention_migrated: false,
             keymap_migrated: false,
             keymap_rename_migrated: false,
+            ide_strip_migrated: false,
             markdown_modes: HashMap::new(),
             hidden_projects: HashSet::new(),
             project_sort: ProjectSort::NameAsc,

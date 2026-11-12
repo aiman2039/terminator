@@ -54,6 +54,12 @@ impl Client {
                 Plan::Historical(owner, state) => inventories.push((owner, state, None)),
             }
         }
+        // Bound the cache to owners that are live right now.
+        let ids: HashSet<&str> = live.iter().map(|owner| owner.id.as_str()).collect();
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|id, _| ids.contains(id.as_str()));
         let mut responses = stream::iter(
             live.into_iter()
                 .map(|owner| self.clone().live_inventory(owner, active.to_owned())),
@@ -75,10 +81,29 @@ impl Client {
         owner: generations::Generation,
         active: String,
     ) -> Result<Inventory> {
-        let response = self.direct(owner.paths(), Request::Snapshot, None).await;
-        let (state, error) = match response {
-            Ok(Response::State(state)) => (Arc::new(*state), None),
-            result => {
+        let cached = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&owner.id)
+            .cloned();
+        let hint = cached.as_ref().map(|state| state.snapshot_hint());
+        let response = self.direct(owner.paths(), Request::Snapshot, hint).await;
+        let (state, error) = match (response, cached) {
+            (Ok(Response::State(state)), _) => {
+                let state = Arc::new(*state);
+                self.live
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(owner.id.clone(), Arc::clone(&state));
+                (state, None)
+            }
+            (Ok(Response::Unchanged), Some(cached)) => (cached, None),
+            (result, _) => {
+                self.live
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&owner.id);
                 let error = format!(
                     "Owner unavailable: {:?}",
                     result.as_ref().map_err(|e| ErrorReport(e))

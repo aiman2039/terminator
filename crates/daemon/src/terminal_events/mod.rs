@@ -7,6 +7,8 @@ use base64::{
 use std::collections::{BTreeMap, VecDeque};
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
+pub(crate) mod osc_limit;
+
 /// VT420 + 132-col + printer + selective erase + ANSI color.
 /// VT102 (`?6c`) makes TUIs skip mouse, alt-screen, and truecolor probes.
 const PRIMARY_DA: &str = "\x1b[?64;1;2;6;22c";

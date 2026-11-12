@@ -48,6 +48,11 @@ pub(crate) struct PendingGitConfirm {
     pub(crate) action: GitConfirm,
 }
 
+/// A shelf's commit hash as the panel shows it.
+pub(super) fn short_hash(hash: &str) -> &str {
+    hash.get(..7).unwrap_or(hash)
+}
+
 impl GitConfirm {
     fn prompt(&self) -> (String, &'static str) {
         match self {
@@ -59,7 +64,7 @@ impl GitConfirm {
                     (format!("Discard changes to {name}?"), "Discard")
                 }
             }
-            Self::DropShelf(reference) => (format!("Drop shelf {reference}?"), "Drop"),
+            Self::DropShelf(hash) => (format!("Drop shelf {}?", short_hash(hash)), "Drop"),
         }
     }
 

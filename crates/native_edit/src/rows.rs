@@ -395,6 +395,13 @@ impl RowCells<'_> {
             .sum()
     }
 
+    /// Hint cells painted before the char at `col`: [`Self::char_x`] minus
+    /// the char's display cell.
+    #[must_use]
+    pub fn hint_shift(&self, col: usize) -> usize {
+        self.shift(col, true)
+    }
+
     /// Cell where the char at `col` is painted (after any hint before it).
     #[must_use]
     pub fn char_x(&self, col: usize) -> usize {

@@ -48,7 +48,9 @@ pub(super) fn waiter_should_end(
 
 /// Which delivered banners to remove. Marker hits win, so a banner that still
 /// carries this waiter's marker is the only one cleared. The title fallback
-/// runs only when Notification Center kept the sentence and dropped the marker.
+/// runs only when Notification Center kept the sentence and dropped the marker:
+/// a banner that still carries any marker belongs to another waiter (or
+/// another daemon with the same bundle id) and is never cleared.
 #[cfg(any(target_os = "macos", test))]
 pub(super) fn banners_to_remove(banners: &[Banner<'_>], marker: &str, summary: &str) -> Vec<usize> {
     let marked = banners
@@ -66,7 +68,7 @@ pub(super) fn banners_to_remove(banners: &[Banner<'_>], marker: &str, summary: &
     banners
         .iter()
         .enumerate()
-        .filter(|(_, banner)| banner.title == summary && banner.text.starts_with(BODY_LEAD))
+        .filter(|(_, banner)| banner.title == summary && banner.text == BODY_LEAD)
         .map(|(index, _)| index)
         .collect()
 }

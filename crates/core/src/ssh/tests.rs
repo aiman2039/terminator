@@ -169,6 +169,8 @@ fn known_hosts_lines_bracket_non_default_ports() {
         hostname: "fixture.example".into(),
         port: 22,
         host_key_alias: None,
+        user_known_hosts: Vec::new(),
+        address_family: None,
     };
     assert_eq!(
         known_hosts_line(&resolved.known_hosts_host(), &key),
@@ -216,7 +218,27 @@ fn keyscan_and_keygen_output_is_parsed() {
     assert_eq!(resolved.hostname, "fixture.example");
     assert_eq!(resolved.port, 2222);
     assert_eq!(resolved.host_key_alias, None);
+    assert!(resolved.user_known_hosts.is_empty());
     assert!(parse_resolved("hostname -oProxyCommand=x\nport 22\n").is_err());
+}
+#[test]
+fn resolved_hosts_keep_the_configured_known_hosts_files() {
+    let resolved = parse_resolved(
+        "hostname vm.example\nport 22\nuserknownhostsfile ~/.ssh/known_hosts ~/.ssh/known_hosts2\n",
+    )
+    .unwrap();
+    assert_eq!(
+        resolved.user_known_hosts,
+        ["~/.ssh/known_hosts", "~/.ssh/known_hosts2"]
+    );
+    let resolved =
+        parse_resolved("hostname vm.example\nport 22\nuserknownhostsfile /dev/null\n").unwrap();
+    assert_eq!(resolved.user_known_hosts, ["/dev/null"]);
+    assert_eq!(resolved.address_family, None);
+    let resolved = parse_resolved("hostname vm.example\nport 22\naddressfamily inet\n").unwrap();
+    assert_eq!(resolved.address_family.as_deref(), Some("inet"));
+    let resolved = parse_resolved("hostname vm.example\nport 22\naddressfamily any\n").unwrap();
+    assert_eq!(resolved.address_family, None);
 }
 #[test]
 fn saved_ports_stay_explicit_and_missing_ports_defer_to_config() {

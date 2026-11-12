@@ -44,7 +44,11 @@ impl Shared {
         {
             budgets.insert(owner.id.clone(), 0);
             for path in storage::history_files(&owner.paths(), None) {
-                let metadata = fs::metadata(&path)?;
+                // The history worker may delete a segment after the listing.
+                let metadata = match fs::metadata(&path) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    metadata => metadata?,
+                };
                 let usage = budgets
                     .get_mut(&owner.id)
                     .ok_or_else(|| anyhow!("Missing history budget"))?;
@@ -225,5 +229,40 @@ impl Shared {
         let mut s = relock(&self.state);
         s.degraded = Some(message.into());
         s.revision = s.revision.saturating_add(1);
+    }
+    /// Clears a warning that `source` set, after that source succeeds again.
+    pub(crate) fn recovered(&self, source: &str) {
+        clear_degraded(&mut relock(&self.state), source);
+    }
+}
+
+/// Clears `degraded` only when its message came from `source` (its prefix),
+/// so a recovery does not hide another fault.
+pub(crate) fn clear_degraded(state: &mut State, source: &str) {
+    if state
+        .degraded
+        .as_deref()
+        .is_some_and(|message| message.starts_with(source))
+    {
+        state.degraded = None;
+        state.revision = state.revision.saturating_add(1);
+    }
+}
+
+#[cfg(test)]
+mod degraded_tests {
+    use super::*;
+
+    #[test]
+    fn a_recovered_source_clears_only_its_own_warning() {
+        let mut state = State {
+            degraded: Some("Global history retention: No such file".into()),
+            ..State::default()
+        };
+        clear_degraded(&mut state, "Agent state not saved:");
+        assert!(state.degraded.is_some());
+        clear_degraded(&mut state, "Global history retention:");
+        assert!(state.degraded.is_none());
+        assert_eq!(state.revision, 1);
     }
 }

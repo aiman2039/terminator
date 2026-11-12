@@ -67,6 +67,47 @@ fn add_list_and_remove_preserve_dirty_checkouts_and_branch_refs() {
     );
 }
 #[test]
+fn an_existing_checkout_matches_only_its_own_path_and_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["config", "user.name", "Fixture"]);
+    git(&repo, &["config", "user.email", "fixture@example.invalid"]);
+    std::fs::write(repo.join("file"), "base").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "base"]);
+    let common = common_dir(&repo).unwrap();
+    let path = dunce::canonicalize(dir.path()).unwrap().join("task");
+    assert!(existing(&common, &path, Some("task")).unwrap().is_none());
+    add(AddInput {
+        common: &common,
+        path: &path,
+        branch: Some("task"),
+        start: "HEAD",
+    })
+    .unwrap();
+    assert!(existing(&common, &path, Some("task")).unwrap().is_some());
+    assert!(existing(&common, &path, Some("other")).unwrap().is_none());
+    assert!(existing(&common, &path, None).unwrap().is_none());
+    let main = git_branch(&repo);
+    assert!(
+        existing(&common, &repo, Some(&main)).unwrap().is_none(),
+        "the main checkout is never adopted"
+    );
+}
+
+fn git_branch(repo: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["branch", "--show-current"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
 fn locked_clean_checkout_is_preserved_until_unlocked() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");

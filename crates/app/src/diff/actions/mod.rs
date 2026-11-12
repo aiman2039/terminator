@@ -471,8 +471,13 @@ fn patch(path: &Path, before: &Version, after: &Version) -> Vec<u8> {
             before.mode, after.mode
         ));
     }
+    // Lines end at `\n` only, as Git reads them (a bare `\r` is text).
+    let old: Vec<&str> = before.text.split_inclusive('\n').collect();
+    let new: Vec<&str> = after.text.split_inclusive('\n').collect();
     patch.push_str(
-        &similar::TextDiff::from_lines(&before.text, &after.text)
+        &similar::TextDiff::configure()
+            .newline_terminated(true)
+            .diff_slices(&old, &new)
             .unified_diff()
             .context_radius(3)
             .header(

@@ -194,6 +194,12 @@ impl App {
         let Some(project) = self.selected.clone() else {
             return;
         };
+        // The main dock is checked out while it paints: a tab added to
+        // `layouts` now would land in a throwaway workspace.
+        if let Some(pending) = self.pending_git_tabs.as_mut() {
+            pending.push(tab);
+            return;
+        }
         let workspace = self
             .layouts
             .entry(project.clone())
@@ -202,6 +208,16 @@ impl App {
             workspace.add(terminator_core::id(), tab.clone());
         }
         self.insert(&project, tab, None);
+    }
+
+    /// Opens the Git view tabs queued while the main dock painted.
+    pub(crate) fn drain_pending_git_tabs(&mut self) {
+        for tab in self.pending_git_tabs.take().unwrap_or_default() {
+            if matches!(tab, Tab::Merge { .. }) {
+                self.reset_hidden_merge(&tab);
+            }
+            self.open_git_tab(tab);
+        }
     }
 
     pub(crate) fn open_commit_log(&mut self) {
