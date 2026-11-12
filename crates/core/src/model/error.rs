@@ -26,6 +26,8 @@ pub enum SettingsError {
     HistoryDays { days: u64 },
     #[error("Local History age must be 0–3650 days")]
     LocalHistoryDays { days: u32 },
+    #[error("Local History needs 1–65536 MiB and 1–10000 snapshots per file")]
+    LocalHistoryLimits { mib: u64, file_entries: u32 },
     #[error("Invalid disk limits")]
     DiskLimits { session_mib: u64, total_mib: u64 },
     #[error("History lines must be 100–20000")]

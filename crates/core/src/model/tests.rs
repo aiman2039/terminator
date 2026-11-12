@@ -115,3 +115,19 @@ fn local_history_days_default_to_7_for_old_settings_and_are_bounded() {
     s.local_history_days = 3651;
     assert!(s.validate().is_err());
 }
+
+#[test]
+fn local_history_limits_default_for_old_settings_and_are_bounded() {
+    let old: Settings = serde_json::from_value(serde_json::json!({"history_days": 30})).unwrap();
+    assert_eq!(old.local_history_mib, 512);
+    assert_eq!(old.local_history_file_entries, 200);
+    assert!(old.validate().is_ok());
+    for (mib, file_entries) in [(0, 200), (65537, 200), (512, 0), (512, 10_001)] {
+        let s = Settings {
+            local_history_mib: mib,
+            local_history_file_entries: file_entries,
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err(), "{mib} MiB, {file_entries} entries");
+    }
+}

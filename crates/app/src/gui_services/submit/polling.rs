@@ -155,6 +155,7 @@ impl SnapshotPoller {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Instant::now());
         }
         if let Ok(Response::State(state)) = result {
+            self.service.set_capabilities(&state.capabilities);
             self.unavailable_owners = state
                 .generations
                 .iter()

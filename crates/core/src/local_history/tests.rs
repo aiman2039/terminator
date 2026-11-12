@@ -103,7 +103,7 @@ fn prune_removes_only_expired_entries_and_orphaned_blobs() {
     store.label(Path::new("/p"), "old label", EXPIRED).unwrap();
     let orphan = dir.path().join(DIR).join("blobs").join(hash(b"orphan"));
     fs::write(&orphan, b"orphan").unwrap();
-    let pruned = store.prune(NOW, 7).unwrap();
+    let pruned = store.prune(NOW, week()).unwrap();
     assert_eq!(
         pruned,
         Pruned {
@@ -126,8 +126,89 @@ fn prune_with_zero_days_keeps_everything() {
     let (_dir, store) = store();
     let path = Path::new("/p/a.rs");
     record(&store, path, b"old", 1);
-    assert_eq!(store.prune(NOW, 0).unwrap(), Pruned::default());
+    let off = Limits {
+        max_age_days: 0,
+        total_bytes: 0,
+        file_entries: 0,
+    };
+    assert_eq!(store.prune(NOW, off).unwrap(), Pruned::default());
     assert_eq!(store.list(path).unwrap().len(), 1);
+}
+
+fn week() -> Limits {
+    Limits::new(7, DEFAULT_MIB, DEFAULT_FILE_ENTRIES)
+}
+
+#[test]
+fn prune_keeps_only_the_newest_entries_of_each_file() {
+    let (_dir, store) = store();
+    let path = Path::new("/p/notes.txt");
+    for n in 0..5u8 {
+        record(&store, path, &[b'a' + n], RECENT + u64::from(n));
+    }
+    let limits = Limits {
+        file_entries: 2,
+        ..week()
+    };
+    let pruned = store.prune(NOW, limits).unwrap();
+    assert_eq!(pruned.entries, 3);
+    let texts: Vec<String> = store
+        .list(path)
+        .unwrap()
+        .iter()
+        .map(|e| store.read(&e.id).unwrap())
+        .collect();
+    assert_eq!(texts, ["e", "d"]);
+}
+
+#[test]
+fn prune_drops_the_oldest_entries_of_all_files_until_under_the_size_budget() {
+    let (_dir, store) = store();
+    let (a, b) = (Path::new("/p/a.log"), Path::new("/p/b.log"));
+    record(&store, a, &[b'1'; 400], RECENT);
+    record(&store, b, &[b'2'; 400], RECENT + 1);
+    record(&store, a, &[b'3'; 400], RECENT + 2);
+    // A blob two entries share counts once.
+    record(&store, b, &[b'3'; 400], RECENT + 3);
+    let limits = Limits {
+        total_bytes: 800,
+        ..week()
+    };
+    let pruned = store.prune(NOW, limits).unwrap();
+    assert_eq!(
+        pruned,
+        Pruned {
+            entries: 1,
+            blobs: 1
+        }
+    );
+    assert_eq!(store.list(a).unwrap().len(), 1, "the oldest of a is gone");
+    assert_eq!(store.list(b).unwrap().len(), 2);
+    let tight = Limits {
+        total_bytes: 400,
+        ..week()
+    };
+    store.prune(NOW, tight).unwrap();
+    assert!(store.list(b).unwrap().len() == 1 && store.list(a).unwrap().len() == 1);
+    assert_eq!(
+        store.read(&store.list(a).unwrap()[0].id).unwrap(),
+        "3".repeat(400)
+    );
+}
+
+#[test]
+fn list_page_returns_the_timeline_in_pages_with_the_total() {
+    let (_dir, store) = store();
+    let path = Path::new("/p/a.rs");
+    for n in 0..5u8 {
+        record(&store, path, &[b'a' + n], u64::from(n));
+    }
+    let (page, total) = store.list_page(path, 0, 2).unwrap();
+    assert_eq!((page.len(), total), (2, 5));
+    assert_eq!(page[0].timestamp_ms, 4, "newest first");
+    let (last, _) = store.list_page(path, 4, 2).unwrap();
+    assert_eq!(last.len(), 1);
+    assert!(store.list_page(path, 9, 2).unwrap().0.is_empty());
 }
 
 #[test]
@@ -136,7 +217,7 @@ fn a_shared_blob_survives_when_one_user_expires() {
     let (a, b) = (Path::new("/p/a"), Path::new("/p/b"));
     let expired = record(&store, a, b"same", EXPIRED).unwrap();
     record(&store, b, b"same", NOW).unwrap();
-    store.prune(NOW, 7).unwrap();
+    store.prune(NOW, week()).unwrap();
     assert!(!store.has_history(a));
     assert_eq!(store.read(&expired.id).unwrap(), "same");
 }

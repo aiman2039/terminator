@@ -176,6 +176,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         vnc::DETACH_TIMEOUT_CAPABILITY.into(),
         terminator_core::local_history::CAPABILITY.into(),
         terminator_core::terminal_title::CAPABILITY.into(),
+        terminator_core::local_history::LIMITS_CAPABILITY.into(),
     ];
     if catalog {
         state.daemon_build = Some(generations::build_identity(

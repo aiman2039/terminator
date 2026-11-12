@@ -172,6 +172,7 @@ pub fn read_only(request: &Request) -> bool {
             | Request::RemoteAppsState { .. }
             | Request::LocalHistoryList { .. }
             | Request::LocalHistoryRead { .. }
+            | Request::LocalHistoryPage { .. }
     )
 }
 

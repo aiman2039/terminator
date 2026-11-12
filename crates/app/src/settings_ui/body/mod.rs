@@ -139,6 +139,34 @@ impl App {
         })
         .response
         .on_disabled_hover_text("Requires an updated daemon.");
+        self.local_history_size_setting(ui);
+    }
+
+    /// Total size of Local History snapshots (`local-history-limits-v1`).
+    fn local_history_size_setting(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible("Local History MiB", "snapshots size limit budget disk") {
+            return;
+        }
+        let supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == terminator_core::local_history::LIMITS_CAPABILITY);
+        ui.add_enabled_ui(supported, |ui| {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Local History MiB",
+                description: "Size limit for file snapshots. The oldest go first.",
+                add_control: |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings_draft.local_history_mib)
+                            .range(1..=65536),
+                    );
+                },
+            });
+        })
+        .response
+        .on_disabled_hover_text("Requires an updated daemon.");
     }
 
     /// How long a VNC session with no open tab stays connected.

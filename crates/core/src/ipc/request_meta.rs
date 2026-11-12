@@ -104,6 +104,7 @@ impl Request {
             Self::LocalHistoryRead { .. } => "LocalHistoryRead",
             Self::LocalHistoryLabel { .. } => "LocalHistoryLabel",
             Self::LocalHistoryRevert { .. } => "LocalHistoryRevert",
+            Self::LocalHistoryPage { .. } => "LocalHistoryPage",
         }
     }
 }

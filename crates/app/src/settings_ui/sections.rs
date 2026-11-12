@@ -150,7 +150,7 @@ impl SettingsSection {
             }
             Self::History => {
                 "history days age retain mib per session total disk scrollback local snapshots \
-                 files revert"
+                 files revert size limit budget"
             }
             Self::Updates => {
                 "updates check automatic sparkle install installation repair session service"

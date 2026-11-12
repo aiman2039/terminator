@@ -78,6 +78,8 @@ impl Default for Settings {
             ssh_connect_timeout_seconds: crate::ssh::Tuning::DEFAULT.connect_timeout_seconds,
             ssh_command_timeout_seconds: crate::ssh::Tuning::DEFAULT.command_timeout_seconds,
             local_history_days: 7,
+            local_history_mib: crate::local_history::DEFAULT_MIB,
+            local_history_file_entries: crate::local_history::DEFAULT_FILE_ENTRIES,
         }
     }
 }
@@ -201,6 +203,14 @@ impl Settings {
         if self.local_history_days > 3650 {
             return Err(SettingsError::LocalHistoryDays {
                 days: self.local_history_days,
+            });
+        }
+        if !((1..=65536).contains(&self.local_history_mib)
+            && (1..=10_000).contains(&self.local_history_file_entries))
+        {
+            return Err(SettingsError::LocalHistoryLimits {
+                mib: self.local_history_mib,
+                file_entries: self.local_history_file_entries,
             });
         }
         if !self.ssh_tuning().valid() {
