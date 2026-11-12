@@ -134,10 +134,10 @@ impl App {
             label: "Font size",
             description: "Applies to terminal surfaces.",
             add_control: |ui| {
-                ui.add(egui::Slider::new(
-                    &mut self.settings_draft.font_size,
-                    9.0..=32.0,
-                ));
+                appearance::slider(
+                    ui,
+                    egui::Slider::new(&mut self.settings_draft.font_size, 9.0..=32.0),
+                );
             },
         });
     }

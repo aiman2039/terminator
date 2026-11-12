@@ -7884,6 +7884,7 @@ dependencies = [
  "csv",
  "dispatch2",
  "eframe",
+ "egui",
  "egui-winit",
  "egui_commonmark",
  "egui_dock",

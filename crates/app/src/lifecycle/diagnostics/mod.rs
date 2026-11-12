@@ -15,7 +15,8 @@ pub struct Diagnostics {
     started: Instant,
     requested: bool,
     force_closed: bool,
-    scale_configured: bool,
+    /// The fixture's points-per-pixel scale, once configured.
+    scale: Option<f32>,
     sized: bool,
     input_phase: u8,
     path: Option<std::path::PathBuf>,
@@ -36,7 +37,7 @@ impl Default for Diagnostics {
             started: Instant::now(),
             requested: false,
             force_closed: false,
-            scale_configured: false,
+            scale: None,
             sized: false,
             input_phase: 0,
             path: std::env::var_os("TERMINATOR_CAPTURE_PATH").map(Into::into),

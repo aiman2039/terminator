@@ -15,10 +15,13 @@ struct Chrome {
     menu_muted: AtomicU32,
     menu_line: AtomicU32,
     primary: AtomicU32,
+    control_line: AtomicU32,
 }
 
 /// Carbon accent, the primary fill until the first [`apply`].
 const DEFAULT_PRIMARY: Color32 = Color32::from_rgb(0xEF, 0x62, 0x5A);
+/// Carbon `control_line`, until the first [`apply`].
+const DEFAULT_CONTROL_LINE: Color32 = Color32::from_rgb(0x6F, 0x6E, 0x6E);
 
 /// Keep small navigation/action glyphs legible independently of secondary text.
 const DARK_ICON: Color32 = Color32::from_rgb(242, 244, 248);
@@ -54,6 +57,7 @@ static CHROME: Chrome = Chrome {
     menu_muted: AtomicU32::new(packed(DARK_MENU_MUTED)),
     menu_line: AtomicU32::new(packed(DARK_MENU_LINE)),
     primary: AtomicU32::new(packed(DEFAULT_PRIMARY)),
+    control_line: AtomicU32::new(packed(DEFAULT_CONTROL_LINE)),
 };
 
 fn load(slot: &AtomicU32) -> Color32 {
@@ -89,6 +93,10 @@ pub(super) fn menu_line() -> Color32 {
 pub fn primary_fill() -> Color32 {
     load(&CHROME.primary)
 }
+/// Outline of a checkbox or text field at rest, and a slider's rail.
+pub fn control_line() -> Color32 {
+    load(&CHROME.control_line)
+}
 
 /// Icon, menu fill, menu text, menu muted, and menu line colors for `theme`.
 /// Dark popups sit one layer above the editor, like `JetBrains` popups.
@@ -122,6 +130,10 @@ fn set_chrome(theme: &AppearanceConfig) {
     store(&CHROME.menu_muted, muted);
     store(&CHROME.menu_line, line);
     store(&CHROME.primary, color(theme.primary_color()));
+    store(
+        &CHROME.control_line,
+        super::controls::control_line_for(color(&theme.surface), color(&theme.text)),
+    );
 }
 
 /// Black or white, whichever reads on `background`.
@@ -219,6 +231,7 @@ pub fn dock_style(ui_style: &egui::Style, theme: &AppearanceConfig) -> egui_dock
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(bundled_fonts());
     egui_extras::install_image_loaders(ctx);
+    super::controls::install_rest_outlines(ctx);
     apply(ctx, &AppearanceConfig::default());
 }
 

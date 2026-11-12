@@ -170,10 +170,15 @@ pub(crate) fn plan(task: &TaskDef, trust: Option<bool>, agent_words: &[String]) 
             Some(true) => {}
         }
     }
-    RunPlan::Type(PostCreate {
-        input: task.command.clone(),
-        enter: task.enter && !names_agent(&task.command, agent_words),
-    })
+    let enter = task.enter && !names_agent(&task.command, agent_words);
+    // A line break in the typed text is Enter: a command typed without
+    // Enter must be one line, or its first line would run.
+    let input = if enter {
+        task.command.clone()
+    } else {
+        crate::diff::notes::one_line(&task.command)
+    };
+    RunPlan::Type(PostCreate { input, enter })
 }
 
 /// Whether any word of `command` is an agent program: also a path's last

@@ -229,12 +229,16 @@ impl Viewer<'_> {
                 }),
             },
         );
-        let chips_left = appearance::paint_usage_chips(ui, bar.bar.rect, bar.controls_left, &usage);
+        // Side by side, right to left: the program badge next to the
+        // controls, then the agent usage chips, then the broadcast chip.
+        let right = self
+            .app
+            .paint_program_status(ui, sid, (bar.bar.rect, bar.controls_left));
+        let chips_left = appearance::paint_usage_chips(ui, bar.bar.rect, right, &usage);
         if self.app.broadcasting_to(sid) {
             let accent = appearance::color(&self.app.theme.status_waiting);
             appearance::paint_broadcast_chip(ui, bar.bar.rect, chips_left, accent);
         }
-        self.app.paint_program_status(ui, sid, &bar);
         bar
     }
 

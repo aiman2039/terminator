@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 libc.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow", "x11", "wayland", "accesskit", "system_fonts"] }
+# `experimental` exposes the widget style providers (`appearance::controls::rest_outline`).
+egui = { version = "0.37", default-features = false, features = ["experimental"] }
 egui-winit = { version = "0.37", default-features = false, optional = true }
 egui_dock = { version = "0.21", features = ["serde"] }
 egui_term = { path = "../../vendor/egui_term" }
