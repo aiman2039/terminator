@@ -1,4 +1,5 @@
 //! Git history, merge and worktree UI.
+pub(crate) mod branch_ui;
 pub(super) mod git_log;
 pub(super) mod local_history;
 pub(super) mod merge;
@@ -13,4 +14,6 @@ pub(super) mod worktree_ui;
 pub(crate) struct GitExtras {
     /// The Git panel's reused diff tab.
     pub(crate) preview: preview_tab::Preview,
+    /// A branch action waiting for its name or confirmation.
+    pub(crate) dialog: Option<branch_ui::PendingBranchDialog>,
 }

@@ -11,14 +11,17 @@ struct CommitLogPane<'a> {
     cwd: &'a Path,
     /// Scroll the list to this row (Go to Hash).
     reveal: Option<usize>,
+    /// Why a running commit disables the commit actions, if it does.
+    lock: Option<&'a str>,
 }
 
 /// What the commit log asked for this frame: changed files to fetch for
-/// a commit, or a file change to open.
+/// a commit, a file change to open, or a commit action.
 #[derive(Default)]
 struct CommitLogPick {
     fetch: Option<String>,
     open: Option<Tab>,
+    action: Option<sidebar_ui::CommitPick>,
 }
 
 impl App {
@@ -47,12 +50,14 @@ impl App {
             .get_mut(&key)
             .and_then(|view| view.reveal.take())
             .and_then(|hash| log.commits.iter().position(|c| c.hash == hash));
+        let lock = self.commit_wait(Some(cwd.as_path()), workspace_ops::CommitRisk::Head);
         let pane = CommitLogPane {
             log,
             theme: &self.theme,
             commit_files: &self.commit_files,
             cwd,
             reveal,
+            lock,
         };
         let selected = &mut self.selected_commit;
         ui.columns(3, |cols| {
@@ -78,6 +83,13 @@ impl App {
         }
         if let Some(tab) = pick.open {
             self.open_git_tab(tab);
+        }
+        match pick.action {
+            Some(sidebar_ui::CommitPick::Copy(hash)) => {
+                self.copy_with_note(ui.ctx(), hash, "Commit hash");
+            }
+            Some(sidebar_ui::CommitPick::Branch(request)) => self.branch_request(request),
+            None => {}
         }
     }
 }
@@ -139,6 +151,12 @@ impl CommitLogPane<'_> {
         col.horizontal(|ui| {
             ui.weak("Hash: ");
             ui.label(&commit.short_hash);
+            // Copy hash, New branch, Checkout, Cherry-pick, Revert.
+            appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
+                pick.action = sidebar_ui::commit_actions(ui, &commit.hash, self.lock);
+            })
+            .response
+            .on_hover_text("Commit actions");
         });
         col.horizontal(|ui| {
             ui.weak("Author: ");

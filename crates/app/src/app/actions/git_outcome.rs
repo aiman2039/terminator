@@ -104,6 +104,9 @@ impl App {
         if let Some(reference) = outcome.drop_shelf.take() {
             self.ask_git_confirm(crate::sidebar_ui::GitConfirm::DropShelf(reference));
         }
+        for request in std::mem::take(&mut outcome.branch) {
+            self.branch_request(request);
+        }
     }
 
     /// Commits the draft message and records it in the message history.

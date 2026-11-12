@@ -1,4 +1,5 @@
 //! The Git sidebar panel.
+mod branch_menu;
 mod commit;
 mod commit_progress;
 mod committed;
@@ -16,6 +17,7 @@ use crate::diagnostics;
 use crate::{
     App, appearance, file_actions::FileAction, icons, services::ContextData, workspace_ops,
 };
+pub(crate) use branch_menu::{CommitPick, commit_actions};
 use commit::git_error_row;
 pub(crate) use commit_progress::{CommitLock, CommitPhase, CommitProgress};
 use committed::*;
@@ -181,6 +183,8 @@ pub struct GitPanelOutcome {
     pub compare: Option<(PathBuf, crate::revision_compare::PickerMode)>,
     /// Open the Commit Log at this commit (a History row click).
     pub log_at: Option<String>,
+    /// Branch and sync actions, in click order.
+    pub(crate) branch: Vec<crate::git::branch_ui::BranchRequest>,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -325,6 +329,13 @@ impl GitPanelPass<'_, '_> {
                 if row.clicked() {
                     self.outcome.log_at = Some(hash.clone());
                 }
+                let lock = self.input.commit_lock.head;
+                let outcome = &mut *self.outcome;
+                appearance::context_menu(&row, |ui| match commit_actions(ui, hash, lock) {
+                    Some(CommitPick::Copy(text)) => outcome.copy.push(text),
+                    Some(CommitPick::Branch(request)) => outcome.branch.push(request),
+                    None => {}
+                });
             }
         });
     }

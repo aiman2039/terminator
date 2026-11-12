@@ -343,6 +343,35 @@ fn actions_are_classed_by_what_they_can_change_in_a_running_commit() {
     }
     // The push after the commit reads HEAD too.
     assert_eq!(Op::Switch("main".into()).commit_risk(), CommitRisk::Head);
+    let branch = [
+        BranchOp::Fetch,
+        BranchOp::Pull,
+        BranchOp::Push,
+        BranchOp::New {
+            name: "n".into(),
+            start: None,
+        },
+        BranchOp::Rename {
+            from: "a".into(),
+            to: "b".into(),
+        },
+        BranchOp::Delete {
+            name: "a".into(),
+            force: false,
+        },
+        BranchOp::Merge("a".into()),
+        BranchOp::Rebase("a".into()),
+        BranchOp::Checkout("abc1234".into()),
+        BranchOp::CherryPick("abc1234".into()),
+        BranchOp::Revert("abc1234".into()),
+    ];
+    for op in branch {
+        assert_eq!(
+            Op::Branch(op.clone()).commit_risk(),
+            CommitRisk::Head,
+            "{op:?}"
+        );
+    }
     let stash = [
         Op::Shelve(vec![path()]),
         Op::Unshelve("stash@{0}".into()),

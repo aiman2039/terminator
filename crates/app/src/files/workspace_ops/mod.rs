@@ -1,5 +1,6 @@
 //! Explicit file and Git actions from the sidebar. Diff review stays read-only.
 //! Every path has to stay inside the repository or project root.
+mod branch;
 mod commit;
 #[cfg(test)]
 mod commit_tests;
@@ -9,6 +10,8 @@ mod pr;
 mod tests;
 mod vcs;
 
+pub use branch::BranchOp;
+pub(crate) use branch::NOT_MERGED;
 #[cfg(test)]
 pub(crate) use commit::{COMMIT_CANCELLED, PUSH_CANCELLED, PUSH_FAILED};
 pub(crate) use commit::{
@@ -91,6 +94,8 @@ pub enum Op {
         to_dir: PathBuf,
     },
     Reveal(PathBuf),
+    /// A branch, sync, or commit action (explicit click, quick cap).
+    Branch(BranchOp),
 }
 
 impl Op {
@@ -101,7 +106,9 @@ impl Op {
             Self::Stage(_) | Self::StageAll(_) | Self::Unstage(_) | Self::Discard { .. } => {
                 CommitRisk::Index
             }
-            Self::Switch(_) => CommitRisk::Head,
+            // Branch and sync actions move `HEAD`, the index, or the refs
+            // the commit's push reads: they wait until the push ends.
+            Self::Switch(_) | Self::Branch(_) => CommitRisk::Head,
             Self::Shelve(_) | Self::Unshelve(_) | Self::DropShelf(_) => CommitRisk::Stash,
             Self::Perforce(_)
             | Self::Delete(_)
@@ -207,6 +214,7 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         Op::Copy { from, to_dir } => copy_entries(root, &from, &to_dir),
         Op::Rename { from, to } => rename(root, &from, &to),
         Op::Reveal(path) => reveal_entry(root, &path),
+        Op::Branch(op) => branch::perform(root, &op),
     }
 }
 

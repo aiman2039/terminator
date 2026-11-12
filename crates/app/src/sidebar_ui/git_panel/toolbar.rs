@@ -44,9 +44,12 @@ fn git_base_ref_contents(
     }
 }
 
-/// The ⋮ menu: commit log, base ref, and branch compare refresh.
+/// The ⋮ menu: Fetch, Pull, Push, commit log, base ref, and branch
+/// compare refresh.
 fn git_more_menu(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut GitPanelOutcome) {
     let more = appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
+        super::branch_menu::sync_items(ui, input.commit_lock.head, outcome);
+        ui.separator();
         let log = appearance::menu_item(appearance::MenuItemInput {
             ui,
             label: "View commit log",
@@ -315,6 +318,7 @@ fn git_branch_items(
             ui.close();
         }
     }
+    super::branch_menu::branch_actions(ui, input, branch_name, outcome);
 }
 
 /// One toolbar icon, recorded for fixtures under `target`.

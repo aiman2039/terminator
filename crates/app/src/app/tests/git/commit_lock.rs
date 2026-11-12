@@ -783,3 +783,76 @@ fn delete_file_in_the_git_panel_still_moves_the_file_to_trash_during_a_commit() 
         "{sent:?}"
     );
 }
+
+/// Every branch, sync and commit action, from the Git panel.
+fn branch_requests() -> Vec<crate::git::branch_ui::BranchRequest> {
+    use crate::git::branch_ui::{BranchDialog, BranchRequest};
+    use crate::workspace_ops::BranchOp;
+    let run = [
+        BranchOp::Fetch,
+        BranchOp::Pull,
+        BranchOp::Push,
+        BranchOp::Checkout("abc1234".into()),
+        BranchOp::CherryPick("abc1234".into()),
+        BranchOp::Revert("abc1234".into()),
+    ]
+    .map(BranchRequest::Run);
+    let ask = [
+        BranchDialog::New {
+            start: None,
+            name: String::new(),
+        },
+        BranchDialog::Rename {
+            from: "main".into(),
+            name: "trunk".into(),
+        },
+        BranchDialog::Delete("feature".into()),
+        BranchDialog::ForceDelete("feature".into()),
+        BranchDialog::Merge("feature".into()),
+        BranchDialog::Rebase("feature".into()),
+    ]
+    .map(BranchRequest::Ask);
+    run.into_iter().chain(ask).collect()
+}
+
+#[test]
+fn branch_and_sync_actions_wait_until_the_push_ends() {
+    let mut run = committing(true);
+    for request in branch_requests() {
+        let outcome = GitPanelOutcome {
+            branch: vec![request.clone()],
+            ..Default::default()
+        };
+        run.assert_refused(|run| run.outcome(outcome));
+        assert!(
+            run.app.git_extras.dialog.is_none(),
+            "{request:?} asks nothing"
+        );
+    }
+    // The push still reads HEAD: they stay refused after the commit lands.
+    let job = run.commit.clone();
+    reply(&mut run.app, &run.ctx, job.clone(), Ok(Report::Pushing));
+    for request in branch_requests() {
+        let outcome = GitPanelOutcome {
+            branch: vec![request],
+            ..Default::default()
+        };
+        run.assert_refused(|run| run.outcome(outcome));
+    }
+    let pushed = Ok(Report::Message("Committed and pushed".into()));
+    reply(&mut run.app, &run.ctx, job, pushed);
+    run.outcome(GitPanelOutcome {
+        branch: vec![crate::git::branch_ui::BranchRequest::Run(
+            crate::workspace_ops::BranchOp::Fetch,
+        )],
+        ..Default::default()
+    });
+    let sent = run.sent();
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [(_, Op::Branch(crate::workspace_ops::BranchOp::Fetch))]
+        ),
+        "{sent:?}"
+    );
+}
