@@ -50,6 +50,10 @@ impl Viewer<'_> {
         };
         let vertical_tip = self.app.action_tip("Split vertically", Action::SplitRight);
         let horizontal_tip = self.app.action_tip("Split horizontally", Action::SplitDown);
+        // Same rule as pane captions: the split buttons show while this
+        // leaf has focus or the pointer is on its controls.
+        let show = sid.is_some() && sid == self.app.active_session
+            || ui.rect_contains_pointer(ui.max_rect());
         let (dot, _) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::hover());
         if let Some(color) = sid.as_ref().and_then(|sid| {
             self.app
@@ -61,8 +65,8 @@ impl Viewer<'_> {
         }) {
             ui.painter().circle_filled(dot.center(), 3.5, color);
         }
-        let git_icon = appearance::sidebar_action(ui, "GitBranch", &git_tip);
-        let branch_label = ui
+        // The branch is plain weak text; a click opens Git.
+        let git = ui
             .add_sized(
                 [appearance::TERMINAL_BRANCH_MAX, appearance::TERMINAL_BUTTON],
                 egui::Label::new(
@@ -74,9 +78,20 @@ impl Viewer<'_> {
                 .sense(egui::Sense::click()),
             )
             .on_hover_text(&git_tip);
-        let git = git_icon.union(branch_label);
-        let split_vertical = appearance::sidebar_action(ui, "Columns2", &vertical_tip);
-        let split_horizontal = appearance::sidebar_action(ui, "Rows2", &horizontal_tip);
+        let action = |ui: &mut egui::Ui, icon: &str, tip: &str| {
+            if show {
+                appearance::sidebar_action(ui, icon, tip)
+            } else {
+                // Keep the slot so the row does not move when it shows.
+                ui.allocate_exact_size(
+                    egui::Vec2::splat(appearance::TERMINAL_BUTTON),
+                    egui::Sense::hover(),
+                )
+                .1
+            }
+        };
+        let split_vertical = action(ui, "Columns2", &vertical_tip);
+        let split_horizontal = action(ui, "Rows2", &horizontal_tip);
         #[cfg(feature = "test-support")]
         if let Some(sid) = &sid {
             diagnostics::record(ui.ctx(), &format!("pane-git:{sid}"), git.rect);

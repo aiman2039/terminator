@@ -1,42 +1,159 @@
-//! Pieces of the terminal pane bar: slots, icons, title, and buttons.
+//! Pieces of the terminal pane bar: layout, icons, title, and buttons.
 use super::*;
 use crate::appearance::{paint_focus, paint_unread_dot};
 
-/// Branch label and button tooltips.
-pub(super) struct BarTips<'a> {
-    pub(super) branch: Option<&'a str>,
-    pub(super) git: &'a str,
-    pub(super) stack: Option<&'a str>,
-    pub(super) zoom: Option<&'a str>,
-    pub(super) vertical: &'a str,
-    pub(super) horizontal: &'a str,
+/// One button slot plus its gap.
+const SLOT: f32 = TERMINAL_BUTTON + 2.0;
+
+/// Where the caption's right-hand parts sit.
+#[derive(Debug)]
+pub(super) struct BarLayout {
+    /// Split right, split down, zoom and close; `None` when they fold.
+    pub(super) buttons: Option<ButtonSlots>,
+    /// The one menu button that replaces the four when the pane is narrow.
+    pub(super) more: Option<egui::Rect>,
+    pub(super) branch: Option<egui::Rect>,
+    pub(super) resume: Option<egui::Rect>,
+    /// Where the title (and the status dot) must stop.
+    pub(super) title_right: f32,
 }
 
+#[derive(Debug)]
+pub(super) struct ButtonSlots {
+    pub(super) close: egui::Rect,
+    pub(super) zoom: Option<egui::Rect>,
+    pub(super) horizontal: egui::Rect,
+    pub(super) vertical: egui::Rect,
+}
+
+pub(super) struct LayoutInput {
+    pub(super) rect: egui::Rect,
+    /// Where the title starts, after the leading glyphs.
+    pub(super) lead: f32,
+    pub(super) branch_width: f32,
+    pub(super) resume_width: Option<f32>,
+    pub(super) zoom: bool,
+    /// The buttons show: the pane has focus or the pointer is on it.
+    pub(super) show: bool,
+    pub(super) dot: bool,
+}
+
+impl BarLayout {
+    /// The buttons keep fixed slots (also while hidden, so a pointer that
+    /// reaches them finds them); the branch and the Resume chip move next
+    /// to whatever shows.
+    pub(super) fn new(input: LayoutInput) -> Self {
+        let LayoutInput {
+            rect,
+            lead,
+            branch_width,
+            resume_width,
+            zoom,
+            show,
+            dot,
+        } = input;
+        let count = if zoom { 4.0 } else { 3.0 };
+        let resume = resume_width.map_or(0.0, |width| width + 4.0);
+        let dot = if dot { 14.0 } else { 0.0 };
+        let right = rect.right() - 2.0;
+        // Room for buttons and branch once the title has its minimum.
+        let room = right - lead - TERMINAL_TITLE_MIN - resume - dot;
+        let folded = room < SLOT * count;
+        let cluster = if folded { SLOT } else { SLOT * count };
+        let mut cursor = right;
+        let mut slot = || {
+            let slot = egui::Rect::from_min_max(
+                egui::pos2(
+                    cursor - TERMINAL_BUTTON,
+                    rect.center().y - TERMINAL_BUTTON / 2.0,
+                ),
+                egui::pos2(cursor, rect.center().y + TERMINAL_BUTTON / 2.0),
+            );
+            cursor -= SLOT;
+            slot
+        };
+        let (buttons, more) = if folded {
+            (None, Some(slot()))
+        } else {
+            let close = slot();
+            let zoom = zoom.then(&mut slot);
+            let horizontal = slot();
+            let vertical = slot();
+            (
+                Some(ButtonSlots {
+                    close,
+                    zoom,
+                    horizontal,
+                    vertical,
+                }),
+                None,
+            )
+        };
+        let edge = if show {
+            right - cluster
+        } else {
+            rect.right() - 6.0
+        };
+        let branch_room = if show { room - cluster } else { room + 4.0 };
+        let branch = (branch_width > 0.0 && branch_width <= branch_room).then(|| {
+            egui::Rect::from_min_max(
+                egui::pos2(edge - branch_width, rect.center().y - TERMINAL_BUTTON / 2.0),
+                egui::pos2(edge, rect.center().y + TERMINAL_BUTTON / 2.0),
+            )
+        });
+        let edge = branch.map_or(edge, |branch| branch.left() - 2.0);
+        let resume = resume_width.map(|width| {
+            egui::Rect::from_min_max(
+                egui::pos2(edge - 4.0 - width, rect.center().y - TERMINAL_BUTTON / 2.0),
+                egui::pos2(edge - 4.0, rect.center().y + TERMINAL_BUTTON / 2.0),
+            )
+        });
+        let edge = resume.map_or(edge, |chip| chip.left() - 2.0);
+        Self {
+            buttons,
+            more,
+            branch,
+            resume,
+            title_right: edge - dot,
+        }
+    }
+}
+
+#[derive(Default)]
 pub(super) struct BarActions {
-    pub(super) git: egui::Response,
-    pub(super) stack: Option<egui::Response>,
-    pub(super) split_vertical: egui::Response,
-    pub(super) split_horizontal: egui::Response,
+    pub(super) branch: Option<egui::Response>,
+    pub(super) split_vertical: Option<egui::Response>,
+    pub(super) split_horizontal: Option<egui::Response>,
     pub(super) zoom: Option<egui::Response>,
-    pub(super) close: egui::Response,
+    pub(super) close: Option<egui::Response>,
+    pub(super) more: Option<egui::Response>,
 }
 
 pub(super) struct BarActionsInput<'a> {
     pub(super) ui: &'a egui::Ui,
     pub(super) bar_id: egui::Id,
-    pub(super) slots: &'a BarSlots,
-    pub(super) tips: BarTips<'a>,
+    pub(super) layout: &'a BarLayout,
+    pub(super) spec: &'a TerminalBarSpec<'a>,
+    pub(super) show: bool,
 }
 
-/// The Git (with branch), stack, split and close buttons, left to right.
+/// The branch text, then split right, split down, zoom and close (or the
+/// one folded menu button). Hidden buttons still take clicks: the pointer
+/// on them shows them.
 pub(super) fn bar_actions(input: BarActionsInput<'_>) -> BarActions {
     let BarActionsInput {
         ui,
         bar_id,
-        slots,
-        tips,
+        layout,
+        spec,
+        show,
     } = input;
-    let button = |rect, id, icon, tip| {
+    // On the focus fill, a hovered button uses a darker fill.
+    let on_fill = spec.focus_fill.is_some();
+    let branch_tip = spec
+        .branch
+        .map_or_else(|| "Open Git".to_owned(), |b| format!("{b}\nOpen Git"));
+    let button = |rect, id, icon, tip, hover_tint| {
         bar_button(
             ui,
             BarButton {
@@ -45,101 +162,65 @@ pub(super) fn bar_actions(input: BarActionsInput<'_>) -> BarActions {
                 id,
                 icon,
                 tip,
-                hover_tint: None,
+                hover_tint,
+                show,
+                on_fill,
             },
         )
     };
-    let git = button(slots.git, "git", "GitBranch", tips.git);
-    if let Some(branch) = tips.branch.filter(|branch| !branch.is_empty()) {
-        paint_branch(ui, slots.git, branch);
+    let mut actions = BarActions {
+        branch: layout
+            .branch
+            .zip(spec.branch)
+            .map(|(rect, branch)| branch_text(ui, bar_id, rect, (branch, &branch_tip))),
+        ..BarActions::default()
+    };
+    if let Some(slots) = &layout.buttons {
+        actions.split_vertical = Some(button(
+            slots.vertical,
+            "split-vertical",
+            "Columns2",
+            spec.vertical_tip,
+            None,
+        ));
+        actions.split_horizontal = Some(button(
+            slots.horizontal,
+            "split-horizontal",
+            "Rows2",
+            spec.horizontal_tip,
+            None,
+        ));
+        actions.zoom = slots
+            .zoom
+            .zip(spec.zoom_tip)
+            .map(|(rect, tip)| button(rect, "zoom-pane", "Maximize2", tip, None));
+        actions.close = Some(button(
+            slots.close,
+            "close-pane",
+            "X",
+            "Close pane",
+            Some(ui.visuals().error_fg_color),
+        ));
     }
-    let stack = slots
-        .stack
-        .zip(tips.stack)
-        .map(|(rect, tip)| button(rect, "stack-tab", "Plus", tip));
-    let split_vertical = button(slots.vertical, "split-vertical", "Columns2", tips.vertical);
-    let split_horizontal = button(
-        slots.horizontal,
-        "split-horizontal",
-        "Rows2",
-        tips.horizontal,
-    );
-    let zoom = slots
-        .zoom
-        .zip(tips.zoom)
-        .map(|(rect, tip)| button(rect, "zoom-pane", "Maximize2", tip));
-    let close = bar_button(
-        ui,
-        BarButton {
-            bar_id,
-            rect: slots.close,
-            id: "close-pane",
-            icon: "X",
-            tip: "Close pane",
-            hover_tint: Some(ui.visuals().error_fg_color),
-        },
-    );
-    BarActions {
-        git,
-        stack,
-        split_vertical,
-        split_horizontal,
-        zoom,
-        close,
-    }
+    actions.more = layout
+        .more
+        .map(|rect| button(rect, "pane-more", "EllipsisVertical", "Pane actions", None));
+    actions
 }
 
-/// Branch label width beside the Git icon, capped.
+/// Branch label width, capped.
 pub(super) fn branch_width(ui: &egui::Ui, branch: Option<&str>) -> f32 {
     branch
+        .filter(|text| !text.is_empty())
         .map(|text| {
             ui.painter()
                 .layout_no_wrap(text.into(), FontId::proportional(FONT_SMALL), icon_color())
                 .size()
                 .x
-                + 6.0
+                + 4.0
         })
         .unwrap_or(0.0)
         .min(TERMINAL_BRANCH_MAX)
-}
-
-/// Right-aligned button slots, laid out right to left.
-pub(super) struct BarSlots {
-    pub(super) close: egui::Rect,
-    pub(super) zoom: Option<egui::Rect>,
-    pub(super) horizontal: egui::Rect,
-    pub(super) vertical: egui::Rect,
-    pub(super) stack: Option<egui::Rect>,
-    pub(super) git: egui::Rect,
-}
-
-impl BarSlots {
-    /// `(stack, zoom)`: whether those optional buttons show.
-    pub(super) fn layout(rect: egui::Rect, git_width: f32, (stack, zoom): (bool, bool)) -> Self {
-        let mut cursor = rect.right() - 2.0;
-        let mut slot = |width: f32| {
-            let slot = egui::Rect::from_min_max(
-                egui::pos2(cursor - width, rect.center().y - TERMINAL_BUTTON / 2.0),
-                egui::pos2(cursor, rect.center().y + TERMINAL_BUTTON / 2.0),
-            );
-            cursor -= width + 2.0;
-            slot
-        };
-        let close = slot(TERMINAL_BUTTON);
-        let zoom = zoom.then(|| slot(TERMINAL_BUTTON));
-        let horizontal = slot(TERMINAL_BUTTON);
-        let vertical = slot(TERMINAL_BUTTON);
-        let stack = stack.then(|| slot(TERMINAL_BUTTON));
-        let git = slot(git_width);
-        Self {
-            close,
-            zoom,
-            horizontal,
-            vertical,
-            stack,
-            git,
-        }
-    }
 }
 
 pub(super) struct LeadingIcons<'a> {
@@ -201,7 +282,8 @@ pub(super) fn paint_leading_icons(
 
 pub(super) struct BarTitle<'a> {
     pub(super) rect: egui::Rect,
-    pub(super) git_left: f32,
+    /// Where the title stops: the first right-hand part.
+    pub(super) right: f32,
     pub(super) lead: f32,
     pub(super) title: &'a str,
     /// Weak text after the title, cut first when room runs out.
@@ -210,19 +292,18 @@ pub(super) struct BarTitle<'a> {
     pub(super) status: Option<Color32>,
 }
 
-/// One-line title clipped before the Git slot, then the status dot.
+/// One-line title clipped before the right-hand parts, then the status dot.
 pub(super) fn paint_title(ui: &egui::Ui, input: BarTitle<'_>) {
     let BarTitle {
         rect,
-        git_left,
+        right,
         lead,
         title,
         subtitle,
         tint,
         status,
     } = input;
-    let dot_gap = if status.is_some() { 14.0 } else { 0.0 };
-    let title_width = (git_left - dot_gap - lead - 4.0).max(0.0);
+    let title_width = (right - lead - 4.0).max(0.0);
     let mut job = egui::text::LayoutJob::simple(
         title.into(),
         FontId::proportional(FONT_SMALL),
@@ -246,12 +327,12 @@ pub(super) fn paint_title(ui: &egui::Ui, input: BarTitle<'_>) {
     ui.painter()
         .with_clip_rect(egui::Rect::from_min_max(
             rect.min,
-            egui::pos2(git_left - dot_gap - 4.0, rect.bottom()),
+            egui::pos2(right - 4.0, rect.bottom()),
         ))
         .galley(position, galley, tint);
     if let Some(color) = status {
         ui.painter()
-            .circle_filled(egui::pos2(git_left - 8.0, rect.center().y), 3.5, color);
+            .circle_filled(egui::pos2(right + 6.0, rect.center().y), 3.5, color);
     }
 }
 
@@ -262,6 +343,9 @@ pub(super) struct BarButton<'a> {
     pub(super) icon: &'a str,
     pub(super) tip: &'a str,
     pub(super) hover_tint: Option<Color32>,
+    /// Paint the button; a hidden one still takes a click.
+    pub(super) show: bool,
+    pub(super) on_fill: bool,
 }
 
 pub(super) fn bar_button(ui: &egui::Ui, input: BarButton<'_>) -> egui::Response {
@@ -272,15 +356,26 @@ pub(super) fn bar_button(ui: &egui::Ui, input: BarButton<'_>) -> egui::Response 
         icon,
         tip,
         hover_tint,
+        show,
+        on_fill,
     } = input;
     let response = ui
         .interact(rect, bar_id.with(id), egui::Sense::click())
         .on_hover_text(tip)
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
+    // Keyboard focus on a hidden button shows it.
+    if !show && !response.has_focus() {
+        return response;
+    }
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);
+        let widgets = &ui.visuals().widgets;
+        let fill = if on_fill {
+            widgets.active.bg_fill
+        } else {
+            widgets.hovered.bg_fill
+        };
+        ui.painter().rect_filled(rect, WIDGET_RADIUS, fill);
     }
     let tint = hover_tint
         .filter(|_| response.hovered())
@@ -290,104 +385,42 @@ pub(super) fn bar_button(ui: &egui::Ui, input: BarButton<'_>) -> egui::Response 
         .paint_at(
             ui,
             egui::Rect::from_center_size(
-                egui::pos2(rect.left() + TERMINAL_BUTTON / 2.0, rect.center().y),
+                rect.center(),
                 egui::Vec2::splat(super::super::TOOLBAR_ICON),
             ),
         );
+    paint_focus(ui, &response);
     response
 }
 
-pub(super) fn paint_branch(ui: &egui::Ui, git_rect: egui::Rect, branch: &str) {
+/// The branch as plain weak text; a click opens Git.
+fn branch_text(
+    ui: &egui::Ui,
+    bar_id: egui::Id,
+    rect: egui::Rect,
+    (branch, tip): (&str, &str),
+) -> egui::Response {
+    let response = ui
+        .interact(rect, bar_id.with("git"), egui::Sense::click())
+        .on_hover_text(tip)
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
     let mut job = egui::text::LayoutJob::simple(
         branch.into(),
         FontId::proportional(FONT_SMALL),
         ui.visuals().weak_text_color(),
-        (git_rect.width() - TERMINAL_BUTTON).max(0.0),
+        rect.width(),
     );
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     let galley = ui.painter().layout_job(job);
-    ui.painter().with_clip_rect(git_rect).galley(
+    ui.painter().with_clip_rect(rect).galley(
         egui::pos2(
-            git_rect.left() + TERMINAL_BUTTON,
-            git_rect.center().y - galley.size().y * 0.5,
+            rect.right() - galley.size().x,
+            rect.center().y - galley.size().y * 0.5,
         ),
         galley,
         ui.visuals().weak_text_color(),
-    );
-}
-
-const RESUME_LABEL: &str = "Resume";
-/// The chip's label when presence could not confirm the agent stopped.
-const RESUME_UNSURE_LABEL: &str = "Resume ?";
-
-const fn resume_label(unsure: bool) -> &'static str {
-    if unsure {
-        RESUME_UNSURE_LABEL
-    } else {
-        RESUME_LABEL
-    }
-}
-
-/// The Resume chip sits just left of the Git button.
-pub(super) fn resume_chip_rect(ui: &egui::Ui, git: egui::Rect, unsure: bool) -> egui::Rect {
-    let text = ui
-        .painter()
-        .layout_no_wrap(
-            resume_label(unsure).into(),
-            FontId::proportional(FONT_SMALL),
-            icon_color(),
-        )
-        .size()
-        .x;
-    let width = 6.0 + super::super::TOOLBAR_ICON + 4.0 + text + 8.0;
-    egui::Rect::from_min_max(
-        egui::pos2(git.left() - 4.0 - width, git.top()),
-        egui::pos2(git.left() - 4.0, git.bottom()),
-    )
-}
-
-/// An outlined `▷ Resume` chip (`▷ Resume ?` when unsure). Only a click
-/// acts on it.
-pub(super) fn resume_chip(
-    ui: &egui::Ui,
-    bar_id: egui::Id,
-    rect: egui::Rect,
-    chip: ResumeChip<'_>,
-) -> egui::Response {
-    let label = resume_label(chip.unsure);
-    let response = ui
-        .interact(rect, bar_id.with("resume-chip"), egui::Sense::click())
-        .on_hover_text(chip.tip)
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
-    let visuals = ui.visuals();
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, WIDGET_RADIUS, visuals.widgets.hovered.bg_fill);
-    }
-    ui.painter().rect_stroke(
-        rect,
-        WIDGET_RADIUS,
-        visuals.widgets.inactive.bg_stroke,
-        egui::StrokeKind::Inside,
-    );
-    let icon = egui::Rect::from_center_size(
-        egui::pos2(
-            rect.left() + 6.0 + super::super::TOOLBAR_ICON / 2.0,
-            rect.center().y,
-        ),
-        egui::Vec2::splat(super::super::TOOLBAR_ICON),
-    );
-    egui::Image::new(crate::icons::source("Play"))
-        .tint(icon_color())
-        .paint_at(ui, icon);
-    ui.painter().text(
-        egui::pos2(icon.right() + 4.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(FONT_SMALL),
-        visuals.text_color(),
     );
     paint_focus(ui, &response);
     response

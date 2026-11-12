@@ -295,10 +295,11 @@ fn split_panes_keep_their_captions() {
     assert!(app.fixture_rect(&ctx, "pane-caption:right").is_some());
 }
 
-/// Every terminal caption carries Git and both split buttons on one row.
+/// The focused caption carries the branch and both split buttons on one
+/// row; a split button of another pane works once the pointer is on it.
 #[cfg(feature = "test-support")]
 #[test]
-fn terminal_bars_keep_git_and_splits_on_one_row() {
+fn focused_caption_keeps_branch_and_splits_on_one_row() {
     let (mut app, ctx, _dir) = fixture();
     for sid in ["left", "right"] {
         app.state
@@ -318,6 +319,7 @@ fn terminal_bars_keep_git_and_splits_on_one_row() {
     );
     app.layouts.insert("a".into(), workspace);
     app.selected = Some("a".into());
+    app.active_session = Some("left".into());
     combined_frame(&mut app, &ctx, vec![]);
     for sid in ["left", "right"] {
         let caption = app
@@ -361,5 +363,175 @@ fn terminal_bars_keep_git_and_splits_on_one_row() {
             _ => None,
         }),
         Some(Some("down"))
+    );
+}
+
+// Pane captions: buttons only on the focused or hovered pane, a folded
+// menu on narrow panes, and the steady focus rule.
+
+/// Two terminals side by side in project `a`, `left` focused.
+fn split_pair(app: &mut App) {
+    for sid in ["left", "right"] {
+        app.state
+            .sessions
+            .push(session_fixture(sid, SessionKind::Shell));
+    }
+    let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+    workspace.main_surface_mut().split_right(
+        egui_dock::NodeIndex::root(),
+        0.5,
+        vec![Tab::Terminal("right".into())],
+    );
+    // The dock's focused leaf drives the active session each frame.
+    let surface = workspace.main_surface_mut();
+    let left = surface.find_tab(&Tab::Terminal("left".into())).unwrap().0;
+    surface.set_focused_node(left);
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+    app.focus_terminal("left".into());
+}
+
+/// One frame of the workspace at `width`; returns the painted icon rects.
+#[cfg(feature = "test-support")]
+fn paint_at(
+    app: &mut App,
+    ctx: &egui::Context,
+    width: f32,
+    events: Vec<egui::Event>,
+) -> Vec<egui::Rect> {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 600.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| app.workspace_project(ui, "a".into()),
+    );
+    output.textures_delta.clear();
+    painted_icon_rects(&output.shapes)
+}
+
+#[cfg(feature = "test-support")]
+fn rect_of(app: &App, ctx: &egui::Context, name: &str) -> egui::Rect {
+    let [x, y, w, h] = app
+        .fixture_rect(ctx, name)
+        .unwrap_or_else(|| panic!("missing {name}"));
+    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
+}
+
+/// Toolbar-sized glyphs right of the caption's title: its buttons.
+#[cfg(feature = "test-support")]
+fn caption_buttons(icons: &[egui::Rect], caption: egui::Rect) -> usize {
+    icons
+        .iter()
+        .filter(|icon| {
+            caption.contains(icon.center())
+                && icon.center().x > caption.center().x
+                && (icon.width() - appearance::TOOLBAR_ICON).abs() < 0.5
+        })
+        .count()
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn only_the_focused_or_hovered_caption_shows_its_buttons() {
+    let (mut app, ctx, _dir) = fixture();
+    split_pair(&mut app);
+    paint_at(&mut app, &ctx, 1000.0, vec![]);
+    let icons = paint_at(&mut app, &ctx, 1000.0, vec![]);
+    let left = rect_of(&app, &ctx, "pane-caption:left");
+    let right = rect_of(&app, &ctx, "pane-caption:right");
+    // Split right, split down, zoom and close: no Git and no New tab.
+    assert_eq!(caption_buttons(&icons, left), 4, "focused pane");
+    assert_eq!(caption_buttons(&icons, right), 0, "pane without focus");
+    assert!(app.fixture_rect(&ctx, "pane-stack:left").is_none());
+    let hover = vec![egui::Event::PointerMoved(right.center())];
+    paint_at(&mut app, &ctx, 1000.0, hover.clone());
+    let icons = paint_at(&mut app, &ctx, 1000.0, hover);
+    assert_eq!(caption_buttons(&icons, right), 4, "hovered pane");
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn a_narrow_pane_folds_its_buttons_into_one_menu() {
+    let (mut app, ctx, _dir) = fixture();
+    split_pair(&mut app);
+    paint_at(&mut app, &ctx, 360.0, vec![]);
+    let icons = paint_at(&mut app, &ctx, 360.0, vec![]);
+    let left = rect_of(&app, &ctx, "pane-caption:left");
+    let more = rect_of(&app, &ctx, "pane-more:left");
+    assert!(app.fixture_rect(&ctx, "pane-split-vertical:left").is_none());
+    assert_eq!(caption_buttons(&icons, left), 1);
+    assert!(left.contains(more.center()));
+    // The title keeps its minimum width before the menu button.
+    assert!(more.left() - left.left() >= crate::appearance::TERMINAL_TITLE_MIN);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn the_focused_pane_has_a_steady_accent_rule_on_its_top_edge() {
+    let (mut app, ctx, _dir) = fixture();
+    split_pair(&mut app);
+    paint_at(&mut app, &ctx, 1000.0, vec![]);
+    paint_at(&mut app, &ctx, 1000.0, vec![]);
+    let left = rect_of(&app, &ctx, "pane-caption:left");
+    let rule = rect_of(&app, &ctx, "pane-focus-rule");
+    assert!((rule.height() - 2.0).abs() < 0.01);
+    assert!(rule.bottom() <= left.top() + 0.5, "rule above the caption");
+    assert!(rule.left() <= left.left() && rule.right() >= left.right());
+    // Long after the focus flash faded, the rule is still there.
+    let now = std::time::Instant::now();
+    app.highlight_since = now
+        .checked_sub(std::time::Duration::from_secs(5))
+        .unwrap_or(now);
+    paint_at(&mut app, &ctx, 1000.0, vec![]);
+    assert!(app.fixture_rect(&ctx, "pane-focus-rule").is_some());
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn a_lone_pane_gets_no_focus_rule() {
+    let (mut app, ctx, _dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("one", SessionKind::Shell));
+    app.layouts.insert(
+        "a".into(),
+        Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())])),
+    );
+    app.selected = Some("a".into());
+    app.active_session = Some("one".into());
+    paint_at(&mut app, &ctx, 1000.0, vec![]);
+    paint_at(&mut app, &ctx, 1000.0, vec![]);
+    assert!(app.fixture_rect(&ctx, "pane-focus-rule").is_none());
+}
+
+#[test]
+fn a_focused_editor_pane_is_marked_but_a_strip_terminal_marks_no_main_pane() {
+    let (mut app, _ctx, _dir) = fixture();
+    split_pair(&mut app);
+    let editor = Tab::NativeEditor {
+        path: "/a/main.rs".into(),
+    };
+    let surface = app.layouts.get_mut("a").unwrap().main_surface_mut();
+    let right = surface.find_tab(&Tab::Terminal("right".into())).unwrap().0;
+    surface.set_focused_node(right);
+    if let Ok(leaf) = surface.leaf_mut(right) {
+        leaf.tabs = vec![editor];
+    }
+    app.focus_non_terminal();
+    let surface = app.layouts["a"].main_surface();
+    assert!(
+        app.focused_main_pane(surface).is_some(),
+        "editor pane marked"
+    );
+    app.focus_terminal("strip-shell".into());
+    let surface = app.layouts["a"].main_surface();
+    assert!(
+        app.focused_main_pane(surface).is_none(),
+        "a terminal outside the main dock marks no main pane"
     );
 }

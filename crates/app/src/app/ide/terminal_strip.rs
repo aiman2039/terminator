@@ -299,6 +299,11 @@ impl App {
                     render_tab: None,
                 },
             );
+        // The strip owns the keys when its terminal is active: mark that
+        // pane like a main-dock pane.
+        if let Some(pane) = self.focused_main_pane(strip.main_surface()) {
+            appearance::paint_focus_rule(ui.painter(), pane, appearance::color(&self.theme.accent));
+        }
         self.apply_strip_dock_ops(project, strip);
     }
 }

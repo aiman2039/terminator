@@ -585,12 +585,12 @@ fn pane_drag_onto_strip_plus_opens_new_tab() {
     );
 }
 
-/// A lone terminal pane offers a caption `+` that stacks a tab in its
-/// own split: the same leaf-anchored request as the leaf tab bar `+`,
-/// which a lone pane hides.
+/// A lone terminal pane's caption split button queues a leaf-anchored
+/// split. New tab in this split moved to the pane context menu, so the
+/// caption has no `+` button.
 #[cfg(feature = "test-support")]
 #[test]
-fn caption_stack_button_queues_in_split_tab() {
+fn caption_split_button_queues_in_split_tab() {
     let (mut app, ctx, _dir) = fixture();
     app.state
         .sessions
@@ -601,7 +601,8 @@ fn caption_stack_button_queues_in_split_tab() {
     );
     app.selected = Some("a".into());
     combined_frame(&mut app, &ctx, vec![]);
-    let at = frame_center(&app, &ctx, "pane-stack:one");
+    assert!(app.fixture_rect(&ctx, "pane-stack:one").is_none());
+    let at = frame_center(&app, &ctx, "pane-split-vertical:one");
     combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
     combined_frame(&mut app, &ctx, vec![frame_press(at, true)]);
     combined_frame(&mut app, &ctx, vec![frame_press(at, false)]);
@@ -613,7 +614,7 @@ fn caption_stack_button_queues_in_split_tab() {
         == DockOp::AddTab {
             target: DockTarget::Main,
             path,
-            split: None,
+            split: Some("right".into()),
         }));
 }
 
