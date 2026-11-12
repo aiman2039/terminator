@@ -5,8 +5,14 @@ use super::tabs::cached_terminal_theme;
 use super::viewer::Viewer;
 use egui_term::TerminalBackend;
 
+mod commands;
+mod key_mode_ui;
+mod key_modes;
 mod menu;
 mod target;
+
+pub(crate) use commands::TERMINAL_ACTIONS;
+pub(crate) use key_modes::KeyModes;
 
 /// Per-frame state of one painted terminal pane.
 struct TerminalFrame<'a> {
@@ -215,6 +221,8 @@ impl Viewer<'_> {
         modifier_pressed: bool,
     ) -> Option<TerminalFrame<'a>> {
         let sid = &session.id;
+        // Hints and copy mode take every key first: none reaches the PTY.
+        self.app.key_mode_input(ui.ctx(), sid);
         self.terminal_find_bar(ui, sid);
         let input_enabled = self.terminal_input_for(sid);
         let find_open = self.app.terminal_find.contains_key(sid);
@@ -291,6 +299,9 @@ impl Viewer<'_> {
         let response = ui.add_enabled(gates.input_enabled, view);
         // Shortcuts run before panes paint; this tells them a terminal has focus.
         shortcuts::mark_terminal(ui.ctx(), response.id);
+        self.app.paint_prompt_marks(ui, sid, response.rect);
+        self.app.paint_key_mode(ui, sid, response.rect);
+        self.app.finish_pending_hint(ui.ctx(), sid, response.rect);
         Some(response)
     }
 

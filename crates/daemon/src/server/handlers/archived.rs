@@ -68,12 +68,7 @@ impl ArchivedOwner<'_> {
             .iter_mut()
             .find(|n| n.id == id)
             .context("Unknown notification")?;
-        match action {
-            "read" => n.read = true,
-            "dismiss" => n.dismissed = true,
-            "snooze" => n.snoozed_until = now().saturating_add(600),
-            _ => bail!("Unknown notification action"),
-        }
+        terminator_core::agent_workflow::apply(n, action, now())?;
         Ok(())
     }
 

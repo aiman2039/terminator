@@ -140,6 +140,10 @@ pub struct LayoutPreset {
 pub struct UiPreferences {
     pub version: u32,
     pub setup_completed: bool,
+    /// The first-run Welcome page was closed.
+    pub welcome_seen: bool,
+    /// Version of the last run; another version opens What's New.
+    pub last_seen_version: Option<String>,
     pub expanded: HashMap<String, bool>,
     pub history_expanded: HashMap<String, bool>,
     /// Terminal title colors and icons, keyed by persistent session ID.
@@ -150,6 +154,10 @@ pub struct UiPreferences {
     /// Shell terminal type-ahead prediction (#83).
     #[serde(default)]
     pub type_ahead: super::TypeAhead,
+    /// A shell command that ran at least this long and ends in a pane
+    /// without focus raises a terminal notice. 0 is off.
+    #[serde(default)]
+    pub long_command_notice_secs: u32,
     #[serde(deserialize_with = "lenient_tool")]
     pub tool: SidebarTool,
     pub visible: bool,
@@ -205,6 +213,9 @@ pub struct UiPreferences {
     /// Collapsed All-live project groups (project ids + "unverified").
     #[serde(default)]
     pub agents_collapsed: HashSet<String>,
+    /// Sessions pinned to the top of the Agents inbox and live list.
+    #[serde(default)]
+    pub pinned_agent_sessions: HashSet<String>,
     pub show_ignored: bool,
     /// Explorer follows the focused editor file (`IntelliJ` "Always
     /// select opened file").

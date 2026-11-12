@@ -32,6 +32,10 @@ impl Viewer<'_> {
             ui.separator();
             self.terminal_session_items(ui, session);
             ui.separator();
+            if session.kind == SessionKind::Shell {
+                self.app.terminal_command_menu(ui, sid);
+                ui.separator();
+            }
             self.app.rename_action(ui, sid, RenameSurface::Pane);
             if appearance::menu_item(appearance::MenuItemInput {
                 ui,

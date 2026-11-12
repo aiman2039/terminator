@@ -29,6 +29,8 @@ impl App {
         let processing_started = Instant::now();
         self.drain_updates(ctx);
         crate::sidebar_ui::publish_perforce_run(ctx, self.git.perforce.progress());
+        self.publish_sync_run(ctx);
+        self.publish_known_pr(ctx);
         self.drain_pty_events(ctx);
         self.poll_merge_saves();
         self.ui_service_peak_ms = self
@@ -194,6 +196,7 @@ impl App {
                     anchors,
                 });
             }
+            Update::Restored(session, old) => self.handle_restored(session, &old),
             Update::Text(key, text) => self.handle_text(key, text),
             Update::CommandBlocks(sid, blocks) => self.handle_command_blocks(sid, blocks),
             Update::LoadFailed(key, error) => self.handle_load_failed(key, error),

@@ -5,16 +5,7 @@ const SAVED: usize = 0;
 const CUSTOM: usize = PRESETS.len() + 1;
 
 /// Built-in presets in control order; slot `index + 1` picks `PRESETS[index]`.
-type Preset = (&'static str, fn() -> AppearanceConfig);
-
-const PRESETS: [Preset; 6] = [
-    ("Carbon", AppearanceConfig::carbon),
-    ("Islands dark", AppearanceConfig::islands_dark),
-    ("IntelliJ dark", AppearanceConfig::intellij_dark),
-    ("High contrast", AppearanceConfig::high_contrast),
-    ("Terminator dark", AppearanceConfig::terminator_dark),
-    ("IntelliJ light", AppearanceConfig::intellij_light),
-];
+use terminator_core::appearance::PRESETS;
 
 impl App {
     pub(super) fn appearance_settings(&mut self, ui: &mut egui::Ui) {
@@ -23,6 +14,8 @@ impl App {
         ui.weak("Preview colors and borders. Apply saves your changes.");
         ui.add_space(8.0);
         self.theme_preset_row(ui);
+        self.follow_os_row(ui);
+        self.theme_import_row(ui);
         self.accent_row(ui);
         self.density_row(ui);
         self.font_rows(ui);
@@ -86,24 +79,13 @@ impl App {
             .map_or(CUSTOM, |index| index.saturating_add(1))
     }
 
-    /// Replace the draft colors with a preset, keeping the sizing fields.
+    /// Replace the draft colors with a preset; every other key stays.
     fn apply_theme_preset(&mut self, choice: usize) {
-        let density = self.theme_draft.density;
-        let divider = self.theme_draft.pane_divider_width;
-        let border = self.theme_draft.border_width;
-        let ui_scale = self.theme_draft.ui_scale;
-        let editor = self.theme_draft.editor;
-        let fonts = std::mem::take(&mut self.theme_draft.fonts);
-        self.theme_draft = choice
+        let source = choice
             .checked_sub(1)
             .and_then(|index| PRESETS.get(index))
             .map_or_else(|| self.theme_committed.clone(), |(_, preset)| preset());
-        self.theme_draft.density = density;
-        self.theme_draft.pane_divider_width = divider;
-        self.theme_draft.border_width = border;
-        self.theme_draft.ui_scale = ui_scale;
-        self.theme_draft.editor = editor;
-        self.theme_draft.fonts = fonts;
+        self.theme_draft.copy_colors(&source);
     }
 
     fn accent_row(&mut self, ui: &mut egui::Ui) {

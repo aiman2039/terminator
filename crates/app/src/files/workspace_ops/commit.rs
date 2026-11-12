@@ -192,7 +192,7 @@ fn commit_args(request: CommitRequest<'_>) -> anyhow::Result<(Vec<&'static str>,
 
 /// ` (exit status: 1)` and the end of the output. Git puts hook output on
 /// stderr; its own refusals ("nothing to commit") may use stdout only.
-fn failure(output: &Output) -> String {
+pub(super) fn failure(output: &Output) -> String {
     let stream = if output.stderr.iter().all(u8::is_ascii_whitespace) {
         &output.stdout
     } else {

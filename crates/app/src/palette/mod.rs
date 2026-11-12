@@ -115,6 +115,8 @@ pub(crate) enum PaletteItem {
         container: Option<String>,
     },
     Settings(SettingsSection),
+    /// One Settings row: opens its section searched to that row.
+    SettingsRow(SettingsSection, &'static str),
     Action(Action),
     /// A native editor command (Find Action), run in the target editor.
     Editor(EditorCommand),
@@ -128,6 +130,8 @@ pub(crate) enum PaletteItem {
     ReportProblem,
     ToggleIdeSidebarHeight,
     SaveLayout,
+    /// Restore workspace of this project (`restore-shell-v1`).
+    RestoreWorkspace(String),
     ApplyLayout(String),
     /// "New terminal with <agent>": types the command without Enter.
     AgentLaunch(crate::agent_launch::AgentLauncher),
@@ -218,7 +222,7 @@ impl PaletteItem {
             Self::Agent(..) => Kind::Agent,
             Self::File(..) => Kind::File,
             Self::Symbol { .. } => Kind::Symbol,
-            Self::Settings(..) => Kind::Settings,
+            Self::Settings(..) | Self::SettingsRow(..) => Kind::Settings,
             Self::ApplyLayout(..) => Kind::Layout,
             Self::VncProfile(..) => Kind::Vnc,
             Self::Editor(..) => Kind::Editor,
@@ -241,6 +245,7 @@ impl PaletteItem {
                 .into_owned(),
             Self::Symbol { name, .. } => name.clone(),
             Self::Settings(section) => section.title().into(),
+            Self::SettingsRow(section, label) => crate::settings_ui::row_title(*section, label),
             Self::Action(action) => action.label().into(),
             Self::Editor(command) => command.name().into(),
             Self::AddProject => "Add project".into(),
@@ -253,6 +258,7 @@ impl PaletteItem {
             Self::ReportProblem => "Report a problem…".into(),
             Self::ToggleIdeSidebarHeight => "Toggle IDE sidebar height".into(),
             Self::SaveLayout => "Save layout".into(),
+            Self::RestoreWorkspace(_) => "Restore workspace".into(),
             Self::ApplyLayout(name) => name.clone(),
             Self::AgentLaunch(launcher) => launcher.title(),
         }
@@ -269,6 +275,7 @@ impl PaletteItem {
             | Self::ReportProblem
             | Self::ToggleIdeSidebarHeight
             | Self::SaveLayout
+            | Self::RestoreWorkspace(_)
             | Self::AgentLaunch(_) => self.title(),
             Self::Action(action) if pinned_action(*action) => self.title(),
             _ => format!("{}  {}", self.category(), self.title()),
@@ -322,6 +329,7 @@ impl PaletteItem {
                 .find(|project| &project.id == id)
                 .map_or_else(String::new, |project| project.path.display().to_string()),
             Self::Settings(section) => section.keywords().into(),
+            Self::SettingsRow(section, _) => section.title().into(),
             Self::Action(action) if !pinned_action(*action) => app.shortcut_label(*action),
             Self::Editor(command) => editor_chord(*command),
             Self::AgentLaunch(launcher) => launcher.command.clone(),

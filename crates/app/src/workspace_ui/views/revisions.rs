@@ -8,6 +8,10 @@ impl App {
             self.git_views
                 .insert(key.to_owned(), crate::GitView::Loading);
             let _ = self.jobs.send(Job::GitView(tab.clone()));
+            if matches!(tab, Tab::Blame { .. } | Tab::FileHistory { .. }) {
+                // Note the HEAD this view is read at.
+                self.queue_head_read();
+            }
         }
         if matches!(self.git_views.get(key), Some(crate::GitView::Loading)) {
             ui.horizontal(|ui| {
@@ -29,6 +33,47 @@ impl App {
             button.clicked()
         })
         .inner
+    }
+
+    /// Reads `HEAD` of the shown local Git repository (a cheap read-only
+    /// job on its workspace queue).
+    fn queue_head_read(&mut self) {
+        let local_git = self
+            .context
+            .as_ref()
+            .is_some_and(|context| context.root.is_some() && context.perforce.is_none());
+        if local_git && self.op_root().is_some() {
+            self.queue_workspace(workspace_ops::Op::Head);
+        }
+    }
+
+    /// After a Git refresh: while a Blame or File History view is loaded,
+    /// read `HEAD` again to see whether it moved.
+    pub(crate) fn check_head_for_git_views(&mut self) {
+        if self.git_views.values().any(head_bound) {
+            self.queue_head_read();
+        }
+    }
+
+    /// A `HEAD` read: when it moved in the same repository, Blame and File
+    /// History views reload on their next paint. Failures stay silent.
+    pub(crate) fn head_read(
+        &mut self,
+        root: &std::path::Path,
+        result: Result<workspace_ops::Report, String>,
+    ) {
+        let Ok(workspace_ops::Report::Revision(head)) = result else {
+            return;
+        };
+        let moved = self
+            .git
+            .head
+            .as_ref()
+            .is_some_and(|(known, old)| known == root && *old != head);
+        if moved {
+            self.git_views.retain(|_, view| !head_bound(view));
+        }
+        self.git.head = Some((root.to_path_buf(), head));
     }
 
     /// Drop the loaded view so the next paint asks Git again. A view still
@@ -274,4 +319,9 @@ impl App {
             self.error.set(format!("{error:#}"));
         }
     }
+}
+
+/// A view read at one `HEAD`: Blame and File History, once loaded.
+fn head_bound(view: &crate::GitView) -> bool {
+    matches!(view, crate::GitView::Blame(_) | crate::GitView::History(_))
 }

@@ -3,9 +3,13 @@ mod branch_menu;
 mod commit;
 mod commit_progress;
 mod committed;
+#[cfg(test)]
+mod footer_tests;
 mod group_header;
 mod name_row;
+mod readiness;
 mod rows;
+mod sync_progress;
 #[cfg(test)]
 mod tests;
 mod toolbar;
@@ -24,10 +28,12 @@ use committed::*;
 use eframe::egui::{self, Color32, RichText};
 use group_header::*;
 use name_row::*;
+pub(crate) use readiness::{KnownPr, publish as publish_known_pr};
 #[cfg(test)]
 pub(super) use rows::GIT_TREE_ROW_HEIGHT;
 use rows::*;
 use std::path::{Path, PathBuf};
+pub(crate) use sync_progress::publish as publish_sync_run;
 use terminator_core::ReviewMode;
 use terminator_core::appearance::AppearanceConfig;
 use toolbar::*;
@@ -35,6 +41,10 @@ pub(crate) use tree::PreparedGit;
 #[cfg(test)]
 pub(super) use tree::build_change_tree;
 use tree::*;
+
+/// One glyph per verb, as the diff toolbar: Stage is Plus, Unstage Minus.
+pub(crate) const STAGE_ICON: &str = "Plus";
+pub(crate) const UNSTAGE_ICON: &str = "Minus";
 
 pub(super) fn skip_clipped_git_row(ui: &mut egui::Ui) -> bool {
     skip_clipped_row(ui, GIT_TREE_ROW_HEIGHT)
@@ -155,6 +165,8 @@ pub struct GitPanelOutcome {
     pub commit_push: bool,
     /// Create PR was clicked.
     pub create_pr: bool,
+    /// Open this link in the browser (the known pull request).
+    pub open_url: Option<String>,
     /// Stop the commit or push in flight.
     pub cancel_commit: bool,
     /// Hide the last failure's output.
@@ -288,6 +300,7 @@ impl GitPanelPass<'_, '_> {
             outcome: self.outcome,
         });
         ui.separator();
+        sync_progress::sync_progress(ui, self.input.context.root.as_deref());
         if let Some(error) = self.input.list_error {
             ui.add(
                 egui::Label::new(

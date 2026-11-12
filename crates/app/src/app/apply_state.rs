@@ -104,6 +104,7 @@ impl App {
         self.rebase_settings_draft(&state.settings);
         self.state = state;
         self.prune_terminal_folders();
+        self.prune_task_bases();
         self.reconcile_presentations();
         self.migrate_attention();
         self.migrate_keymap();

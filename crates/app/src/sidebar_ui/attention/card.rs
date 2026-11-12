@@ -37,102 +37,9 @@ pub(super) fn attention_status_glyph(
     response
 }
 
-/// The card's buttons, left to right: icon, tip, test name, action.
-fn action_buttons(
-    show_read: bool,
-) -> Vec<(&'static str, &'static str, &'static str, AttentionAction)> {
-    let mut buttons = vec![
-        ("ArrowRight", "Go to context", "go", AttentionAction::Go),
-        (
-            "GitCompareArrows",
-            "Review changes",
-            "review",
-            AttentionAction::Review,
-        ),
-        (
-            "Moon",
-            "Snooze 10 minutes",
-            "snooze",
-            AttentionAction::Snooze,
-        ),
-        ("X", "Dismiss", "dismiss", AttentionAction::Dismiss),
-    ];
-    if show_read {
-        buttons.insert(
-            2,
-            (
-                "CircleCheck",
-                "Mark read (keeps agent state)",
-                "read",
-                AttentionAction::Read,
-            ),
-        );
-    }
-    buttons
-}
-
-struct ActionsInput<'a> {
-    card: egui::Id,
-    rect: egui::Rect,
-    session_id: &'a str,
-    show_read: bool,
-    /// Paint the buttons; hidden ones still take a click or the keyboard.
-    show: bool,
-}
-
-/// The action buttons in `rect`. They always take input, so a pointer
-/// that reaches them (and shows them) or a Tab key finds them.
-fn attention_actions(ui: &egui::Ui, input: ActionsInput<'_>) -> AttentionAction {
-    let ActionsInput {
-        card,
-        rect,
-        session_id,
-        show_read,
-        show,
-    } = input;
-    let mut action = AttentionAction::None;
-    let mut left = rect.left();
-    for (icon, tip, name, next) in action_buttons(show_read) {
-        let slot = egui::Rect::from_min_size(
-            egui::pos2(left, rect.top()),
-            egui::Vec2::splat(ATTENTION_ACTION_SIZE),
-        );
-        left += ATTENTION_ACTION_SIZE;
-        let response = ui
-            .interact(slot, card.with(name), egui::Sense::click())
-            .on_hover_text(tip);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
-        if show || response.has_focus() {
-            if response.hovered() {
-                ui.painter().rect_filled(
-                    slot,
-                    appearance::WIDGET_RADIUS,
-                    ui.visuals().widgets.active.bg_fill,
-                );
-            }
-            appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
-                ui,
-                rect: slot,
-                icon,
-                size: appearance::TOOLBAR_ICON,
-                tint: appearance::icon_color(),
-            });
-            appearance::paint_focus(ui, &response);
-        }
-        #[cfg(feature = "test-support")]
-        diagnostics::record(
-            ui.ctx(),
-            &format!("agent-{name}:{session_id}"),
-            response.rect,
-        );
-        #[cfg(not(feature = "test-support"))]
-        let _ = (name, session_id);
-        if response.clicked() {
-            action = next;
-        }
-    }
-    action
-}
+use super::card_actions::{
+    ActionsInput, CardButton, action_buttons, attention_actions, card_keys, card_menu,
+};
 
 /// One line of text cut with an ellipsis at `width`.
 fn one_line(
@@ -195,6 +102,16 @@ fn paint_card_frame(ui: &egui::Ui, input: &AttentionCard<'_>, rect: egui::Rect, 
     );
 }
 
+fn paint_resolved_line(ui: &egui::Ui, left: f32, line1_bottom: f32) {
+    ui.painter().text(
+        egui::pos2(left, line1_bottom + NOTICE_LINE + RESOLVED_LINE * 0.5),
+        egui::Align2::LEFT_CENTER,
+        "This event has resolved.",
+        egui::FontId::proportional(appearance::FONT_CAPTION),
+        ui.visuals().weak_text_color(),
+    );
+}
+
 fn attention_card_contents(
     ui: &mut egui::Ui,
     input: AttentionCard<'_>,
@@ -207,17 +124,23 @@ fn attention_card_contents(
     }
     // The card is registered before its glyph and buttons, so they sit on
     // top of it in egui and keep their own clicks.
-    let (rect, card) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), height),
-        egui::Sense::click(),
-    );
-    let hovered = ui.rect_contains_pointer(rect);
+    let card_id = ui.scope_id().with("card");
+    let buttons = action_buttons(&input);
     let keyboard_inside = ui.memory(|memory| memory.focused()).is_some_and(|id| {
-        id == card.id
-            || action_buttons(input.show_read)
+        id == card_id
+            || buttons
                 .iter()
-                .any(|(_, _, name, _)| card.id.with(*name) == id)
+                .any(|(_, _, name, _)| card_id.with(*name) == id)
     });
+    // Read before the card takes input, so Space peeks instead of clicking.
+    let key_action = if keyboard_inside {
+        card_keys(ui, &input)
+    } else {
+        AttentionAction::None
+    };
+    let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), height));
+    let card = ui.interact(rect, card_id, egui::Sense::click());
+    let hovered = ui.rect_contains_pointer(rect);
     paint_card_frame(ui, &input, rect, hovered);
     appearance::paint_focus(ui, &card);
     let inner = rect.shrink2(PAD);
@@ -248,24 +171,21 @@ fn attention_card_contents(
             title_left: glyph.rect.right() + 4.0,
             project,
             show,
+            buttons,
         },
     );
     paint_notice_line(ui, &input, line1);
     if notice.resolved {
-        ui.painter().text(
-            egui::pos2(
-                inner.left(),
-                line1.bottom() + NOTICE_LINE + RESOLVED_LINE * 0.5,
-            ),
-            egui::Align2::LEFT_CENTER,
-            "This event has resolved.",
-            egui::FontId::proportional(appearance::FONT_CAPTION),
-            ui.visuals().weak_text_color(),
-        );
+        paint_resolved_line(ui, inner.left(), line1.bottom());
     }
     let card = card_hover(card, &input);
+    let menu_action = card_menu(&card, &input);
     if action != AttentionAction::None {
         action
+    } else if key_action != AttentionAction::None {
+        key_action
+    } else if menu_action != AttentionAction::None {
+        menu_action
     } else if card.clicked() || glyph.clicked() {
         AttentionAction::Go
     } else {
@@ -281,6 +201,7 @@ struct TitleRow<'a> {
     project: Option<&'a str>,
     /// Buttons in place of the age.
     show: bool,
+    buttons: Vec<CardButton>,
 }
 
 /// Session label, project and age (or the buttons) on line 1.
@@ -292,13 +213,11 @@ fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
         title_left,
         project,
         show,
+        buttons,
     } = row;
     let notice = input.notice;
-    let count = if input.show_read {
-        ATTENTION_ACTION_READ_COUNT
-    } else {
-        ATTENTION_ACTION_COUNT
-    };
+    #[expect(clippy::cast_precision_loss, reason = "a handful of buttons")]
+    let count = buttons.len() as f32;
     let actions_rect = egui::Rect::from_min_max(
         egui::pos2(line1.right() - ATTENTION_ACTION_SIZE * count, line1.top()),
         line1.max,
@@ -355,7 +274,7 @@ fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
             card,
             rect: actions_rect,
             session_id: &notice.session_id,
-            show_read: input.show_read,
+            buttons,
             show,
         },
     )
@@ -372,7 +291,10 @@ fn paint_title_text(
         .session
         .map_or("Unknown session", |session| session.label.as_str());
     let weak = ui.visuals().weak_text_color();
-    let project = project.map(|name| format!(" · {name}")).unwrap_or_default();
+    let mut project = project.map(|name| format!(" · {name}")).unwrap_or_default();
+    if input.pinned {
+        project.push_str(" · pinned");
+    }
     let events = if input.group_extra.is_empty() {
         String::new()
     } else {
@@ -416,12 +338,13 @@ fn paint_notice_line(ui: &egui::Ui, input: &AttentionCard<'_>, line1: egui::Rect
         });
         left += BRAND_SIZE + 4.0;
     }
+    let right = appearance::paint_usage_chips(ui, line, line.right(), input.usage);
     let text = notice_preview(&input.notice.summary);
     let weak = ui.visuals().weak_text_color();
     let galley = one_line(
         ui,
         &[(&text, appearance::FONT_CAPTION, weak)],
-        line.right() - left,
+        right - 4.0 - left,
     );
     ui.painter().galley(
         egui::pos2(left, line.center().y - galley.size().y * 0.5),

@@ -17,6 +17,7 @@ use serde_json::Value;
 use url::Url;
 
 mod completion;
+mod custom;
 mod edits;
 mod hierarchy;
 mod navigate;
@@ -29,6 +30,10 @@ mod types;
 mod wire;
 
 pub use completion::*;
+pub use custom::{
+    CUSTOM_PREFIX, CustomServer, custom_families, custom_languages, parse_custom_servers,
+    set_custom_servers, store_custom_servers,
+};
 pub use edits::*;
 pub use hierarchy::*;
 pub use navigate::*;

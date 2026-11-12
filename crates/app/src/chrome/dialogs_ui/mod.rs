@@ -11,6 +11,7 @@ use crate::{AttentionAction, AttentionCard, attention_card, *};
 impl App {
     fn first_project_dialog(&mut self, ctx: &egui::Context) {
         if !(cfg!(target_os = "macos")
+            && self.center != CenterPage::Welcome
             && self
                 .preferences
                 .needs_setup(self.state_loaded, self.state.projects.len())
@@ -53,10 +54,12 @@ impl App {
         self.close_session_modal(ctx);
         self.open_terminal_notice_detail();
         self.notice_detail_modal(ctx);
+        self.session_peek_modal(ctx);
         self.worktree_remove_dialog(ctx);
         self.ask_agent_dialog(ctx);
         self.init_command_dialog(ctx);
         self.missing_offer_dialog(ctx);
+        self.task_dialog(ctx);
     }
 
     fn restart_confirm_dialog(&mut self, ctx: &egui::Context) {
@@ -124,7 +127,7 @@ impl App {
         else {
             return;
         };
-        if !self.notice_detail_modal_open() {
+        if !self.notice_detail_open() {
             return;
         }
         let session = self
@@ -137,6 +140,7 @@ impl App {
         let mut action = AttentionAction::None;
         let presented = self.present_session(&n.session_id);
         let history = self.notice_history_brand(&n);
+        let usage = self.agent_usage_chips(&n.session_id);
         let brand_icon = history
             .as_ref()
             .map(|(icon, _)| *icon)
@@ -162,6 +166,9 @@ impl App {
                         brand_icon,
                         brand_label,
                         show_read: false,
+                        pinned: self.session_pinned(&n.session_id),
+                        triage: self.triage_available(),
+                        usage: &usage,
                         group_extra: &[],
                     },
                 );

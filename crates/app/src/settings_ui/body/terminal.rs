@@ -16,6 +16,7 @@ impl App {
         self.shell_override_row(ui, &shells, browse);
         self.font_size_row(ui);
         self.type_ahead_row(ui);
+        self.long_command_row(ui);
         self.folder_access_row(ui, grant_folder);
     }
 
@@ -395,6 +396,36 @@ impl App {
                 {
                     self.request_pick(PickKind::TestEditor);
                 }
+            },
+        });
+    }
+
+    /// GUI preference: a terminal notice when a long shell command ends in
+    /// a pane without focus (needs shell integration marks).
+    fn long_command_row(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible(
+            "Long command notice",
+            "osc 133 shell integration notify done",
+        ) {
+            return;
+        }
+        let supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == TERMINAL_NOTICES_CAPABILITY);
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Long command notice",
+            description: "Add a terminal notice when a shell command that ran at least this long ends in a pane without focus. 0 turns it off.",
+            add_control: |ui| {
+                ui.add_enabled(
+                    supported,
+                    egui::DragValue::new(&mut self.preferences.long_command_notice_secs)
+                        .range(0..=86_400)
+                        .suffix(" s"),
+                )
+                .on_disabled_hover_text(settings_controls::NEEDS_SERVICE);
             },
         });
     }

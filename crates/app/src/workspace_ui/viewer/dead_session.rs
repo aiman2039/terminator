@@ -19,6 +19,21 @@ impl Viewer<'_> {
         if ui.button("Open a fresh shell here").clicked() {
             self.open_fresh_shell(session);
         }
+        let restorable = if self.app.restore_available() {
+            self.app.restorable_sessions(&session.project_id).len()
+        } else {
+            0
+        };
+        if restorable > 0
+            && ui
+                .button(format!("Restore workspace ({restorable})"))
+                .on_hover_text(
+                    "Open each interrupted shell of this project again in its pane, with its saved output above a fresh prompt. Agents are not started.",
+                )
+                .clicked()
+        {
+            self.app.restore_workspace(&session.project_id);
+        }
         if session.truncated {
             ui.weak("Some saved output was pruned or unavailable.");
         }

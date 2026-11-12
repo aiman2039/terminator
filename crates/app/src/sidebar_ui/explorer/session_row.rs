@@ -418,6 +418,17 @@ impl App {
                 appearance::color(&self.theme.git_deleted),
             ));
         }
+        // Only a pull request the GUI already read; never a new call.
+        let branch = git.and_then(|git| git.branch.as_deref());
+        if let Some((number, _)) = branch.and_then(|b| self.known_pr(&project.path, Some(b))) {
+            if !parts.is_empty() {
+                parts.push((" · ".to_owned(), appearance::color(&self.theme.secondary)));
+            }
+            parts.push((
+                format!("PR #{number}"),
+                appearance::color(&self.theme.secondary),
+            ));
+        }
         parts
     }
 

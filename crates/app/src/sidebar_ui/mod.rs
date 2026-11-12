@@ -19,6 +19,7 @@ mod session_select;
 pub(crate) use session_select::SessionSelection;
 mod git_panel;
 mod perforce_panel;
+pub(crate) use git_panel::{KnownPr, publish_known_pr, publish_sync_run};
 pub(crate) use perforce_panel::publish as publish_perforce_run;
 mod problems;
 pub(crate) mod structure;
@@ -27,8 +28,8 @@ pub(crate) use structure::StructureState;
 mod sidebar_tests;
 
 pub(crate) use attention::{
-    AttentionAction, AttentionCard, NoticeGroup, attention_card, group_notices, notice_pending,
-    notice_rank, notice_waiting, state_color,
+    AttentionAction, AttentionCard, NoticeGroup, Triage, attention_card, group_notices,
+    notice_pending, notice_rank, notice_waiting, state_color,
 };
 pub(crate) use explorer::ExplorerReveal;
 pub(crate) use explorer_prompts::{GitConfirm, PendingGitConfirm};

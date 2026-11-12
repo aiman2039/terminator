@@ -440,6 +440,7 @@ fn header_rects(width: f32, branch: &str) -> (egui::Rect, egui::Rect) {
         behind: 12,
         base: Some("origin/main".into()),
         files: vec![],
+        pr_ahead: None,
     };
     let theme = AppearanceConfig::default();
     let ctx = egui::Context::default();
@@ -675,4 +676,12 @@ fn a_disabled_commit_names_what_is_missing() {
         }),
         Some("Wait for the commit to finish")
     );
+}
+
+#[test]
+fn stage_and_unstage_use_the_diff_toolbar_glyphs() {
+    assert_eq!((STAGE_ICON, UNSTAGE_ICON), ("Plus", "Minus"));
+    for icon in [STAGE_ICON, UNSTAGE_ICON] {
+        assert!(crate::icons::is_ui_icon(icon), "{icon} is bundled");
+    }
 }

@@ -397,9 +397,9 @@ impl TreeFolder<'_> {
     /// Stage or unstage the whole folder, unless `lock` disables it.
     fn menu(&self, ui: &mut egui::Ui, lock: Option<&str>, outcome: &mut GitPanelOutcome) {
         let (label, icon) = match self.group {
-            terminator_git::GitGroup::Staged => ("Unstage folder", "ArrowLeft"),
+            terminator_git::GitGroup::Staged => ("Unstage folder", UNSTAGE_ICON),
             terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
-                ("Stage folder", "Plus")
+                ("Stage folder", STAGE_ICON)
             }
             terminator_git::GitGroup::Conflicts => return,
         };

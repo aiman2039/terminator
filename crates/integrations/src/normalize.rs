@@ -105,6 +105,13 @@ fn hook_state(input: HookStateInput<'_>) -> Option<AgentState> {
 }
 
 fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
+    if kind == "copilot" {
+        // The documented form; the session ID is optional after `--resume`.
+        return Some(Resume {
+            program: "copilot".into(),
+            args: vec![format!("--resume={provider}")],
+        });
+    }
     let (program, arg) = match kind {
         "claude" => ("claude", "--resume"),
         "codex" => ("codex", "resume"),
@@ -112,6 +119,9 @@ fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
         "muse" => ("muse", "resume"),
         "grok" => ("grok", "--resume"),
         "cursor" => ("cursor-agent", "--resume"),
+        "gemini" => ("gemini", "--resume"),
+        "droid" => ("droid", "--resume"),
+        "qwen" => ("qwen", "--resume"),
         _ => return None,
     };
     Some(Resume {
@@ -210,5 +220,12 @@ pub fn normalize(input: NormalizeInput<'_>) -> Result<Option<HookEvent>> {
         // The hook helper attaches ancestor process identity after
         // normalization; the normalizer itself never inspects processes.
         process: None,
+        // What the agent reports about itself: Claude Code (`model` on
+        // SessionStart, `permission_mode`), Codex (`model`,
+        // `permission_mode`) and Factory Droid (`permission_mode`).
+        usage: terminator_core::agent_workflow::AgentUsage::new(
+            first_str(payload, &["model"]),
+            first_str(payload, &["permission_mode"]),
+        ),
     }))
 }

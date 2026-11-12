@@ -76,6 +76,9 @@ impl App {
             Action::ZoomPane => self.pane_ops.zoomed.is_some() || self.zoom_target().is_some(),
             Action::ReopenBrowserTab => !self.browser_extras.closed.is_empty(),
             action if SESSION_ACTIONS.contains(&action) => self.active_session.is_some(),
+            action if crate::workspace_ui::TERMINAL_ACTIONS.contains(&action) => {
+                self.terminal_action_applies()
+            }
             action if super::actions::GIT_ACTIONS.contains(&action) => {
                 self.git_action_applies(action)
             }
@@ -223,6 +226,10 @@ impl App {
             Action::NewVnc => self.open_new_vnc_tab(None),
             Action::NewAgentSession => self.open_agent_picker(),
             Action::NewDrawing => self.open_new_drawing(None),
+            Action::RunTask => self.open_task_picker(),
+            Action::RerunTask => self.rerun_last_task(),
+            Action::ShowWelcome => self.open_welcome(),
+            Action::ShowWhatsNew => self.show_center(CenterPage::WhatsNew),
             Action::SwitcherNext => self.step_switcher(false),
             Action::SwitcherBack => self.step_switcher(true),
             Action::ToolExplorer
@@ -248,6 +255,12 @@ impl App {
             | Action::GitAnnotate
             | Action::GitStageAll
             | Action::GitShowAllChanges => self.run_git_action(action),
+            Action::PrevPrompt
+            | Action::NextPrompt
+            | Action::SelectCommand
+            | Action::CopyLastOutput => self.run_terminal_action(ctx, action),
+            Action::HintsMode => self.toggle_hints_mode(),
+            Action::CopyMode => self.toggle_copy_mode(),
         }
     }
 

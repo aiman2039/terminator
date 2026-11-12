@@ -88,3 +88,28 @@ fn saved_trust_lets_the_next_sync_start_the_server() {
     assert!(manager.trust_request_for(&path).is_none());
     assert!(manager.sync_doc(&path, Language::Rust, 1));
 }
+
+#[test]
+fn go_and_user_servers_wait_for_the_trust_answer() {
+    let mut manager = LspManager::new();
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("go.mod"), "module x").expect("manifest");
+    let path = dir.path().join("main.go");
+    manager.submit_text(SubmitTextInput {
+        path: &path,
+        language: Language::Go,
+        revision: 1,
+        text: "package main",
+    });
+    assert!(manager.servers.is_empty());
+    assert_eq!(manager.trust_request_for(&path), Some(dir.path()));
+    assert!(L::family_needs_trust("custom:anything"));
+}
+
+#[test]
+fn missing_server_note_names_the_install_command() {
+    let manager = LspManager::new();
+    let note = manager.missing_server_note("go");
+    assert!(note.contains("gopls"), "{note}");
+    assert!(note.contains("Install: go install"), "{note}");
+}

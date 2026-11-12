@@ -128,6 +128,9 @@ impl App {
         for section in SettingsSection::ALL {
             items.push(PaletteItem::Settings(section));
         }
+        for (section, label) in crate::settings_ui::SETTINGS_ROWS {
+            items.push(PaletteItem::SettingsRow(*section, label));
+        }
         items.push(PaletteItem::AddProject);
         items.extend(
             PINNED_ACTIONS
@@ -157,6 +160,11 @@ impl App {
                 .map(PaletteItem::Action),
         );
         items.extend([PaletteItem::ToggleIdeSidebarHeight, PaletteItem::SaveLayout]);
+        if let Some(project) = self.selected.as_ref().filter(|project| {
+            self.restore_available() && !self.restorable_sessions(project).is_empty()
+        }) {
+            items.push(PaletteItem::RestoreWorkspace(project.clone()));
+        }
         for profile in &self.state.vnc_profiles {
             items.push(PaletteItem::VncProfile(
                 profile.id.clone(),

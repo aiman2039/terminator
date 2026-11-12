@@ -6,6 +6,7 @@ mod commit;
 mod commit_tests;
 mod entries;
 mod pr;
+mod sync;
 #[cfg(test)]
 mod tests;
 mod vcs;
@@ -21,6 +22,8 @@ pub(crate) use commit::{
 use entries::*;
 use pr::create_pr;
 pub(crate) use pr::review_cli;
+pub(crate) use sync::{SYNC_BUSY, SYNC_SUBSYSTEM, perform_sync, sync_cancelled};
+pub use sync::{SyncProgress, SyncRun, SyncSlots};
 use vcs::*;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -98,8 +101,13 @@ pub enum Op {
     /// Perforce Sync, Submit, Shelve or Unshelve: a cancellable job with a
     /// long cap, like `Commit`.
     PerforceRun(crate::perforce::Run),
-    /// A branch, sync, or commit action (explicit click, quick cap).
+    /// A branch or commit action (explicit click, quick cap).
     Branch(BranchOp),
+    /// Fetch, Pull or Push: a cancellable job with a 5-minute cap.
+    SyncRun(SyncRun),
+    /// The full hash of `HEAD` (read-only): open Blame and File History
+    /// views reload when it moves.
+    Head,
 }
 
 impl Op {
@@ -112,7 +120,7 @@ impl Op {
             }
             // Branch and sync actions move `HEAD`, the index, or the refs
             // the commit's push reads: they wait until the push ends.
-            Self::Switch(_) | Self::Branch(_) => CommitRisk::Head,
+            Self::Switch(_) | Self::Branch(_) | Self::SyncRun(_) => CommitRisk::Head,
             Self::Shelve(_) | Self::Unshelve(_) | Self::DropShelf(_) => CommitRisk::Stash,
             Self::Perforce(_)
             | Self::PerforceRun(_)
@@ -133,7 +141,8 @@ impl Op {
             | Self::Rename { .. }
             | Self::Move { .. }
             | Self::Copy { .. }
-            | Self::Reveal(_) => CommitRisk::None,
+            | Self::Reveal(_)
+            | Self::Head => CommitRisk::None,
         }
     }
 }
@@ -164,6 +173,9 @@ pub struct CompareData {
     pub behind: u32,
     pub base: Option<String>,
     pub files: Vec<CommittedFile>,
+    /// Commits on `HEAD` that `origin`'s default branch lacks, when that
+    /// branch is known: what a new pull request would carry.
+    pub pr_ahead: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -194,7 +206,9 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         }),
         Op::Discard { path, untracked } => discard(root, &path, untracked),
         Op::Delete(path) => delete(root, &path),
-        Op::Commit { .. } => bail!("Commit and push run as cancellable jobs"),
+        Op::Commit { .. } | Op::SyncRun(_) => {
+            bail!("Commit, Fetch, Pull and Push run as cancellable jobs")
+        }
         Op::Shelve(paths) => shelve(root, &paths),
         Op::Shelves => Ok(Report::Shelves(shelves(root)?)),
         Op::Unshelve(reference) => unshelve(root, &reference),
@@ -222,6 +236,10 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         Op::Rename { from, to } => rename(root, &from, &to),
         Op::Reveal(path) => reveal_entry(root, &path),
         Op::Branch(op) => branch::perform(root, &op),
+        Op::Head => Ok(Report::Revision(git_text(
+            root,
+            &["rev-parse", "--verify", "--quiet", "HEAD"],
+        )?)),
     }
 }
 

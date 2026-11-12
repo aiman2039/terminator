@@ -45,9 +45,9 @@ mod tabs;
 #[cfg(test)]
 mod terminal_find_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 #[cfg(test)]
-pub(crate) use tests::support::{drain_updates, painted_text};
+pub(crate) use tests::support::{drain_updates, fixture, painted_text};
 pub(crate) mod types;
 mod updates;
 #[cfg(test)]

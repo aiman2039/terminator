@@ -2001,6 +2001,7 @@ dependencies = [
  "anyhow",
  "egui",
  "open",
+ "polling",
 ]
 
 [[package]]
@@ -7908,6 +7909,7 @@ dependencies = [
  "terminator-sys",
  "terminator-updater",
  "tokio",
+ "toml_edit 0.25.18+spec-1.1.0",
  "url",
  "uuid",
  "wry",
@@ -7924,6 +7926,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "libc",
+ "plist",
  "rusqlite",
  "rustix 1.1.6",
  "serde",

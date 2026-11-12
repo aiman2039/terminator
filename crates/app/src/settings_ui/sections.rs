@@ -108,7 +108,8 @@ impl SettingsSection {
             }
             Self::Terminal => {
                 "shell override zsh bash fish sh font size type terminal type-ahead typeahead \
-                 prediction latency ssh echo folder access privacy files folders"
+                 prediction latency ssh echo folder access privacy files folders \
+                 long command notice osc 133 shell integration notify done"
             }
             Self::Editor => {
                 "editor mode embedded neovim nvim terminal external native editor executable \
@@ -166,7 +167,9 @@ impl SettingsSection {
     pub(super) fn haystack(self) -> String {
         let mut text = format!("{} {}", self.title(), self.keywords());
         match self.canonical() {
+            Self::Appearance => text.push_str(super::body::THEME_FOLLOW_KEYWORDS),
             Self::Languages => {
+                text.push_str(super::body::CUSTOM_SERVER_KEYWORDS);
                 for family in terminator_native_edit::lsp::SERVER_FAMILIES {
                     text.push(' ');
                     text.push_str(family.id);

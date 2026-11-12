@@ -294,6 +294,19 @@ impl App {
             ui.close();
         }
         self.init_command_item(ui, p);
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: crate::Action::RunTask.label(),
+            icon: crate::Action::RunTask.icon(),
+            shortcut: "",
+        })
+        .clicked()
+        {
+            self.select_project(p.id.clone());
+            self.open_task_picker();
+            ui.close();
+        }
+        self.restore_workspace_item(ui, &p.id);
         if self.has_worktrees() || self.has_project_init() {
             ui.separator();
         }

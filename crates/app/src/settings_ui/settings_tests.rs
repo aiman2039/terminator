@@ -413,4 +413,75 @@ mod tests {
         assert!(app.section_match_count(SettingsSection::Git) >= 1);
         assert!(app.section_match_count(SettingsSection::Remote) >= 2);
     }
+
+    #[test]
+    fn follow_os_paints_the_preset_for_the_os_appearance() {
+        let (mut app, ctx, _dir) = app();
+        app.theme_draft.follow.follow_os_theme = true;
+        for (os, preset) in [
+            (egui::Theme::Light, AppearanceConfig::intellij_light()),
+            (egui::Theme::Dark, AppearanceConfig::carbon()),
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    system_theme: Some(os),
+                    ..Default::default()
+                },
+                |ui| app.preview_appearance(ui.ctx()),
+            );
+            output.textures_delta.clear();
+            assert!(app.theme.colors_match(&preset), "{os:?}");
+        }
+        // The draft keeps its own colors; only the painted theme follows.
+        assert!(app.theme_draft.colors_match(&AppearanceConfig::default()));
+    }
+
+    #[test]
+    fn imported_theme_fills_the_draft_only() {
+        let (mut app, ctx, dir) = app();
+        let file = dir.path().join("nord.conf");
+        std::fs::write(&file, "background = #2e3440\nforeground = #d8dee9\n").unwrap();
+        app.start_theme_import(file);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.theme_draft.window != "#2E3440" && std::time::Instant::now() < deadline {
+            app.settings_section = SettingsSection::Appearance;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.settings_center(ui));
+            output.textures_delta.clear();
+        }
+        assert_eq!(app.theme_draft.window, "#2E3440");
+        assert_ne!(
+            app.theme_committed.window, "#2E3440",
+            "nothing saved before Apply"
+        );
+    }
+
+    /// Each Find Action settings row names a row its section paints, and
+    /// picking it searches Settings down to that row.
+    #[test]
+    fn find_action_settings_rows_name_real_rows() {
+        let (mut app, ctx, _dir) = app();
+        for (section, label) in super::super::SETTINGS_ROWS {
+            app.settings_section = *section;
+            app.settings_search.clear();
+            SEEN.with(|seen| seen.borrow_mut().clear());
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 4000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.settings_center(ui),
+            );
+            output.textures_delta.clear();
+            let rows = SEEN.with(|seen| std::mem::take(&mut *seen.borrow_mut()));
+            assert!(
+                rows.iter().any(|(seen, _)| seen == label),
+                "{section:?} has no row {label}"
+            );
+            app.settings_search = (*label).to_owned();
+            assert!(app.section_visible(*section), "{label} finds {section:?}");
+        }
+    }
 }

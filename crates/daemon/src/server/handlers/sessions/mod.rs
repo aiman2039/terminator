@@ -20,6 +20,8 @@ pub(crate) struct CreateInput {
     pub line: Option<u32>,
     pub column: Option<u32>,
     pub launch: Launch,
+    /// Saved output shown above the first prompt (`restore-shell-v1`).
+    pub seed: Option<String>,
 }
 
 /// Where a new session runs, resolved under the worktree guard.
@@ -55,6 +57,7 @@ impl Shared {
             line,
             column,
             launch,
+            seed,
         } = input;
         let _worktree_guard = relock(&self.worktree_operations);
         ensure!(
@@ -94,6 +97,12 @@ impl Shared {
             pid: spawned.pid,
         });
         self.register_session(&sid, &spawned.runtime, &record);
+        if let Some(seed) = seed.filter(|seed| !seed.is_empty()) {
+            // Before the reader starts: the saved output sits above the
+            // shell's first prompt in every attach snapshot. Display only;
+            // nothing is written to the PTY.
+            relock(&spawned.runtime).parser.process(seed.as_bytes());
+        }
         let reader_finished = self.spawn_output_reader(&sid, &spawned.runtime, spawned.reader);
         self.spawn_exit_watcher(exit::ExitWatch {
             child: spawned.child,

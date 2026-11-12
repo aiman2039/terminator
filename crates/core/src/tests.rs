@@ -124,7 +124,24 @@ pub(crate) fn event(n: u64, state: AgentState) -> HookEvent {
         details: String::new(),
         resume: None,
         process: None,
+        usage: None,
     }
+}
+
+#[test]
+fn hook_usage_is_kept_per_agent_and_never_changes_lifecycle() {
+    use crate::agent_workflow::AgentUsage;
+    let mut state = setup();
+    let mut first = event(1, AgentState::Running);
+    first.usage = AgentUsage::new(Some("model-a"), Some("plan"));
+    state.apply_hook(first).unwrap();
+    let mut second = event(2, AgentState::Running);
+    second.usage = AgentUsage::new(None, Some("acceptEdits"));
+    state.apply_hook(second).unwrap();
+    let usage = &state.agent_usage["a"];
+    assert_eq!(usage.model.as_deref(), Some("model-a"));
+    assert_eq!(usage.permission_mode.as_deref(), Some("acceptEdits"));
+    assert_eq!(state.agents[0].state, AgentState::Running);
 }
 
 #[test]

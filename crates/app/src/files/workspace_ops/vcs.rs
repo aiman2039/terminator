@@ -173,6 +173,31 @@ pub(super) fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     Ok(run_command(git::command(root, args), git_options())?.stdout)
 }
 
+/// Commits on `HEAD` that `origin`'s default branch (`origin/HEAD`, else
+/// `origin/main`, else `origin/master`) lacks. Read-only.
+fn pr_ahead(root: &Path) -> Option<u32> {
+    let default = git_text(
+        root,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--verify",
+            "--quiet",
+            "refs/remotes/origin/HEAD",
+        ],
+    )
+    .ok()
+    .filter(|name| !name.is_empty() && name != "refs/remotes/origin/HEAD");
+    let default = default
+        .into_iter()
+        .chain(["origin/main".to_owned(), "origin/master".to_owned()])
+        .find(|name| valid_ref(root, name))?;
+    git_text(root, &["rev-list", "--count", &format!("{default}..HEAD")])
+        .ok()?
+        .parse()
+        .ok()
+}
+
 /// A base ref must not look like a flag and must resolve to a commit.
 pub(super) fn valid_ref(root: &Path, base: &str) -> bool {
     !base.is_empty()
@@ -249,6 +274,7 @@ pub(super) fn compare(root: &Path, base_override: Option<&str>) -> Result<Compar
         data.behind = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
         data.ahead = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     }
+    data.pr_ahead = pr_ahead(root);
     let base = base_override
         .map(str::to_owned)
         .or_else(|| data.upstream.clone());

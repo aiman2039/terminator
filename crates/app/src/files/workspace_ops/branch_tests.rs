@@ -135,25 +135,10 @@ fn commit_actions_checkout_cherry_pick_and_revert() {
 }
 
 #[test]
-fn push_without_an_upstream_sets_it_on_origin_and_fetch_pull_follow() {
+fn sync_actions_never_run_with_the_quick_cap() {
     let dir = repo();
-    let root = dir.path();
-    let origin = tempfile::tempdir().unwrap();
-    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
-    let url = origin.path().to_string_lossy().into_owned();
-    git(root, &["remote", "add", "origin", &url]);
-    branch(root, BranchOp::Push).unwrap();
-    assert_eq!(
-        text(root, &["rev-parse", "@{upstream}"]),
-        text(root, &["rev-parse", "HEAD"])
-    );
-    branch(root, BranchOp::Fetch).unwrap();
-    branch(root, BranchOp::Pull).unwrap();
-}
-
-#[test]
-fn push_with_no_remote_says_why() {
-    let dir = repo();
-    let error = format!("{:#}", branch(dir.path(), BranchOp::Push).unwrap_err());
-    assert!(error.contains("origin"), "{error}");
+    for op in [BranchOp::Fetch, BranchOp::Pull, BranchOp::Push] {
+        let error = format!("{:#}", branch(dir.path(), op).unwrap_err());
+        assert!(error.contains("sync job"), "{error}");
+    }
 }

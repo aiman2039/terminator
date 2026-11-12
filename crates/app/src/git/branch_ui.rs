@@ -131,6 +131,7 @@ impl App {
             return;
         }
         match request {
+            BranchRequest::Run(op) if op.is_sync() => self.start_sync(op),
             BranchRequest::Run(op) => {
                 self.queue_workspace(Op::Branch(op));
             }
@@ -140,6 +141,50 @@ impl App {
                     .map(|root| PendingBranchDialog { root, dialog });
             }
         }
+    }
+
+    /// Fetch, Pull or Push as its own cancellable job; refused while one
+    /// runs in this repository.
+    fn start_sync(&mut self, op: BranchOp) {
+        let Some(root) = self.op_root() else {
+            self.error.set("Open a project folder first.");
+            return;
+        };
+        let Some(run) = self.git.sync.start(&root, op) else {
+            self.info = Some(workspace_ops::SYNC_BUSY.into());
+            return;
+        };
+        if !self.queue_workspace(Op::SyncRun(run)) {
+            self.git.sync.finish(&root);
+        }
+    }
+
+    /// Shares the sync of the shown repository with the Git panel.
+    pub(crate) fn publish_sync_run(&self, ctx: &egui::Context) {
+        let root = self.op_root();
+        let progress = root
+            .as_deref()
+            .and_then(|root| self.git.sync.progress(root));
+        crate::sidebar_ui::publish_sync_run(ctx, progress);
+    }
+
+    /// A sync job replied: its slot ends and the lists reload. Returns
+    /// true when Cancel stopped it: a notice, not a failure.
+    pub(crate) fn sync_finished(
+        &mut self,
+        root: &Path,
+        op: &BranchOp,
+        result: &Result<workspace_ops::Report, String>,
+    ) -> bool {
+        self.git.sync.finish(root);
+        let cancelled = workspace_ops::sync_cancelled(op);
+        if result.as_ref().is_err_and(|error| *error == cancelled) {
+            self.refresh_request = None;
+            self.info = Some(cancelled);
+            return true;
+        }
+        self.branch_op_finished(root, op, result);
+        false
     }
 
     /// A branch action ended: lists reload; an unmerged branch that

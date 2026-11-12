@@ -106,6 +106,7 @@ impl Request {
             Self::LocalHistoryRevert { .. } => "LocalHistoryRevert",
             Self::LocalHistoryPage { .. } => "LocalHistoryPage",
             Self::NtfyToken { .. } => "NtfyToken",
+            Self::CreateRestored { .. } => "CreateRestored",
         }
     }
 }

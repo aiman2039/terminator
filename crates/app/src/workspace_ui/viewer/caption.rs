@@ -187,7 +187,8 @@ impl Viewer<'_> {
             .app
             .resume_chip_command(sid)
             .map(|chip| (chip.tip(), !chip.confirmed));
-        appearance::terminal_bar(
+        let usage = self.app.agent_usage_chips(sid);
+        let bar = appearance::terminal_bar(
             ui,
             appearance::TerminalBarSpec {
                 title: if frame.editing || frame.lone {
@@ -227,7 +228,10 @@ impl Viewer<'_> {
                     unsure: *unsure,
                 }),
             },
-        )
+        );
+        appearance::paint_usage_chips(ui, bar.bar.rect, bar.controls_left, &usage);
+        self.app.paint_program_status(ui, sid, &bar);
+        bar
     }
 
     #[cfg(feature = "test-support")]

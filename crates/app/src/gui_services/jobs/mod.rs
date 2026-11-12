@@ -14,6 +14,7 @@ pub(crate) use files::SearchInput;
 pub(crate) use files::WorkspaceOpInput;
 mod git;
 mod perforce_run;
+mod sync_run;
 pub(crate) use git::DiffActionInput;
 pub(crate) use git::DiffContextInput;
 mod platform;

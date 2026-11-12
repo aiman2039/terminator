@@ -134,6 +134,10 @@ impl Services {
             self.perforce_run(root, op, updates);
             return Ok(());
         }
+        if let workspace_ops::Op::SyncRun(_) = op {
+            self.sync_run(root, op, updates);
+            return Ok(());
+        }
         let reply = op.clone();
         let reply_root = root.clone();
         let result = match op {

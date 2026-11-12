@@ -35,6 +35,7 @@ impl App {
         }
         // The panel shows a run started this frame on the next one.
         crate::sidebar_ui::publish_perforce_run(ui.ctx(), self.git.perforce.progress());
+        self.publish_sync_run(ui.ctx());
         if outcome.refresh {
             self.refresh_request = None;
             self.git.list_root = None;
@@ -96,6 +97,9 @@ impl App {
         }
         if outcome.create_pr {
             self.queue_workspace(workspace_ops::Op::CreatePr);
+        }
+        if let Some(url) = outcome.open_url.take() {
+            let _ = self.jobs.send(Job::Browser(url));
         }
         if outcome.shelve {
             let paths =

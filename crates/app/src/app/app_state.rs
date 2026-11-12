@@ -263,6 +263,14 @@ pub struct App {
     pub(crate) hook_status: HashMap<String, bool>,
     /// Catalog agents on PATH, for the agent launchers.
     pub(crate) installed_agents: Vec<crate::agent_launch::InstalledAgent>,
+    /// Run task window and the last task run.
+    pub(crate) tasks: crate::tasks::TaskState,
+    /// Welcome and What's New pages.
+    pub(crate) onboarding: crate::onboarding::Onboarding,
+    /// Start panel PATH probes (Neovim, Git).
+    pub(crate) tool_probes: crate::workspace_ui::ToolProbes,
+    /// Settings → Appearance theme file import.
+    pub(crate) theme_import: crate::settings_ui::ThemeImport,
     pub(crate) detail: Option<String>,
     pub(crate) close_session: Option<String>,
     pub(crate) popups: popup::Popups,
@@ -402,6 +410,8 @@ pub struct App {
     pub(crate) targets: HashMap<String, Option<services::Target>>,
     pub(crate) hover_popup: Option<HoverPopup>,
     pub(crate) hover_popup_blocks_input: bool,
+    /// Terminal hints and copy mode (keys never reach the PTY).
+    pub(crate) key_modes: crate::workspace_ui::KeyModes,
     pub(crate) last_heartbeat: Instant,
     /// Env-gated (`TERMINATOR_REPAINT_LOG`) idle-CPU probe. `None` unless the
     /// variable is set, so release builds pay nothing for it.
@@ -417,6 +427,8 @@ pub struct App {
     pub(crate) sidebar_cache: std::cell::RefCell<sidebar_cache::Cache>,
     /// Unread-view row retained after marking read, until selection/filter changes.
     pub(crate) unread_selected: Option<String>,
+    /// Inbox triage: session peek, last undoable action, restores in flight.
+    pub(crate) triage: sidebar_ui::Triage,
     pub(crate) connected: bool,
     pub(crate) control_server: Option<ui_control::Server>,
     /// Git preview tab, branch and sync actions, and the pull request panel.

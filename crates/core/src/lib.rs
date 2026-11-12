@@ -1,5 +1,6 @@
 //! Versioned local protocol and persistent, renderer-independent models.
 #![forbid(unsafe_code)]
+pub mod agent_workflow;
 pub mod agents;
 pub mod appearance;
 #[cfg(feature = "async-client")]
@@ -18,6 +19,7 @@ mod ipc;
 pub mod local_history;
 pub mod metadata;
 mod model;
+pub mod program_status;
 pub mod recovery;
 pub mod remote;
 pub mod remote_apps;

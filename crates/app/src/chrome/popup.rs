@@ -1,11 +1,16 @@
-//! Position each newly opened app dialog at its initiating pointer location.
+//! Position each newly opened app dialog at its initiating pointer
+//! location. A dialog opened by a key opens centered on the focused pane.
 use eframe::egui::{self, Pos2};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub(crate) struct Popups {
     origin: Option<Pos2>,
-    visible: HashMap<String, (Pos2, u8)>,
+    /// The origin came from a key, so it is the focused pane's center.
+    keyed: bool,
+    /// The focused workspace pane, for key-opened dialogs.
+    focus_rect: Option<egui::Rect>,
+    visible: HashMap<String, (Pos2, u8, bool)>,
     seen: HashSet<String>,
     reserved: HashMap<String, Option<Pos2>>,
     confirm_open: bool,
@@ -23,15 +28,27 @@ impl Popups {
         ctx.input(|input| {
             if input.pointer.any_pressed() || input.pointer.any_released() {
                 self.origin = input.pointer.interact_pos();
+                self.keyed = false;
             } else if input
                 .events
                 .iter()
                 .any(|event| matches!(event, egui::Event::Key { pressed: true, .. }))
             {
-                // Keyboard actions use the current pointer, never an old click.
-                self.origin = input.pointer.latest_pos();
+                // A key opens on the focused pane; without one, at the
+                // current pointer, never an old click.
+                self.keyed = self.focus_rect.is_some();
+                self.origin = self
+                    .focus_rect
+                    .map(|rect| rect.center())
+                    .or_else(|| input.pointer.latest_pos());
             }
         });
+    }
+
+    /// The focused workspace pane this frame (`None` while a center page
+    /// covers the workspace).
+    pub fn set_focus_rect(&mut self, rect: Option<egui::Rect>) {
+        self.focus_rect = rect;
     }
 
     #[cfg(test)]
@@ -42,13 +59,23 @@ impl Popups {
     pub fn window(&mut self, ctx: &egui::Context, title: &str) -> egui::Window<'static> {
         self.seen.insert(title.to_owned());
         let mut window = egui::Window::new(title.to_owned()).constrain_to(ctx.content_rect());
-        let (position, age) = self.visible.entry(title.to_owned()).or_insert_with(|| {
+        let keyed = self.keyed && !self.reserved.contains_key(title);
+        let (position, age, centered) = self.visible.entry(title.to_owned()).or_insert_with(|| {
             let origin = self.reserved.remove(title).unwrap_or(self.origin);
-            (origin.unwrap_or_else(|| ctx.content_rect().center()), 0)
+            (
+                origin.unwrap_or_else(|| ctx.content_rect().center()),
+                0,
+                keyed,
+            )
         });
         // The initial invisible sizing pass uses a provisional size. Reapply
         // the origin once the real size is known, then allow normal dragging.
-        if *age < 2 {
+        if *age < 2 && *centered {
+            window = window
+                .movable(false)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .current_pos(*position);
+        } else if *age < 2 {
             window = window
                 // egui 0.36 title-bar dragging restores the previous area position.
                 // Disable it only during placement so current_pos takes effect.
@@ -66,11 +93,23 @@ impl Popups {
     }
 
     pub fn end_frame(&mut self) {
-        self.visible.retain(|title, (_, age)| {
+        self.visible.retain(|title, (_, age, _)| {
             *age = age.saturating_add(1);
             self.seen.contains(title)
         });
         self.seen.clear();
+    }
+}
+
+impl crate::App {
+    /// The focused pane of the shown workspace, as painted last frame.
+    pub(crate) fn focused_pane_rect(&self) -> Option<egui::Rect> {
+        if self.center_covers_workspace() {
+            return None;
+        }
+        let dock = self.layouts.get(self.selected.as_ref()?)?;
+        let tree = dock.main_surface();
+        tree.focused_leaf().and_then(|node| tree[node].rect())
     }
 }
 
@@ -166,6 +205,46 @@ mod tests {
         output.textures_delta.clear();
         popups.end_frame();
         rect
+    }
+
+    #[test]
+    fn key_opened_dialog_centers_on_the_focused_pane() {
+        let ctx = egui::Context::default();
+        let pane = egui::Rect::from_min_size(egui::pos2(400.0, 300.0), egui::vec2(380.0, 280.0));
+        let mut popups = Popups::default();
+        popups.set_focus_rect(Some(pane));
+        let key = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::W,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(key, |ui| popups.begin_frame(ui.ctx()));
+        output.textures_delta.clear();
+        let _ = draw(&ctx, &mut popups, "Close tab?");
+        let rect = draw(&ctx, &mut popups, "Close tab?");
+        assert!(rect.center().distance(pane.center()) < 4.0, "{rect:?}");
+        // A click afterwards keeps the pointer rule.
+        popups.end_frame();
+        popups.end_frame();
+        let click = egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: egui::pos2(100.0, 80.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(click, |ui| popups.begin_frame(ui.ctx()));
+        output.textures_delta.clear();
+        let _ = draw(&ctx, &mut popups, "Close tab?");
+        let rect = draw(&ctx, &mut popups, "Close tab?");
+        assert!(rect.min.distance(egui::pos2(108.0, 88.0)) < 2.0, "{rect:?}");
     }
 
     #[test]
