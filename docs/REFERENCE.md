@@ -706,6 +706,19 @@ permission), `done`, `failed` or `any-stop`. It prints the state and exits 0
 on a match, 2 when `--timeout` seconds pass, and 3 when the session ends. It
 needs `agent-presence-v1`. Both use hook state only, never terminal text.
 
+The default check is level-triggered: a state left by the previous turn
+matches at once. After `send --enter`, add `--changed`. Then `ctl wait`
+records the newest agent record (updated time, sequence and record id) at the
+start of the call and accepts only a newer record in the wanted state:
+
+```sh
+terminator-hook ctl send SESSION_ID 'next task' --enter
+terminator-hook ctl wait SESSION_ID --state done --changed --timeout 600
+```
+
+`updated` has a resolution of one second. A turn that starts and ends in the
+same second as the recorded record, with no hook sequence, is not seen.
+
 Run shutdown from Terminal.app or another terminal outside Terminator. The default
 refuses live sessions. Explicit `--stop-all` closes the GUI through its normal
 workspace checkpoint, stops every live shell/editor through the daemon, waits for
