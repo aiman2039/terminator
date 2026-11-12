@@ -1,7 +1,8 @@
-//! Branch and sync actions of the Git panel and the Commit Log: Fetch,
-//! Pull, Push, new/rename/delete branch, Merge, Rebase, and the commit
-//! actions Checkout, Cherry-pick and Revert. Each runs only on an explicit
-//! click, as a quick call with the 20-second cap, and never prompts. Typed
+//! Branch actions of the Git panel and the Commit Log: new/rename/delete
+//! branch, Merge, Rebase, and the commit actions Checkout, Cherry-pick and
+//! Revert. Each runs only on an explicit click, as a quick call with the
+//! 20-second cap, and never prompts. Fetch, Pull and Push run as their own
+//! cancellable job (`sync.rs`). Typed
 //! names never reach Git as options: a new name passes `git check-ref-format`,
 //! an existing branch goes as its full ref name, a commit as its full hash.
 use super::*;
@@ -66,15 +67,9 @@ impl BranchOp {
 pub(super) fn perform(root: &Path, op: &BranchOp) -> Result<Report> {
     let name = op.name();
     let message = match op {
-        BranchOp::Fetch => {
-            run(root, name, &["fetch"])?;
-            "Fetched".to_owned()
+        BranchOp::Fetch | BranchOp::Pull | BranchOp::Push => {
+            bail!("{name} runs as a cancellable sync job")
         }
-        BranchOp::Pull => {
-            run(root, name, &["pull", "--no-edit"])?;
-            "Pulled".to_owned()
-        }
-        BranchOp::Push => push(root)?,
         BranchOp::New { name: new, start } => {
             let new = new_name(root, new)?;
             let mut args = vec!["switch", "-c", new.as_str()];
@@ -153,29 +148,6 @@ fn run(root: &Path, name: &str, args: &[&str]) -> Result<String> {
         }
         Err(error) => Err(error.into()),
     }
-}
-
-/// `git push`; with no upstream, `git push -u origin HEAD`.
-fn push(root: &Path) -> Result<String> {
-    let upstream = git_text(
-        root,
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-        ],
-    )
-    .ok()
-    .filter(|upstream| !upstream.is_empty());
-    if upstream.is_some() {
-        run(root, "Push", &["push"])?;
-        return Ok("Pushed".into());
-    }
-    git_text(root, &["remote", "get-url", "origin"])
-        .context("Push needs an upstream branch or an origin remote")?;
-    run(root, "Push", &["push", "--set-upstream", "origin", "HEAD"])?;
-    Ok("Pushed and set the upstream on origin".into())
 }
 
 /// A typed name that looks like an option or has spaces is refused.

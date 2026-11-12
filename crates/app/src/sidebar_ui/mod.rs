@@ -19,6 +19,7 @@ mod session_select;
 pub(crate) use session_select::SessionSelection;
 mod git_panel;
 mod perforce_panel;
+pub(crate) use git_panel::publish_sync_run;
 pub(crate) use perforce_panel::publish as publish_perforce_run;
 mod problems;
 pub(crate) mod structure;

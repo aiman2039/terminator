@@ -372,6 +372,12 @@ fn actions_are_classed_by_what_they_can_change_in_a_running_commit() {
             "{op:?}"
         );
     }
+    // Fetch, Pull and Push run as their own job, still HEAD writers.
+    let sync = Op::SyncRun(SyncRun {
+        op: BranchOp::Fetch,
+        cancel: CancellationToken::new(),
+    });
+    assert_eq!(sync.commit_risk(), CommitRisk::Head);
     let stash = [
         Op::Shelve(vec![path()]),
         Op::Unshelve("stash@{0}".into()),

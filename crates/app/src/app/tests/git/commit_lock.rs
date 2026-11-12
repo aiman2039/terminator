@@ -851,7 +851,7 @@ fn branch_and_sync_actions_wait_until_the_push_ends() {
     assert!(
         matches!(
             sent.as_slice(),
-            [(_, Op::Branch(crate::workspace_ops::BranchOp::Fetch))]
+            [(_, Op::SyncRun(sync))] if sync.op == crate::workspace_ops::BranchOp::Fetch
         ),
         "{sent:?}"
     );

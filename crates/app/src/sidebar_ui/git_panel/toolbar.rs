@@ -48,7 +48,8 @@ fn git_base_ref_contents(
 /// compare refresh.
 fn git_more_menu(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut GitPanelOutcome) {
     let more = appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
-        super::branch_menu::sync_items(ui, input.commit_lock.head, outcome);
+        let lock = super::sync_progress::sync_lock(ui, input);
+        super::branch_menu::sync_items(ui, lock, outcome);
         ui.separator();
         // The header has no room for a fourth tab at the default width.
         let pr = appearance::menu_item(appearance::MenuItemInput {

@@ -244,17 +244,8 @@ impl App {
             self.handle_commit_reply(result);
             return;
         }
-        if let workspace_ops::Op::PerforceRun(_) = op {
-            self.git.perforce.finish();
-            if result
-                .as_ref()
-                .is_err_and(|error| error == crate::perforce::RUN_CANCELLED)
-            {
-                // A cancel is not a failure; the workspace may still need a look.
-                self.refresh_request = None;
-                self.info = Some(crate::perforce::RUN_CANCELLED.into());
-                return;
-            }
+        if self.long_run_cancelled(root, &op, &result) {
+            return;
         }
         if crate::revision_compare::answers(&op) {
             self.compare_reply(root, &op, result);
@@ -309,6 +300,31 @@ impl App {
                 }
                 self.workspace_op_failed(op, error, stale);
             }
+        }
+    }
+
+    /// A long Perforce or sync run replied: its slot ends. True when Cancel
+    /// stopped it: a notice, not a failure.
+    fn long_run_cancelled(
+        &mut self,
+        root: &std::path::Path,
+        op: &workspace_ops::Op,
+        result: &Result<workspace_ops::Report, String>,
+    ) -> bool {
+        match op {
+            workspace_ops::Op::PerforceRun(_) => {
+                self.git.perforce.finish();
+                let cancelled = crate::perforce::RUN_CANCELLED;
+                if result.as_ref().is_err_and(|error| error == cancelled) {
+                    // The workspace may still need a look.
+                    self.refresh_request = None;
+                    self.info = Some(cancelled.into());
+                    return true;
+                }
+                false
+            }
+            workspace_ops::Op::SyncRun(run) => self.sync_finished(root, &run.op, result),
+            _ => false,
         }
     }
 
@@ -372,6 +388,7 @@ impl App {
                 | workspace_ops::Op::Unshelve(_)
                 | workspace_ops::Op::DropShelf(_)
                 | workspace_ops::Op::Branch(_)
+                | workspace_ops::Op::SyncRun(_)
         ) {
             self.git.list_root = None;
             // History and blame changed; open views reload.
@@ -445,6 +462,7 @@ fn operation_name(op: &workspace_ops::Op) -> Option<&'static str> {
         Op::Move { .. } => "Move",
         Op::Copy { .. } => "Copy",
         Op::Branch(op) => op.name(),
+        Op::SyncRun(run) => run.op.name(),
         _ => return None,
     })
 }

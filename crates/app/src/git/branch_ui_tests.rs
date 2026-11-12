@@ -31,12 +31,48 @@ fn branch_ops(requests: &mpsc::Receiver<Job>) -> Vec<BranchOp> {
 }
 
 #[test]
-fn sync_and_commit_actions_run_on_their_click() {
+fn commit_actions_run_on_their_click() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, requests) = app(&dir);
+    let revert = BranchOp::Revert("abc1234".into());
+    app.branch_request(BranchRequest::Run(revert.clone()));
+    assert_eq!(branch_ops(&requests), vec![revert]);
+    assert!(app.git_extras.dialog.is_none());
+}
+
+fn sync_runs(requests: &mpsc::Receiver<Job>) -> Vec<crate::workspace_ops::SyncRun> {
+    requests
+        .try_iter()
+        .filter_map(|job| match job {
+            Job::Workspace(_, Op::SyncRun(run)) => Some(run),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn pull_runs_as_one_cancellable_sync_job_per_repository() {
     let dir = tempfile::tempdir().unwrap();
     let (mut app, requests) = app(&dir);
     app.branch_request(BranchRequest::Run(BranchOp::Pull));
-    assert_eq!(branch_ops(&requests), vec![BranchOp::Pull]);
-    assert!(app.git_extras.dialog.is_none());
+    let runs = sync_runs(&requests);
+    assert!(matches!(runs.as_slice(), [run] if run.op == BranchOp::Pull));
+    assert!(branch_ops(&requests).is_empty(), "never the quick path");
+    // A second sync in the same repository is refused with a note.
+    app.branch_request(BranchRequest::Run(BranchOp::Push));
+    assert!(sync_runs(&requests).is_empty());
+    assert_eq!(app.info.as_deref(), Some(crate::workspace_ops::SYNC_BUSY));
+    // Cancel from the panel reaches the job; its reply ends the run.
+    let progress = app.git.sync.progress(Path::new("/a")).unwrap();
+    progress.cancel.cancel();
+    let run = runs.into_iter().next().unwrap();
+    assert!(run.cancel.is_cancelled());
+    let cancelled = crate::workspace_ops::sync_cancelled(&BranchOp::Pull);
+    assert!(app.sync_finished(Path::new("/a"), &run.op, &Err(cancelled.clone())));
+    assert_eq!(app.info.as_deref(), Some(cancelled.as_str()));
+    assert!(app.git.sync.progress(Path::new("/a")).is_none());
+    app.branch_request(BranchRequest::Run(BranchOp::Fetch));
+    assert_eq!(sync_runs(&requests).len(), 1);
 }
 
 #[test]

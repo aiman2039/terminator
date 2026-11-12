@@ -35,6 +35,7 @@ impl App {
         }
         // The panel shows a run started this frame on the next one.
         crate::sidebar_ui::publish_perforce_run(ui.ctx(), self.git.perforce.progress());
+        self.publish_sync_run(ui.ctx());
         if outcome.refresh {
             self.refresh_request = None;
             self.git.list_root = None;

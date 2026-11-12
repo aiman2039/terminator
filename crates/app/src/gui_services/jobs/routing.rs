@@ -68,7 +68,9 @@ impl JobRouting {
             job,
             Job::Workspace(
                 _,
-                crate::workspace_ops::Op::Commit { .. } | crate::workspace_ops::Op::PerforceRun(_)
+                crate::workspace_ops::Op::Commit { .. }
+                    | crate::workspace_ops::Op::PerforceRun(_)
+                    | crate::workspace_ops::Op::SyncRun(_)
             )
         ) {
             // A queued commit still runs and replies, however long the

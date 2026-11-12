@@ -48,6 +48,8 @@ pub(crate) struct GitPanelState {
     pub(crate) focus_message: bool,
     /// The long Perforce action in flight (Sync, Submit, Shelve, Unshelve).
     pub(crate) perforce: crate::perforce::RunSlot,
+    /// Fetch, Pull or Push in flight, one per repository.
+    pub(crate) sync: workspace_ops::SyncSlots,
 }
 
 /// A commit (and push) job in flight.

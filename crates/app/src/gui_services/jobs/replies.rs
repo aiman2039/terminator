@@ -108,7 +108,9 @@ fn waiting(job: &Job) -> Option<Reply> {
         Job::Workspace(root, op)
             if matches!(
                 op,
-                crate::workspace_ops::Op::Commit { .. } | crate::workspace_ops::Op::Rename { .. }
+                crate::workspace_ops::Op::Commit { .. }
+                    | crate::workspace_ops::Op::Rename { .. }
+                    | crate::workspace_ops::Op::SyncRun(_)
             ) || crate::revision_compare::answers(op) =>
         {
             reply((root.clone(), op.clone()), |(r, o), e| {

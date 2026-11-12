@@ -3,9 +3,12 @@ mod branch_menu;
 mod commit;
 mod commit_progress;
 mod committed;
+#[cfg(test)]
+mod footer_tests;
 mod group_header;
 mod name_row;
 mod rows;
+mod sync_progress;
 #[cfg(test)]
 mod tests;
 mod toolbar;
@@ -28,6 +31,7 @@ use name_row::*;
 pub(super) use rows::GIT_TREE_ROW_HEIGHT;
 use rows::*;
 use std::path::{Path, PathBuf};
+pub(crate) use sync_progress::publish as publish_sync_run;
 use terminator_core::ReviewMode;
 use terminator_core::appearance::AppearanceConfig;
 use toolbar::*;
@@ -288,6 +292,7 @@ impl GitPanelPass<'_, '_> {
             outcome: self.outcome,
         });
         ui.separator();
+        sync_progress::sync_progress(ui, self.input.context.root.as_deref());
         if let Some(error) = self.input.list_error {
             ui.add(
                 egui::Label::new(

@@ -6,6 +6,7 @@ mod commit;
 mod commit_tests;
 mod entries;
 mod pr;
+mod sync;
 #[cfg(test)]
 mod tests;
 mod vcs;
@@ -21,6 +22,8 @@ pub(crate) use commit::{
 use entries::*;
 use pr::create_pr;
 pub(crate) use pr::review_cli;
+pub(crate) use sync::{SYNC_BUSY, SYNC_SUBSYSTEM, perform_sync, sync_cancelled};
+pub use sync::{SyncProgress, SyncRun, SyncSlots};
 use vcs::*;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -98,8 +101,10 @@ pub enum Op {
     /// Perforce Sync, Submit, Shelve or Unshelve: a cancellable job with a
     /// long cap, like `Commit`.
     PerforceRun(crate::perforce::Run),
-    /// A branch, sync, or commit action (explicit click, quick cap).
+    /// A branch or commit action (explicit click, quick cap).
     Branch(BranchOp),
+    /// Fetch, Pull or Push: a cancellable job with a 5-minute cap.
+    SyncRun(SyncRun),
 }
 
 impl Op {
@@ -112,7 +117,7 @@ impl Op {
             }
             // Branch and sync actions move `HEAD`, the index, or the refs
             // the commit's push reads: they wait until the push ends.
-            Self::Switch(_) | Self::Branch(_) => CommitRisk::Head,
+            Self::Switch(_) | Self::Branch(_) | Self::SyncRun(_) => CommitRisk::Head,
             Self::Shelve(_) | Self::Unshelve(_) | Self::DropShelf(_) => CommitRisk::Stash,
             Self::Perforce(_)
             | Self::PerforceRun(_)
@@ -194,7 +199,9 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         }),
         Op::Discard { path, untracked } => discard(root, &path, untracked),
         Op::Delete(path) => delete(root, &path),
-        Op::Commit { .. } => bail!("Commit and push run as cancellable jobs"),
+        Op::Commit { .. } | Op::SyncRun(_) => {
+            bail!("Commit, Fetch, Pull and Push run as cancellable jobs")
+        }
         Op::Shelve(paths) => shelve(root, &paths),
         Op::Shelves => Ok(Report::Shelves(shelves(root)?)),
         Op::Unshelve(reference) => unshelve(root, &reference),
