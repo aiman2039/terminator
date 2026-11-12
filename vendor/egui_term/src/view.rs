@@ -65,6 +65,9 @@ pub struct TerminalView<'a> {
     external_links: bool,
     bindings_layout: Arc<BindingsLayout>,
     find: Option<FindPaint>,
+    /// Receives a copy of every PTY write that a keyboard or paste event
+    /// made (not mouse reports or scrolling).
+    input_tap: Option<&'a mut Vec<Vec<u8>>>,
 }
 
 impl Widget for TerminalView<'_> {
@@ -103,7 +106,15 @@ impl<'a> TerminalView<'a> {
             external_links: false,
             bindings_layout: BindingsLayout::shared(),
             find: None,
+            input_tap: None,
         }
+    }
+
+    /// Copy the bytes that typed keys and pastes write to the PTY into
+    /// `tap`, for example to send the same input to other terminals.
+    pub fn input_tap(mut self, tap: &'a mut Vec<Vec<u8>>) -> Self {
+        self.input_tap = Some(tap);
+        self
     }
 
     /// Overlay literal-find match highlights. The current match paints in the
@@ -213,11 +224,24 @@ impl<'a> TerminalView<'a> {
                 egui::Event::Text(_)
                 | egui::Event::Key { .. }
                 | egui::Event::Copy
-                | egui::Event::Paste(_) => input_actions.push(skip_repeated_ctrl_letter(
-                    process_keyboard_event(event, self.backend, &self.bindings_layout, modifiers),
-                    is_key,
-                    ctrl_text,
-                )),
+                | egui::Event::Paste(_) => {
+                    let action = skip_repeated_ctrl_letter(
+                        process_keyboard_event(
+                            event,
+                            self.backend,
+                            &self.bindings_layout,
+                            modifiers,
+                        ),
+                        is_key,
+                        ctrl_text,
+                    );
+                    if let (Some(tap), InputAction::BackendCall(BackendCommand::Write(bytes))) =
+                        (self.input_tap.as_deref_mut(), &action)
+                    {
+                        tap.push(bytes.clone());
+                    }
+                    input_actions.push(action);
+                }
                 egui::Event::MouseWheel {
                     unit,
                     delta,
@@ -2237,5 +2261,57 @@ mod paste_tests {
         zsh.wait_text(10, "raw paste submitted its first line", |t| {
             t.contains("42")
         });
+    }
+}
+
+#[cfg(test)]
+mod input_tap_tests {
+    use super::*;
+    use crate::backend::settings::BackendSettings;
+    use std::sync::mpsc;
+
+    #[test]
+    fn input_tap_copies_key_writes_but_not_mouse_reports() {
+        let (tx, _rx) = mpsc::channel();
+        let ctx = egui::Context::default();
+        let mut backend = TerminalBackend::new(
+            0,
+            ctx.clone(),
+            tx,
+            BackendSettings {
+                shell: "/bin/cat".into(),
+                ..BackendSettings::default()
+            },
+        )
+        .expect("spawn cat pty");
+        let mut tap = Vec::new();
+        for frame in 0..3 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                ..Default::default()
+            };
+            if frame == 2 {
+                input.events = vec![
+                    egui::Event::Text("ab".into()),
+                    egui::Event::Key {
+                        key: Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                    egui::Event::PointerMoved(Pos2::new(50.0, 50.0)),
+                ];
+            }
+            let mut output = ctx.run_ui(input, |ui| {
+                let view = TerminalView::new(ui, &mut backend)
+                    .set_focus(true)
+                    .set_size(Vec2::splat(300.0))
+                    .input_tap(&mut tap);
+                ui.add(view);
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(tap, [b"ab".to_vec(), b"\r".to_vec()]);
     }
 }

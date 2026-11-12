@@ -400,3 +400,13 @@ Tests: `kitty_disambiguate_makes_modified_enter_and_escape_distinct`,
 `without_the_kitty_flag_encoding_is_unchanged`,
 `kitty_flag_does_not_take_the_copy_chord`,
 `a_pushed_kitty_flag_sets_the_mode_and_a_pop_clears_it`.
+
+## Input tap for broadcast input (2026-11-12)
+
+`TerminalView::input_tap(&mut Vec<Vec<u8>>)` receives a copy of each PTY
+write that a key, text or paste event made; mouse reports, wheel
+scrolling and clipboard copies are not copied. Terminator's broadcast
+input sends those bytes to the other terminals of a tab. Without a tap
+the view is unchanged.
+
+Test: `input_tap_copies_key_writes_but_not_mouse_reports`.
