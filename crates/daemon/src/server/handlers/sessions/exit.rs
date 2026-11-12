@@ -70,6 +70,7 @@ impl Shared {
             rec.pid = None;
         }
         s.terminal_titles.remove(sid);
+        s.program_status.remove(sid);
         for a in &mut s.agents {
             if a.session_id == sid {
                 a.state = AgentState::Stopped;

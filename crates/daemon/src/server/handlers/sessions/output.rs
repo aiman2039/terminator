@@ -41,6 +41,30 @@ pub(crate) fn publish_title(state: &mut State, sid: &str, title: String) {
     }
 }
 
+/// Stores a live session's OSC 7501 status (`program-status-v1`); `None`
+/// clears it. Display only: never agent lifecycle or presence.
+pub(crate) fn publish_program_status(
+    state: &mut State,
+    sid: &str,
+    status: Option<terminator_core::program_status::ProgramStatus>,
+) {
+    let live = state
+        .sessions
+        .iter()
+        .any(|s| s.id == sid && s.lifecycle.live());
+    let changed = match status.filter(|_| live) {
+        None => state.program_status.remove(sid).is_some(),
+        Some(status) if state.program_status.get(sid) != Some(&status) => {
+            state.program_status.insert(sid.to_owned(), status);
+            true
+        }
+        Some(_) => false,
+    };
+    if changed {
+        state.revision = state.revision.saturating_add(1);
+    }
+}
+
 /// Pending query replies per session; more are dropped, never waited for.
 const REPLY_QUEUE: usize = 64;
 
@@ -147,6 +171,10 @@ impl Shared {
         let replies = std::mem::take(&mut rt.parser.callbacks_mut().replies);
         let notices = std::mem::take(&mut rt.parser.callbacks_mut().notices);
         let title = rt.parser.callbacks_mut().take_title(Instant::now(), false);
+        let program = rt
+            .parser
+            .callbacks_mut()
+            .take_program_status(Instant::now(), false);
         let frame = Response::Data(B64.encode(data));
         let mut blocked = Vec::new();
         rt.subscribers
@@ -168,6 +196,9 @@ impl Shared {
         if let Some(title) = title {
             publish_title(&mut relock(&self.state), sid, title);
         }
+        if let Some(change) = program {
+            publish_program_status(&mut relock(&self.state), sid, change.0);
+        }
         replies
     }
 
@@ -178,22 +209,27 @@ impl Shared {
             .iter()
             .map(|(id, rt)| (id.clone(), Arc::clone(rt)))
             .collect();
-        let titles: Vec<(String, String)> = runtimes
-            .into_iter()
-            .filter_map(|(id, rt)| {
-                let title = relock(&rt)
-                    .parser
-                    .callbacks_mut()
-                    .take_title(Instant::now(), true)?;
-                Some((id, title))
-            })
-            .collect();
-        if titles.is_empty() {
+        let mut titles = Vec::new();
+        let mut programs = Vec::new();
+        for (id, rt) in runtimes {
+            let mut rt = relock(&rt);
+            let events = rt.parser.callbacks_mut();
+            if let Some(title) = events.take_title(Instant::now(), true) {
+                titles.push((id.clone(), title));
+            }
+            if let Some(change) = events.take_program_status(Instant::now(), true) {
+                programs.push((id, change.0));
+            }
+        }
+        if titles.is_empty() && programs.is_empty() {
             return;
         }
         let mut state = relock(&self.state);
         for (id, title) in titles {
             publish_title(&mut state, &id, title);
+        }
+        for (id, status) in programs {
+            publish_program_status(&mut state, &id, status);
         }
     }
 
@@ -262,6 +298,25 @@ mod tests {
         assert!(state.terminal_titles.is_empty());
         assert_eq!(state.revision, 2);
         assert!(state.notifications.is_empty() && state.terminal_notices.is_empty());
+        let done = terminator_core::program_status::ProgramStatus {
+            state: terminator_core::program_status::ProgramState::Done,
+            kind: None,
+            progress: None,
+            app: None,
+            title: None,
+            message: None,
+        };
+        publish_program_status(&mut state, "s", Some(done.clone()));
+        publish_program_status(&mut state, "s", Some(done.clone()));
+        publish_program_status(&mut state, "gone", Some(done));
+        assert_eq!(state.revision, 3);
+        assert!(!state.program_status.contains_key("gone"));
+        publish_program_status(&mut state, "s", None);
+        assert!(state.program_status.is_empty());
+        assert!(
+            state.agents.is_empty(),
+            "program status never makes an agent"
+        );
     }
 
     #[test]

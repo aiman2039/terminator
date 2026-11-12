@@ -245,6 +245,7 @@ pub struct Settings {
     pub ntfy_options: NtfyOptions,
 }
 mod error;
+mod history;
 mod hooks;
 mod settings;
 pub use error::{SettingsError, StateError};
@@ -317,6 +318,11 @@ pub struct State {
     /// notice or notification source. Live-only; absent on older daemons.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub terminal_titles: std::collections::BTreeMap<String, String>,
+    /// OSC 7501 program status per live session
+    /// (`program_status::CAPABILITY`). Display only: a badge and notices,
+    /// never agent lifecycle. Absent on older daemons.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub program_status: std::collections::BTreeMap<String, crate::program_status::ProgramStatus>,
     pub settings: Settings,
     pub recent_events: Vec<String>,
     pub selected_project: Option<String>,
@@ -358,37 +364,6 @@ impl State {
         self.presence.retain(|p| !removed.contains(&p.session_id));
         self.revision = self.revision.saturating_add(1);
         removed
-    }
-    /// Drop transient records that only matter to a live owner so a historical
-    /// state stays small when it is loaded for aggregation. Pending attention
-    /// is never dropped; only already dismissed/resolved notifications beyond
-    /// the retention cap are removed. Sessions and resumable agents are kept.
-    pub fn compact_history(&mut self) {
-        self.recent_events.clear();
-        self.presence.clear();
-        self.terminal_titles.clear();
-        let len = self.notifications.len();
-        if len > MAX_NOTIFICATIONS {
-            let cutoff = len.saturating_sub(MAX_NOTIFICATIONS);
-            let mut index = 0;
-            self.notifications.retain(|n| {
-                let keep = index >= cutoff || !(n.dismissed || n.resolved);
-                index = index.saturating_add(1);
-                keep
-            });
-        }
-        let len = self.agents.len();
-        if len > MAX_AGENTS {
-            let cutoff = len.saturating_sub(MAX_AGENTS);
-            let mut index = 0;
-            self.agents.retain(|a| {
-                // Keep live/resumable agents and the most recent records; a
-                // resumable handle must never be trimmed.
-                let keep = index >= cutoff || a.resumable() || a.state == AgentState::Running;
-                index = index.saturating_add(1);
-                keep
-            });
-        }
     }
     /// Resolve from the already-loaded inventory; safe to use in GUI rendering.
     #[must_use]

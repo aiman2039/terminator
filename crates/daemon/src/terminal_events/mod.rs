@@ -9,6 +9,7 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 pub(crate) mod kitty_keys;
 pub(crate) mod osc_limit;
+mod program_status;
 
 /// VT420 + 132-col + printer + selective erase + ANSI color.
 /// VT102 (`?6c`) makes TUIs skip mouse, alt-screen, and truecolor probes.
@@ -48,6 +49,7 @@ pub struct Events {
     escape_pending: bool,
     title: Title,
     kitty: kitty_keys::KittyKeys,
+    program: program_status::ProgramSlot,
 }
 /// Last OSC 0/2 window title. Display only; never a notice or lifecycle
 /// source. Publication is throttled so spinner titles do not flood snapshots.
@@ -429,6 +431,8 @@ impl vt100::Callbacks for Events {
                 self.notice(text(title, 256), text(&body.join(&b';'), 1024));
             }
             b"99" => self.kitty(params),
+            b"7501" => self.program_status(params),
+            b"133" | b"633" if params.get(1) == Some(&b"A".as_slice()) => self.prompt_started(),
             b"10" | b"11" | b"12" if params.get(1) == Some(&b"?".as_slice()) => {
                 let Some(channel) = params.first().copied() else {
                     return;

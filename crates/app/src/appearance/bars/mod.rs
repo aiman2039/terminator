@@ -1,5 +1,8 @@
 mod pane_bar;
+mod program_badge;
 mod resume;
+
+pub use program_badge::program_status_badge;
 
 use super::rows::{PaintStatusIconInput, paint_status_icon, u8_from_f32};
 use super::scale::{FONT_SMALL, WIDGET_RADIUS};
