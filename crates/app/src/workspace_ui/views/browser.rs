@@ -100,6 +100,7 @@ impl App {
                 key,
                 target: target.clone(),
                 rect,
+                zoom: ui.ctx().zoom_factor(),
             });
     }
 

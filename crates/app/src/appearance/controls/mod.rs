@@ -160,19 +160,22 @@ fn icon_label(
     let image = egui::Image::new(crate::icons::source(icon))
         .tint(tint)
         .fit_to_exact_size(egui::Vec2::splat(TOOLBAR_ICON));
-    ui.scope(|ui| {
-        // The ambient interact size would make the button taller than its row.
-        ui.spacing_mut().interact_size.y = height;
-        let button = egui::Button::new((image, label)).frame(false);
-        match max_width {
-            Some(width) => {
-                ui.set_max_width(width);
-                ui.add(button.truncate())
+    let response = ui
+        .scope(|ui| {
+            // The ambient interact size would make the button taller than its row.
+            ui.spacing_mut().interact_size.y = height;
+            let button = egui::Button::new((image, label)).frame(false);
+            match max_width {
+                Some(width) => {
+                    ui.set_max_width(width);
+                    ui.add(button.truncate())
+                }
+                None => ui.add(button),
             }
-            None => ui.add(button),
-        }
-    })
-    .inner
+        })
+        .inner;
+    paint_focus(ui, &response);
+    response
 }
 
 /// Name an icon-only control for screen readers and outline it while it has
@@ -182,16 +185,23 @@ fn accessible_icon(ui: &egui::Ui, response: &egui::Response, tip: &str) {
     paint_focus(ui, response);
 }
 
-/// Outline a control while it has keyboard focus.
+/// Outline a control while it has keyboard focus: a 2 px ring in the text
+/// color, which reads on every fill (an accent ring can vanish on a red
+/// or blue control).
 pub fn paint_focus(ui: &egui::Ui, response: &egui::Response) {
     if response.has_focus() {
         ui.painter().rect_stroke(
             response.rect,
             WIDGET_RADIUS,
-            ui.visuals().selection.stroke,
+            focus_ring(ui.visuals()),
             egui::StrokeKind::Inside,
         );
     }
+}
+
+/// The keyboard focus ring.
+pub fn focus_ring(visuals: &egui::Visuals) -> egui::Stroke {
+    egui::Stroke::new(2.0, visuals.strong_text_color())
 }
 
 /// Single-line field. Placeholder and typed text share a vertical center,
@@ -251,7 +261,9 @@ pub fn enabled_unless(
 /// Exact-size frameless button for toolbar icons with custom paint, such as
 /// tinted status glyphs. Shares the action size so it centers on their row.
 pub fn toolbar_button(ui: &mut egui::Ui) -> egui::Response {
-    exact_button(ui, egui::Vec2::splat(TOOLBAR_BUTTON))
+    let response = exact_button(ui, egui::Vec2::splat(TOOLBAR_BUTTON));
+    paint_focus(ui, &response);
+    response
 }
 
 /// Pixel-snapped centered icon paint, so adjacent icons share one center line.

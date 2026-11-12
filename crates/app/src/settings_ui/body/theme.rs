@@ -91,6 +91,7 @@ impl App {
         let density = self.theme_draft.density;
         let divider = self.theme_draft.pane_divider_width;
         let border = self.theme_draft.border_width;
+        let ui_scale = self.theme_draft.ui_scale;
         let editor = self.theme_draft.editor;
         let fonts = std::mem::take(&mut self.theme_draft.fonts);
         self.theme_draft = choice
@@ -100,6 +101,7 @@ impl App {
         self.theme_draft.density = density;
         self.theme_draft.pane_divider_width = divider;
         self.theme_draft.border_width = border;
+        self.theme_draft.ui_scale = ui_scale;
         self.theme_draft.editor = editor;
         self.theme_draft.fonts = fonts;
     }
@@ -111,7 +113,7 @@ impl App {
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label: "Accent",
-            description: "Selection color is derived from the accent.",
+            description: "Selection follows the accent, except in neutral themes.",
             add_control: |ui| {
                 let mut color = terminator_core::appearance::rgb(&self.theme_draft.accent)
                     .unwrap_or([56, 113, 225]);
@@ -142,6 +144,26 @@ impl App {
                         ("Compact", terminator_core::appearance::Density::Compact),
                     ],
                 );
+            },
+        });
+        self.interface_size_row(ui);
+    }
+
+    fn interface_size_row(&mut self, ui: &mut egui::Ui) {
+        if !self.field_visible("Interface size", "zoom scale text ui larger smaller") {
+            return;
+        }
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Interface size",
+            description: "Scales the whole window, terminal and editor text included.",
+            add_control: |ui| {
+                let labels = ["90 %", "100 %", "110 %", "125 %", "150 %"];
+                let options: Vec<(&str, f32)> = labels
+                    .into_iter()
+                    .zip(AppearanceConfig::UI_SCALES)
+                    .collect();
+                settings_controls::segmented(ui, &mut self.theme_draft.ui_scale, &options);
             },
         });
     }
