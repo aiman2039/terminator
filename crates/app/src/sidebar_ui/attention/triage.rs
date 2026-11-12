@@ -35,8 +35,15 @@ pub(crate) const SNOOZE_CHOICES: [(&str, SnoozeSecs); 3] = [
 /// the local time is not known.
 pub(crate) fn seconds_until_tomorrow(now: u64) -> u64 {
     const DAY: u64 = 24 * 60 * 60;
-    terminator_sys::seconds_until_tomorrow_at(now, 9)
-        .filter(|secs| (1..=agent_workflow::MAX_SNOOZE_SECS).contains(secs))
+    #[cfg(unix)]
+    let secs = terminator_sys::seconds_until_tomorrow_at(now, 9);
+    // No local-time conversion on Windows yet: fall back to one day.
+    #[cfg(not(unix))]
+    let secs: Option<u64> = {
+        let _ = now;
+        None
+    };
+    secs.filter(|secs| (1..=agent_workflow::MAX_SNOOZE_SECS).contains(secs))
         .unwrap_or(DAY)
 }
 

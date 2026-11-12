@@ -3,6 +3,9 @@
 Source: https://github.com/excalidraw/excalidraw (MIT, see LICENSE)
 Pinned npm package: `@excalidraw/excalidraw` 0.18.1, with `react` and
 `react-dom` 19.2.0. Exact versions are in `package-lock.json`.
+`overrides` in `package.json` lift `lodash-es`, `nanoid` and `katex` (from
+Excalidraw and Mermaid) to releases with the published security fixes.
+Remove an override when the upstream pin includes the fix.
 
 `dist/` is the built page and is committed. The app embeds it with
 `include_dir` (`crates/app/src/browser/draw.rs`) and serves it to drawing tabs

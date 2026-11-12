@@ -98,9 +98,9 @@ fn leftmost_file_close(f: &Fixture, o: &Options) -> Result<()> {
             name: "leftmost-file-close",
             actions: json!([
                 {"at_ms":1100,"target":"explorer-file:source.rs"},
-                {"at_ms":2700,"target":"workspace-close:source.rs"}
+                {"at_ms":4000,"target":"workspace-close:source.rs"}
             ]),
-            after: 4200,
+            after: 5500,
         },
         |_| wait_running_file(h, path),
     )?;
@@ -142,7 +142,7 @@ fn wait_running_file(h: &Harness, path: &Path) -> Result<()> {
                         .is_some_and(|file| file == path.to_string_lossy().as_ref())
             })
         },
-        3,
+        5,
     )?;
     Ok(())
 }

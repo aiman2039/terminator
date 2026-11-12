@@ -10,6 +10,11 @@ pub(crate) struct VisibleBrowser {
     pub key: String,
     pub target: BrowserTarget,
     pub rect: egui::Rect,
+    #[expect(
+        dead_code,
+        reason = "set by the pane view; only the webview host reads it"
+    )]
+    pub zoom: f32,
 }
 
 pub(crate) struct SyncInput<'a> {
