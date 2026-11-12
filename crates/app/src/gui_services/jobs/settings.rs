@@ -25,6 +25,7 @@ pub(crate) struct InstallInput<'a> {
 pub(crate) struct TestNtfyInput<'a> {
     pub(in crate::gui_services) channel: String,
     pub(in crate::gui_services) machine: String,
+    pub(in crate::gui_services) endpoint: String,
     pub(in crate::gui_services) cancel: CancellationToken,
     pub(in crate::gui_services) updates: &'a mut Vec<Update>,
 }
@@ -186,13 +187,14 @@ impl Services {
         let TestNtfyInput {
             channel,
             machine,
+            endpoint,
             cancel,
             updates,
         } = input;
         let delivered = self
             .platform()
             .run(&cancel, move || {
-                notify_test::send(notify_test::ENDPOINT, &channel, &machine)
+                notify_test::send(&endpoint, &channel, &machine)
             })
             .await;
         match delivered {

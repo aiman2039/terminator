@@ -88,12 +88,19 @@ impl Viewer<'_> {
             Tab::Browser { id, target } => self.app.browser_title(id, target).into(),
             Tab::Player => "Player".into(),
             Tab::Terminal(sid) => self.terminal_tab_title(sid),
-            Tab::Diff { path, staged, .. } => format!(
-                "{} {}",
-                if *staged { "Staged:" } else { "Diff:" },
-                path.file_name().unwrap_or_default().to_string_lossy()
-            )
-            .into(),
+            Tab::Diff { path, staged, .. } => {
+                let title = egui::RichText::new(format!(
+                    "{} {}",
+                    if *staged { "Staged:" } else { "Diff:" },
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ));
+                // The Git panel's preview diff tab reads in italics until kept.
+                if self.app.is_preview_diff(Some(&*tab)) {
+                    title.italics().into()
+                } else {
+                    title.into()
+                }
+            }
             Tab::CommitLog { .. } => "Commit Log".into(),
             Tab::Blame { path, .. } => format!(
                 "Blame {}",

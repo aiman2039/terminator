@@ -35,6 +35,8 @@ pub(crate) struct VisibleBrowser {
     pub key: String,
     pub target: BrowserTarget,
     pub rect: egui::Rect,
+    /// egui zoom (Interface size): native views take OS points.
+    pub zoom: f32,
 }
 
 struct Hosted {
@@ -61,9 +63,9 @@ impl Hosted {
         Ok(())
     }
 
-    fn place(&mut self, rect: egui::Rect) -> Result<(), wry::Error> {
+    fn place(&mut self, rect: egui::Rect, zoom: f32) -> Result<(), wry::Error> {
         if self.bounds != Some(rect) {
-            self.view.set_bounds(bounds(rect))?;
+            self.view.set_bounds(bounds(rect, zoom))?;
             self.bounds = Some(rect);
         }
         Ok(())
@@ -349,7 +351,7 @@ impl BrowserHost {
                 hosted.view.load_url(&href).map_err(wry_error)?;
                 hosted.target = pane.target.clone();
             }
-            hosted.place(pane.rect).map_err(wry_error)?;
+            hosted.place(pane.rect, pane.zoom).map_err(wry_error)?;
             hosted.show(true).map_err(wry_error)?;
             hosted.used = Instant::now();
             let loaded = self.nav.take_stale(&pane.key);
@@ -377,7 +379,7 @@ impl BrowserHost {
             scope: &scope,
             current: &current,
             committed: &committed,
-            bounds: bounds(pane.rect),
+            bounds: bounds(pane.rect, pane.zoom),
             data_dir,
             nav: &self.nav,
             navigations: &self.navigations,
@@ -479,19 +481,17 @@ fn eviction_victim<'a>(
     mounted: impl Iterator<Item = (&'a str, Instant)>,
     listed: &[&str],
 ) -> Option<String> {
-    let mounted: Vec<(&str, Instant)> = mounted.collect();
     mounted
-        .iter()
-        .copied()
         .filter(|(key, _)| !listed.contains(key))
         .min_by_key(|(_, used)| *used)
         .map(|(key, _)| key.to_owned())
 }
 
-fn bounds(rect: egui::Rect) -> Rect {
+fn bounds(rect: egui::Rect, zoom: f32) -> Rect {
+    let [x, y, w, h] = [rect.min.x, rect.min.y, rect.width(), rect.height()].map(|v| v * zoom);
     Rect {
-        position: LogicalPosition::new(f64::from(rect.min.x), f64::from(rect.min.y)).into(),
-        size: LogicalSize::new(f64::from(rect.width()), f64::from(rect.height())).into(),
+        position: LogicalPosition::new(x, y).into(),
+        size: LogicalSize::new(w, h).into(),
     }
 }
 

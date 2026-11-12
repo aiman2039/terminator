@@ -67,6 +67,8 @@ struct Inner {
     editors: std::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     snapshot: Arc<std::sync::Mutex<Option<Box<State>>>>,
     owed: super::jobs::replies::SharedOwed,
+    /// Capabilities of the last full snapshot, for jobs that gate a request.
+    capabilities: std::sync::Mutex<Vec<String>>,
 }
 pub struct Owner {
     pub supervisor: Supervisor<Vec<Update>, anyhow::Error>,
@@ -126,6 +128,7 @@ impl Services {
             editors: std::sync::Mutex::default(),
             snapshot: Arc::clone(&snapshot),
             owed: super::jobs::replies::SharedOwed::default(),
+            capabilities: std::sync::Mutex::default(),
         }));
         let cpu = service.cpu().clone();
         supervisor.handle.submit(
@@ -162,6 +165,25 @@ impl Services {
             .map(|received| {
                 received.elapsed().as_secs() <= terminator_core::agents::STALE_AFTER_SECS
             })
+    }
+    /// Whether the last full snapshot advertised `capability`. False before
+    /// the first one: an unknown daemon gets the older request.
+    pub fn advertises(&self, capability: &str) -> bool {
+        self.0
+            .capabilities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|c| c == capability)
+    }
+    pub(super) fn set_capabilities(&self, capabilities: &[String]) {
+        capabilities.clone_into(
+            &mut self
+                .0
+                .capabilities
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
     pub fn client(&self) -> &Client {
         &self.0.client

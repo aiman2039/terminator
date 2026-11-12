@@ -7,11 +7,13 @@
 use std::{ops::Range, path::PathBuf};
 
 mod io;
+mod labels;
 #[cfg(test)]
 mod tests;
 mod three_way;
 
-pub(crate) use io::{MergeTab, MergeTabs, take_done};
+pub(crate) use io::{Done, MergeTab, MergeTabs, take_done};
+pub(crate) use labels::SideLabels;
 pub(crate) use three_way::ChunkKind;
 
 /// One version of the file, split into lines (endings kept).
@@ -94,6 +96,8 @@ pub(crate) struct MergeDoc {
     pub ours: Side,
     pub theirs: Side,
     pub chunks: Vec<Chunk>,
+    /// Branch names for the Ours and Theirs headers.
+    pub labels: SideLabels,
 }
 
 impl MergeDoc {
@@ -123,6 +127,7 @@ impl MergeDoc {
             ours,
             theirs,
             chunks,
+            labels: SideLabels::default(),
         }
     }
 

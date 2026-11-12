@@ -13,6 +13,25 @@ impl Shared {
         Ok(Outcome::Reply(Response::LocalHistory(entries)))
     }
 
+    /// One page of the timeline, so a large one fits the IPC frame.
+    pub(super) fn on_local_history_page(
+        &self,
+        path: &Path,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Outcome> {
+        ensure!(path.is_absolute(), "Local History needs an absolute path");
+        let (entries, total) = LocalHistoryWorker::store(self).list_page(
+            path,
+            usize::try_from(offset).unwrap_or(usize::MAX),
+            usize::try_from(limit).unwrap_or(usize::MAX),
+        )?;
+        Ok(Outcome::Reply(Response::LocalHistoryPage {
+            entries,
+            total: u64::try_from(total).unwrap_or(u64::MAX),
+        }))
+    }
+
     pub(super) fn on_local_history_read(&self, path: &Path, id: &str) -> Result<Outcome> {
         Ok(Outcome::Reply(Response::Text(
             self.snapshot_text(path, id)?,
@@ -132,5 +151,26 @@ mod tests {
         revert_file(&store, &path, "old text").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old text");
         assert_eq!(store.list(&path).unwrap().len(), 1, "before-revert kept");
+    }
+
+    #[test]
+    fn local_history_page_reply_fits_one_frame_for_a_large_timeline() {
+        let data = tempfile::tempdir().unwrap();
+        let store = local_history::Store::in_data(data.path());
+        let path = data.path().join("big.log");
+        for n in 0..1500u64 {
+            store
+                .record(local_history::Record {
+                    path: &path,
+                    bytes: n.to_string().as_bytes(),
+                    source: local_history::Source::External,
+                    label: None,
+                    now_ms: n,
+                })
+                .unwrap();
+        }
+        let (page, total) = store.list_page(&path, 0, usize::MAX).unwrap();
+        assert_eq!(total, 1500);
+        assert_eq!(page.len(), local_history::MAX_PAGE, "a page is capped");
     }
 }

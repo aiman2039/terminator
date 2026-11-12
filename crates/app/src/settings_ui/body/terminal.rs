@@ -104,20 +104,24 @@ impl App {
         if !self.field_visible("Pull requests", "github gh metadata") {
             return;
         }
+        let supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == METADATA_SETTINGS_CAPABILITY);
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label: "Pull requests",
-            description: "Uses GitHub CLI when the session service supports it.",
+            description: "Uses GitHub CLI.",
             add_control: |ui| {
                 ui.add_enabled(
-                    self.state
-                        .capabilities
-                        .iter()
-                        .any(|c| c == METADATA_SETTINGS_CAPABILITY),
+                    supported,
                     egui::Checkbox::new(&mut self.settings_draft.pr_metadata, "Fetch PR metadata"),
-                );
+                )
+                .on_disabled_hover_text(settings_controls::NEEDS_SERVICE);
             },
         });
+        self.service_caption(ui, supported);
     }
 
     fn font_size_row(&mut self, ui: &mut egui::Ui) {
@@ -212,10 +216,20 @@ impl App {
         if !self.field_visible("Diff viewer", "native neovim review") {
             return;
         }
+        let supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == NVIM_REVIEW_CAPABILITY);
+        let description = if supported || self.settings_draft.review_mode != ReviewMode::Neovim {
+            "Where Git reviews open."
+        } else {
+            "Neovim review is not available until the session service updates. Native is used."
+        };
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label: "Diff viewer",
-            description: "Neovim review needs nvim-review-v1 on the running session service.",
+            description,
             add_control: |ui| {
                 settings_controls::segmented(
                     ui,

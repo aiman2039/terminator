@@ -1,6 +1,31 @@
 use super::signature::open_paren;
 use super::*;
 
+#[test]
+fn the_completion_list_goes_above_the_caret_line_near_the_pane_bottom() {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let caret = |top: f32| egui::Rect::from_min_size(egui::pos2(100.0, top), egui::vec2(2.0, 18.0));
+    // Room below: under the caret line, every row.
+    let (at, pivot, rows) = super::popup::list_place(caret(100.0), screen, 30);
+    assert_eq!(
+        (at, pivot, rows),
+        (
+            caret(100.0).left_bottom(),
+            egui::Align2::LEFT_TOP,
+            VISIBLE_ROWS
+        )
+    );
+    // Near the bottom: above the caret line, so the typed line stays clear.
+    let near = caret(560.0);
+    let (at, pivot, rows) = super::popup::list_place(near, screen, 30);
+    assert_eq!((at, pivot), (near.left_top(), egui::Align2::LEFT_BOTTOM));
+    assert_eq!(rows, VISIBLE_ROWS);
+    // A short pane shows only the rows that fit.
+    let short = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0));
+    let (_, _, rows) = super::popup::list_place(caret(90.0), short, 30);
+    assert!((1..VISIBLE_ROWS).contains(&rows), "{rows}");
+}
+
 fn item(label: &str, sort: &str) -> native_lsp::CompletionItem {
     native_lsp::CompletionItem {
         label: label.into(),

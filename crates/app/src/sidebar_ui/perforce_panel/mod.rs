@@ -1,6 +1,11 @@
 //! The Perforce sidebar panel: workspace, changelist actions, and files.
 use super::git_panel::{GitFileAction, GitPanelOutcome, git_color};
-use crate::{appearance, file_actions::FileAction, perforce::Op, services::ContextData};
+use crate::{
+    appearance,
+    file_actions::FileAction,
+    perforce::{Op, Progress, RUN_BUSY},
+    services::ContextData,
+};
 use eframe::egui::{self, RichText};
 use terminator_core::appearance::AppearanceConfig;
 
@@ -8,6 +13,22 @@ pub(super) struct PerforcePanelInput<'a> {
     pub(super) context: &'a ContextData,
     pub(super) theme: &'a AppearanceConfig,
     pub(super) open_shortcut: &'a str,
+}
+
+fn progress_id() -> egui::Id {
+    egui::Id::unique("perforce-run-progress")
+}
+
+/// Shares the long Perforce action in flight with the panel. The app calls
+/// it each frame; the panel paints with only the context and theme.
+pub(crate) fn publish(ctx: &egui::Context, progress: Option<&Progress>) {
+    ctx.data_mut(|data| {
+        if let Some(progress) = progress {
+            data.insert_temp(progress_id(), progress.clone());
+        } else {
+            data.remove::<Progress>(progress_id());
+        }
+    });
 }
 
 pub(super) fn panel(ui: &mut egui::Ui, input: PerforcePanelInput<'_>) -> GitPanelOutcome {
@@ -26,8 +47,10 @@ pub(super) fn panel(ui: &mut egui::Ui, input: PerforcePanelInput<'_>) -> GitPane
         theme,
         open_shortcut,
         id: ui.make_persistent_id(("perforce", &context.root)),
+        running: ui.data(|data| data.get_temp::<Progress>(progress_id())),
     };
     view.header(ui, &mut outcome);
+    view.progress(ui);
     let change = view.changelist_controls(ui, &mut outcome);
     ui.separator();
     egui::ScrollArea::vertical()
@@ -47,6 +70,8 @@ struct PerforceView<'a> {
     theme: &'a AppearanceConfig,
     open_shortcut: &'a str,
     id: egui::Id,
+    /// The long action in flight; its controls wait for it.
+    running: Option<Progress>,
 }
 
 impl PerforceView<'_> {
@@ -57,11 +82,19 @@ impl PerforceView<'_> {
             if appearance::sidebar_action(ui, "RefreshCw", "Refresh Perforce status").clicked() {
                 outcome.refresh = true;
             }
-            if appearance::sidebar_action(ui, "Download", "Sync this folder to the latest revision")
+            ui.add_enabled_ui(self.running.is_none(), |ui| {
+                if appearance::sidebar_action(
+                    ui,
+                    "Download",
+                    "Sync this folder to the latest revision",
+                )
                 .clicked()
-            {
-                outcome.perforce.push(Op::Sync);
-            }
+                {
+                    outcome.perforce.push(Op::Sync);
+                }
+            })
+            .response
+            .on_disabled_hover_text(RUN_BUSY);
         });
         ui.label(&self.workspace.client);
         if !self.workspace.stream.is_empty() {
@@ -70,6 +103,26 @@ impl PerforceView<'_> {
         if let Some(error) = &self.context.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+    }
+
+    /// The running action and its Cancel: Ctrl-C to `p4`, then a kill
+    /// after 5 seconds. The run ends when its job replies.
+    fn progress(&self, ui: &mut egui::Ui) {
+        let Some(run) = &self.running else {
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.add(egui::Spinner::new());
+            ui.label(run.line());
+            let stopping = run.cancel.is_cancelled();
+            if ui
+                .add_enabled(!stopping, egui::Button::new("Cancel"))
+                .on_hover_text("Stop p4: Ctrl-C, then kill after 5 seconds")
+                .clicked()
+            {
+                run.cancel.cancel();
+            }
+        });
     }
 
     /// Changelist field, submit/shelve/unshelve, and the submit
@@ -82,7 +135,7 @@ impl PerforceView<'_> {
         let confirmation_id = id.with("submit");
         let mut confirmation = ui.data_mut(|data| data.get_temp::<String>(confirmation_id));
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(valid, |ui| {
+            ui.add_enabled_ui(valid && self.running.is_none(), |ui| {
                 if let Some(asked) = Self::changelist_actions(ui, &change, outcome) {
                     confirmation = Some(asked);
                 }

@@ -51,6 +51,12 @@ pub(crate) struct MergeTab {
     pub scroll_to: Option<usize>,
     /// Syntax spans of hand-edited chunk text, by text hash.
     pub highlights: HashMap<u64, std::sync::Arc<Vec<Vec<crate::diff::DiffSpan>>>>,
+    /// Shared horizontal offset of the three text columns, in points.
+    pub hscroll: f32,
+    /// Widest line laid out so far, in points: the horizontal scroll range.
+    pub widest: f32,
+    /// Reload was clicked with unsaved edits: a bar asks first.
+    pub confirm_reload: bool,
     pending: Option<Pending>,
 }
 
@@ -99,11 +105,9 @@ pub(crate) fn load(root: &Path, path: &Path) -> Result<MergeDoc, String> {
         side.spans = crate::diff::highlight_spans(&relative, &side.text);
         Ok(side)
     };
-    Ok(MergeDoc::new(
-        side(stages.base)?,
-        side(stages.ours)?,
-        side(stages.theirs)?,
-    ))
+    let mut doc = MergeDoc::new(side(stages.base)?, side(stages.ours)?, side(stages.theirs)?);
+    doc.labels = super::labels::side_labels(root);
+    Ok(doc)
 }
 
 impl App {

@@ -2,6 +2,7 @@
 //! one row as tall as its longest side, so the panes stay aligned; only
 //! rows inside the viewport are laid out.
 use super::super::super::*;
+use super::scroll;
 use super::text::{self, ResultSpansInput, SpanCache};
 use crate::merge::{Chunk, ChunkKind, MergeDoc, MergeTab, Pick};
 use std::path::Path;
@@ -103,13 +104,30 @@ pub(super) fn merge_body(input: MergeBodyInput<'_>) {
         .iter()
         .map(|chunk| chunk_height(doc, chunk, row_height))
         .collect();
+    // The first result line of each chunk, for the Result line numbers.
+    let result_starts: Vec<usize> = doc
+        .chunks
+        .iter()
+        .scan(0usize, |line, chunk| {
+            let start = *line;
+            *line = line.saturating_add(text::line_count(&chunk.result));
+            Some(start)
+        })
+        .collect();
+    let bar_room = 8.0 + ui.spacing().item_spacing.y;
+    let body = ui.available_rect_before_wrap();
+    let view = scroll::text_area(Columns::new(body).ours).width();
+    let max = scroll::max_offset(state.widest, view);
+    state.hscroll = scroll::wheel(ui, body, state.hscroll, max);
     let mut area = egui::ScrollArea::vertical()
         .id_salt((key, "merge-rows"))
+        .max_height((ui.available_height() - bar_room).max(row_height))
         .auto_shrink([false; 2]);
     if let Some(index) = state.scroll_to.take() {
         let top: f32 = heights.iter().take(index).sum();
         area = area.vertical_scroll_offset((top - 3.0 * row_height).max(0.0));
     }
+    let mut follow = None;
     let mut pass = RowPass {
         doc,
         cache: &mut state.highlights,
@@ -118,6 +136,11 @@ pub(super) fn merge_body(input: MergeBodyInput<'_>) {
         key,
         path,
         colors,
+        hscroll: state.hscroll,
+        widest: &mut state.widest,
+        follow: &mut follow,
+        result_starts: &result_starts,
+        row_height,
     };
     area.show_viewport(ui, |ui, viewport| {
         let width = ui.available_width();
@@ -135,8 +158,16 @@ pub(super) fn merge_body(input: MergeBodyInput<'_>) {
             top += height;
         }
     });
+    if let Some(offset) = follow {
+        state.hscroll = offset.clamp(0.0, scroll::max_offset(state.widest, view));
+        ui.ctx().request_repaint();
+    }
+    let max = scroll::max_offset(state.widest, view);
+    state.hscroll = scroll::bar(ui, state.hscroll.min(max), max);
 }
 
+/// `Ours - main`, `Result`, `Theirs - feature`: the name strong, the
+/// branch weak.
 fn headers(ui: &mut egui::Ui, doc: &MergeDoc) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(
@@ -147,19 +178,26 @@ fn headers(ui: &mut egui::Ui, doc: &MergeDoc) {
     );
     let columns = Columns::new(rect);
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let color = ui.visuals().strong_text_color();
-    for (column, label) in [
+    let strong = ui.visuals().strong_text_color();
+    let weak = ui.visuals().weak_text_color();
+    for (column, (name, branch)) in [
         (columns.ours, super::side_label(doc, true)),
-        (columns.result, "Result".to_owned()),
+        (columns.result, ("Result".to_owned(), None)),
         (columns.theirs, super::side_label(doc, false)),
     ] {
-        ui.painter().with_clip_rect(column).text(
-            column.left_center(),
-            egui::Align2::LEFT_CENTER,
-            label,
-            font.clone(),
-            color,
-        );
+        let mut job = egui::text::LayoutJob::simple_singleline(name, font.clone(), strong);
+        if let Some(branch) = branch {
+            job.append(
+                &format!(" - {branch}"),
+                0.0,
+                egui::TextFormat::simple(font.clone(), weak),
+            );
+        }
+        let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+        let at = egui::pos2(column.left(), column.center().y - galley.size().y / 2.0);
+        ui.painter()
+            .with_clip_rect(column)
+            .galley(at, galley, strong);
     }
 }
 
@@ -190,6 +228,14 @@ struct RowPass<'a> {
     key: &'a str,
     path: &'a Path,
     colors: MergeColors,
+    /// The shared horizontal offset of the text columns this frame.
+    hscroll: f32,
+    /// Widest laid-out line: the horizontal scroll range.
+    widest: &'a mut f32,
+    /// The offset that brings the result caret into view, if it moved out.
+    follow: &'a mut Option<f32>,
+    result_starts: &'a [usize],
+    row_height: f32,
 }
 
 impl RowPass<'_> {
@@ -226,8 +272,8 @@ impl RowPass<'_> {
         }
     }
 
-    /// Ours and theirs text of chunk `index`, read-only.
-    fn side_texts(&self, ui: &egui::Ui, index: usize, columns: Columns) {
+    /// Ours and theirs text of chunk `index`, read-only, with line numbers.
+    fn side_texts(&mut self, ui: &egui::Ui, index: usize, columns: Columns) {
         let Some(chunk) = self.doc.chunks.get(index) else {
             return;
         };
@@ -239,6 +285,16 @@ impl RowPass<'_> {
             if content.is_empty() {
                 continue;
             }
+            scroll::paint_numbers(
+                ui,
+                rect,
+                scroll::Numbers {
+                    first: lines.start,
+                    count: lines.len(),
+                    row_height: self.row_height,
+                },
+            );
+            let area = scroll::text_area(rect);
             let font = egui::TextStyle::Monospace.resolve(ui.style());
             let job = text::job(
                 content,
@@ -247,9 +303,14 @@ impl RowPass<'_> {
                 self.colors.text,
             );
             let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+            *self.widest = self.widest.max(galley.size().x);
             ui.painter()
-                .with_clip_rect(rect.intersect(ui.clip_rect()))
-                .galley(rect.min, galley, self.colors.text);
+                .with_clip_rect(area.intersect(ui.clip_rect()))
+                .galley(
+                    egui::pos2(area.left() - self.hscroll, area.top()),
+                    galley,
+                    self.colors.text,
+                );
         }
     }
 
@@ -271,28 +332,54 @@ impl RowPass<'_> {
         })
         .as_slice()
         .to_vec();
+        scroll::paint_numbers(
+            ui,
+            rect,
+            scroll::Numbers {
+                first: self.result_starts.get(index).copied().unwrap_or_default(),
+                count: text::line_count(&chunk.result),
+                row_height: self.row_height,
+            },
+        );
         let font = egui::TextStyle::Monospace.resolve(ui.style());
         let fallback = self.colors.text;
         let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _wrap: f32| {
             let job = text::job(buffer.as_str(), &spans, font.clone(), fallback);
             ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
         };
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        // The editor is as wide as the widest line and moves with the
+        // shared offset; only the column's text area shows.
+        let area = scroll::text_area(rect);
+        let width = (*self.widest + 2.0 * area.width()).max(area.width() + self.hscroll);
+        let moved = egui::Rect::from_min_size(
+            egui::pos2(area.left() - self.hscroll, area.top()),
+            egui::vec2(width, area.height()),
+        );
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(moved));
+        child.set_clip_rect(area.intersect(ui.clip_rect()));
         let Some(chunk) = self.doc.chunks.get_mut(index) else {
             return;
         };
-        let response = child.add(
-            egui::TextEdit::multiline(&mut chunk.result)
-                .id(egui::Id::unique((self.key, "merge-result", index)))
-                .font(egui::TextStyle::Monospace)
-                .frame(egui::Frame::NONE)
-                .margin(egui::Margin::ZERO)
-                .desired_width(rect.width())
-                .desired_rows(1)
-                .layouter(&mut layouter),
-        );
-        if response.changed() {
+        let output = egui::TextEdit::multiline(&mut chunk.result)
+            .id(egui::Id::unique((self.key, "merge-result", index)))
+            .font(egui::TextStyle::Monospace)
+            .frame(egui::Frame::NONE)
+            .margin(egui::Margin::ZERO)
+            .desired_width(width)
+            .desired_rows(1)
+            .layouter(&mut layouter)
+            .show(&mut child);
+        *self.widest = self.widest.max(output.galley.size().x);
+        if output.response.has_focus()
+            && let Some(range) = output.cursor_range
+        {
+            let caret = output.galley.pos_from_cursor(range.primary).min.x;
+            let wanted = scroll::follow(self.hscroll, caret, area.width());
+            if (wanted - self.hscroll).abs() > 0.5 {
+                *self.follow = Some(wanted);
+            }
+        }
+        if output.response.changed() {
             self.doc.edited(index);
             *self.dirty = true;
         }

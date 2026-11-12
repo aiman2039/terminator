@@ -46,6 +46,8 @@ pub(crate) struct GitPanelState {
     pub(crate) logs: std::collections::HashMap<String, crate::git_log::LogView>,
     /// Focus the commit message the next time the panel paints.
     pub(crate) focus_message: bool,
+    /// The long Perforce action in flight (Sync, Submit, Shelve, Unshelve).
+    pub(crate) perforce: crate::perforce::RunSlot,
 }
 
 /// A commit (and push) job in flight.

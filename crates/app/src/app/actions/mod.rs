@@ -333,9 +333,10 @@ impl App {
                 path,
                 staged,
             };
-            if self.focus_file_view(&project, &tab) {
+            if self.focus_file_view(&project, &tab) || self.reuse_preview_diff(&project, &tab) {
                 return;
             }
+            self.note_new_diff_tab(&project, &tab);
             self.layouts
                 .entry(project)
                 .or_insert_with(Workspace::empty)
@@ -351,7 +352,9 @@ impl App {
             }
             self.error.clear();
             if self.neovim_review_unavailable() {
-                self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
+                self.info = Some(
+                    "Using built-in diff. Neovim review needs the updated session service.".into(),
+                );
             }
             let _ = self.jobs.send(Job::Diff(tab));
             return;

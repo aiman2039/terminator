@@ -2,8 +2,10 @@ use super::super::super::*;
 use super::{DiffFrame, DiffPass};
 
 impl App {
-    /// The diff toolbar: edit, change, and file navigation on the left;
-    /// view options, layout, undo, and the change counter on the right.
+    /// The diff toolbar: changed files, change navigation with its
+    /// counter between the arrows, file navigation likewise, the labeled
+    /// whole-file stage action, edit and source on the left; undo, layout,
+    /// and the view menu (with Refresh) on the right.
     pub(super) fn diff_toolbar(
         &mut self,
         ui: &mut egui::Ui,
@@ -11,14 +13,17 @@ impl App {
         pass: &mut DiffPass,
     ) {
         ui.spacing_mut().item_spacing.x = 4.0;
+        pass.compact = ui.available_width() < COMPACT_WIDTH;
         self.diff_file_tree_toggle(ui, frame);
-        self.diff_edit_buttons(ui, frame, pass);
-        self.diff_change_buttons(ui, frame, pass);
-        Self::diff_stage_file_button(ui, frame, pass);
         ui.separator();
-        Self::diff_source_buttons(ui, frame, pass);
+        self.diff_change_buttons(ui, frame, pass);
         ui.separator();
         self.diff_file_buttons(ui, frame, pass);
+        ui.separator();
+        Self::diff_stage_file_button(ui, frame, pass);
+        self.diff_edit_buttons(ui, frame, pass);
+        Self::diff_source_button(ui, frame, pass);
+        self.diff_note_buttons(ui, frame, pass);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             self.diff_toolbar_trailing(ui, frame, pass);
         });
@@ -109,6 +114,11 @@ impl App {
         if previous.clicked() {
             pass.review.advance(false, count);
         }
+        let position = pass
+            .review
+            .selected
+            .map_or(0, |index| index.saturating_add(1));
+        ui.weak(change_counter(position, count, pass.compact));
         let next = ui
             .add_enabled_ui(
                 count > 0 && pass.review.selected != count.checked_sub(1),
@@ -132,20 +142,23 @@ impl App {
     }
 
     /// Stage (working tree) or unstage (staged) the whole file, mode
-    /// changes included; the only action for a mode-only change.
+    /// changes included; the only action for a mode-only change. The one
+    /// labeled control on the row, with the same glyphs as the gutter.
     fn diff_stage_file_button(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
         if frame.read_only || frame.remote {
             return;
         }
-        let (icon, tip) = if frame.staged {
-            ("Download", "Unstage whole file")
-        } else {
-            ("Upload", "Stage whole file")
-        };
+        let (icon, label, tip) = stage_file_control(frame.staged);
         let lock = frame.commit_lock.then_some(workspace_ops::COMMIT_WAIT);
         let button = appearance::enabled_unless(ui, lock, |ui| {
             ui.add_enabled_ui(frame.enabled && !pass.review.unsaved_edits(), |ui| {
-                appearance::sidebar_action(ui, icon, tip)
+                appearance::icon_label_button(appearance::IconLabelButtonInput {
+                    ui,
+                    icon,
+                    label,
+                    height: appearance::TOOLBAR_BUTTON,
+                })
+                .on_hover_text(tip)
             })
             .inner
         });
@@ -167,7 +180,7 @@ impl App {
             return;
         }
         let lock = Self::diff_undo_lock(frame, pass);
-        let menu = appearance::icon_menu_button(ui, "List", |ui| {
+        let menu = appearance::icon_menu_button(ui, "ChevronDown", |ui| {
             ui.weak("Undo history");
             for (at, undo) in pass.review.undo.iter().rev().enumerate() {
                 let label = undo.label.as_str();
@@ -200,19 +213,43 @@ impl App {
         }
     }
 
-    fn diff_source_buttons(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+    fn diff_source_button(ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
         let source = appearance::sidebar_action(ui, "FileText", "Open at selected change (F4)");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "diff-open-source", source.rect);
         if source.clicked() {
             pass.open_line = pass.selected_change_line(frame.doc.as_ref());
         }
-        pass.refresh = ui
-            .add_enabled_ui(!pass.review.busy, |ui| {
-                appearance::sidebar_action(ui, "RefreshCw", "Refresh diff")
+    }
+
+    /// Add a review note on the selected change; when the repository has
+    /// notes, Send opens Ask agent with all of them. GUI-only state.
+    fn diff_note_buttons(&self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        let add = ui
+            .add_enabled_ui(frame.count > 0 && pass.review.note.is_none(), |ui| {
+                appearance::sidebar_action(
+                    ui,
+                    "MessageSquarePlus",
+                    "Add a review note on the selected change (Alt+click lines to note \
+                     only those; right-click a line to note it)",
+                )
             })
-            .inner
-            .clicked();
+            .inner;
+        #[cfg(feature = "test-support")]
+        diagnostics::record_response(ui.ctx(), "diff-add-note", &add);
+        if add.clicked() {
+            pass.review.note = pass.note_draft(frame.doc.as_ref());
+        }
+        let count = self.diff_notes.list(&frame.notes_repo()).len();
+        if count == 0 {
+            return;
+        }
+        let tip = format!("Send {count} review note(s) to an agent…");
+        let send = appearance::sidebar_action(ui, "Send", &tip);
+        #[cfg(feature = "test-support")]
+        diagnostics::record_response(ui.ctx(), "diff-send-notes", &send);
+        ui.weak(count.to_string());
+        pass.send_notes = send.clicked();
     }
 
     fn diff_file_buttons(&self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
@@ -231,7 +268,7 @@ impl App {
             pass.navigate.clone_from(&frame.prev_file);
         }
         if frame.file_total > 0 {
-            ui.weak(format!("{}/{} files", frame.file_pos, frame.file_total));
+            ui.weak(file_counter(frame.file_pos, frame.file_total, pass.compact));
         }
         let next_file_btn = ui
             .add_enabled_ui(frame.next_file.is_some(), |ui| {
@@ -263,28 +300,40 @@ impl App {
         let _ = menu;
         self.diff_layout_toggles(ui, frame, pass);
         ui.separator();
+        // Right to left: the history chevron paints right of Undo.
+        Self::diff_undo_history(ui, frame, pass);
         let lock = Self::diff_undo_lock(frame, pass);
+        let undo_tip = pass
+            .review
+            .undo
+            .last()
+            .map_or_else(|| "Undo".to_owned(), |undo| format!("Undo {}", undo.label));
         let undo_button = appearance::enabled_unless(ui, lock, |ui| {
             ui.add_enabled_ui(frame.enabled && !pass.review.undo.is_empty(), |ui| {
-                appearance::sidebar_action(ui, "History", "Undo last hunk action")
+                appearance::sidebar_action(ui, "Undo2", &undo_tip)
             })
             .inner
         });
         #[cfg(feature = "test-support")]
         diagnostics::record_response(ui.ctx(), "diff-undo", &undo_button);
         pass.undo = undo_button.clicked();
-        Self::diff_undo_history(ui, frame, pass);
-        ui.weak(format!(
-            "Change {} of {}",
-            pass.review
-                .selected
-                .map_or(0, |index| index.saturating_add(1)),
-            frame.count
-        ));
     }
 
-    /// Unchanged-line context, whitespace, and the markdown preview.
+    /// Refresh, unchanged-line context, whitespace, and the markdown preview.
     fn diff_view_menu(&mut self, ui: &mut egui::Ui, frame: &DiffFrame<'_>, pass: &mut DiffPass) {
+        let refresh = ui.add_enabled_ui(!pass.review.busy, |ui| {
+            appearance::menu_item(appearance::MenuItemInput {
+                ui,
+                label: "Refresh diff",
+                icon: "RefreshCw",
+                shortcut: "",
+            })
+        });
+        if refresh.inner.clicked() {
+            pass.refresh = true;
+            ui.close();
+        }
+        ui.separator();
         if appearance::menu_item(appearance::MenuItemInput {
             ui,
             label: "Show more unchanged lines",
@@ -372,5 +421,58 @@ impl App {
             self.diff_split.remove(&frame.key);
             pass.review.jump = true;
         }
+    }
+}
+
+/// Below this toolbar width the counters use their short form.
+const COMPACT_WIDTH: f32 = 600.0;
+
+/// The change counter between the change arrows.
+pub(super) fn change_counter(position: usize, count: usize, compact: bool) -> String {
+    if compact {
+        format!("{position}/{count}")
+    } else {
+        format!("Change {position} of {count}")
+    }
+}
+
+/// The file counter between the file arrows.
+pub(super) fn file_counter(position: usize, total: usize, compact: bool) -> String {
+    if compact {
+        format!("{position}/{total}")
+    } else {
+        format!("{position}/{total} files")
+    }
+}
+
+/// Glyph, label, and tip of the whole-file control: the gutter's Stage
+/// (Plus) and Unstage (Minus) glyphs, so one glyph has one verb.
+pub(super) fn stage_file_control(staged: bool) -> (&'static str, &'static str, &'static str) {
+    if staged {
+        ("Minus", "Unstage file", "Unstage the whole file")
+    } else {
+        ("Plus", "Stage file", "Stage the whole file")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counters_shorten_on_a_narrow_toolbar() {
+        assert_eq!(change_counter(2, 5, false), "Change 2 of 5");
+        assert_eq!(change_counter(2, 5, true), "2/5");
+        assert_eq!(file_counter(1, 3, false), "1/3 files");
+        assert_eq!(file_counter(1, 3, true), "1/3");
+    }
+
+    #[test]
+    fn whole_file_control_uses_the_gutter_glyphs_with_a_label() {
+        assert_eq!(stage_file_control(false).0, "Plus");
+        assert_eq!(stage_file_control(false).1, "Stage file");
+        assert_eq!(stage_file_control(true).0, "Minus");
+        assert_eq!(stage_file_control(true).1, "Unstage file");
+        assert!(crate::icons::is_ui_icon("Undo2"));
     }
 }

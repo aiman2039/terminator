@@ -83,7 +83,7 @@ pub(crate) struct Shared {
     pub(crate) persist_pending: AtomicBool,
     pub(crate) history: SyncSender<HistoryJob>,
     pub(crate) alerts: SyncSender<String>,
-    pub(crate) ntfy: SyncSender<ntfy::Ping>,
+    pub(crate) ntfy: SyncSender<ntfy::Job>,
     pub(crate) ntfy_cooldown: Mutex<ntfy::Cooldown>,
     /// Active SSH port forwards. Lock after `state`, never before.
     pub(crate) forwards: Mutex<crate::remote::Forwards>,

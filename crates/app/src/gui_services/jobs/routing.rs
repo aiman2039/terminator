@@ -66,7 +66,10 @@ impl JobRouting {
         }
         if matches!(
             job,
-            Job::Workspace(_, crate::workspace_ops::Op::Commit { .. })
+            Job::Workspace(
+                _,
+                crate::workspace_ops::Op::Commit { .. } | crate::workspace_ops::Op::PerforceRun(_)
+            )
         ) {
             // A queued commit still runs and replies, however long the
             // actions before it take; the Git panel waits for that reply.
@@ -117,9 +120,14 @@ impl JobRouting {
                 Policy::ReplaceableRead,
             ),
             // A newer ask for the same worktree replaces the one queued.
-            Job::WorktreeStats(path) => (
+            Job::WorktreeStats(path, _) => (
                 "git",
                 format!("worktree-stats:{}", path.display()),
+                Policy::ReplaceableRead,
+            ),
+            Job::TaskChanges(path, _) => (
+                "git",
+                format!("task-changes:{}", path.display()),
                 Policy::ReplaceableRead,
             ),
             Job::CommitFiles(_, hash) => (

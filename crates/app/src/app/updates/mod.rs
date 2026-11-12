@@ -28,6 +28,7 @@ impl App {
     pub(crate) fn process_updates(&mut self, ctx: &egui::Context) {
         let processing_started = Instant::now();
         self.drain_updates(ctx);
+        crate::sidebar_ui::publish_perforce_run(ctx, self.git.perforce.progress());
         self.drain_pty_events(ctx);
         self.poll_merge_saves();
         self.ui_service_peak_ms = self
@@ -232,6 +233,7 @@ impl App {
             Update::Fonts(reply) => self.handle_fonts(ctx, reply),
             Update::WorktreeProbe(draft, git) => self.apply_worktree_probe(draft, git),
             Update::WorktreeStats(path, git) => self.worktree_stats.apply(path, git),
+            Update::TaskChanges(key, files) => self.apply_task_changes(key, files),
             Update::CommitFiles(hash, files) => {
                 self.commit_files.insert(hash, Some(files));
             }

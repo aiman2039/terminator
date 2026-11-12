@@ -26,7 +26,8 @@ impl Default for UiPreferences {
             left_tool_pins: ["Projects", "Explorer", "Agents", "Git"]
                 .map(str::to_owned)
                 .to_vec(),
-            right_tool_pins: Vec::new(),
+            right_tool_pins: super::DEFAULT_RIGHT_PINS.map(str::to_owned).to_vec(),
+            right_pins_migrated: true,
             width: DEFAULT_SIDEBAR_WIDTH,
             agents_tab: AgentsTab::NeedsAttention,
             agents_search: String::new(),
@@ -65,6 +66,8 @@ impl Default for UiPreferences {
             history_sort: HistorySort::LatestActivity,
             history_filter: String::new(),
             task_agent_command: String::new(),
+            task_bases: HashMap::new(),
+            task_setup_commands: HashMap::new(),
             agent_presets: Vec::new(),
             agent_launch_recent: Vec::new(),
             hosts_filter: String::new(),

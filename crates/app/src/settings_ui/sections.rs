@@ -103,7 +103,8 @@ impl SettingsSection {
                  terminal font family monospace nerd powerline cjk fallback font chinese japanese \
                  korean reset color hex interface window surface hover border text main button \
                  primary background foreground git added modified deleted agent status running \
-                 waiting failed width pane divider"
+                 waiting failed width pane divider interface size zoom scale text ui larger \
+                 smaller"
             }
             Self::Terminal => {
                 "shell override zsh bash fish sh font size type terminal type-ahead typeahead \
@@ -134,12 +135,14 @@ impl SettingsSection {
             }
             Self::Notifications => {
                 "events waiting permission completed failed ntfy channel machine phone push alert \
+                 server self-hosted access token click notice text \
                  os desktop dismiss notifications focus resolve manual position corner terminal osc \
                  test place notifications at the side play sound with desktop notifications"
             }
             Self::Agents | Self::AgentHooks => {
                 "agents presets preset launcher program arguments new agent session terminal \
-                 installed path detected hooks claude codex opencode muse grok cursor install hook \
+                 installed path detected hooks claude codex opencode muse grok cursor gemini \
+                 copilot droid factory qwen install hook \
                  hello test verify notification"
             }
             Self::Remote => {
@@ -150,7 +153,7 @@ impl SettingsSection {
             }
             Self::History => {
                 "history days age retain mib per session total disk scrollback local snapshots \
-                 files revert"
+                 files revert size limit budget"
             }
             Self::Updates => {
                 "updates check automatic sparkle install installation repair session service"

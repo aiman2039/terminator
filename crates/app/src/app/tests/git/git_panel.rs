@@ -59,7 +59,12 @@ fn legacy_daemon_diff_never_sends_an_unsupported_creation_request() {
     }
     assert!(requests.try_recv().is_err());
     assert!(app.error.text().is_none());
-    assert!(app.info.as_ref().unwrap().contains("updated daemon"));
+    assert!(
+        app.info
+            .as_ref()
+            .unwrap()
+            .contains("updated session service")
+    );
     assert!(app.state.sessions.is_empty());
     assert_eq!(app.layouts["a"].tabs.len(), 2);
 }

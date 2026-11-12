@@ -244,9 +244,24 @@ impl App {
             self.handle_commit_reply(result);
             return;
         }
+        if let workspace_ops::Op::PerforceRun(_) = op {
+            self.git.perforce.finish();
+            if result
+                .as_ref()
+                .is_err_and(|error| error == crate::perforce::RUN_CANCELLED)
+            {
+                // A cancel is not a failure; the workspace may still need a look.
+                self.refresh_request = None;
+                self.info = Some(crate::perforce::RUN_CANCELLED.into());
+                return;
+            }
+        }
         if crate::revision_compare::answers(&op) {
             self.compare_reply(root, &op, result);
             return;
+        }
+        if let workspace_ops::Op::Branch(branch) = &op {
+            self.branch_op_finished(root, branch, &result);
         }
         // A list reply for a repository the panel no longer shows is stale.
         // Compare with the root new jobs run in (Perforce uses its command root).
@@ -282,7 +297,10 @@ impl App {
                 self.git.compare = Some(data);
             }
             Err(error) => {
-                if matches!(op, workspace_ops::Op::Perforce(_)) {
+                if matches!(
+                    op,
+                    workspace_ops::Op::Perforce(_) | workspace_ops::Op::PerforceRun(_)
+                ) {
                     self.refresh_request = None;
                 }
                 if let workspace_ops::Op::Rename { from, to } = &op {
@@ -353,6 +371,7 @@ impl App {
                 | workspace_ops::Op::Shelve(_)
                 | workspace_ops::Op::Unshelve(_)
                 | workspace_ops::Op::DropShelf(_)
+                | workspace_ops::Op::Branch(_)
         ) {
             self.git.list_root = None;
             // History and blame changed; open views reload.
@@ -425,6 +444,7 @@ fn operation_name(op: &workspace_ops::Op) -> Option<&'static str> {
         Op::Rename { .. } => "Rename",
         Op::Move { .. } => "Move",
         Op::Copy { .. } => "Copy",
+        Op::Branch(op) => op.name(),
         _ => return None,
     })
 }

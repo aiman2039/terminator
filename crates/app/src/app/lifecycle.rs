@@ -213,6 +213,8 @@ impl App {
             diff_split_scroll: HashMap::new(),
             diff_preview: HashSet::new(),
             diff_reviews: HashMap::new(),
+            diff_notes: Default::default(),
+            task_changes: None,
             loading: HashSet::new(),
             git_views: HashMap::new(),
             selected_commit: None,
@@ -246,6 +248,7 @@ impl App {
             structure: crate::sidebar_ui::StructureState::default(),
             worktree_draft: None,
             worktree_remove: None,
+            worktree_remove_check: Default::default(),
             theme: AppearanceConfig::default(),
             terminal_theme: None,
             theme_committed: AppearanceConfig::default(),
@@ -347,6 +350,7 @@ impl App {
             unread_selected: None,
             connected: false,
             control_server: None,
+            git_extras: Default::default(),
         }
     }
     pub(crate) fn fixture_rect(&self, ctx: &egui::Context, name: &str) -> Option<[f32; 4]> {

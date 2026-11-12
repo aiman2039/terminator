@@ -75,7 +75,9 @@ pub fn text_menu_button<R>(
         }
         visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
         visuals.widgets.open.bg_stroke = egui::Stroke::NONE;
-        menu_button(ui, title, add_contents)
+        let shown = menu_button(ui, title, add_contents);
+        super::paint_focus(ui, &shown.response);
+        shown
     })
     .inner
 }
@@ -101,6 +103,7 @@ pub fn compact_menu_button<R>(
         FontId::proportional(TOOLBAR_ICON),
         icon_color(),
     );
+    super::paint_focus(ui, &response);
     let popup = egui::Popup::menu(&response)
         .style(menu_style)
         .show(add_contents);

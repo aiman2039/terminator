@@ -133,6 +133,10 @@ struct WaitArgs {
     /// Seconds to wait. Omit to wait without a limit.
     #[arg(long)]
     timeout: Option<u64>,
+    /// Accept only an agent record newer than the one at the start of the
+    /// call (for example after `send --enter`).
+    #[arg(long)]
+    changed: bool,
 }
 #[derive(Args)]
 struct SplitArgs {

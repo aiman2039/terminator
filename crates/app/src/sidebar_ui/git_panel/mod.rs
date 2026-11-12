@@ -1,4 +1,5 @@
 //! The Git sidebar panel.
+mod branch_menu;
 mod commit;
 mod commit_progress;
 mod committed;
@@ -16,6 +17,7 @@ use crate::diagnostics;
 use crate::{
     App, appearance, file_actions::FileAction, icons, services::ContextData, workspace_ops,
 };
+pub(crate) use branch_menu::{CommitPick, commit_actions};
 use commit::git_error_row;
 pub(crate) use commit_progress::{CommitLock, CommitPhase, CommitProgress};
 use committed::*;
@@ -121,6 +123,8 @@ pub enum GitTab {
     Stash,
     /// The commit log.
     History,
+    /// The current branch's pull request (read only); `App` paints it.
+    PullRequest,
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -179,6 +183,12 @@ pub struct GitPanelOutcome {
     pub resolve: Option<PathBuf>,
     /// Open the Compare popup for this file.
     pub compare: Option<(PathBuf, crate::revision_compare::PickerMode)>,
+    /// Open the Commit Log at this commit (a History row click).
+    pub log_at: Option<String>,
+    /// Branch and sync actions, in click order.
+    pub(crate) branch: Vec<crate::git::branch_ui::BranchRequest>,
+    /// Ask a live agent to draft the commit message (Ask agent, no Enter).
+    pub draft_message: bool,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -292,6 +302,8 @@ impl GitPanelPass<'_, '_> {
         match self.input.tab {
             GitTab::History => self.history(ui),
             GitTab::Stash => self.stash_tab(ui),
+            // Painted after the panel by `App::pull_request_tab`.
+            GitTab::PullRequest => {}
             GitTab::Commit => {
                 git_actions(GitActionsInput {
                     ui,
@@ -321,8 +333,15 @@ impl GitPanelPass<'_, '_> {
                 });
                 crate::shortcuts::tool_row_focus(ui, &row);
                 if row.clicked() {
-                    self.outcome.view_log = true;
+                    self.outcome.log_at = Some(hash.clone());
                 }
+                let lock = self.input.commit_lock.head;
+                let outcome = &mut *self.outcome;
+                appearance::context_menu(&row, |ui| match commit_actions(ui, hash, lock) {
+                    Some(CommitPick::Copy(text)) => outcome.copy.push(text),
+                    Some(CommitPick::Branch(request)) => outcome.branch.push(request),
+                    None => {}
+                });
             }
         });
     }

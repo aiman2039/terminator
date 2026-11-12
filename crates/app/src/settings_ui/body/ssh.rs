@@ -86,13 +86,15 @@ impl App {
                             egui::DragValue::new(row.value)
                                 .range(row.range)
                                 .suffix(row.suffix),
-                        );
+                        )
+                        .on_disabled_hover_text(settings_controls::NEEDS_SERVICE);
                     },
                 });
             }
         })
         .response
-        .on_disabled_hover_text("Requires an updated session service.");
+        .on_disabled_hover_text(settings_controls::NEEDS_SERVICE);
+        self.service_caption(ui, supported && command_timeout);
         if ui
             .add_enabled(supported, egui::Button::new("Reset to defaults"))
             .clicked()

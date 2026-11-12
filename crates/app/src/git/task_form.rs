@@ -10,6 +10,26 @@ pub(crate) struct TaskStart {
     pub browser_url: String,
     /// The [`WorktreeDraft::id`] that was submitted.
     pub draft: u64,
+    /// The new checkout and the commit it started from, read after
+    /// `git worktree add`.
+    pub base: Option<(PathBuf, crate::worktree_stats::TaskBase)>,
+    /// The project's setup command, typed before the agent command.
+    pub setup_command: String,
+    /// What the `.worktreeinclude` copy did, for the status bar.
+    pub setup_note: Option<String>,
+}
+
+impl TaskStart {
+    /// The one line typed into the new terminal, never followed by Enter:
+    /// `setup && agent` when both are set. Line breaks become spaces.
+    pub(crate) fn typed_input(&self) -> String {
+        let parts: Vec<&str> = [self.setup_command.as_str(), self.agent_command.as_str()]
+            .into_iter()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect();
+        crate::diff::notes::one_line(&parts.join(" && "))
+    }
 }
 
 impl WorktreeDraft {
@@ -19,6 +39,8 @@ impl WorktreeDraft {
             open_terminal: self.open_terminal,
             agent_command: self.agent_command.trim().to_owned(),
             browser_url: self.browser_url.trim().to_owned(),
+            setup_command: self.setup_command.trim().to_owned(),
+            ..TaskStart::default()
         }
     }
 
@@ -34,12 +56,19 @@ pub(super) fn task_name(ui: &mut egui::Ui, draft: &mut WorktreeDraft, source: Op
     settings_controls::settings_row(settings_controls::SettingsRowInput {
         ui,
         label: "Task name",
-        description: "Sets the branch name and the destination.",
+        description: "Names the branch and the folder.",
         add_control: |ui| {
-            let field = appearance::singleline(&mut draft.task)
-                .hint_text("fix-login")
-                .desired_width(260.0);
-            if ui.add(field).changed()
+            let field = ui.add(
+                appearance::singleline(&mut draft.task)
+                    .hint_text("fix-login")
+                    .desired_width(360.0),
+            );
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "worktree-task-name", field.rect);
+            if std::mem::take(&mut draft.focus_name) {
+                field.request_focus();
+            }
+            if field.changed()
                 && let Some(path) = source
             {
                 draft.set_task(path);
@@ -48,25 +77,82 @@ pub(super) fn task_name(ui: &mut egui::Ui, draft: &mut WorktreeDraft, source: Op
     });
 }
 
-/// Agent command (only with a terminal) and Browser URL rows. The combo box
-/// fills the command from a preset or an installed agent.
-pub(super) fn task_extras(
+/// The agent command row. The combo box fills the command from a preset
+/// or an installed agent. The command is typed, never sent.
+pub(super) fn agent_row(
     ui: &mut egui::Ui,
     draft: &mut WorktreeDraft,
     launchers: &[crate::agent_launch::AgentLauncher],
 ) {
+    settings_controls::settings_row(settings_controls::SettingsRowInput {
+        ui,
+        label: "Agent",
+        description: "Typed into the new terminal. Press Enter there to start it.",
+        add_control: |ui| {
+            ui.add(
+                appearance::singleline(&mut draft.agent_command)
+                    .hint_text("claude")
+                    .desired_width(260.0),
+            );
+            agent_choice(ui, &mut draft.agent_command, launchers);
+        },
+    });
+}
+
+/// One line with what the task makes (branch, start, folder) and the
+/// Advanced toggle that shows the rows to change them.
+pub(super) fn summary_line(ui: &mut egui::Ui, draft: &mut WorktreeDraft, source: &str) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let folder = draft.dest.file_name().unwrap_or_default().to_string_lossy();
+        ui.add(egui::Label::new(task_summary(draft, source, &folder)).truncate());
+        let (icon, tip) = if draft.advanced {
+            ("ChevronDown", "Hide the branch, start, folder and extras")
+        } else {
+            (
+                "ChevronRight",
+                "Change the branch, start, folder and extras",
+            )
+        };
+        let toggle = appearance::icon_label_button(appearance::IconLabelButtonInput {
+            ui,
+            icon,
+            label: "Advanced",
+            height: appearance::TOOLBAR_BUTTON,
+        })
+        .on_hover_text(tip);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "worktree-advanced", toggle.rect);
+        if toggle.clicked() {
+            draft.advanced = !draft.advanced;
+        }
+    });
+}
+
+/// `terminator/fix-login from HEAD of webapp in terminator-fix-login`.
+pub(crate) fn task_summary(draft: &WorktreeDraft, source: &str, folder: &str) -> String {
+    format!(
+        "{} from {} of {source} in {folder}",
+        draft.branch.trim(),
+        draft.start.trim()
+    )
+}
+
+/// Setup command (only with a terminal) and Browser URL rows.
+pub(super) fn task_extras(ui: &mut egui::Ui, draft: &mut WorktreeDraft) {
     if draft.open_terminal {
         settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            label: "Agent command",
-            description: "Typed into the terminal. Press Enter there to start it.",
+            label: "Setup command",
+            description: "Optional, for this project. Typed before the agent command \
+                          as `setup && agent`. Ignored files named in .worktreeinclude \
+                          are copied first.",
             add_control: |ui| {
                 ui.add(
-                    appearance::singleline(&mut draft.agent_command)
-                        .hint_text("claude")
+                    appearance::singleline(&mut draft.setup_command)
+                        .hint_text("npm install")
                         .desired_width(260.0),
                 );
-                agent_choice(ui, &mut draft.agent_command, launchers);
             },
         });
     }
@@ -128,12 +214,32 @@ impl App {
         if draft.open_terminal {
             self.preferences.task_agent_command = start.agent_command;
         }
+        // The setup command belongs to the source project (GUI-only; it
+        // never comes from a file in the repository).
+        if let Some(source) = self.state.projects.iter().find(|p| p.id == draft.source) {
+            let path = source.path.clone();
+            if start.setup_command.is_empty() {
+                self.preferences.task_setup_commands.remove(&path);
+            } else {
+                self.preferences
+                    .task_setup_commands
+                    .insert(path, start.setup_command);
+            }
+        }
         true
     }
 
     /// Opens what the New task form asked for in the new project. The agent
     /// command is typed without Enter: the user starts the agent.
-    pub(crate) fn start_task(&mut self, project: &str, start: TaskStart) {
+    pub(crate) fn start_task(&mut self, project: &str, mut start: TaskStart) {
+        // The task base outlives this selection: it counts the row's
+        // numbers and the Changes since task start page.
+        if let Some((path, base)) = start.base.take() {
+            self.preferences.task_bases.insert(path, base);
+        }
+        if let Some(note) = start.setup_note.take() {
+            self.info = Some(note);
+        }
         if self.selected.as_deref() != Some(project) {
             return;
         }
@@ -145,7 +251,7 @@ impl App {
         }
         if start.open_terminal {
             let post = PostCreate {
-                input: start.agent_command,
+                input: start.typed_input(),
                 enter: false,
             };
             self.create_workspace_tab_with(None, None, Some(post));

@@ -40,9 +40,18 @@ impl App {
                 });
             }
         });
-        response.response.on_disabled_hover_text(
-            "These settings require an updated daemon. Restart it after finishing your live sessions.",
-        )
+        self.service_caption(ui, supported);
+        response
+            .response
+            .on_disabled_hover_text(settings_controls::NEEDS_SERVICE)
+    }
+
+    /// Under a control the session service cannot use yet: the one
+    /// caption, whose link opens Updates.
+    pub(super) fn service_caption(&mut self, ui: &mut egui::Ui, supported: bool) {
+        if !supported && settings_controls::needs_service_caption(ui) {
+            self.request_settings_section(SettingsSection::Updates);
+        }
     }
 
     /// Settings paints as a card inset in the center pane. A click on the
@@ -113,12 +122,15 @@ impl App {
         if let Err(error) = &validation {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
         }
-        // Right to left: Apply at the far right, Cancel left of it.
+        let count = self.settings_change_count();
+        let none = (count == 0).then_some("No changes to apply");
+        // Right to left: Apply at the far right, Discard changes left of
+        // it, and the pending count at the left edge.
         appearance::footer_row(ui, |ui| {
             let why = if self.theme_conflict {
                 Some("Appearance changed externally. Reload it in Appearance before applying.")
             } else {
-                validation.as_ref().err().map(String::as_str)
+                validation.as_ref().err().map(String::as_str).or(none)
             };
             let response =
                 appearance::enabled_unless(ui, why, |ui| appearance::primary_button(ui, "Apply"));
@@ -127,11 +139,20 @@ impl App {
             if response.clicked() {
                 frame.apply = true;
             }
-            let response = ui.button("Cancel");
+            let response = appearance::enabled_unless(ui, none, |ui| ui.button("Discard changes"));
+            // `settings-cancel` stays the fixture id of the left button.
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "settings-cancel", response.rect);
             if response.clicked() {
                 frame.cancel = true;
+            }
+            if count > 0 {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.weak(format!(
+                        "{} not applied",
+                        appearance::count_noun(count, "change")
+                    ));
+                });
             }
         });
     }
@@ -154,7 +175,10 @@ impl App {
             self.apply_settings();
             self.settings_pending = None;
         }
-        if cancel || hide {
+        if cancel {
+            self.discard_settings_draft();
+        }
+        if hide {
             self.request_settings_close();
         }
     }

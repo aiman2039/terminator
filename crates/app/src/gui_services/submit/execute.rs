@@ -91,6 +91,7 @@ impl Services {
             | Job::CreateWorktree(..)
             | Job::WorktreeProbe(..)
             | Job::WorktreeStats(..)
+            | Job::TaskChanges(..)
             | Job::CommitFiles(..)
             | Job::EditorBlame(..)
             | Job::GitBase(..)

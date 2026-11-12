@@ -45,18 +45,26 @@ impl App {
             ui.set_width(142.0);
             ui.set_min_height(height);
             ui.spacing_mut().item_spacing.y = 4.0;
+            let searching = !self.settings_search.trim().is_empty();
             for section in SettingsSection::ALL {
                 if !self.section_visible(section) {
                     continue;
                 }
+                // While searching, each section shows how many rows match.
+                let count = self.section_match_count(section);
+                let trailing = if searching && count > 0 {
+                    count.to_string()
+                } else {
+                    String::new()
+                };
                 let row = appearance::row(appearance::RowInput {
                     tint: ui.visuals().weak_text_color(),
                     ui,
                     label: section.title(),
                     icon: section.icon(),
-                    selected: self.settings_section.canonical() == section,
+                    selected: !searching && self.settings_section.canonical() == section,
                     height: 30.0,
-                    trailing: "",
+                    trailing: &trailing,
                 });
                 #[cfg(feature = "test-support")]
                 record_section(ui, section, row.rect);

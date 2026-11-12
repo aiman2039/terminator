@@ -149,11 +149,21 @@ impl App {
                     );
                 });
             });
+        let viewport = scroll.inner_rect;
         if overflow {
             Self::scroll_tabs_right(ui, scroll, direction);
         }
         let plus_rect = self.strip_new_tab_buttons(ui);
-        self.strip_recent_tabs_menu(ui, workspace, actions);
+        let hidden = super::all_tabs::hidden_attention(viewport, &strip_rects, &tab_layout);
+        self.strip_all_tabs_menu(
+            ui,
+            super::all_tabs::AllTabsInput {
+                workspace,
+                tab_layout: &tab_layout,
+                hidden,
+                actions,
+            },
+        );
         let released = ui.input(|i| i.pointer.any_released());
         let mut drop = StripDrop {
             frame,
@@ -212,10 +222,11 @@ impl App {
         // Gap between tabs is a UI coordinate; the count can exceed the f32 mantissa.
         let gaps = tab_layout.len().saturating_sub(1) as f32;
         let content_width = tab_layout.iter().map(|(width, _)| *width).sum::<f32>() + gaps;
-        // Reserve exactly the trailing `+` and menu buttons, and the two
-        // scroll arrows on overflow, so the strip never clips a tab.
+        // Reserve exactly the three trailing controls (`+`, new-tab menu and
+        // All tabs), and the two scroll arrows on overflow, so the strip
+        // never clips a tab or a control.
         let control = appearance::TOOLBAR_BUTTON + ui.spacing().item_spacing.x;
-        let width = (ui.available_width() - 2.0 * control).max(40.0);
+        let width = (ui.available_width() - 3.0 * control).max(40.0);
         let overflow = content_width > width;
         let width = (width - if overflow { 2.0 * control } else { 0.0 }).max(1.0);
         (width, overflow)
@@ -353,50 +364,6 @@ impl App {
         .response
         .on_hover_text("New terminal, browser, or VNC tab");
         plus_rect
-    }
-
-    fn strip_recent_tabs_menu(
-        &self,
-        ui: &mut egui::Ui,
-        workspace: &Workspace,
-        actions: &mut StripActions,
-    ) {
-        let recent: Vec<(String, String, bool)> = workspace
-            .recent_tabs
-            .iter()
-            .filter_map(|id| {
-                workspace.tabs.iter().find(|tab| &tab.id == id).map(|tab| {
-                    (
-                        id.clone(),
-                        self.tab_face(Self::group_primary(tab)).label,
-                        tab.pinned,
-                    )
-                })
-            })
-            .collect();
-        appearance::icon_menu_button(ui, "History", |ui| {
-            ui.weak("Recent tabs");
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    for (id, label, pinned) in &recent {
-                        let label = if *pinned {
-                            format!("◆ {label}")
-                        } else {
-                            label.clone()
-                        };
-                        if ui
-                            .selectable_label(workspace.active == *id, label)
-                            .clicked()
-                        {
-                            actions.switch = Some(id.clone());
-                            ui.close();
-                        }
-                    }
-                });
-        })
-        .response
-        .on_hover_text("Recent tabs");
     }
 
     fn apply_strip_actions(

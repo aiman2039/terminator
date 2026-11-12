@@ -68,10 +68,24 @@ impl Shared {
             && let Some(ping) = ping
             && relock(&self.ntfy_cooldown).allow(&key, now())
         {
-            let _ = self.ntfy.try_send(ping);
+            let _ = self.ntfy.try_send(ntfy::Job::Ping(ping));
         }
         self.alert_unfocused(nid, should_os);
         Ok(Outcome::Deferred)
+    }
+
+    /// Queues the token for the ntfy worker, which writes the OS credential
+    /// store; this request never waits for it.
+    pub(super) fn on_ntfy_token(&self, token: String) -> Result<Outcome> {
+        let token = zeroize::Zeroizing::new(token);
+        anyhow::ensure!(
+            token.is_empty() || crate::ntfy_token::valid(&token),
+            "An ntfy token is 1–256 printable characters without spaces or quotes"
+        );
+        self.ntfy
+            .try_send(ntfy::Job::Token(token))
+            .map_err(|_| anyhow::anyhow!("The ntfy worker is busy; save the token again"))?;
+        Ok(Outcome::Reply(Response::Ok))
     }
 
     /// Raises an OS alert unless the GUI reported focus within the last 4 s.

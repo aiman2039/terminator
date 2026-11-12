@@ -370,9 +370,14 @@ impl App {
                 .worktree_stats
                 .take_due(&project.path, std::time::Instant::now())
         {
+            let base = self
+                .preferences
+                .task_bases
+                .get(&project.path)
+                .map(|base| base.commit.clone());
             let _ = self
                 .jobs
-                .send(crate::Job::WorktreeStats(project.path.clone()));
+                .send(crate::Job::WorktreeStats(project.path.clone(), base));
         }
     }
 
@@ -417,7 +422,7 @@ impl App {
     }
 
     /// A missing checkout with no live terminal cannot open; say why.
-    fn open_worktree_card(&mut self, project: &Project) {
+    pub(crate) fn open_worktree_card(&mut self, project: &Project) {
         if !self.project_available(&project.id) && self.project_folder_missing(&project.id) {
             self.info = Some(missing_folder_text(&project.path));
         } else {
@@ -435,43 +440,6 @@ impl App {
         self.select_project(project.id.clone());
         if self.selected.as_deref() == Some(project.id.as_str()) {
             self.create(None);
-        }
-    }
-
-    fn worktree_card_menu(&mut self, ui: &mut egui::Ui, project: &Project) {
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Open",
-            icon: "FolderOpen",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            self.open_worktree_card(project);
-            ui.close();
-        }
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "New terminal",
-            icon: "Terminal",
-            shortcut: &self.shortcut_label(Action::NewTerminal),
-        })
-        .clicked()
-        {
-            self.new_worktree_terminal(project);
-            ui.close();
-        }
-        ui.separator();
-        if appearance::menu_item(appearance::MenuItemInput {
-            ui,
-            label: "Remove worktree…",
-            icon: "X",
-            shortcut: "",
-        })
-        .clicked()
-        {
-            self.confirm_remove_worktree(&project.id);
-            ui.close();
         }
     }
 }

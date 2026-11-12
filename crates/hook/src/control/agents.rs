@@ -46,6 +46,18 @@ fn latest_agent<'a>(state: &'a State, session: &str) -> Option<&'a Agent> {
         .max_by_key(|agent| (agent.updated, agent.sequence))
 }
 
+/// Identity of an agent record version: updated time, sequence and record id.
+pub(super) type Mark = (u64, Option<u64>, String);
+
+fn mark(agent: &Agent) -> Mark {
+    (agent.updated, agent.sequence, agent.invocation_id.clone())
+}
+
+/// The mark of the newest agent record of a session, if any.
+pub(super) fn latest_mark(state: &State, session: &str) -> Option<Mark> {
+    latest_agent(state, session).map(mark)
+}
+
 /// Agent rows: session, project, label, kind, state, and seconds since the
 /// last hook report.
 pub(super) fn agent_rows(state: &State, project: Option<&str>, now: u64) -> Vec<Value> {
@@ -76,11 +88,21 @@ pub(super) enum WaitStep {
     Pending,
 }
 
-pub(super) fn wait_step(state: &State, session: &str, want: WaitFor) -> Result<WaitStep> {
+/// `since` is the mark recorded at the start of `ctl wait --changed`
+/// (`Some(None)` when the session had no agent record then); a record with
+/// the same mark does not count.
+pub(super) fn wait_step(
+    state: &State,
+    session: &str,
+    want: WaitFor,
+    since: Option<&Option<Mark>>,
+) -> Result<WaitStep> {
     let Some(found) = state.sessions.iter().find(|s| s.id == session) else {
         anyhow::bail!("Unknown session ID");
     };
-    let agent = latest_agent(state, session).map(|agent| agent.state);
+    let agent = latest_agent(state, session)
+        .filter(|agent| since.is_none_or(|old| old.as_ref() != Some(&mark(agent))))
+        .map(|agent| agent.state);
     if let Some(reached) = agent.filter(|state| want.matches(*state)) {
         return Ok(WaitStep::Reached(reached));
     }
@@ -108,8 +130,9 @@ impl Ctl {
             .timeout
             .and_then(|s| Instant::now().checked_add(Duration::from_secs(s)));
         let mut state = self.state.clone();
+        let since = args.changed.then(|| latest_mark(&state, &args.session));
         loop {
-            match wait_step(&state, &args.session, args.state)? {
+            match wait_step(&state, &args.session, args.state, since.as_ref())? {
                 WaitStep::Reached(reached) => {
                     return Ok(Ok(json!({"session": args.session, "state": reached})));
                 }
@@ -168,13 +191,45 @@ mod tests {
     fn ctl_wait_exits_on_waiting_state() {
         let waiting = state(Lifecycle::Running, Some(AgentState::WaitingPermission));
         assert_eq!(
-            wait_step(&waiting, "s", WaitFor::Waiting).unwrap(),
+            wait_step(&waiting, "s", WaitFor::Waiting, None).unwrap(),
             WaitStep::Reached(AgentState::WaitingPermission)
         );
         let running = state(Lifecycle::Running, Some(AgentState::Running));
         assert_eq!(
-            wait_step(&running, "s", WaitFor::AnyStop).unwrap(),
+            wait_step(&running, "s", WaitFor::AnyStop, None).unwrap(),
             WaitStep::Pending
+        );
+    }
+
+    #[test]
+    fn ctl_wait_changed_ignores_the_previous_turn_state() {
+        let done = state(Lifecycle::Running, Some(AgentState::Completed));
+        let since = Some(latest_mark(&done, "s"));
+        assert_eq!(
+            wait_step(&done, "s", WaitFor::Done, since.as_ref()).unwrap(),
+            WaitStep::Pending
+        );
+        let mut next = done.clone();
+        next.agents[0].updated = 105;
+        assert_eq!(
+            wait_step(&next, "s", WaitFor::Done, since.as_ref()).unwrap(),
+            WaitStep::Reached(AgentState::Completed)
+        );
+        next.agents[0].state = AgentState::Running;
+        assert_eq!(
+            wait_step(&next, "s", WaitFor::Done, since.as_ref()).unwrap(),
+            WaitStep::Pending
+        );
+    }
+
+    #[test]
+    fn ctl_wait_changed_accepts_a_first_agent_record() {
+        let empty = state(Lifecycle::Running, None);
+        let since = Some(latest_mark(&empty, "s"));
+        let waiting = state(Lifecycle::Running, Some(AgentState::WaitingInput));
+        assert_eq!(
+            wait_step(&waiting, "s", WaitFor::Waiting, since.as_ref()).unwrap(),
+            WaitStep::Reached(AgentState::WaitingInput)
         );
     }
 
@@ -182,10 +237,10 @@ mod tests {
     fn ctl_wait_reports_an_ended_session() {
         let ended = state(Lifecycle::Ended, Some(AgentState::Running));
         assert_eq!(
-            wait_step(&ended, "s", WaitFor::Done).unwrap(),
+            wait_step(&ended, "s", WaitFor::Done, None).unwrap(),
             WaitStep::Ended
         );
-        assert!(wait_step(&ended, "other", WaitFor::Done).is_err());
+        assert!(wait_step(&ended, "other", WaitFor::Done, None).is_err());
     }
 
     #[test]

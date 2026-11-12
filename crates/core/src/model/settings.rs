@@ -78,6 +78,9 @@ impl Default for Settings {
             ssh_connect_timeout_seconds: crate::ssh::Tuning::DEFAULT.connect_timeout_seconds,
             ssh_command_timeout_seconds: crate::ssh::Tuning::DEFAULT.command_timeout_seconds,
             local_history_days: 7,
+            local_history_mib: crate::local_history::DEFAULT_MIB,
+            local_history_file_entries: crate::local_history::DEFAULT_FILE_ENTRIES,
+            ntfy_options: NtfyOptions::default(),
         }
     }
 }
@@ -203,6 +206,14 @@ impl Settings {
                 days: self.local_history_days,
             });
         }
+        if !((1..=65536).contains(&self.local_history_mib)
+            && (1..=10_000).contains(&self.local_history_file_entries))
+        {
+            return Err(SettingsError::LocalHistoryLimits {
+                mib: self.local_history_mib,
+                file_entries: self.local_history_file_entries,
+            });
+        }
         if !self.ssh_tuning().valid() {
             return Err(SettingsError::SshTuning {
                 tuning: self.ssh_tuning(),
@@ -227,6 +238,49 @@ impl Settings {
                 machine: self.ntfy_machine.clone(),
             });
         }
+        let options = &self.ntfy_options;
+        for url in [&options.server, &options.click] {
+            if !(url.is_empty() || web_url(url)) {
+                return Err(SettingsError::NtfyUrl { url: url.clone() });
+            }
+        }
         Ok(())
     }
+
+    /// The ntfy server pushes go to: the configured one or `ntfy.sh`.
+    #[must_use]
+    pub fn ntfy_endpoint(&self) -> String {
+        match self.ntfy_options.server.trim_end_matches('/') {
+            "" => NTFY_DEFAULT_SERVER.into(),
+            server => server.into(),
+        }
+    }
+}
+
+/// The daemon serves `Request::NtfyToken` and honors [`NtfyOptions`].
+pub const NTFY_SERVER_CAPABILITY: &str = "ntfy-server-v1";
+const NTFY_DEFAULT_SERVER: &str = "https://ntfy.sh";
+
+/// ntfy push options (`ntfy-server-v1`). The access token is not here: the
+/// daemon keeps it in the OS credential store.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NtfyOptions {
+    /// A self-hosted server URL; empty means `https://ntfy.sh`.
+    pub server: String,
+    /// Opened when the push is tapped; empty sends no click action.
+    pub click: String,
+    /// Adds the hook's notice text (for example the question) to the push.
+    pub include_text: bool,
+}
+
+/// An http(s) URL with a host, at most 1024 bytes, with no spaces or
+/// control characters (it goes into a curl config line).
+fn web_url(text: &str) -> bool {
+    text.len() <= 1024
+        && !text
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '"')
+        && url::Url::parse(text)
+            .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
 }

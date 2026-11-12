@@ -222,6 +222,16 @@ lifecycle only, never terminal text). `LocalHistoryLabel` adds labels
 explicitly; "before git checkout" labels are not recorded yet. Settings →
 History → Local History days (default 7, 0 stops recording) sets retention;
 the worker prunes expired entries and unused blobs once a day.
+With `local-history-limits-v1` it also keeps at most
+`local_history_file_entries` (default 200) snapshots per file and drops the
+oldest entries of all files until the distinct blobs fit
+`local_history_mib` (Settings → History → Local History MiB, default 512).
+These limits run once a day and one minute after new snapshots. Days set
+to 0 still keeps the store as it is: recording stops, nothing is deleted.
+`LocalHistoryPage` returns the timeline in pages of at most 1000 entries, so
+a long timeline never exceeds the IPC frame; the GUI uses it only when the
+daemon advertises `local-history-limits-v1` and sends `LocalHistoryList` to
+older daemons.
 
 The GUI opens Local History from the Explorer file menu or the native editor's
 pane tab menu, only when the daemon advertises the capability. The page fills the

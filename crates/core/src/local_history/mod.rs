@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
-    collections::HashSet,
     fs,
     io::{BufRead, Write},
     path::{Path, PathBuf},
@@ -22,6 +21,16 @@ use std::{
 
 /// Daemons that serve `LocalHistory*` requests advertise this.
 pub const CAPABILITY: &str = "local-history-v1";
+/// Daemons that serve `LocalHistoryPage` and apply the size budget and the
+/// per-file entry cap (`Settings::local_history_mib`,
+/// `Settings::local_history_file_entries`) advertise this.
+pub const LIMITS_CAPABILITY: &str = "local-history-limits-v1";
+/// Default total size of the store, in MiB.
+pub const DEFAULT_MIB: u64 = 512;
+/// Default number of snapshots kept per file.
+pub const DEFAULT_FILE_ENTRIES: u32 = 200;
+/// Most entries in one `LocalHistoryPage` reply.
+pub const MAX_PAGE: usize = 1000;
 /// Folder under the shared data directory.
 pub const DIR: &str = "local-history";
 /// Larger files are not recorded.
@@ -242,51 +251,22 @@ impl Store {
         )
     }
 
-    /// Drops entries and labels older than `max_age_days`, then blobs no
-    /// entry uses. `0` days keeps everything (recording is off).
-    pub fn prune(&self, now_ms: u64, max_age_days: u32) -> Result<Pruned> {
-        let mut pruned = Pruned::default();
-        if max_age_days == 0 || !self.root.exists() {
-            return Ok(pruned);
-        }
-        let _lock = self.lock()?;
-        let cutoff = now_ms.saturating_sub(DAY_MS.saturating_mul(u64::from(max_age_days)));
-        let mut used = HashSet::new();
-        for index in list_dir(&self.root.join("files"))? {
-            let entries: Vec<Entry> = read_lines(&index)?;
-            let total = entries.len();
-            let kept: Vec<Entry> = entries
-                .into_iter()
-                .filter(|e| e.timestamp_ms >= cutoff)
-                .collect();
-            pruned.entries = pruned
-                .entries
-                .saturating_add(total.saturating_sub(kept.len()));
-            used.extend(kept.iter().map(|e| e.id.clone()));
-            if kept.is_empty() {
-                fs::remove_file(&index)?;
-            } else if kept.len() != total {
-                write_lines(&index, &kept)?;
-            }
-        }
-        let labels_path = self.root.join("labels.jsonl");
-        let labels: Vec<LabelRecord> = read_lines(&labels_path)?;
-        let total = labels.len();
-        let labels: Vec<LabelRecord> = labels
+    /// One page of [`Self::list`], newest first, and the total count. A
+    /// large timeline never has to fit in one IPC frame.
+    pub fn list_page(
+        &self,
+        path: &Path,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<Entry>, usize)> {
+        let entries = self.list(path)?;
+        let total = entries.len();
+        let page = entries
             .into_iter()
-            .filter(|l| l.timestamp_ms >= cutoff)
+            .skip(offset)
+            .take(limit.clamp(1, MAX_PAGE))
             .collect();
-        if labels.len() != total {
-            write_lines(&labels_path, &labels)?;
-        }
-        for blob in list_dir(&self.root.join("blobs"))? {
-            let name = blob.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !used.contains(name) {
-                fs::remove_file(&blob)?;
-                pruned.blobs = pruned.blobs.saturating_add(1);
-            }
-        }
-        Ok(pruned)
+        Ok((page, total))
     }
 
     fn index_path(&self, path: &Path) -> PathBuf {
@@ -364,6 +344,9 @@ fn write_lines<T: Serialize>(path: &Path, values: &[T]) -> Result<()> {
     crate::atomic_write(path, &bytes).map_err(std::io::Error::other)?;
     Ok(())
 }
+
+mod prune;
+pub use prune::Limits;
 
 #[cfg(test)]
 mod tests;

@@ -1,12 +1,22 @@
 //! Best-effort hook notifications; a bounded worker never holds daemon locks.
-use std::{collections::HashMap, process::Command, sync::mpsc, thread, time::Duration};
+//! The worker also owns the access token: it reads and writes the OS
+//! credential store, never an IPC request.
+use crate::ntfy_token::{Keychain, TokenStore};
+use std::{
+    collections::HashMap, path::PathBuf, process::Command, sync::mpsc, thread, time::Duration,
+};
 use terminator_core::{
     HookEvent, Settings,
     process::{CommandOptions, run_command},
 };
+use zeroize::Zeroizing;
+
+/// Notice text kept in a push.
+const TEXT_LIMIT: usize = 500;
 
 pub struct Ping {
     payload: Vec<u8>,
+    endpoint: String,
 }
 impl Ping {
     pub fn from_event(settings: &Settings, event: &HookEvent) -> Option<Self> {
@@ -31,18 +41,44 @@ impl Ping {
                 event.state.label()
             )
         };
+        let options = &settings.ntfy_options;
+        let mut message = format!("{agent}: {}", event.state.label());
+        // Opt-in: the notice text can hold the agent's question.
+        let text = notice_text(&event.summary);
+        if options.include_text && !text.is_empty() && text != event.state.label() {
+            message = format!("{message}\n{text}");
+        }
+        let mut payload = serde_json::json!({
+            "topic": settings.ntfy_channel,
+            "title": title,
+            "message": message,
+            "tags": ["robot"],
+        });
+        if !options.click.is_empty()
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert("click".into(), options.click.clone().into());
+        }
         Some(Self {
-            payload: serde_json::to_vec(&serde_json::json!({
-                "topic": settings.ntfy_channel,
-                "title": title,
-                "message": format!("{agent}: {}", event.state.label()),
-                "tags": ["robot"],
-            }))
-            .ok()?,
+            payload: serde_json::to_vec(&payload).ok()?,
+            endpoint: settings.ntfy_endpoint(),
         })
     }
 
-    fn send(self, endpoint: &str) -> anyhow::Result<()> {
+    /// curl reads the request from stdin as a config file, so the token
+    /// never shows in a process list or a temporary file.
+    fn curl_config(&self, token: Option<&str>) -> Vec<u8> {
+        let mut config = String::from("header = \"Content-Type: application/json\"\n");
+        if let Some(token) = token {
+            config.push_str(&format!("header = \"Authorization: Bearer {token}\"\n"));
+        }
+        let body = String::from_utf8_lossy(&self.payload);
+        config.push_str(&format!("data-binary = \"{}\"\n", quoted(&body)));
+        config.push_str(&format!("url = \"{}\"\n", quoted(&self.endpoint)));
+        config.into_bytes()
+    }
+
+    fn send(&self, token: Option<&str>) -> anyhow::Result<()> {
         // Disable curlrc: user defaults must not add retries, redirects or extra recipients.
         let mut command = Command::new("curl");
         command.args([
@@ -54,24 +90,76 @@ impl Ping {
             "8",
             "--output",
             if cfg!(windows) { "NUL" } else { "/dev/null" },
-            "--header",
-            "Content-Type: application/json",
-            "--data-binary",
-            "@-",
-            "--url",
-            endpoint,
+            "--config",
+            "-",
         ]);
         run_command(
             command,
             CommandOptions {
                 timeout: Duration::from_secs(10),
-                input: Some(self.payload),
+                input: Some(self.curl_config(token)),
                 stdout_limit: 4096,
                 stderr_limit: 4096,
                 ..Default::default()
             },
         )?;
         Ok(())
+    }
+}
+
+/// The notice text on one line set, without control characters.
+fn notice_text(summary: &str) -> String {
+    summary
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(TEXT_LIMIT)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// A curl config string body: backslash and quote escaped.
+fn quoted(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Work for the ntfy worker thread.
+pub enum Job {
+    Ping(Ping),
+    /// A new access token; empty removes it.
+    Token(Zeroizing<String>),
+}
+
+/// Delivers pings with the saved token. The token is read from `store`
+/// once, on the first ping, and replaced when a new one is saved.
+fn run_worker(
+    rx: &mpsc::Receiver<Job>,
+    mut store: Option<Box<dyn TokenStore>>,
+    mut deliver: impl FnMut(&Ping, Option<&str>) -> anyhow::Result<()>,
+) {
+    let mut token: Option<Option<Zeroizing<String>>> = None;
+    while let Ok(job) = rx.recv() {
+        match job {
+            Job::Token(new) => {
+                let new = (!new.is_empty()).then_some(new);
+                let saved = store
+                    .as_mut()
+                    .map(|store| store.save(new.as_ref().map(|t| t.as_str())));
+                if !matches!(saved, Some(Ok(()))) {
+                    crate::console::Console::err(format_args!("ntfy token could not be saved"));
+                }
+                token = Some(new);
+            }
+            Job::Ping(ping) => {
+                let token = token.get_or_insert_with(|| {
+                    store.as_mut().and_then(|store| store.load().ok().flatten())
+                });
+                if deliver(&ping, token.as_ref().map(|t| t.as_str())).is_err() {
+                    // Do not expose the channel, token or provider text in logs.
+                    crate::console::Console::err(format_args!("ntfy notification delivery failed"));
+                }
+            }
+        }
     }
 }
 
@@ -115,17 +203,19 @@ impl Cooldown {
     }
 }
 
-pub fn start() -> mpsc::SyncSender<Ping> {
-    let (tx, rx) = mpsc::sync_channel::<Ping>(64);
+/// Starts the worker. `data` names the credential store entry.
+pub fn start(data: PathBuf) -> mpsc::SyncSender<Job> {
+    let (tx, rx) = mpsc::sync_channel::<Job>(64);
     thread::spawn(move || {
-        while let Ok(ping) = rx.recv() {
-            if std::env::var_os("TERMINATOR_NO_NOTIFICATIONS").is_none()
-                && ping.send("https://ntfy.sh").is_err()
-            {
-                // Do not expose the channel or provider text in logs.
-                crate::console::Console::err(format_args!("ntfy notification delivery failed"));
-            }
+        // Fixtures neither deliver nor touch the OS credential store.
+        if std::env::var_os("TERMINATOR_NO_NOTIFICATIONS").is_some() {
+            run_worker(&rx, None, |_, _| Ok(()));
+            return;
         }
+        let store = Keychain::new(&data)
+            .ok()
+            .map(|store| Box::new(store) as Box<dyn TokenStore>);
+        run_worker(&rx, store, Ping::send);
     });
     tx
 }
@@ -173,6 +263,109 @@ mod tests {
         assert!(Ping::from_event(&settings, &event()).is_none());
     }
 
+    fn payload(settings: &Settings) -> serde_json::Value {
+        let ping = Ping::from_event(settings, &event()).unwrap();
+        serde_json::from_slice(&ping.payload).unwrap()
+    }
+
+    #[test]
+    fn ntfy_notice_text_and_click_are_opt_in() {
+        let mut settings = Settings {
+            ntfy_enabled: true,
+            ntfy_channel: "fixture".into(),
+            ..Default::default()
+        };
+        let plain = payload(&settings);
+        assert!(plain.get("click").is_none());
+        assert!(!plain.to_string().contains("private"));
+        settings.ntfy_options.include_text = true;
+        settings.ntfy_options.click = "https://example.com/agents".into();
+        let rich = payload(&settings);
+        assert_eq!(rich["click"], "https://example.com/agents");
+        let message = rich["message"].as_str().unwrap();
+        assert!(message.ends_with("\nprivate prompt"), "{message}");
+        // An invalid click URL disables the push instead of sending it.
+        settings.ntfy_options.click = "javascript:alert(1)".into();
+        assert!(Ping::from_event(&settings, &event()).is_none());
+    }
+
+    #[test]
+    fn ntfy_uses_the_configured_server() {
+        let mut settings = Settings {
+            ntfy_enabled: true,
+            ntfy_channel: "fixture".into(),
+            ..Default::default()
+        };
+        let ping = Ping::from_event(&settings, &event()).unwrap();
+        assert_eq!(ping.endpoint, "https://ntfy.sh");
+        settings.ntfy_options.server = "https://push.example.com/".into();
+        let ping = Ping::from_event(&settings, &event()).unwrap();
+        assert_eq!(ping.endpoint, "https://push.example.com");
+        let config = String::from_utf8(ping.curl_config(Some("tk_secret"))).unwrap();
+        assert!(config.contains("header = \"Authorization: Bearer tk_secret\"\n"));
+        assert!(config.contains("url = \"https://push.example.com\"\n"));
+        assert!(config.contains("\\\"topic\\\":\\\"fixture\\\""), "{config}");
+        let config = String::from_utf8(ping.curl_config(None)).unwrap();
+        assert!(!config.contains("Authorization"));
+    }
+
+    /// An in-memory credential store; tests never touch the OS keychain.
+    struct Memory(std::sync::Arc<std::sync::Mutex<(Option<String>, usize)>>);
+    impl TokenStore for Memory {
+        fn load(&mut self) -> anyhow::Result<Option<Zeroizing<String>>> {
+            let mut state = self.0.lock().unwrap();
+            state.1 = state.1.saturating_add(1);
+            Ok(state.0.clone().map(Zeroizing::new))
+        }
+        fn save(&mut self, token: Option<&str>) -> anyhow::Result<()> {
+            self.0.lock().unwrap().0 = token.map(str::to_owned);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_worker_reads_the_token_once_and_uses_a_new_one_at_once() {
+        let state = std::sync::Arc::new(std::sync::Mutex::new((Some("old".to_owned()), 0)));
+        let (tx, rx) = mpsc::sync_channel(8);
+        let settings = Settings {
+            ntfy_enabled: true,
+            ntfy_channel: "fixture".into(),
+            ..Default::default()
+        };
+        for job in [
+            Job::Ping(Ping::from_event(&settings, &event()).unwrap()),
+            Job::Ping(Ping::from_event(&settings, &event()).unwrap()),
+            Job::Token(Zeroizing::new("new".into())),
+            Job::Ping(Ping::from_event(&settings, &event()).unwrap()),
+            Job::Token(Zeroizing::new(String::new())),
+            Job::Ping(Ping::from_event(&settings, &event()).unwrap()),
+        ] {
+            tx.send(job).unwrap();
+        }
+        drop(tx);
+        let mut used = Vec::new();
+        run_worker(
+            &rx,
+            Some(Box::new(Memory(std::sync::Arc::clone(&state)))),
+            |_, token| {
+                used.push(token.map(str::to_owned));
+                Ok(())
+            },
+        );
+        assert_eq!(
+            used,
+            [
+                Some("old".into()),
+                Some("old".into()),
+                Some("new".into()),
+                None
+            ]
+        );
+        let state = state.lock().unwrap();
+        assert_eq!(state.1, 1, "one credential store read");
+        assert_eq!(state.0, None, "an empty token removes the saved one");
+    }
+
     #[test]
     fn cooldown_holds_back_same_agent_repeats_and_global_bursts() {
         let mut gate = Cooldown::default();
@@ -211,6 +404,7 @@ mod tests {
             }
             let headers = String::from_utf8(request).unwrap();
             assert!(headers.starts_with("POST / HTTP/1.1"));
+            assert!(headers.contains("Authorization: Bearer tk_fixture\r\n"));
             let length: usize = headers
                 .lines()
                 .find_map(|line| {
@@ -230,11 +424,15 @@ mod tests {
         let settings = Settings {
             ntfy_enabled: true,
             ntfy_channel: "fixture".into(),
+            ntfy_options: terminator_core::NtfyOptions {
+                server: endpoint,
+                ..Default::default()
+            },
             ..Default::default()
         };
         Ping::from_event(&settings, &event())
             .unwrap()
-            .send(&endpoint)
+            .send(Some("tk_fixture"))
             .unwrap();
         server.join().unwrap();
     }

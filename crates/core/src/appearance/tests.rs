@@ -176,3 +176,83 @@ fn blank_font_name_means_bundled() {
     };
     assert_eq!(prefs.terminal(), None);
 }
+
+/// WCAG 2.x relative luminance of a `#RRGGBB` color.
+fn luminance(hex: &str) -> f64 {
+    let channel = |value: u8| {
+        let c = f64::from(value) / 255.0;
+        if c <= 0.039_28 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let [r, g, b] = rgb(hex).unwrap();
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+fn contrast(a: &str, b: &str) -> f64 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+fn presets() -> [(&'static str, AppearanceConfig); 6] {
+    [
+        ("carbon", AppearanceConfig::carbon()),
+        ("islands dark", AppearanceConfig::islands_dark()),
+        ("intellij dark", AppearanceConfig::intellij_dark()),
+        ("terminator dark", AppearanceConfig::terminator_dark()),
+        ("high contrast", AppearanceConfig::high_contrast()),
+        ("intellij light", AppearanceConfig::intellij_light()),
+    ]
+}
+
+#[test]
+fn presets_meet_contrast_floors() {
+    for (name, theme) in presets() {
+        let texts = [
+            ("text", &theme.text),
+            ("secondary", &theme.secondary),
+            ("git_added", &theme.git_added),
+            ("git_modified", &theme.git_modified),
+            ("git_deleted", &theme.git_deleted),
+            ("git_untracked", &theme.git_untracked),
+            ("git_ignored", &theme.git_ignored),
+            ("status_running", &theme.status_running),
+            ("status_waiting", &theme.status_waiting),
+            ("status_failed", &theme.status_failed),
+        ];
+        for (token, color) in texts {
+            for (fill, floor) in [
+                (&theme.surface, 4.5),
+                (&theme.window, 4.5),
+                (&theme.selection, 3.0),
+            ] {
+                let ratio = contrast(color, fill);
+                assert!(
+                    ratio >= floor,
+                    "{name}: {token} {color} on {fill} is {ratio:.2}:1, below {floor}:1"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_accent_picker_keeps_selected_text_readable() {
+    for (name, mut theme) in presets() {
+        let before = theme.selection.clone();
+        theme.apply_accent("#3574F0".into());
+        assert!(
+            contrast(&theme.text, &theme.selection) >= 7.0,
+            "{name}: text on {} is too weak",
+            theme.selection
+        );
+        if name == "carbon" {
+            assert_eq!(theme.selection, before, "a neutral selection stays");
+        }
+    }
+    let mut light = AppearanceConfig::intellij_light();
+    light.apply_accent("#3574F0".into());
+    assert_eq!(light.selection, "#DBE6FC");
+}

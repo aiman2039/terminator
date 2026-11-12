@@ -370,4 +370,47 @@ mod tests {
         assert!(app.section_visible(SettingsSection::Updates));
         assert!(!app.section_visible(SettingsSection::Appearance));
     }
+
+    #[test]
+    fn a_section_change_keeps_the_draft_without_a_question() {
+        let (mut app, _ctx, _dir) = app();
+        let saved = app.settings_change_count();
+        app.settings_draft.inlay_hints = !app.state.settings.inlay_hints;
+        assert_eq!(app.settings_change_count(), saved + 1);
+        app.request_settings_section(SettingsSection::Remote);
+        assert_eq!(app.settings_section, SettingsSection::Remote);
+        assert!(app.settings_pending.is_none(), "no question");
+        assert_ne!(
+            app.settings_draft.inlay_hints,
+            app.state.settings.inlay_hints
+        );
+        // Discard changes reverts at once; it does not ask either.
+        app.discard_settings_draft();
+        assert_eq!(app.settings_change_count(), 0);
+        assert!(app.settings_pending.is_none());
+    }
+
+    #[test]
+    fn a_search_lists_matching_rows_of_every_section_with_counts() {
+        let (mut app, ctx, _dir) = app();
+        app.settings_section = SettingsSection::Appearance;
+        app.settings_search = "timeout".into();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.settings_center(ui),
+            );
+            output.textures_delta.clear();
+        }
+        // "Editor close timeout" (Git & Diff) and the SSH timeouts (Remote)
+        // show together, whichever section was open.
+        assert!(app.section_match_count(SettingsSection::Git) >= 1);
+        assert!(app.section_match_count(SettingsSection::Remote) >= 2);
+    }
 }

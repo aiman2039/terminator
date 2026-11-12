@@ -261,6 +261,12 @@ impl Shared {
             Request::Shutdown | Request::ShutdownIfIdle => self.on_shutdown(),
             Request::RetireIfDraining => self.on_retire_if_draining(),
             Request::LocalHistoryList { path } => self.on_local_history_list(&path),
+            Request::LocalHistoryPage {
+                path,
+                offset,
+                limit,
+            } => self.on_local_history_page(&path, offset, limit),
+            Request::NtfyToken { token } => self.on_ntfy_token(token),
             Request::LocalHistoryRead { path, id } => self.on_local_history_read(&path, &id),
             Request::LocalHistoryLabel { project, label } => {
                 self.on_local_history_label(&project, label)

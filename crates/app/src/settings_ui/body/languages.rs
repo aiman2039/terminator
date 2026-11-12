@@ -40,7 +40,7 @@ impl App {
                     enabled,
                     egui::Checkbox::new(&mut self.settings_draft.spell_check, "Check spelling"),
                 )
-                .on_disabled_hover_text("Restart the daemon to use this with Neovim editors.");
+                .on_disabled_hover_text(settings_controls::NEEDS_SERVICE);
             },
         });
     }

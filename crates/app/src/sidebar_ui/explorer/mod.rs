@@ -277,15 +277,6 @@ impl App {
         self.cached_projects().as_ref().clone()
     }
 
-    /// Brand plus status for a project row when one of its live sessions has an agent.
-    /// A running agent wins over a finished one, so a working logo is not replaced by a folder.
-    pub(super) fn project_agent_face(
-        &self,
-        project_id: &str,
-    ) -> Option<(&'static str, AgentState)> {
-        self.sidebar_index().faces.get(project_id).copied()
-    }
-
     pub(super) fn session_row(
         &mut self,
         ui: &mut egui::Ui,

@@ -45,11 +45,11 @@ pub fn file_reuse(o: &Options) -> Result<()> {
             {"at_ms":1000,"target":"explorer-file:file.txt"},
             {"at_ms":1800,"target":"explorer-file:file.txt"},
             {"at_ms":2600,"target":"explorer-file:file.txt"},
-            {"at_ms":3300,"target":"tool-Git"},
+            {"at_ms":3300,"target":"stripe-tool-Git"},
             {"at_ms":4000,"target":"git-file-file.txt"},
             {"at_ms":4600,"target":"git-file-file.txt"},
             {"at_ms":5200,"target":"git-file-file.txt"},
-            {"at_ms":5800,"target":"tool-Explorer"},
+            {"at_ms":5800,"target":"stripe-tool-Explorer"},
             {"at_ms":6400,"target":"explorer-file:file.txt"}
         ]),
         after: 7400,

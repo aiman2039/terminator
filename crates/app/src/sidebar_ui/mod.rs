@@ -19,6 +19,7 @@ mod session_select;
 pub(crate) use session_select::SessionSelection;
 mod git_panel;
 mod perforce_panel;
+pub(crate) use perforce_panel::publish as publish_perforce_run;
 mod problems;
 pub(crate) mod structure;
 pub(crate) use structure::StructureState;
@@ -35,7 +36,8 @@ pub(crate) use explorer_rows::explorer_query_keeps_file;
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use git_panel::git_panel;
 pub(crate) use git_panel::{
-    CommitLock, CommitPhase, CommitProgress, GitPanelOutcome, GitTab, PreparedGit,
+    CommitLock, CommitPhase, CommitPick, CommitProgress, GitPanelOutcome, GitTab, PreparedGit,
+    commit_actions,
 };
 #[cfg(test)]
 pub(crate) use git_panel::{GitClickActionInput, git_click_action};

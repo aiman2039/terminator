@@ -26,6 +26,8 @@ pub(crate) enum LocalHistoryJob {
 const QUIET: Duration = Duration::from_millis(500);
 const ROOTS_EVERY: Duration = Duration::from_secs(5);
 const PRUNE_EVERY: Duration = Duration::from_hours(24);
+/// After new snapshots, the size budget and per-file cap apply this soon.
+const PRUNE_AFTER_RECORD: Duration = Duration::from_mins(1);
 /// Files recorded per tick; the rest stay pending for later ticks (#192).
 const MAX_BATCH: usize = 256;
 
@@ -36,9 +38,13 @@ pub(crate) struct LocalHistoryWorker {
     /// Watched project roots; the recorder is on while this is non-empty.
     watched: BTreeSet<PathBuf>,
     days: u32,
+    /// Size budget and per-file cap from the settings.
+    limits: (u64, u32),
     pending: HashMap<PathBuf, Instant>,
     roots_checked: Option<Instant>,
     pruned: Option<Instant>,
+    /// Snapshots were recorded since the last prune.
+    recorded: bool,
 }
 
 impl LocalHistoryWorker {
@@ -65,9 +71,14 @@ impl LocalHistoryWorker {
                 watcher: None,
                 watched: BTreeSet::new(),
                 days: 0,
+                limits: (
+                    local_history::DEFAULT_MIB,
+                    local_history::DEFAULT_FILE_ENTRIES,
+                ),
                 pending: HashMap::new(),
                 roots_checked: None,
                 pruned: None,
+                recorded: false,
             };
             loop {
                 let job = rx.recv_timeout(Duration::from_millis(250));
@@ -115,23 +126,42 @@ impl LocalHistoryWorker {
             self.refresh_roots(shared);
         }
         self.record_quiet();
-        if self.days > 0 && self.pruned.is_none_or(|at| at.elapsed() >= PRUNE_EVERY) {
+        if self.prune_due() {
             self.pruned = Some(Instant::now());
-            if let Err(error) = self.store.prune(local_history::now_ms(), self.days) {
+            self.recorded = false;
+            let (mib, file_entries) = self.limits;
+            let limits = local_history::Limits::new(self.days, mib, file_entries);
+            if let Err(error) = self.store.prune(local_history::now_ms(), limits) {
                 shared.degraded(&format!("Local History retention: {error}"));
             }
         }
     }
 
+    /// Daily, and soon after new snapshots so the size budget holds.
+    fn prune_due(&self) -> bool {
+        let every = if self.recorded {
+            PRUNE_AFTER_RECORD
+        } else {
+            PRUNE_EVERY
+        };
+        self.days > 0 && self.pruned.is_none_or(|at| at.elapsed() >= every)
+    }
+
     /// Watches the local roots of the active generation's projects, or
     /// nothing when recording is off.
     fn refresh_roots(&mut self, shared: &Shared) {
-        let (days, roots) = {
+        let (days, limits, roots) = {
             let state = relock(&shared.state);
             let roots = scan::project_roots(state.projects.iter().map(|p| p.path.clone()));
-            (state.settings.local_history_days, roots)
+            let settings = &state.settings;
+            let limits = (
+                settings.local_history_mib,
+                settings.local_history_file_entries,
+            );
+            (settings.local_history_days, limits, roots)
         };
         self.days = days;
+        self.limits = limits;
         let wanted = if days > 0 && Self::active(shared) {
             roots
         } else {
@@ -202,6 +232,7 @@ impl LocalHistoryWorker {
         for path in &ready {
             self.pending.remove(path);
         }
+        self.recorded = true;
         scan::record_batch(&self.store, &self.watched, ready);
     }
 }

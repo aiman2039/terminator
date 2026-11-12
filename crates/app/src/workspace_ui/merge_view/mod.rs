@@ -6,6 +6,7 @@ use super::super::*;
 use crate::merge::{MergeDoc, MergeTab};
 
 mod rows;
+mod scroll;
 mod text;
 
 /// What the merge tab's controls asked for this frame.
@@ -40,6 +41,7 @@ impl App {
         // Mark resolved stages where the Git panel runs its actions.
         let lock = self.commit_wait(self.git_root().as_deref(), workspace_ops::CommitRisk::Index);
         merge_status(ui, &mut state, &mut clicks, lock);
+        reload_bar(ui, &mut state, &mut clicks);
         let colors = rows::MergeColors::new(&self.theme, ui);
         if state.doc.is_some() {
             rows::merge_body(rows::MergeBodyInput {
@@ -78,8 +80,14 @@ fn merge_toolbar(ui: &mut egui::Ui, tab: &Tab, state: &mut MergeTab, clicks: &mu
                 appearance::sidebar_action(ui, "RefreshCw", "Reload from Git (drops edits)")
             });
             if reload.inner.clicked() {
-                clicks.reload = true;
+                // Edits are asked about first; a clean result reloads at once.
+                if state.dirty {
+                    state.confirm_reload = true;
+                } else {
+                    clicks.reload = true;
+                }
             }
+            ui.separator();
             if appearance::sidebar_action(ui, "ArrowDown", "Next change (F7)").clicked() {
                 step(state, true);
             }
@@ -171,16 +179,34 @@ fn counter(count: usize, noun: &str) -> String {
     format!("{count} {noun}{} left", if count == 1 { "" } else { "s" })
 }
 
-/// Column headers: which version each pane shows.
-fn side_label(doc: &MergeDoc, ours: bool) -> String {
-    let (name, side) = if ours {
-        ("Ours", &doc.ours)
+/// Column headers: which version each pane shows, and its branch.
+fn side_label(doc: &MergeDoc, ours: bool) -> (String, Option<String>) {
+    let (name, side, branch) = if ours {
+        ("Ours", &doc.ours, &doc.labels.ours)
     } else {
-        ("Theirs", &doc.theirs)
+        ("Theirs", &doc.theirs, &doc.labels.theirs)
     };
-    if side.present {
+    let name = if side.present {
         name.to_owned()
     } else {
         format!("{name} (deleted)")
+    };
+    (name, branch.clone())
+}
+
+/// With unsaved edits, Reload asks first in a bar under the status row.
+fn reload_bar(ui: &mut egui::Ui, state: &mut MergeTab, clicks: &mut MergeClicks) {
+    if !state.confirm_reload {
+        return;
     }
+    ui.horizontal(|ui| {
+        ui.colored_label(ui.visuals().warn_fg_color, "Reload drops your edits.");
+        if ui.button("Reload").clicked() {
+            state.confirm_reload = false;
+            clicks.reload = true;
+        }
+        if ui.button("Cancel").clicked() {
+            state.confirm_reload = false;
+        }
+    });
 }

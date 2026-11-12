@@ -10,6 +10,16 @@
 | Muse Code | `~/.config/muse/settings.json` (user hooks). Install also writes `~/.muse/hooks.json` for older CLIs and trusted project hooks. | Start, prompt/tool progress, permission, subagent start/stop, completion/end | CLI 1.4 reads user hooks from `settings.json`. Tool and subagent events use a different session id than Stop; the sidebar follows the conversation id so a later tool event does not stay Working. CLI 1.0.3-R2198.1 was tested with the offline echo provider. Its cleared hook environment is handled by ancestor correlation. |
 | Grok Build | `~/.grok/hooks/terminator.json` | Start, prompt/tool progress, input/permission notification, completion/failure/end | CLI 1.0.13 identified; official Grok hook format. Imported Claude hook commands are ignored when the actual agent is Grok, avoiding duplicate agent attribution. |
 | Cursor | `~/.cursor/hooks.json` | Session start, prompt submit, tool progress, assistant response, stop (completed / error / aborted), session end | User hooks, schema version 1. The command prints `{}` (or `{"continue":true}` for `beforeSubmitPrompt`) so Cursor does not treat an empty body as a block. Permission hooks are not installed: `preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile`, and `subagentStart` block the action when the body does not match their schema. Cursor has no observer for a native approval or question dialog, so those states are not reported. Presence matches `cursor-agent` and the Node entrypoint under `cursor-agent/versions/<version>/index.js`. This supports the `agent` launcher without matching Grok's unrelated `agent` command or arbitrary `index.js` scripts. Hook ancestry uses the same command-line matcher. CLI 2026.10.19-6bbf2c4 in ask/print mode emitted only sessionStart/sessionEnd in a real Reply OK check. The sessionEnd reason maps completed to Completed and error to Failed; aborted stays Unknown, and window/user close stays Stopped. A preceding matching stop does not create a second notice. Completion appears in the inbox by default; select Completed under OS notifications for a desktop banner. |
+| Gemini CLI | `~/.gemini/settings.json` under `hooks` | Session start, prompt (`BeforeAgent`), tool progress (`AfterTool`), tool permission notification, turn end (`AfterAgent`), session end | Official hook reference (events, `session_id`, `hook_event_name`, `notification_type: ToolPermission`, timeout in milliseconds). Gemini parses hook stdout as JSON, so the command prints `{}`. No installed CLI was run. |
+| GitHub Copilot CLI | `~/.copilot/hooks/terminator.json` (version 1) | Session start, prompt submit, tool progress, stop | Official hooks configuration reference. PascalCase event names select the VS Code-compatible payload with `session_id` and `hook_event_name`. `permissionRequest` and `notification` exist only in camelCase, whose payload has no event name, so waiting states are not reported. `COPILOT_HOME` is not followed. No installed CLI was run. |
+| Factory Droid | `~/.factory/settings.json` under `hooks` | Start, prompt/tool progress, input/permission notification, completion, end | Official hooks reference: Claude-compatible events and payload, timeout in seconds. No installed CLI was run. |
+| Qwen Code | `~/.qwen/settings.json` under `hooks` | Start, prompt/tool progress, input/permission notification, permission request, completion, failure, end | Official hooks documentation: Claude-compatible events and `notification_type` values, timeout in seconds. No installed CLI was run. |
+
+Not added: Kiro CLI (`~/.kiro/hooks/*.json`) does not document its stdin
+fields, and Amp's hook or plugin API was not found in official documentation.
+Use `terminator-hook emit` for them. The new agents have no presence
+(process) detection or resume template yet; their hook events show as last
+reported state.
 
 These are capability targets, not an assertion that all providers report identical lifecycle events. A missing callback cannot reliably be replaced with “the terminal was silent.” In particular, failures and clarification prompts are only reported when the integration receives an appropriate event. CLI upgrades may change their configuration or payloads.
 
@@ -57,6 +67,10 @@ The app displays provider resume commands for manual copying; it never executes 
 - [Muse Code SDK](https://github.com/meta-models/muse-code-sdk); installed CLI echo-provider testing verifies the project hook path and payloads.
 - [Grok hook guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md)
 - [Cursor hooks](https://cursor.com/docs/agent/hooks)
+- [Gemini CLI hooks](https://geminicli.com/docs/hooks/reference/)
+- [GitHub Copilot hooks configuration](https://docs.github.com/en/copilot/reference/hooks-configuration)
+- [Factory Droid hooks](https://docs.factory.com/reference/hooks-reference)
+- [Qwen Code hooks](https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/)
 
 ## Idle-shell close (2026-09-15)
 
@@ -89,7 +103,27 @@ Delivery uses `curl` (required on PATH), one worker and a 64-item bounded queue.
 Requests time out after eight seconds and are not retried; queue overflow drops
 pings rather than blocking hooks. Failures log a generic daemon message and do
 not affect lifecycle tracking. `TERMINATOR_NO_NOTIFICATIONS` suppresses delivery
-for fixtures. This option currently supports public ntfy.sh topics without auth.
+for fixtures.
+
+With `ntfy-server-v1`, Settings → Notifications also has:
+
+- **Server**: a self-hosted ntfy URL (http or https). Empty uses ntfy.sh.
+- **Click opens**: an optional URL that the push opens when tapped (ntfy
+  `click`).
+- **Include the notice text**: off by default. When on, the hook summary
+  (for example the agent's question, at most 500 characters) follows the
+  status line. Details, paths and tool input are never sent.
+- **Access token**: Save token sends it to the daemon with `NtfyToken`. The
+  daemon's ntfy worker thread writes it to the OS credential store (service
+  `dev.terminator.ntfy:<data dir>`), never the IPC handler, and reads it
+  there once before the first push. Remove token deletes it. The token is
+  never in settings, logs, the process list or a temporary file: curl reads
+  the request, with the `Authorization: Bearer` header, from stdin
+  (`--config -`).
+
+Send test posts to the draft server without a token. To check a protected
+server, Apply and use Send hello from all agents, which goes through the
+daemon. Telegram and keep-awake are not supported.
 
 Pushes are time-gated while the inbox keeps every notification: repeats
 from one agent run and state are held back for 60s, and any push holds

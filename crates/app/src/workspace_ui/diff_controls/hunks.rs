@@ -1,7 +1,7 @@
 use super::super::super::*;
 #[cfg(feature = "test-support")]
 use super::chevrons::action_target;
-use super::chevrons::{ChevronBand, action_tip};
+use super::chevrons::{ChevronBand, action_icon, action_tip};
 use super::rows::HunkLine;
 use super::{
     ControlsFrame, ControlsState, PaintConnectorInput, PaneOutput, change_color, paint_connector,
@@ -317,14 +317,19 @@ impl ControlsFrame<'_> {
             .as_ref()
             .filter(|(picked_hunk, _)| *picked_hunk == index)
             .map_or(0, |(_, lines)| lines.len());
-        let kinds: &[(Kind, &str)] = if self.staged {
-            &[(Kind::Unstage, "ArrowLeft")]
+        let kinds: &[Kind] = if self.staged {
+            &[Kind::Unstage]
         } else {
-            &[(Kind::Stage, "Plus"), (Kind::Discard, "Eraser")]
+            &[Kind::Stage, Kind::Discard]
         };
-        for &(kind, icon) in kinds {
+        let selected = state.review.selected == Some(index);
+        for &kind in kinds {
             let button = appearance::enabled_unless(ui, self.action_lock(kind), |ui| {
-                appearance::sidebar_action(ui, icon, &action_tip(kind, picked))
+                appearance::sidebar_action(
+                    ui,
+                    action_icon(kind),
+                    &action_tip(kind, picked, selected),
+                )
             });
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &action_target(kind, index), button.rect);

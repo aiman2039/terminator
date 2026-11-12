@@ -50,9 +50,8 @@ impl Services {
                 updates.push(Update::WorktreeProbe(draft, git));
                 Ok(())
             }
-            Job::WorktreeStats(path) => {
-                let git = self.worktree_git(&path).await;
-                updates.push(Update::WorktreeStats(path, git));
+            job @ (Job::WorktreeStats(..) | Job::TaskChanges(..)) => {
+                updates.extend(self.task_worktree_job(job, &cancel).await);
                 Ok(())
             }
             Job::CommitFiles(cwd, hash) => {
@@ -88,6 +87,28 @@ impl Services {
         }
     }
 
+    /// A worktree row's stats, or the files a task worktree changed since
+    /// its base (on the file pool). Read-only Git.
+    async fn task_worktree_job(&self, job: Job, cancel: &CancellationToken) -> Option<Update> {
+        let (path, base) = match job {
+            Job::WorktreeStats(path, base) => {
+                let git = self.worktree_git(&path, base).await;
+                return Some(Update::WorktreeStats(path, git));
+            }
+            Job::TaskChanges(path, base) => (path, base),
+            _ => return None,
+        };
+        let (worktree, revision) = (path.clone(), base.clone());
+        let files = self
+            .fs()
+            .run(cancel, move || {
+                anyhow::Ok(crate::task_changes::list_changes(&worktree, &revision))
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("{error:#}")));
+        Some(Update::TaskChanges((path, base), files))
+    }
+
     /// The `HEAD` text of `path` for gutter markers, and the root of its
     /// repository: the gutter Stage matches that root with a running commit.
     async fn git_base(&self, path: PathBuf, generation: u64, cancel: &CancellationToken) -> Update {
@@ -99,11 +120,14 @@ impl Services {
         Update::GitBase(path, generation, base, root)
     }
 
-    /// The worktree's branch and uncommitted `+added −deleted` against
-    /// HEAD. Read-only Git (no optional locks); `None` when Git fails.
+    /// The worktree's branch and `+added −deleted` from its task base to
+    /// the working tree: the saved base, else the merge base with the main
+    /// checkout's branch, else HEAD (uncommitted changes only). Read-only
+    /// Git (no optional locks); `None` when Git fails.
     async fn worktree_git(
         &self,
         path: &std::path::Path,
+        saved: Option<String>,
     ) -> Option<crate::worktree_stats::WorktreeGit> {
         let run = |args: &[&str]| {
             terminator_git::run(
@@ -116,7 +140,30 @@ impl Services {
                 },
             )
         };
-        let stat = run(&["diff", "--shortstat", "HEAD", "--"]).await.ok()?;
+        let text = |bytes: Vec<u8>| String::from_utf8_lossy(&bytes).trim().to_owned();
+        let (base, base_name) = if let Some(rev) = saved.filter(|rev| !rev.starts_with('-')) {
+            let spec = format!("{rev}^{{commit}}");
+            let args = [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &spec,
+            ];
+            let hash = run(&args).await.ok().map(text);
+            (hash.filter(|hash| !hash.is_empty()), None)
+        } else {
+            let list = run(&["worktree", "list", "--porcelain", "-z"]).await.ok();
+            let main = list.as_deref().and_then(crate::worktree_stats::main_branch);
+            let mut merge = None;
+            if let Some(main) = &main {
+                let spec = format!("refs/heads/{main}");
+                merge = run(&["merge-base", "HEAD", &spec]).await.ok().map(text);
+            }
+            (merge.filter(|hash| !hash.is_empty()), main)
+        };
+        let from = base.as_deref().unwrap_or("HEAD");
+        let stat = run(&["diff", "--shortstat", from, "--"]).await.ok()?;
         let (added, deleted) =
             crate::worktree_stats::parse_shortstat(&String::from_utf8_lossy(&stat));
         // A detached HEAD has no branch; the row keeps the folder name.
@@ -129,6 +176,8 @@ impl Services {
             branch,
             added,
             deleted,
+            base_name: base_name.filter(|_| base.is_some()),
+            base,
         })
     }
 

@@ -6,7 +6,11 @@ use crate::{Update, diff};
 use anyhow::{Context, Result};
 use std::{path::PathBuf, sync::Arc};
 use terminator_core::async_service::CancellationToken;
+use terminator_core::local_history::{self, Entry};
 use terminator_core::{Request, Response};
+
+/// Entries asked for per `LocalHistoryPage`.
+const PAGE: u64 = 500;
 
 impl Services {
     pub(super) async fn local_history_job(
@@ -17,14 +21,18 @@ impl Services {
     ) -> Result<()> {
         let reply = match op {
             Op::List(path) => {
-                let result = match self
-                    .client()
-                    .rpc(Request::LocalHistoryList { path: path.clone() })
-                    .await
-                {
-                    Ok(Response::LocalHistory(entries)) => Ok(entries),
-                    Ok(_) => Err("Unexpected Local History reply".into()),
-                    Err(error) => Err(format!("{error:#}")),
+                let result = if self.advertises(local_history::LIMITS_CAPABILITY) {
+                    self.local_history_pages(&path).await
+                } else {
+                    match self
+                        .client()
+                        .rpc(Request::LocalHistoryList { path: path.clone() })
+                        .await
+                    {
+                        Ok(Response::LocalHistory(entries)) => Ok(entries),
+                        Ok(_) => Err("Unexpected Local History reply".into()),
+                        Err(error) => Err(format!("{error:#}")),
+                    }
                 };
                 Reply::Listed(path, result)
             }
@@ -49,6 +57,28 @@ impl Services {
         };
         updates.push(Update::LocalHistory(reply));
         Ok(())
+    }
+
+    /// The whole timeline in pages, so no reply exceeds the IPC frame.
+    async fn local_history_pages(&self, path: &std::path::Path) -> Result<Vec<Entry>, String> {
+        let mut entries = Vec::new();
+        loop {
+            let request = Request::LocalHistoryPage {
+                path: path.to_path_buf(),
+                offset: u64::try_from(entries.len()).unwrap_or(u64::MAX),
+                limit: PAGE,
+            };
+            let (page, total) = match self.client().rpc(request).await {
+                Ok(Response::LocalHistoryPage { entries, total }) => (entries, total),
+                Ok(_) => return Err("Unexpected Local History reply".into()),
+                Err(error) => return Err(format!("{error:#}")),
+            };
+            let done = page.is_empty();
+            entries.extend(page);
+            if done || u64::try_from(entries.len()).unwrap_or(u64::MAX) >= total {
+                return Ok(entries);
+            }
+        }
     }
 
     async fn local_history_diff(

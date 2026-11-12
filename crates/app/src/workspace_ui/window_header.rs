@@ -2,9 +2,9 @@ use super::super::*;
 #[cfg(not(target_os = "macos"))]
 use super::header::paint_window_controls;
 use super::header::{
-    HEADER_ACTIONS, HEADER_GAP, HeaderAction, HeaderActionView, HeaderToolBounds,
-    PROJECT_HEADER_GAP, PROJECT_HEADER_SLOT, ProjectHeaderChrome, header_action_view,
-    header_tool_bounds, header_visible_count, project_header_chrome, project_title_width,
+    HEADER_ACTIONS, HEADER_GAP, HeaderAction, HeaderToolBounds, PROJECT_HEADER_GAP,
+    PROJECT_HEADER_SLOT, ProjectHeaderChrome, header_action_view, header_tool_bounds,
+    header_visible_count, project_header_chrome, project_title_width,
 };
 /// Narrower than this, the center toolbar and its project switcher are hidden.
 const TOOLBAR_MIN_WIDTH: f32 = 120.0;
@@ -392,35 +392,11 @@ impl App {
 
     pub(super) fn paint_header_action(&mut self, ui: &mut egui::Ui, action: HeaderAction) {
         let view = header_action_view(action);
-        let response = match action {
-            HeaderAction::Tool(tool) => self.header_tool_button(ui, tool, &view),
-            HeaderAction::IdeMode | HeaderAction::Settings | HeaderAction::Palette => {
-                appearance::framed_icon(ui, view.icon, &self.header_tip(action))
-            }
-        };
+        let response = appearance::framed_icon(ui, view.icon, &self.header_tip(action));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), view.target, response.rect);
         if response.clicked() {
             self.run_header_action(action);
-        }
-    }
-
-    pub(super) fn header_tool_button(
-        &mut self,
-        ui: &mut egui::Ui,
-        tool: SidebarTool,
-        view: &HeaderActionView,
-    ) -> egui::Response {
-        let response = appearance::tool_button(appearance::ToolButtonInput {
-            ui,
-            tool,
-            label: &self.tool_tip(view.label, tool),
-            active: self.header_tool_selected(tool),
-        });
-        if tool == SidebarTool::Explorer {
-            response.on_hover_text(self.explorer_tooltip())
-        } else {
-            response
         }
     }
 
@@ -452,28 +428,16 @@ impl App {
 
     pub(super) fn header_menu_mark(&self, action: HeaderAction) -> String {
         match action {
-            HeaderAction::Tool(tool) if self.header_tool_selected(tool) => "✓".into(),
             HeaderAction::IdeMode if self.preferences.ide_mode => "✓".into(),
             HeaderAction::Settings => self.shortcut_label(Action::OpenSettings),
-            HeaderAction::Palette => self.shortcut_label(Action::OpenPalette),
             HeaderAction::IdeMode => self.shortcut_label(Action::ToggleIdeMode),
-            HeaderAction::Tool(tool) => self.tool_keys(tool),
         }
-    }
-
-    pub(super) fn header_tool_selected(&self, tool: SidebarTool) -> bool {
-        self.preferences.visible && self.preferences.tool == tool
     }
 
     pub(super) fn run_header_action(&mut self, action: HeaderAction) {
         match action {
-            HeaderAction::Tool(tool) => {
-                self.preferences.right_projects = false;
-                self.preferences.toggle(tool);
-            }
             HeaderAction::IdeMode => self.toggle_ide_mode(),
             HeaderAction::Settings => self.open_settings(),
-            HeaderAction::Palette => self.open_command_palette(),
         }
     }
 }

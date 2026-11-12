@@ -329,6 +329,19 @@ pub enum Request {
         path: PathBuf,
         id: String,
     },
+    /// One page of `LocalHistoryList`, newest first. Replies
+    /// `Response::LocalHistoryPage`. Requires `local-history-limits-v1`.
+    LocalHistoryPage {
+        path: PathBuf,
+        offset: u64,
+        limit: u64,
+    },
+    /// Saves the ntfy access token in the OS credential store; empty
+    /// removes it. The daemon queues the write on its ntfy worker and
+    /// replies at once. Requires `ntfy-server-v1`.
+    NtfyToken {
+        token: String,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -375,6 +388,10 @@ pub enum Response {
     End,
     Error(String),
     LocalHistory(Vec<crate::local_history::Entry>),
+    LocalHistoryPage {
+        entries: Vec<crate::local_history::Entry>,
+        total: u64,
+    },
 }
 impl Response {
     pub fn checked(self) -> Result<Self> {

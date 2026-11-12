@@ -33,6 +33,8 @@ pub enum Error {
     /// The text keeps its literal `{event}`, as users have always seen it.
     #[error("Unsupported Cursor hook format for {{event}}; left untouched")]
     UnsupportedCursorFormat { event: &'static str },
+    #[error("Copilot hook file version is not 1; left untouched")]
+    CopilotVersion { version: serde_json::Value },
     #[error("Codex hooks must be a table")]
     CodexHooksNotTable,
     /// The text keeps its literal `{event}`, as users have always seen it.

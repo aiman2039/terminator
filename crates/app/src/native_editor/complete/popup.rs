@@ -20,15 +20,18 @@ pub(crate) fn popup_ui(ui: &egui::Ui, popup: &mut CompletionPopup) -> PopupActio
     let Some(anchor) = popup.anchor else {
         return action;
     };
+    let (at, pivot, rows) = list_place(anchor, ui.ctx().content_rect(), popup.visible.len());
     let shown = egui::Area::new(egui::Id::unique(("native-completion", &popup.path)))
         .order(egui::Order::Foreground)
-        .fixed_pos(anchor.left_bottom())
+        .pivot(pivot)
+        .fixed_pos(at)
         .show(ui.ctx(), |ui| {
             appearance::popup_text_style(ui.style_mut());
             appearance::popup_frame(ui.style()).show(ui, |ui| {
                 ui.set_width(POPUP_WIDTH);
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let max_height = VISIBLE_ROWS as f32 * ROW_HEIGHT;
+                // Row counts are small UI numbers (at most VISIBLE_ROWS).
+                let max_height = rows as f32 * ROW_HEIGHT;
                 egui::ScrollArea::vertical()
                     .max_height(max_height)
                     .show(ui, |ui| {
@@ -79,6 +82,34 @@ fn popup_keys(ui: &egui::Ui, popup: &mut CompletionPopup) -> (PopupAction, bool)
 /// Popup width and row height, as in the `IntelliJ` completion list.
 const POPUP_WIDTH: f32 = 520.0;
 const ROW_HEIGHT: f32 = 22.0;
+/// Frame margins, border and the footer line around the rows.
+const LIST_CHROME: f32 = 48.0;
+
+/// Where the list goes, as Quick Documentation does: under the caret line
+/// when the room below holds it, else above the caret line when the room
+/// above is larger, so the list never covers the line being typed.
+/// Returns the point, the list corner placed on it, and how many rows fit.
+pub(crate) fn list_place(
+    anchor: egui::Rect,
+    screen: egui::Rect,
+    items: usize,
+) -> (egui::Pos2, egui::Align2, usize) {
+    let wanted = items.clamp(1, VISIBLE_ROWS);
+    // Row counts are small UI numbers (at most VISIBLE_ROWS).
+    let need = wanted as f32 * ROW_HEIGHT + LIST_CHROME;
+    let below = screen.bottom() - anchor.bottom();
+    let above = anchor.top() - screen.top();
+    let (at, pivot, room) = if below >= need || below >= above {
+        (anchor.left_bottom(), egui::Align2::LEFT_TOP, below)
+    } else {
+        (anchor.left_top(), egui::Align2::LEFT_BOTTOM, above)
+    };
+    let rows = (1..=wanted)
+        .rev()
+        .find(|rows| *rows as f32 * ROW_HEIGHT + LIST_CHROME <= room)
+        .unwrap_or(1);
+    (at, pivot, rows)
+}
 
 /// The visible items; returns an accept for a clicked row.
 fn popup_rows(ui: &mut egui::Ui, popup: &CompletionPopup, moved: bool) -> Option<PopupAction> {

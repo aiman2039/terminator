@@ -41,6 +41,7 @@ impl App {
             CenterPage::LocalHistory => self.local_history_center(ui),
             CenterPage::Ssh => self.ssh_page_center(ui),
             CenterPage::Vnc => self.vnc_page_center(ui),
+            CenterPage::TaskChanges => self.task_changes_center(ui),
         }
         false
     }
@@ -60,7 +61,7 @@ impl App {
         if !has_worktrees && self.worktree_draft.is_none() {
             ui.weak("No worktrees yet.");
             ui.add_space(8.0);
-            if ui.button("Create a worktree").clicked() {
+            if ui.button("New task…").clicked() {
                 self.open_worktree_wizard();
             }
             return;
@@ -73,7 +74,7 @@ impl App {
         self.worktree_list(ui, list_h);
         ui.separator();
         ui.horizontal(|ui| {
-            if self.worktree_draft.is_none() && ui.button("New worktree").clicked() {
+            if self.worktree_draft.is_none() && ui.button("New task…").clicked() {
                 self.open_worktree_wizard();
             }
         });
@@ -281,6 +282,7 @@ impl App {
         self.paint_zoom(ui.ctx(), outer, &project);
         self.layouts.insert(project.clone(), dock);
         self.drain_pending_git_tabs();
+        self.follow_preview_replacement();
         self.apply_diff_replacement();
         if self.pending_layout_save {
             self.pending_layout_save = false;
@@ -336,18 +338,6 @@ impl App {
         if strip_moved && !main_moved && self.ide_strip_visible() {
             self.follow_focus_tab(strip_focused);
         }
-    }
-
-    pub(crate) fn workspace_blank(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.3);
-            ui.heading("Your workspace, ready.");
-            ui.label("Open a terminal. Run the tools you already use.");
-            ui.add_space(12.0);
-            if ui.button("Open terminal").clicked() {
-                self.create(None);
-            }
-        });
     }
 
     /// Pane lookup for the floating window under render, rebuilt every

@@ -205,6 +205,10 @@ pub struct App {
     pub(crate) diff_split_scroll: HashMap<String, f32>,
     pub(crate) diff_preview: HashSet<String>,
     pub(crate) diff_reviews: HashMap<String, diff::review::State>,
+    /// Diff review notes waiting to go to an agent (GUI-only).
+    pub(crate) diff_notes: diff::notes::Notes,
+    /// Data of `CenterPage::TaskChanges`.
+    pub(crate) task_changes: Option<crate::task_changes::TaskChanges>,
     pub(crate) loading: HashSet<String>,
     /// Commit-log and blame tab contents, loaded by `Job::GitView`.
     pub(crate) git_views: HashMap<String, crate::GitView>,
@@ -246,6 +250,8 @@ pub struct App {
     /// The new-worktree form; kept only on the worktree center pages.
     pub(crate) worktree_draft: Option<worktree_ui::WorktreeDraft>,
     pub(crate) worktree_remove: Option<String>,
+    /// The Remove worktree dialog's read-only Git check.
+    pub(crate) worktree_remove_check: crate::chrome::dialogs_ui::RemoveCheck,
     pub(crate) theme: AppearanceConfig,
     pub(crate) terminal_theme: Option<(String, String, egui_term::TerminalTheme)>,
     pub(crate) theme_committed: AppearanceConfig,
@@ -413,6 +419,8 @@ pub struct App {
     pub(crate) unread_selected: Option<String>,
     pub(crate) connected: bool,
     pub(crate) control_server: Option<ui_control::Server>,
+    /// Git preview tab, branch and sync actions, and the pull request panel.
+    pub(crate) git_extras: crate::git::GitExtras,
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

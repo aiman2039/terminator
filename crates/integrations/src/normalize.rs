@@ -20,7 +20,8 @@ fn pre_tool_state(tool: &str) -> AgentState {
 
 fn notification_state(payload: &Value) -> Option<AgentState> {
     match first_str(payload, &["notification_type", "notificationType"]) {
-        Some("permission_prompt") => Some(AgentState::WaitingPermission),
+        // Gemini CLI reports a tool approval as `ToolPermission`.
+        Some("permission_prompt" | "ToolPermission") => Some(AgentState::WaitingPermission),
         Some("idle_prompt" | "elicitation_dialog") => Some(AgentState::WaitingInput),
         _ => None,
     }
@@ -71,6 +72,8 @@ fn hook_state(input: HookStateInput<'_>) -> Option<AgentState> {
         "SessionStart" | "session.created" | "sessionStart" => Some(AgentState::Unknown),
         "UserPromptSubmit"
         | "PostToolUse"
+        | "BeforeAgent"
+        | "AfterTool"
         | "beforeSubmitPrompt"
         | "postToolUse"
         | "postToolUseFailure"
@@ -86,7 +89,7 @@ fn hook_state(input: HookStateInput<'_>) -> Option<AgentState> {
             Some(AgentState::WaitingPermission)
         }
         "question.asked" | "question.v2.asked" => Some(AgentState::WaitingInput),
-        "Stop" | "session.idle" | "agent-turn-complete" | "SubagentStop" => {
+        "Stop" | "session.idle" | "agent-turn-complete" | "SubagentStop" | "AfterAgent" => {
             Some(AgentState::Completed)
         }
         "stop" => Some(cursor_stop_state(payload)),

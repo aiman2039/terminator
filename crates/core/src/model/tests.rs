@@ -115,3 +115,47 @@ fn local_history_days_default_to_7_for_old_settings_and_are_bounded() {
     s.local_history_days = 3651;
     assert!(s.validate().is_err());
 }
+
+#[test]
+fn ntfy_server_and_click_must_be_web_urls_and_default_to_ntfy_sh() {
+    let old: Settings = serde_json::from_value(serde_json::json!({"ntfy_enabled": false})).unwrap();
+    assert_eq!(old.ntfy_options, NtfyOptions::default());
+    assert_eq!(old.ntfy_endpoint(), "https://ntfy.sh");
+    let mut s = Settings {
+        ntfy_enabled: true,
+        ntfy_channel: "phone".into(),
+        ..Settings::default()
+    };
+    s.ntfy_options.server = "https://push.example.com/".into();
+    s.ntfy_options.click = "https://example.com/x".into();
+    assert!(s.validate().is_ok());
+    assert_eq!(s.ntfy_endpoint(), "https://push.example.com");
+    for bad in [
+        "ftp://example.com",
+        "not a url",
+        "https://",
+        "javascript:alert(1)",
+    ] {
+        s.ntfy_options.server = bad.into();
+        assert!(s.validate().is_err(), "{bad}");
+    }
+    // A disabled toggle still saves whatever is in the fields.
+    s.ntfy_enabled = false;
+    assert!(s.validate().is_ok());
+}
+
+#[test]
+fn local_history_limits_default_for_old_settings_and_are_bounded() {
+    let old: Settings = serde_json::from_value(serde_json::json!({"history_days": 30})).unwrap();
+    assert_eq!(old.local_history_mib, 512);
+    assert_eq!(old.local_history_file_entries, 200);
+    assert!(old.validate().is_ok());
+    for (mib, file_entries) in [(0, 200), (65537, 200), (512, 0), (512, 10_001)] {
+        let s = Settings {
+            local_history_mib: mib,
+            local_history_file_entries: file_entries,
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err(), "{mib} MiB, {file_entries} entries");
+    }
+}

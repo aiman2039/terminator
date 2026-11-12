@@ -1,6 +1,7 @@
 //! Notification self-tests: direct ntfy posts and per-agent hello events.
 //!
-//! The ntfy test posts straight to ntfy.sh with the draft channel, so it needs
+//! The ntfy test posts straight to the draft server (ntfy.sh by default) with
+//! the draft channel and no access token, so it needs
 //! neither Apply nor a live terminal. The hello test goes through the daemon's
 //! normal hook path, so it verifies the Agents inbox plus ntfy end to end and
 //! does need saved settings and a live terminal.
@@ -12,8 +13,6 @@ use terminator_core::{
 
 // curl opens its output itself, so use the native null device.
 const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
-
-pub const ENDPOINT: &str = "https://ntfy.sh";
 
 /// Same channel/machine rules as [`terminator_core::Settings::validate`]; the
 /// test must not depend on the rest of the settings draft being valid.
@@ -56,11 +55,12 @@ pub fn payload(channel: &str, machine: &str) -> Vec<u8> {
 
 /// Copy/paste equivalent of [`send`] for any terminal.
 #[must_use]
-pub fn curl_command(channel: &str, machine: &str) -> String {
+pub fn curl_command(endpoint: &str, channel: &str, machine: &str) -> String {
     let body = String::from_utf8_lossy(&payload(channel, machine)).into_owned();
     format!(
-        "curl --disable --silent --show-error --fail --max-time 8 --output {NULL_DEVICE} --header 'Content-Type: application/json' --data-binary {} --url {ENDPOINT}",
-        terminator_core::quote(&body)
+        "curl --disable --silent --show-error --fail --max-time 8 --output {NULL_DEVICE} --header 'Content-Type: application/json' --data-binary {} --url {}",
+        terminator_core::quote(&body),
+        terminator_core::quote(endpoint)
     )
 }
 
@@ -214,7 +214,8 @@ mod tests {
     #[test]
     fn copy_commands_survive_tricky_machine_names() {
         // Single quotes in the machine name must not break the shell quoting.
-        let command = curl_command("fixture", "o'brien");
+        let endpoint = Settings::default().ntfy_endpoint();
+        let command = curl_command(&endpoint, "fixture", "o'brien");
         assert!(command.contains("https://ntfy.sh"));
         assert!(command.contains("'\\''"));
         let rendered = hello_command("/tmp/dir with space/terminator-hook");
