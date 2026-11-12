@@ -82,6 +82,7 @@ pub(crate) mod diff;
 mod gui_services;
 mod onboarding;
 mod perforce;
+mod scrollback_find;
 mod tasks;
 pub use app::app_state::App;
 pub(crate) use app::app_state::{inventory_is_stale, observation_is_stale};

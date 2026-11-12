@@ -435,6 +435,8 @@ pub struct App {
     pub(crate) git_extras: crate::git::GitExtras,
     /// Prompt composer window and follow-up queues (GUI memory).
     pub(crate) composer: crate::composer::ComposerState,
+    /// Data of `CenterPage::ScrollbackFind`.
+    pub(crate) scrollback_find: crate::scrollback_find::FindPage,
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

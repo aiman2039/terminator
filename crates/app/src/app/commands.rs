@@ -263,6 +263,7 @@ impl App {
             Action::CopyMode => self.toggle_copy_mode(),
             Action::ReviewLastTurn => self.review_last_turn(),
             Action::PromptComposer => self.open_composer(),
+            Action::SearchAllScrollback => self.open_scrollback_find(),
         }
     }
 

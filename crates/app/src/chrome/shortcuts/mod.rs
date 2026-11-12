@@ -7,16 +7,15 @@ mod shared;
 mod tests;
 mod tool_focus;
 
+use eframe::egui::{self, Key, Modifiers};
 pub use jetbrains::*;
 pub use meta::terminal_keeps;
 pub use migrate::{
     CMD_E_MOVES, RENAME_TERMINAL_MOVES, fill_moved_defaults, migrate_moved_defaults,
 };
-pub use tool_focus::*;
-
-use eframe::egui::{self, Key, Modifiers};
 pub use shared::{fill_defaults, yields};
 use std::collections::{BTreeMap, HashMap};
+pub use tool_focus::*;
 
 macro_rules! actions {
     ($($variant:ident => $id:literal, $label:literal, $icon:literal;)*) => {
@@ -140,6 +139,7 @@ actions! {
     CopyMode => "copy_mode", "Terminal copy mode", "Keyboard";
     ReviewLastTurn => "review_last_turn", "Review last agent turn", "History";
     PromptComposer => "prompt_composer", "Prompt composer…", "Pencil";
+    SearchAllScrollback => "search_all_scrollback", "Search all scrollback…", "Search";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
