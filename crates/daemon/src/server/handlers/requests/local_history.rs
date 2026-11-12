@@ -6,6 +6,9 @@ use super::super::super::shared::{Shared, relock};
 use super::Outcome;
 use crate::workers::{LocalHistoryJob, LocalHistoryWorker};
 
+/// Sessions whose newest turn the daemon keeps.
+const MAX_TURN_SESSIONS: usize = 256;
+
 impl Shared {
     pub(super) fn on_local_history_list(&self, path: &Path) -> Result<Outcome> {
         ensure!(path.is_absolute(), "Local History needs an absolute path");
@@ -72,6 +75,66 @@ impl Shared {
             path.display()
         );
         Ok(store.read(id)?)
+    }
+
+    /// Starts or ends the session's turn on an applied hook event.
+    pub(super) fn mark_turn(&self, session: &str, agent: (&str, &str), state: AgentState) {
+        let mut turns = relock(&self.turns);
+        let Some(mark) =
+            local_history::next_mark(turns.get(session), state, agent, local_history::now_ms())
+        else {
+            return;
+        };
+        if turns.len() >= MAX_TURN_SESSIONS && !turns.contains_key(session) {
+            let oldest = turns
+                .iter()
+                .min_by_key(|(_, m)| m.started_ms)
+                .map(|(id, _)| id.clone());
+            if let Some(oldest) = oldest {
+                turns.remove(&oldest);
+            }
+        }
+        turns.insert(session.to_owned(), mark);
+    }
+
+    /// The session's newest turn and the files changed since it started.
+    pub(super) fn on_local_history_turn(&self, session: &str) -> Result<Outcome> {
+        let root = {
+            let state = relock(&self.state);
+            let session = state
+                .sessions
+                .iter()
+                .find(|s| s.id == session)
+                .context("Unknown session")?;
+            ensure!(
+                session.remote.is_none(),
+                "Local History does not record SSH projects"
+            );
+            state
+                .projects
+                .iter()
+                .find(|p| p.id == session.project_id)
+                .context("Unknown project")?
+                .path
+                .clone()
+        };
+        let Some(mark) = relock(&self.turns).get(session).cloned() else {
+            return Ok(Outcome::Reply(Response::LocalHistoryTurn(None)));
+        };
+        let (files, truncated) = LocalHistoryWorker::store(self).turn_files(
+            &root,
+            mark.started_ms,
+            local_history::MAX_TURN_FILES,
+        )?;
+        Ok(Outcome::Reply(Response::LocalHistoryTurn(Some(Box::new(
+            local_history::Turn {
+                session: session.to_owned(),
+                project_root: root,
+                mark,
+                files,
+                truncated,
+            },
+        )))))
     }
 
     /// Never blocks: a full queue drops the label.
@@ -151,6 +214,41 @@ mod tests {
         revert_file(&store, &path, "old text").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old text");
         assert_eq!(store.list(&path).unwrap().len(), 1, "before-revert kept");
+    }
+
+    #[test]
+    fn rolling_back_a_turn_restores_the_turn_start_content_and_can_be_undone() {
+        let data = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let store = local_history::Store::in_data(data.path());
+        let path = project.path().join("a.rs");
+        let snap = |bytes: &[u8], now_ms| {
+            store
+                .record(local_history::Record {
+                    path: &path,
+                    bytes,
+                    source: local_history::Source::External,
+                    label: None,
+                    now_ms,
+                })
+                .unwrap();
+        };
+        snap(b"start", 1_000);
+        std::fs::write(&path, "agent").unwrap();
+        snap(b"agent", 20_000);
+        let (files, _) = store.turn_files(project.path(), 10_000, 10).unwrap();
+        let base = files[0].base.clone().unwrap();
+        revert_file(&store, &path, &store.read(&base.id).unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "start");
+        // The rolled back content stays in the timeline: revert to it.
+        let undo = store
+            .list(&path)
+            .unwrap()
+            .into_iter()
+            .find(|e| !e.id.is_empty() && store.read(&e.id).unwrap() == "agent")
+            .unwrap();
+        revert_file(&store, &path, &store.read(&undo.id).unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "agent");
     }
 
     #[test]

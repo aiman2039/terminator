@@ -1,8 +1,12 @@
 //! User-invoked high-level controls. Never called by observational agent hooks.
 mod agents;
+pub(crate) mod inbox;
 mod lookup;
+#[cfg(test)]
+mod mcp_parity_tests;
 mod projects;
 mod sessions;
+mod spawn;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -40,6 +44,9 @@ enum Control {
     /// Create a shell/editor in a new tab. --background works without a GUI.
     Create(CreateArgs),
     Split(SplitArgs),
+    /// Create a child terminal of a live session (optionally in a new
+    /// worktree) and type --agent without Enter. Prints the child ID.
+    Spawn(SpawnArgs),
     Focus {
         session: String,
     },
@@ -145,6 +152,20 @@ struct SplitArgs {
     direction: String,
 }
 #[derive(Args)]
+struct SpawnArgs {
+    /// The parent session ID.
+    #[arg(long)]
+    parent: String,
+    /// Add worktree `terminator/NAME` beside the parent's project first.
+    #[arg(long)]
+    worktree: Option<String>,
+    /// Command typed into the child (one line, never followed by Enter).
+    #[arg(long)]
+    agent: Option<String>,
+    #[arg(long)]
+    background: bool,
+}
+#[derive(Args)]
 struct NotifyArgs {
     session: String,
     body: String,
@@ -178,14 +199,49 @@ enum Worktree {
         project: String,
     },
 }
+/// What one control produced: JSON, raw terminal text, or a `ctl wait` exit code.
+pub(crate) enum Outcome {
+    Json(serde_json::Value),
+    Text(String),
+    Exit(i32),
+}
 pub fn run(args: &[String]) -> Result<()> {
     let cli = Cli::parse_from(
         std::iter::once("terminator-hook ctl".to_owned()).chain(args.iter().cloned()),
     );
-    let paths = cli_paths(cli.data_dir, cli.runtime_dir)?;
     if let Control::Browser { command } = cli.command {
         return super::browser::run(command);
     }
+    match execute(cli)? {
+        Outcome::Json(value) => {
+            crate::output::Output::line(serde_json::to_string_pretty(&value)?);
+        }
+        Outcome::Text(text) => crate::output::Output::text(text),
+        Outcome::Exit(code) => std::process::exit(code),
+    }
+    Ok(())
+}
+/// Parses `args` exactly as `terminator-hook ctl ARGS`.
+fn parse(args: &[String]) -> Result<Cli> {
+    let cli = Cli::try_parse_from(
+        std::iter::once("terminator-hook ctl".to_owned()).chain(args.iter().cloned()),
+    )?;
+    anyhow::ensure!(
+        !matches!(
+            cli.command,
+            Control::Browser { .. } | Control::Shutdown(_) | Control::Window { .. }
+        ),
+        "This control is not available here"
+    );
+    Ok(cli)
+}
+/// Runs a ctl command line. Used by `terminator-hook mcp`, so every tool
+/// keeps the ctl limits and refusals.
+pub(crate) fn execute_args(args: &[String]) -> Result<Outcome> {
+    execute(parse(args)?)
+}
+fn execute(cli: Cli) -> Result<Outcome> {
+    let paths = cli_paths(cli.data_dir, cli.runtime_dir)?;
     let ctl = Ctl::connect(&paths)?;
     let value = match cli.command {
         Control::Shutdown(args) => ctl.shutdown(args)?,
@@ -193,15 +249,16 @@ pub fn run(args: &[String]) -> Result<()> {
         Control::Agents { project } => ctl.agents(project)?,
         Control::Wait(args) => match ctl.wait(args)? {
             Ok(value) => value,
-            Err(code) => std::process::exit(code),
+            Err(code) => return Ok(Outcome::Exit(code)),
         },
         Control::AddRemoteProject(args) => ctl.add_remote_project(args)?,
         Control::AddProject { path } => ctl.add_project(path)?,
         Control::Create(args) => ctl.create(args)?,
         Control::Split(args) => ctl.split(args)?,
+        Control::Spawn(args) => ctl.spawn(args)?,
         Control::Focus { session } => ctl.focus(session)?,
         Control::Send(args) => ctl.send(args)?,
-        Control::Read { session, screen } => return ctl.read(session, screen),
+        Control::Read { session, screen } => return Ok(Outcome::Text(ctl.read(session, screen)?)),
         Control::OpenFile {
             project,
             path,
@@ -213,12 +270,11 @@ pub fn run(args: &[String]) -> Result<()> {
         Control::Worktree { command } => ctl.worktree(command)?,
         Control::UiSnapshot => ctl.ui_snapshot()?,
         Control::Window { action } => ctl.window(action)?,
-        Control::Browser { .. } => unreachable!(),
+        Control::Browser { .. } => anyhow::bail!("Browser controls run before connecting"),
     };
-    crate::output::Output::line(serde_json::to_string_pretty(&value)?);
-    Ok(())
+    Ok(Outcome::Json(value))
 }
-fn cli_paths(data_dir: Option<PathBuf>, runtime_dir: Option<PathBuf>) -> Result<Paths> {
+pub(crate) fn cli_paths(data_dir: Option<PathBuf>, runtime_dir: Option<PathBuf>) -> Result<Paths> {
     let mut paths = if let Some(path) = data_dir {
         Paths::at(std::path::absolute(path)?)
     } else {

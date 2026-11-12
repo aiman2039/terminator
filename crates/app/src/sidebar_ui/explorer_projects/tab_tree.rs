@@ -66,14 +66,18 @@ impl App {
     /// name draws that terminal in the tab's place, because the node would
     /// only repeat it.
     pub(super) fn project_sessions_tree(&mut self, ui: &mut egui::Ui, project_id: &str) {
-        let live = self.live_project_sessions(project_id);
+        let mut live = self.live_project_sessions(project_id);
         if live.is_empty() {
             return;
         }
+        // Children of a parent in this project draw under that parent.
+        let nested = super::child_rows::nested_ids(&self.state, &live);
+        live.retain(|s| !nested.contains(&s.id));
         let tabs = self.project_tab_terminals(project_id);
         if tabs.len() < 2 {
             for session in &live {
                 self.session_row(ui, session);
+                self.session_children(ui, project_id, &session.id);
             }
             return;
         }
@@ -97,6 +101,7 @@ impl App {
         for sid in &overflow {
             if let Some(session) = by_id.get(sid.as_str()) {
                 self.session_row(ui, session);
+                self.session_children(ui, project_id, sid);
             }
         }
     }
@@ -202,6 +207,7 @@ impl App {
                     Self::tree_session_row_dnd(&response, (project_id, &session.id));
                     self.tree_drop_target(ui, &response, (project_id, tab_id));
                 }
+                self.session_children(ui, project_id, &session.id);
             }
             return;
         }
@@ -238,6 +244,7 @@ impl App {
                         {
                             Self::tree_session_row_dnd(&response, (project_id, sid));
                         }
+                        self.session_children(ui, project_id, sid);
                     }
                 });
             });

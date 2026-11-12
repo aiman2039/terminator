@@ -124,16 +124,17 @@ impl App {
     }
 
     /// The OSC 7501 program status badge on a terminal caption. Display
-    /// only; the agent status glyph and Resume chip ignore it.
+    /// only; the agent status glyph and Resume chip ignore it. It ends at
+    /// `right` in `row`; returns its left edge (`right` when none shows).
     pub(crate) fn paint_program_status(
         &self,
         ui: &egui::Ui,
         sid: &str,
-        bar: &appearance::TerminalBar,
-    ) {
+        (row, right): (egui::Rect, f32),
+    ) -> f32 {
         use terminator_core::program_status::{ProgramState, badge};
         let Some(status) = self.state.program_status.get(sid) else {
-            return;
+            return right;
         };
         let theme = &self.theme;
         let tint = appearance::color(match status.state {
@@ -144,7 +145,7 @@ impl App {
             ProgramState::Idle => &theme.secondary,
         });
         let ink = appearance::color(&theme.window);
-        appearance::program_status_badge(ui, bar, &badge(status), (tint, ink));
+        appearance::program_status_badge(ui, (row, right), &badge(status), (tint, ink))
     }
 
     /// Whether the daemon generation that owns session `sid` advertises

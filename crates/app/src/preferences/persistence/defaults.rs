@@ -15,6 +15,7 @@ impl Default for UiPreferences {
             vnc_paste_shortcut: VncPasteShortcut::default(),
             type_ahead: crate::preferences::TypeAhead::default(),
             long_command_notice_secs: 0,
+            quick_terminal: super::QuickTerminalPrefs::default(),
             tool: SidebarTool::Explorer,
             visible: true,
             ide_mode: true,
@@ -94,6 +95,7 @@ impl Default for UiPreferences {
             radio_stations: Vec::new(),
             browser: crate::browser::extras::BrowserPrefs::default(),
             editor_states: crate::preferences::EditorStates::default(),
+            prompt_history: std::collections::BTreeMap::new(),
             ide_strip_docks: StripDocks::default(),
         }
     }

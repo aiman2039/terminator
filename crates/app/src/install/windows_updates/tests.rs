@@ -289,3 +289,12 @@ fn release_feed_body_becomes_release_notes() {
     let (_, _, _, notes) = feed::parse_latest(r#"{"tag_name":"v1.2.3"}"#).expect("parse");
     assert!(notes.is_empty());
 }
+
+#[test]
+fn package_manager_installs_are_told_to_update_through_the_package_manager() {
+    let packaged = chip::chip_hint("v2.0.0", true);
+    assert!(packaged.contains("package manager") && packaged.contains("apt"));
+    let archive = chip::chip_hint("v2.0.0", false);
+    assert!(!archive.contains("package manager"));
+    assert!(archive.starts_with("Terminator v2.0.0 is available."));
+}

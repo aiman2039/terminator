@@ -173,6 +173,7 @@ pub fn read_only(request: &Request) -> bool {
             | Request::LocalHistoryList { .. }
             | Request::LocalHistoryRead { .. }
             | Request::LocalHistoryPage { .. }
+            | Request::LocalHistoryTurn { .. }
     )
 }
 

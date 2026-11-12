@@ -35,5 +35,11 @@ features = ["handshake"]
 [dependencies.url]
 version = "2"
 
+# `terminator-hook inbox`: terminal UI with its re-exported crossterm backend.
+[dependencies.ratatui]
+version = "0.30"
+default-features = false
+features = ["crossterm"]
+
 [lints]
 workspace = true

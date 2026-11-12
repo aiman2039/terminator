@@ -29,7 +29,8 @@ impl App {
                     label: "Editor close timeout",
                     description: "How long to wait for Neovim to close before force-stopping.",
                     add_control: |ui| {
-                        ui.add(
+                        appearance::slider(
+                            ui,
                             egui::Slider::new(
                                 &mut self.settings_draft.editor_close_timeout_secs,
                                 1..=30,

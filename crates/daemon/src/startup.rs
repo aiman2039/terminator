@@ -149,6 +149,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
         PROJECT_INIT_CAPABILITY.into(),
+        terminator_core::session_parents::CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
         terminator_core::agent_workflow::TRIAGE_CAPABILITY.into(),
         terminator_core::agent_workflow::RESTORE_CAPABILITY.into(),
@@ -183,6 +184,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::NTFY_SERVER_CAPABILITY.into(),
         crate::terminal_events::kitty_keys::CAPABILITY.into(),
         terminator_core::program_status::CAPABILITY.into(),
+        terminator_core::local_history::TURN_CAPABILITY.into(),
     ];
     if catalog {
         state.daemon_build = Some(generations::build_identity(
@@ -274,6 +276,7 @@ pub(crate) fn start_shared(input: StartInput) -> Started {
         forwards: Mutex::new(crate::remote::Forwards::default()),
         remote_transfers: Mutex::new(crate::remote::Transfers::default()),
         local_history,
+        turns: Mutex::new(HashMap::new()),
     });
     Started {
         shared,

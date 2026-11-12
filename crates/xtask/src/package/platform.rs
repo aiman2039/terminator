@@ -111,7 +111,25 @@ pub(super) fn windows(app: &Path, staging: &Path, destination: &Path) -> Result<
     Ok(())
 }
 
-pub(super) fn linux(app: &Path, staging: &Path, destination: &Path) -> Result<()> {
+/// The tarball, then (for non-portable builds) the `.deb` and `.rpm` from
+/// the same staged tree.
+pub(super) fn linux(app: &Path, staging: &Path, destination: &Path, portable: bool) -> Result<()> {
+    fs::copy(root().join("LICENSE"), app.join("LICENSE"))?;
+    linux_tarball(app, staging, destination)?;
+    if portable {
+        return Ok(());
+    }
+    let meta = super::distro::Meta {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        arch: std::env::consts::ARCH.to_owned(),
+    };
+    for package in super::distro::packages(app, destination, &meta)? {
+        println!("{}", package.display());
+    }
+    Ok(())
+}
+
+fn linux_tarball(app: &Path, staging: &Path, destination: &Path) -> Result<()> {
     fs::write(
         app.join("terminator.desktop"),
         "[Desktop Entry]\nType=Application\nName=Terminator\nExec=terminator\nIcon=terminator\nTerminal=false\nCategories=Development;TerminalEmulator;\n",

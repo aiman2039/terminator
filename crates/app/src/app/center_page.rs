@@ -30,6 +30,10 @@ pub(crate) enum CenterPage {
     Welcome,
     /// This version's changelog section, after an update.
     WhatsNew,
+    /// An agent's last turn; data is `App::git_extras.last_turn`.
+    LastTurn,
+    /// Search all scrollback; data is `App::scrollback_find`.
+    ScrollbackFind,
 }
 
 impl CenterPage {
@@ -58,6 +62,12 @@ impl App {
         }
         if page != CenterPage::TaskChanges {
             self.task_changes = None;
+        }
+        if page != CenterPage::LastTurn {
+            self.git_extras.last_turn = None;
+        }
+        if page != CenterPage::ScrollbackFind {
+            self.scrollback_find.stop();
         }
         self.shortcut_capture = None;
         if self.palette.open {
@@ -111,6 +121,7 @@ impl App {
         matches!(
             self.center,
             CenterPage::Search(_)
+                | CenterPage::ScrollbackFind
                 | CenterPage::Commands(_)
                 | CenterPage::Worktrees
                 | CenterPage::WorktreeDraft

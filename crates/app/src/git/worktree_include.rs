@@ -159,6 +159,15 @@ fn copy_file(from: &Path, (dest, part): (&Path, &Path), report: &mut CopyReport)
     let target = dest.join(part);
     let result = (|| -> std::io::Result<bool> {
         if let Some(parent) = target.parent() {
+            // A linked folder already in the worktree could lead out of it:
+            // check before creating any folder below it.
+            let existing = parent.ancestors().find(|dir| dir.exists());
+            if !existing
+                .and_then(|dir| std::fs::canonicalize(dir).ok())
+                .is_some_and(|real| real.starts_with(dest))
+            {
+                return Ok(false);
+            }
             std::fs::create_dir_all(parent)?;
             if !std::fs::canonicalize(parent)?.starts_with(dest) {
                 return Ok(false);

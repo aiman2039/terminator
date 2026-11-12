@@ -268,3 +268,35 @@ fn kitty_keyboard_flags_answer_queries_and_survive_reattach() {
     let snapshot = attachment_snapshot(&parser);
     assert!(!snapshot.windows(push.len()).any(|w| w == push));
 }
+
+/// Main and alternate screens keep their own kitty stacks, as in the GUI:
+/// a push left on the alternate screen never reaches the shell after it.
+#[test]
+fn kitty_flags_of_the_alternate_screen_stay_there() {
+    let query = |parser: &mut vt100::Parser<Events>| {
+        process(parser, b"\x1b[?u");
+        parser
+            .callbacks()
+            .replies
+            .back()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut parser = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+    process(&mut parser, b"\x1b[?1049h\x1b[>1u");
+    assert_eq!(query(&mut parser), "\x1b[?1u");
+    // The program left without a pop: the shell gets legacy keys.
+    process(&mut parser, b"\x1b[?1049l");
+    assert_eq!(query(&mut parser), "\x1b[?0u");
+    let push = b"\x1b[>1u".as_slice();
+    let snapshot = attachment_snapshot(&parser);
+    assert!(!snapshot.windows(push.len()).any(|w| w == push));
+    // Back on the alternate screen its flags return, also after reattach.
+    process(&mut parser, b"\x1b[?1049h");
+    assert_eq!(query(&mut parser), "\x1b[?1u");
+    let mut replay = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+    process(&mut replay, &attachment_snapshot(&parser));
+    assert_eq!(query(&mut replay), "\x1b[?1u");
+    process(&mut replay, b"\x1b[?1049l");
+    assert_eq!(query(&mut replay), "\x1b[?0u");
+}

@@ -92,6 +92,9 @@ pub(crate) struct Shared {
     pub(crate) remote_transfers: Mutex<crate::remote::Transfers>,
     /// Labels and file changes for the Local History recorder.
     pub(crate) local_history: SyncSender<crate::workers::LocalHistoryJob>,
+    /// Newest agent turn per terminal session, from hook events only.
+    /// Memory only: a restarted daemon knows no turns.
+    pub(crate) turns: Mutex<HashMap<String, terminator_core::local_history::TurnMark>>,
 }
 
 #[cfg(test)]

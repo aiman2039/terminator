@@ -51,7 +51,8 @@ impl App {
                 label: "Font size",
                 description: "Code font size in points. Markdown is one point larger.",
                 add_control: |ui| {
-                    ui.add(
+                    appearance::slider(
+                        ui,
                         egui::Slider::new(&mut prefs.editor_font_size, FONT_SIZE)
                             .step_by(1.0)
                             .suffix(" pt"),
@@ -65,7 +66,8 @@ impl App {
                 label: "Line spacing",
                 description: "Row height as a multiple of the font height.",
                 add_control: |ui| {
-                    ui.add(
+                    appearance::slider(
+                        ui,
                         egui::Slider::new(&mut prefs.editor_line_spacing, LINE_SPACING)
                             .step_by(0.05)
                             .fixed_decimals(2),
@@ -153,7 +155,8 @@ impl App {
                         ],
                     );
                     if prefs.editor_autosave == Autosave::Delay {
-                        ui.add(
+                        appearance::slider(
+                            ui,
                             egui::Slider::new(
                                 &mut prefs.editor_autosave_delay_ms,
                                 AUTOSAVE_DELAY_MS,

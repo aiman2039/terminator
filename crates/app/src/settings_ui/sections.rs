@@ -132,7 +132,7 @@ impl SettingsSection {
             }
             Self::Keymap => {
                 "keymap jetbrains intellij shortcuts keys double shift find action go to file \
-                 command shortcut chord palette"
+                 command shortcut chord palette quick terminal project hotkey global scratch"
             }
             Self::Notifications => {
                 "events waiting permission completed failed ntfy channel machine phone push alert \

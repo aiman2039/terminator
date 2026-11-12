@@ -40,7 +40,10 @@ impl ImageDiff {
                 }
             }
             if self.mode != Mode::SideBySide {
-                ui.add(egui::Slider::new(&mut self.mix, 0.0..=1.0).show_value(false));
+                appearance::slider(
+                    ui,
+                    egui::Slider::new(&mut self.mix, 0.0..=1.0).show_value(false),
+                );
             }
         });
         ui.horizontal(|ui| {

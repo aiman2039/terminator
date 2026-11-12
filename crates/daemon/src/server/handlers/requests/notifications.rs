@@ -57,8 +57,20 @@ impl Shared {
         let mut state = relock(&self.state);
         let ping = ntfy::Ping::from_event(&state.settings, &event);
         let key = format!("{}:{}", event.agent_invocation_id, event.state as u8);
+        let turn = (
+            event.terminal_session_id.clone(),
+            event.agent_invocation_id.clone(),
+            event.agent_kind.clone(),
+            event.state,
+        );
+        let revision = state.revision;
         let nid = state.apply_hook(event)?;
+        // A duplicate or out-of-order event changes nothing, turns included.
+        let applied = state.revision != revision;
         drop(state);
+        if applied {
+            self.mark_turn(&turn.0, (&turn.1, &turn.2), turn.3);
+        }
         if nid.is_some()
             && let Some(ping) = ping
             && relock(&self.ntfy_cooldown).allow(&key, now())

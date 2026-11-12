@@ -1,6 +1,6 @@
 use super::super::super::harness::{id, output, session_present};
 use super::super::run::symlink;
-use super::{CONTROL_SIGNAL, Checkout};
+use super::{CONTROL_SIGNAL, Checkout, MCP_SIGNAL, SPAWN_SIGNAL};
 use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::fs;
@@ -25,6 +25,66 @@ impl Checkout {
             String::from_utf8_lossy(&output(read)?).contains("CONTROL_SEND_PROOF"),
             "Screen read did not return live content"
         );
+        self.mcp_send_enter_only_on_request(s)?;
+        self.spawn_types_without_enter(s)
+    }
+    /// `ctl spawn` links a child to its parent and types `--agent` without
+    /// Enter; the child is stopped again so removal checks keep their state.
+    fn spawn_types_without_enter(&self, s: &Value) -> Result<()> {
+        let h = &self.h;
+        let mut spawn = h.command("terminator-hook");
+        spawn.args(["ctl", "spawn", "--parent", id(s), "--background", "--agent"]);
+        spawn.arg(SPAWN_SIGNAL);
+        let reply: Value = serde_json::from_slice(&output(spawn)?)?;
+        let child = reply
+            .get("session")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("spawn printed no session: {reply}"))?
+            .to_owned();
+        ensure!(
+            reply.get("enter") == Some(&json!(false))
+                && reply.get("parent_linked") == Some(&json!(true)),
+            "Unexpected spawn reply: {reply}"
+        );
+        ensure!(
+            h.state()?.pointer(&format!("/session_parents/{child}")) == Some(&json!(id(s))),
+            "Parent link missing from the snapshot"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        ensure!(
+            !h.history(&child)?.contains("SPAWN_TYPED_PROOF"),
+            "ctl spawn pressed Enter"
+        );
+        self.stop(&json!({ "id": child }))
+    }
+    /// MCP `send` types without Enter unless `enter` is true.
+    fn mcp_send_enter_only_on_request(&self, s: &Value) -> Result<()> {
+        let h = &self.h;
+        let typed = self.mcp_call("send", &json!({"session": id(s), "text": MCP_SIGNAL}))?;
+        ensure!(
+            typed.pointer("/result/isError") == Some(&json!(false)),
+            "MCP send failed: {typed}"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        ensure!(
+            !h.history(id(s))?.contains("MCP_TYPED_PROOF"),
+            "MCP send pressed Enter without `enter`"
+        );
+        let enter = self.mcp_call(
+            "send",
+            &json!({"session": id(s), "text": "", "enter": true}),
+        )?;
+        ensure!(
+            enter.pointer("/result/isError") == Some(&json!(false)),
+            "MCP Enter failed: {enter}"
+        );
+        h.wait(
+            |_| {
+                h.history(id(s))
+                    .is_ok_and(|text| text.contains("MCP_TYPED_PROOF"))
+            },
+            5,
+        )?;
         Ok(())
     }
     /// CLI and OSC notices stay separate from agent state; returns the attached stream.

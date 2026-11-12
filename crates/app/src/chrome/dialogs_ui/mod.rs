@@ -57,9 +57,11 @@ impl App {
         self.session_peek_modal(ctx);
         self.worktree_remove_dialog(ctx);
         self.ask_agent_dialog(ctx);
+        self.composer_dialog(ctx);
         self.init_command_dialog(ctx);
         self.missing_offer_dialog(ctx);
         self.task_dialog(ctx);
+        self.launch_dialog(ctx);
     }
 
     fn restart_confirm_dialog(&mut self, ctx: &egui::Context) {

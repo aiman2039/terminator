@@ -24,7 +24,11 @@ impl Events {
                     .as_ref()
                     .is_none_or(|old| old.state != status.state);
                 if changed && let Some((title, body)) = program_status::notice(&status) {
-                    self.notice(title, body);
+                    self.push_notice(super::Notice {
+                        title,
+                        body,
+                        program: true,
+                    });
                 }
                 self.set_program_status(Some(status));
             }
@@ -109,6 +113,9 @@ mod tests {
             .map(|n| n.title.clone())
             .collect();
         assert_eq!(titles, ["brew is waiting (auth)", "brew is done"]);
+        assert!(p.callbacks().notices.iter().all(|n| n.program));
+        process(&mut p, b"\x1b]9;plain notice\x07");
+        assert!(!p.callbacks().notices.back().unwrap().program);
         assert_eq!(take(&mut p), "done");
     }
 

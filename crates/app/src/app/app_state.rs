@@ -433,6 +433,16 @@ pub struct App {
     pub(crate) control_server: Option<ui_control::Server>,
     /// Git preview tab, branch and sync actions, and the pull request panel.
     pub(crate) git_extras: crate::git::GitExtras,
+    /// Prompt composer window and follow-up queues (GUI memory).
+    pub(crate) composer: crate::composer::ComposerState,
+    /// Data of `CenterPage::ScrollbackFind`.
+    pub(crate) scrollback_find: crate::scrollback_find::FindPage,
+    /// Broadcast input of one workspace tab (GUI memory only).
+    pub(crate) broadcast: crate::workspace_ui::Broadcast,
+    /// The system-wide quick terminal hotkey and its scratch terminal.
+    pub(crate) quick_terminal: crate::workspace_ui::QuickTerminal,
+    /// Launch layout window, file reads and saves, and a launch in progress.
+    pub(crate) launch: crate::workspace::launch::LaunchState,
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

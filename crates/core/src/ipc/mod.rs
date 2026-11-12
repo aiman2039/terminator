@@ -352,6 +352,18 @@ pub enum Request {
         label: String,
         seed: String,
     },
+    /// The newest agent turn of `session` and the files Local History saw
+    /// change since it started. Replies `Response::LocalHistoryTurn`.
+    /// Read-only. Requires `local-history-turn-v1`.
+    LocalHistoryTurn {
+        session: String,
+    },
+    /// Links a live child session to its parent (`ctl spawn`). Display
+    /// data only. Requires `session-parent-v1`.
+    SetSessionParent {
+        session: String,
+        parent: String,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -402,6 +414,8 @@ pub enum Response {
         entries: Vec<crate::local_history::Entry>,
         total: u64,
     },
+    /// `None` when the session had no agent turn since the daemon started.
+    LocalHistoryTurn(Option<Box<crate::local_history::Turn>>),
 }
 impl Response {
     pub fn checked(self) -> Result<Self> {

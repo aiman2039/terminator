@@ -100,6 +100,16 @@ enum Task {
         #[arg(long)]
         portable: bool,
     },
+    /// Fill the Homebrew cask and AUR PKGBUILD templates in `packaging/` for
+    /// a release from its SHA256SUMS file. Writes local files only.
+    PackageManifests {
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        sums: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Build and package a local DMG without installing it.
     LocalDmg {
         #[arg(long)]
@@ -246,6 +256,11 @@ fn dispatch(task: Task) -> Result<()> {
             output,
             portable,
         } => package::run(debug, timings, output, portable),
+        Task::PackageManifests {
+            version,
+            sums,
+            output,
+        } => package::manifests(&version, &sums, output),
         Task::LocalDmg {
             release,
             styled,

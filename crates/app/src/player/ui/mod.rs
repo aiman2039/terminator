@@ -226,9 +226,11 @@ fn volume_row(app: &mut App, ui: &mut Ui) {
         ui.weak("Vol");
         let mut volume = app.preferences.player_volume;
         ui.spacing_mut().slider_width = ui.available_width();
-        if ui
-            .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
-            .changed()
+        if appearance::slider(
+            ui,
+            egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false),
+        )
+        .changed()
         {
             app.preferences.player_volume = volume;
             app.player.set_volume(volume);

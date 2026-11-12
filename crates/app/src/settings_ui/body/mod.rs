@@ -236,6 +236,12 @@ impl App {
         self.editor_keymap_setting(ui);
         settings_controls::sub_heading(ui, "Shortcuts");
         self.shortcut_settings(ui);
+        if self.field_visible(
+            "Quick terminal project",
+            "quick terminal hotkey global scratch",
+        ) {
+            self.quick_terminal_settings(ui);
+        }
     }
 
     fn shortcut_settings(&mut self, ui: &mut egui::Ui) {

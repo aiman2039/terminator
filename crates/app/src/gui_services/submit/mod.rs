@@ -6,6 +6,7 @@ mod local_history_jobs;
 mod local_jobs;
 mod polling;
 mod remote_jobs;
+mod turn_jobs;
 
 use execute::MISROUTED;
 

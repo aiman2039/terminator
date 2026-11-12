@@ -5,12 +5,14 @@ use super::tabs::cached_terminal_theme;
 use super::viewer::Viewer;
 use egui_term::TerminalBackend;
 
+mod broadcast;
 mod commands;
 mod key_mode_ui;
 mod key_modes;
 mod menu;
 mod target;
 
+pub(crate) use broadcast::Broadcast;
 pub(crate) use commands::TERMINAL_ACTIONS;
 pub(crate) use key_modes::KeyModes;
 
@@ -242,6 +244,10 @@ impl Viewer<'_> {
                 .get(sid)
                 .is_none_or(|p| p.editor_focused);
         self.paste_clipboard_images(ui, sid, focused);
+        self.app.broadcast_paste_bar(ui, sid);
+        if focused {
+            self.app.broadcast_pre_input(ui.ctx(), sid);
+        }
         let gates = TerminalGates {
             input_enabled,
             focused,
@@ -282,6 +288,7 @@ impl Viewer<'_> {
     ) -> Option<egui::Response> {
         let find_paint = self.find_paint_for(sid);
         let type_ahead = self.app.type_ahead_mode(sid);
+        let broadcasting = gates.focused && self.app.broadcasting_to(sid);
         let backend = self.app.backends.get_mut(sid)?;
         backend.set_painted(true);
         backend.set_type_ahead(type_ahead);
@@ -289,14 +296,23 @@ impl Viewer<'_> {
             font_type: egui::FontId::monospace(self.app.state.settings.font_size),
         });
         let theme = cached_terminal_theme(&mut self.app.terminal_theme, &self.app.theme);
-        let view = TerminalView::new(ui, backend)
+        let mut typed = Vec::new();
+        let mut view = TerminalView::new(ui, backend)
             .external_links(true)
             .set_theme(theme)
             .set_focus(gates.focused)
             .set_font(font)
             .set_size(ui.available_size())
             .find_highlight(find_paint);
+        if broadcasting {
+            view = view.input_tap(&mut typed);
+        }
         let response = ui.add_enabled(gates.input_enabled, view);
+        self.app.broadcast_typed(sid, typed);
+        if self.app.broadcasting_to(sid) {
+            let accent = appearance::color(&self.app.theme.status_waiting);
+            appearance::paint_broadcast_outline(ui.painter(), response.rect, accent);
+        }
         // Shortcuts run before panes paint; this tells them a terminal has focus.
         shortcuts::mark_terminal(ui.ctx(), response.id);
         self.app.paint_prompt_marks(ui, sid, response.rect);

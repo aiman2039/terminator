@@ -6,6 +6,7 @@ mod commands;
 mod forward;
 pub mod mosh;
 mod paths;
+pub mod reconnect;
 pub use commands::{
     COMMANDS_CAPABILITY, DEFAULT_SHELL_COMMAND, MAX_COMMAND_LEN, normalize_command,
 };

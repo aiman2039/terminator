@@ -19,13 +19,18 @@ pub(crate) enum Op {
         path: PathBuf,
         id: String,
     },
+    /// Last turn page work.
+    Turn(turn::TurnOp),
 }
 
 pub(crate) enum Reply {
     Listed(PathBuf, Result<Vec<Entry>, String>),
     Diff(PathBuf, String, Result<Arc<DiffDocument>, String>),
     Reverted(PathBuf, Result<(), String>),
+    Turn(turn::TurnReply),
 }
+
+pub(crate) mod turn;
 
 #[derive(Default)]
 pub(crate) struct Page {
@@ -38,41 +43,36 @@ pub(crate) struct Page {
 }
 
 impl Op {
-    pub(crate) fn path(&self) -> &PathBuf {
-        match self {
-            Self::List(path) | Self::Diff { path, .. } | Self::Revert { path, .. } => path,
-        }
-    }
-
     /// The reply when the job could not run.
     pub(crate) fn failed(&self, error: String) -> Reply {
         match self {
             Self::List(path) => Reply::Listed(path.clone(), Err(error)),
             Self::Diff { path, id } => Reply::Diff(path.clone(), id.clone(), Err(error)),
             Self::Revert { path, .. } => Reply::Reverted(path.clone(), Err(error)),
+            Self::Turn(op) => Reply::Turn(op.failed(error)),
         }
     }
 }
 
 /// Service route: reads replace each other; a revert is ordered.
 pub(crate) fn route(op: &Op) -> (&'static str, String, Policy) {
-    let path = op.path().display().to_string();
     match op {
-        Op::List(_) => (
+        Op::List(path) => (
             "local-history",
-            format!("list:{path}"),
+            format!("list:{}", path.display()),
             Policy::ReplaceableRead,
         ),
-        Op::Diff { .. } => (
+        Op::Diff { path, .. } => (
             "local-history",
-            format!("diff:{path}"),
+            format!("diff:{}", path.display()),
             Policy::ReplaceableRead,
         ),
-        Op::Revert { .. } => (
+        Op::Revert { path, .. } => (
             "local-history",
-            format!("revert:{path}"),
+            format!("revert:{}", path.display()),
             Policy::OrderedMutation,
         ),
+        Op::Turn(op) => turn::route(op),
     }
 }
 
@@ -103,6 +103,10 @@ impl App {
     }
 
     pub(crate) fn handle_local_history(&mut self, reply: Reply) {
+        let reply = match reply {
+            Reply::Turn(reply) => return self.handle_turn_reply(reply),
+            reply => reply,
+        };
         let Some(page) = self.local_history.as_mut() else {
             return;
         };

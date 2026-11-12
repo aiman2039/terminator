@@ -1,7 +1,9 @@
+mod broadcast;
 mod pane_bar;
 mod program_badge;
 mod resume;
 mod usage;
+pub use broadcast::{paint_broadcast_chip, paint_broadcast_outline};
 pub use usage::paint_usage_chips;
 
 pub use program_badge::program_status_badge;

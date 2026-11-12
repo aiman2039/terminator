@@ -8,8 +8,18 @@ New terminals are daemon-owned local PTYs running OpenSSH with a remote PTY.
 The remote command changes to the configured project directory and starts that
 host's login shell. Splits create another SSH terminal in the project root.
 Closing the GUI leaves those SSH processes running. A network disconnect ends
-the SSH process; this first implementation does not restart remote shells or
-add tmux automatically. Historical sessions are never silently restarted.
+the SSH process; nothing restarts remote shells or adds tmux automatically.
+Historical sessions are never silently restarted.
+
+When `ssh` itself ends a running OpenSSH shell terminal (exit status 255: the
+connection dropped or failed), the daemon keeps the ended record and the dead
+pane shows "Connection to … was lost." with a Reconnect button. One click
+opens a new SSH terminal for the same host and folder in the same pane
+position; it runs only what a new terminal runs (the host's Terminal command,
+for example `tmux new -A -s main`, or the login shell). Closing the pane or
+reconnecting drops the old record; a daemon restart prunes it. Mosh
+terminals and editors never show the bar. An older daemon prunes the record,
+so the pane closes as before.
 
 Remote projects have their own catalog collection and table. Local project
 services never receive their remote root. The GUI uses a non-filesystem

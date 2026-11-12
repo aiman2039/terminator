@@ -6,11 +6,14 @@ mod buttons;
 mod confirm;
 mod menus;
 mod popup_list;
+mod rest_outline;
 mod tabs;
 pub use buttons::*;
 pub use confirm::*;
 pub use menus::*;
 pub use popup_list::*;
+pub use rest_outline::slider;
+pub(super) use rest_outline::{control_line_for, install_rest_outlines};
 pub use tabs::*;
 
 /// Glyph size of every icon-only toolbar control. The window header keeps it
