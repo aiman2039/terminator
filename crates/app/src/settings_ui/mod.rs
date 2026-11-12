@@ -3,6 +3,7 @@ mod body;
 mod footer;
 mod nav;
 mod rebase;
+mod sections;
 #[cfg(test)]
 mod settings_tests;
 mod state;

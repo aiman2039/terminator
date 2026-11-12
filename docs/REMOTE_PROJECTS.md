@@ -45,7 +45,7 @@ shares one multiplexing master through a control socket in the runtime
 directory (`ControlMaster=auto`, `ControlPersist`), so Explorer, Git,
 editor control and transfers ride an existing connection.
 
-Settings → SSH sets the keep-alive interval (`ServerAliveInterval`, default
+Settings → Remote sets the keep-alive interval (`ServerAliveInterval`, default
 15 s, three missed replies end the connection), how long the shared connection
 stays open after its last terminal (`ControlPersist`, default 10 min) and the
 connect timeout (default 10 s). They apply to OpenSSH processes the daemon
@@ -185,7 +185,7 @@ starts a batch master (`ssh -fN -oControlMaster=yes`), which needs key or agent
 authentication; otherwise sign in through an SSH terminal first and retry. Such a
 dedicated master has no idle timeout and is exited when its last forward stops,
 unless a live terminal or VNC session joined it. A master started by a terminal
-keeps its `ControlPersist` (Settings → SSH); idle forward listeners do not keep it
+keeps its `ControlPersist` (Settings → Remote); idle forward listeners do not keep it
 alive. Forwards end with their master, and status (rechecked with `ssh -O check`
 every 10 seconds while forwards are shown) reflects that. A local port already
 in use is reported before the forward is requested.

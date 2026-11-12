@@ -113,7 +113,7 @@ fn config_menu(ui: &mut egui::Ui, hosts: Option<&[ConfigHost]>) -> Option<String
     chosen
 }
 
-/// Per-host limit for one background SSH call; blank uses Settings → SSH.
+/// Per-host limit for one background SSH call; blank uses Settings → Remote.
 /// `enabled` only when the daemon stores it (`ssh-host-timeout-v1`).
 pub(super) fn timeout_field(
     ui: &mut egui::Ui,
@@ -124,7 +124,7 @@ pub(super) fn timeout_field(
     form::label(ui, "Command timeout (seconds)");
     ui.add_enabled_ui(enabled, |ui| {
         let mut text = value.map_or_else(String::new, |v| v.to_string());
-        let hint = format!("{default} (Settings → SSH)");
+        let hint = format!("{default} (Settings → Remote)");
         let response = ui.add(
             appearance::singleline(&mut text)
                 .hint_text(hint)

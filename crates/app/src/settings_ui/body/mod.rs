@@ -3,6 +3,7 @@ mod browser;
 mod editor;
 mod fonts;
 mod hooks;
+mod languages;
 mod notifications;
 mod ssh;
 mod terminal;
@@ -18,26 +19,42 @@ impl App {
         height: f32,
         frame: &mut SettingsFrame,
     ) {
+        let section = self.settings_section.canonical();
         ui.vertical(|ui| {
             ui.set_width(ui.available_width());
+            if self.settings_search_empty() {
+                self.paint_settings_no_match(ui);
+                return;
+            }
             egui::ScrollArea::vertical()
-                .id_salt(("settings-section", self.settings_section as u8))
+                .id_salt(("settings-section", section as u8))
                 .max_height(height)
                 .auto_shrink([false, false])
-                .show(ui, |ui| match self.settings_section {
+                .show(ui, |ui| match section {
                     SettingsSection::Appearance => self.appearance_settings(ui),
                     SettingsSection::Terminal => {
-                        let mut grant = false;
-                        frame.browse = self.terminal_settings(ui, &mut grant);
-                        frame.grant_folder |= grant;
+                        self.terminal_settings(ui, &mut frame.grant_folder, &mut frame.browse);
                     }
-                    SettingsSection::Editor => self.editor_settings(ui),
+                    SettingsSection::Editor => self.editor_settings(ui, &mut frame.browse),
+                    SettingsSection::Languages => self.language_settings(ui, &mut frame.browse),
+                    SettingsSection::Git => self.git_settings(ui),
+                    SettingsSection::Browser => {
+                        ui.heading("Browser");
+                        self.browser_settings_rows(ui);
+                    }
+                    SettingsSection::Keymap => self.keymap_settings(ui),
                     SettingsSection::Notifications => self.notification_settings(ui),
                     SettingsSection::History => self.history_settings(ui),
-                    SettingsSection::Shortcuts => self.shortcut_settings(ui),
-                    SettingsSection::Agents => self.agent_settings(ui),
-                    SettingsSection::AgentHooks => self.hook_settings(ui),
-                    SettingsSection::Ssh => self.ssh_settings(ui),
+                    SettingsSection::Agents | SettingsSection::AgentHooks => {
+                        self.agent_settings(ui);
+                        ui.add_space(12.0);
+                        self.hook_settings(ui);
+                    }
+                    SettingsSection::Remote => {
+                        self.ssh_settings(ui);
+                        settings_controls::sub_heading(ui, "VNC");
+                        self.vnc_detach_setting(ui);
+                    }
                     SettingsSection::Updates => {
                         self.installation_settings(ui);
                         ui.add_space(12.0);
@@ -93,9 +110,12 @@ impl App {
                 },
             });
         }
-        ui.weak("Limits apply to saved output; records and resume commands remain.");
+        settings_controls::description_line(
+            ui,
+            "Limits apply to saved output; records and resume commands remain.",
+        );
+        ui.add_space(10.0);
         self.local_history_setting(ui);
-        self.vnc_detach_setting(ui);
     }
 
     /// How long Local History keeps file snapshots (`local-history-v1`).
@@ -149,8 +169,15 @@ impl App {
         .on_disabled_hover_text("Requires an updated daemon; older ones disconnect after 30 minutes.");
     }
 
+    /// The JetBrains keymap switch, then every shortcut.
+    fn keymap_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Keymap");
+        self.editor_keymap_setting(ui);
+        settings_controls::sub_heading(ui, "Shortcuts");
+        self.shortcut_settings(ui);
+    }
+
     fn shortcut_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Shortcuts");
         ui.weak("Click a row, then press the keys. Esc cancels capture.");
         if ui.button("Reset to defaults").clicked() {
             self.settings_draft.keybindings = Settings::default().keybindings;

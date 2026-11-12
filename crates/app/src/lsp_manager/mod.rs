@@ -320,7 +320,7 @@ pub struct LspManager {
     /// its actors, never on the calling thread. `None` keeps the direct
     /// spawn path for tests that own their Tokio runtime.
     services: Option<Services>,
-    /// Settings → Terminal & Editor server executables by language id.
+    /// Settings → Languages server executables by language id.
     /// Empty values fall back to the default candidates on `PATH`.
     overrides: std::collections::BTreeMap<String, String>,
     /// Saved trust answers per project root (see `trust.rs`).
@@ -382,7 +382,7 @@ impl LspManager {
         }
     }
 
-    /// Apply Settings → Terminal & Editor server paths. Saving restarts
+    /// Apply Settings → Languages server paths. Saving restarts
     /// only the servers whose path changed, so the new binary is used
     /// without restarting the app. Unchanged settings do nothing.
     pub fn set_server_overrides(&mut self, overrides: &std::collections::BTreeMap<String, String>) {

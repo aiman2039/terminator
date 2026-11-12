@@ -2,14 +2,14 @@
 use crate::*;
 use terminator_core::find_executable;
 
+/// Whether every word of `query` is in `haystacks` (any order, any case).
+/// An empty query matches everything.
 pub fn matches_search(query: &str, haystacks: &[&str]) -> bool {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-    haystacks
-        .iter()
-        .any(|text| text.to_lowercase().contains(&query))
+    let text = haystacks.join(" ").to_lowercase();
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .all(|word| text.contains(word))
 }
 
 const LABEL_COL: f32 = 220.0;
@@ -21,6 +21,9 @@ pub struct SettingsRowInput<'a, F: FnOnce(&mut egui::Ui)> {
     pub add_control: F,
 }
 
+/// One setting: the label and its control on the first line, then the
+/// description across the full width in small secondary text. A narrow
+/// card puts the control under the label.
 pub fn settings_row(input: SettingsRowInput<'_, impl FnOnce(&mut egui::Ui)>) {
     let SettingsRowInput {
         ui,
@@ -29,49 +32,79 @@ pub fn settings_row(input: SettingsRowInput<'_, impl FnOnce(&mut egui::Ui)>) {
         add_control,
     } = input;
     if ui.available_width() < 460.0 {
-        ui.vertical(|ui| {
-            ui.label(label);
-            if !description.is_empty() {
-                ui.add(egui::Label::new(egui::RichText::new(description).weak()).wrap());
-            }
-            add_control(ui);
+        ui.label(label);
+        add_control(ui);
+    } else {
+        ui.horizontal_top(|ui| {
+            let line = egui::vec2(LABEL_COL, ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(
+                line,
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(LABEL_COL);
+                    ui.add(egui::Label::new(label).truncate());
+                },
+            );
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                ui.set_min_width(ui.available_width().clamp(180.0, 360.0));
+                add_control(ui);
+            });
         });
-        ui.add_space(8.0);
-        return;
     }
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(LABEL_COL);
-            ui.label(label);
-            if !description.is_empty() {
-                ui.add(egui::Label::new(egui::RichText::new(description).weak()).wrap());
-            }
-        });
-        ui.add_space(16.0);
-        ui.vertical(|ui| {
-            ui.set_min_width(ui.available_width().clamp(180.0, 360.0));
-            add_control(ui);
-        });
-    });
-    ui.add_space(8.0);
+    if !description.is_empty() {
+        description_line(ui, description);
+    }
+    ui.add_space(10.0);
 }
 
+/// A row description: small secondary text across the full width.
+pub fn description_line(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .size(appearance::FONT_SMALL)
+                .color(ui.visuals().weak_text_color()),
+        )
+        .wrap(),
+    );
+}
+
+/// A group title inside a section, with a rule under it.
+pub fn sub_heading(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(text)
+            .strong()
+            .color(ui.visuals().weak_text_color()),
+    );
+    ui.separator();
+}
+
+/// Mutually exclusive choices in one framed control, so the options read
+/// as one setting and stay on one line.
 pub fn segmented<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     value: &mut T,
     options: &[(&str, T)],
 ) -> bool {
     let mut changed = false;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for (label, option) in options {
-            let selected = *value == *option;
-            if ui.selectable_label(selected, *label).clicked() && !selected {
-                *value = *option;
-                changed = true;
-            }
-        }
-    });
+    egui::Frame::new()
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(egui::CornerRadius::same(appearance::WIDGET_RADIUS))
+        .inner_margin(egui::Margin::same(2))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (label, option) in options {
+                    let selected = *value == *option;
+                    if ui.selectable_label(selected, *label).clicked() && !selected {
+                        *value = *option;
+                        changed = true;
+                    }
+                }
+            });
+        });
     changed
 }
 
@@ -271,7 +304,8 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        assert!(control.top() > 25.0);
+        // On the line under the label, not beside it.
+        assert!(control.top() > 12.0, "{control:?}");
         assert!(control.right() <= 280.0);
         assert!(control.left() < 20.0);
     }
