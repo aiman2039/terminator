@@ -29,10 +29,11 @@ const DISMISS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 #[cfg(target_os = "macos")]
 static LAST_DISMISS_POLL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-/// The generation whose dismiss poll has stopped. A successful remove or
-/// [`DISMISS_ATTEMPTS`] misses both latch it. A different alert starts over.
+/// The generation whose dismiss poll has paused, and when. A successful
+/// remove or [`DISMISS_ATTEMPTS`] misses both latch it until
+/// [`ALERT_WAIT`] later. A different alert starts over.
 #[cfg(target_os = "macos")]
-static DISMISSED: AtomicU64 = AtomicU64::new(0);
+static DISMISSED: Mutex<Option<(u64, std::time::Instant)>> = Mutex::new(None);
 
 /// How many times one generation may miss its delivered alert before the
 /// dismiss poll stops. One miss keeps polling so a banner that is not
@@ -449,15 +450,19 @@ pub fn pump() {
             let presented_at = *PRESENTED_AT
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if waiter_should_end(superseded(), presented_at, std::time::Instant::now()) {
+            let now = std::time::Instant::now();
+            if waiter_should_end(superseded(), presented_at, now) {
                 let generation = PRESENTING.load(Ordering::Relaxed);
-                if DISMISSED.load(Ordering::Relaxed) != generation && dismiss_poll_due() {
+                let mut latch = DISMISSED
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !dismiss_paused(*latch, generation, now) && dismiss_poll_due() {
                     // `deliveredNotifications` autoreleases the decoded list.
                     // Drain it here so a miss does not retain that list for
                     // the life of the process.
                     let removed = objc2::rc::autoreleasepool(|_| remove_active_notification());
                     if record_dismiss_attempt(generation, removed) {
-                        DISMISSED.store(generation, Ordering::Relaxed);
+                        *latch = Some((generation, now));
                     }
                 }
             }

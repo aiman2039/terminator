@@ -50,6 +50,22 @@ fn dismiss_poll_is_throttled_between_pumps() {
 }
 
 #[test]
+fn a_latched_dismiss_poll_tries_again_after_the_alert_wait() {
+    let start = Instant::now();
+    assert!(!dismiss_paused(None, 7, start), "nothing latched yet");
+    let latch = Some((7, start));
+    assert!(dismiss_paused(latch, 7, start + Duration::from_secs(2)));
+    assert!(
+        !dismiss_paused(latch, 7, start + ALERT_WAIT),
+        "a banner delivered after the misses is still removed"
+    );
+    assert!(
+        !dismiss_paused(latch, 8, start),
+        "a newer alert polls at once"
+    );
+}
+
+#[test]
 fn os_banner_sound_name_is_platform_default() {
     let name = super::sound_name();
     assert!(!name.is_empty());
