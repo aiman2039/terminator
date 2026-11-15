@@ -60,6 +60,7 @@ impl Request {
             Self::WorktreeRemove { .. } => "WorktreeRemove",
             Self::Screen { .. } => "Screen",
             Self::TerminalNotify { .. } => "TerminalNotify",
+            Self::QuotaNotify { .. } => "QuotaNotify",
             Self::DismissTerminalNotice { .. } => "DismissTerminalNotice",
             Self::Snapshot => "Snapshot",
             Self::SessionForPids { .. } => "SessionForPids",

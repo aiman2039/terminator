@@ -144,6 +144,20 @@ fn release_falls_back_to_the_title_when_the_marker_was_stripped() {
 }
 
 #[test]
+fn release_falls_back_to_the_title_when_part_of_the_marker_was_stripped() {
+    let partial: String = marker_for(8).chars().filter(|&c| c != '\u{200B}').collect();
+    let text = format!("{BODY_LEAD}{partial}");
+    let banners = [Banner {
+        title: "Agent: Waiting",
+        text: &text,
+    }];
+    assert_eq!(
+        banners_to_remove(&banners, &marker_for(8), "Agent: Waiting"),
+        vec![0]
+    );
+}
+
+#[test]
 fn title_fallback_never_clears_a_banner_with_another_marker() {
     let other = format!("{BODY_LEAD}{}", marker_for(7));
     let banners = [Banner {

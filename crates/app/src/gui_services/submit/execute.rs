@@ -72,6 +72,7 @@ impl Services {
             | Job::MigrateTypography
             | Job::HookStatus
             | Job::Install(..)
+            | Job::StatusLine(..)
             | Job::TestNtfy { .. }
             | Job::Fonts(..)) => self.settings_job(job, cancel, updates).await,
             job @ (Job::ResolveTarget(..)

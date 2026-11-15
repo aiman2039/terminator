@@ -95,6 +95,8 @@ fn new_drawing_opens_a_drawing_tab_in_the_project_folder() {
     else {
         panic!("New drawing did not open a Browser tab");
     };
+    // Windows adds the current drive to the fixture's `/a`.
+    let root = std::path::absolute(&root).unwrap();
     assert_eq!(path.parent(), Some(root.as_path()));
     assert!(crate::browser::draw::supported(&path));
     assert!(!path.exists());

@@ -21,8 +21,10 @@ mod git_panel;
 mod perforce_panel;
 pub(crate) use git_panel::{KnownPr, publish_known_pr, publish_sync_run};
 pub(crate) use perforce_panel::publish as publish_perforce_run;
+pub(crate) mod ports;
 mod problems;
 pub(crate) mod structure;
+pub(crate) mod usage;
 pub(crate) use structure::StructureState;
 #[cfg(test)]
 mod sidebar_tests;

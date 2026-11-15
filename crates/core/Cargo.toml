@@ -24,6 +24,9 @@ plist = "1.10"
 rusqlite = { version = "0.41", features = ["bundled"] }
 fs2 = "0.4"
 sha2 = "0.11"
+# Agent quota: Codex session log timestamps and newest-log lookup.
+time = { version = "0.3", features = ["parsing"] }
+walkdir = "2"
 
 [features]
 async-client = ["dep:tokio", "dep:tokio-util", "dep:futures-util"]

@@ -30,9 +30,52 @@ impl Shared {
         let id = state.terminal_notice(session, title, body)?;
         drop(state);
         if os && let Some(id) = id {
-            let _ = self.alerts.try_send(id);
+            let _ = self.alerts.try_send(crate::workers::Alert::Notice(id));
         }
         Ok(Outcome::Changed)
+    }
+
+    /// An agent quota alert on the channels the GUI opted into. Display
+    /// only: never an agent lifecycle event and never input to an agent.
+    /// `[inbox, os, ntfy]` are the GUI's opt-in channels.
+    pub(super) fn on_quota_notify(
+        &self,
+        session: &str,
+        title: &str,
+        [inbox, os, ntfy]: [bool; 3],
+    ) -> Result<Outcome> {
+        let title: String = title
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(120)
+            .collect();
+        let mut state = relock(&self.state);
+        let id = if inbox {
+            state.quota_notice(session, &title)?
+        } else {
+            None
+        };
+        let ping = ntfy
+            .then(|| ntfy::Ping::quota(&state.settings, &title))
+            .flatten();
+        drop(state);
+        if os {
+            let summary = title.clone();
+            let notice = id.clone().unwrap_or_default();
+            let _ = self
+                .alerts
+                .try_send(crate::workers::Alert::Quota { summary, notice });
+        }
+        if let Some(ping) = ping
+            && relock(&self.ntfy_cooldown).allow(&format!("quota:{title}"), now())
+        {
+            let _ = self.ntfy.try_send(ntfy::Job::Ping(ping));
+        }
+        Ok(if id.is_some() {
+            Outcome::Changed
+        } else {
+            Outcome::Reply(Response::Ok)
+        })
     }
 
     pub(super) fn on_dismiss_terminal_notice(&self, id: &str) -> Result<Outcome> {
@@ -102,7 +145,7 @@ impl Shared {
             && should_os
             && (!focused.0 || focused.1.elapsed() > Duration::from_secs(4))
         {
-            let _ = self.alerts.try_send(nid);
+            let _ = self.alerts.try_send(crate::workers::Alert::Notice(nid));
         }
     }
 }

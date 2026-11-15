@@ -109,6 +109,18 @@ fn terminal_notifications_never_create_or_change_agents_and_are_bounded() {
     }
     assert_eq!(state.terminal_notices.len(), 128);
 }
+#[test]
+fn quota_notices_reach_the_inbox_without_the_terminal_notice_setting() {
+    let mut state = setup();
+    state.settings.terminal_notifications = false;
+    assert!(state.terminal_notice("s", "t", "b").unwrap().is_none());
+    let id = state
+        .quota_notice("s", "Claude Code: 5h limit reached")
+        .unwrap();
+    assert!(id.is_some());
+    assert!(state.agents.is_empty() && state.notifications.is_empty());
+    assert!(state.quota_notice("missing", "x").is_err());
+}
 pub(crate) fn event(n: u64, state: AgentState) -> HookEvent {
     HookEvent {
         protocol_version: 1,

@@ -105,6 +105,9 @@ and white-stroke adaptation, for the image preview Fit and Actual size actions.
 `chevrons-up-down.svg` comes from Lucide 0.577.0 with the same license and
 white-stroke adaptation, for the Git panel Expand all action.
 
+`plug.svg` and `gauge.svg` come from Lucide 0.577.0 with the same license and
+white-stroke adaptation, for the Ports and Usage tools.
+
 `minus.svg`, `undo-2.svg`, `message-square-plus.svg` and `send.svg` come from
 Lucide 0.468.0 with the same license and white-stroke adaptation, for the diff
 viewer's Unstage and Undo actions and its review notes.

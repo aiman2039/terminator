@@ -15,7 +15,19 @@ impl App {
         ui.weak("Cursor reports completion and errors. Its permission and question dialogs have no notification hook. Select Completed under OS notifications to show completion alerts.");
         ui.weak("Copilot reports working and done only: its permission and notification hooks give no event name.");
         ui.add_space(8.0);
+        self.statusline_source(ui);
+        ui.add_space(8.0);
         self.hello_test_buttons(ui);
+    }
+
+    /// Opt-in Claude Code status-line source for the Usage tool.
+    fn statusline_source(&mut self, ui: &mut egui::Ui) {
+        let installed = self.statusline_installed;
+        ui.horizontal(|ui| {
+            ui.label("Claude Code usage (status line)");
+            self.install_controls(ui, installed, Job::StatusLine);
+        });
+        ui.weak("Reads the 5-hour and weekly usage Claude Code gives its status line. Your own status line keeps working; Remove restores it.");
     }
 
     fn hook_row(&mut self, ui: &mut egui::Ui, kind: &str) {
@@ -28,38 +40,50 @@ impl App {
             }
             None => settings_controls::status_badge(ui, "Not on PATH", false),
         }
-        ui.weak(match installed {
+        let path = terminator_integrations::settings_path(
+            Path::new(&std::env::var("HOME").unwrap_or_default()),
+            kind,
+        );
+        self.install_controls(ui, installed, |remove| {
+            Job::Install(kind.to_string(), remove)
+        })
+        .on_hover_text(path.display().to_string());
+        ui.end_row();
+    }
+
+    /// Status text and Install/Repair and Remove buttons. `job` builds the
+    /// install (`false`) or remove (`true`) job; the status is read again
+    /// after it. Returns the status label for a hover text.
+    fn install_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        installed: Option<bool>,
+        job: impl Fn(bool) -> Job,
+    ) -> egui::Response {
+        let status = ui.weak(match installed {
             Some(true) => "Configured",
             Some(false) => "Not configured",
             None => "Checking…",
-        })
-        .on_hover_text(
-            terminator_integrations::settings_path(
-                Path::new(&std::env::var("HOME").unwrap_or_default()),
-                kind,
-            )
-            .display()
-            .to_string(),
-        );
-        if ui
-            .button(if installed == Some(true) {
-                "Repair"
-            } else {
-                "Install"
-            })
-            .clicked()
-        {
-            let _ = self.jobs.send(Job::Install(kind.to_string(), false));
-            let _ = self.jobs.send(Job::HookStatus);
+        });
+        let label = if installed == Some(true) {
+            "Repair"
+        } else {
+            "Install"
+        };
+        for (remove, clicked) in [
+            (false, ui.button(label).clicked()),
+            (
+                true,
+                ui.add_enabled(installed == Some(true), egui::Button::new("Remove"))
+                    .clicked(),
+            ),
+        ] {
+            if clicked {
+                let _ = self.jobs.send(job(remove));
+                let _ = self.jobs.send(Job::HookStatus);
+            }
         }
-        if ui
-            .add_enabled(installed == Some(true), egui::Button::new("Remove"))
-            .clicked()
-        {
-            let _ = self.jobs.send(Job::Install(kind.to_string(), true));
-            let _ = self.jobs.send(Job::HookStatus);
-        }
-        ui.end_row();
+        status
     }
 
     fn hello_test_buttons(&mut self, ui: &mut egui::Ui) {

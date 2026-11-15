@@ -12,6 +12,17 @@ pub struct TerminalNotice {
 }
 
 impl State {
+    /// An agent quota alert in the Agents inbox. Its own opt-in in the GUI,
+    /// so the terminal notice setting does not apply.
+    pub fn quota_notice(
+        &mut self,
+        session: &str,
+        title: &str,
+    ) -> Result<Option<String>, StateError> {
+        self.require_live_session(session)?;
+        self.push_terminal_notice(session, title, "")
+    }
+
     pub fn apply_hook(&mut self, e: HookEvent) -> Result<Option<String>, StateError> {
         self.validate_hook_event(&e)?;
         let existing = self.hook_existing(&e);

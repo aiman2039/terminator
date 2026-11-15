@@ -70,7 +70,7 @@ pub(crate) fn probe(path: &Path) -> Probe {
     let mut probe = Probe::default();
     let list = git_out(path, &["worktree", "list", "--porcelain", "-z"]);
     if let Some((source, branch)) = list.as_deref().map(str::as_bytes).and_then(main_checkout) {
-        probe.source = Some(source.canonicalize().unwrap_or(source));
+        probe.source = Some(dunce::canonicalize(&source).unwrap_or(source));
         probe.source_branch = branch;
     }
     probe.head = git_out(path, &["rev-parse", "--verify", "--quiet", "HEAD"]);

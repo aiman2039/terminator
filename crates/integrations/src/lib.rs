@@ -248,6 +248,7 @@ mod error;
 mod json_hooks;
 mod normalize;
 mod opencode;
+pub mod statusline;
 use codex::codex_config;
 use copilot::copilot_config;
 pub use error::Error;

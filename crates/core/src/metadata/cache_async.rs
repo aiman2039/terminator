@@ -137,22 +137,6 @@ async fn ports_async(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let mut command = Command::new("lsof");
-    command.args(["-nP", "-a", "-p", &pids, "-iTCP", "-sTCP:LISTEN", "-Fpn"]);
-    let output = processes
-        .run(
-            command,
-            CommandOptions {
-                timeout: Duration::from_secs(3),
-                stdout_limit: 256 * 1024,
-                accepted_exit_codes: Some(vec![0, 1]),
-                ..Default::default()
-            },
-            None,
-        )
-        .await?;
-    Ok(Some(parse_ports(
-        &String::from_utf8_lossy(&output.stdout),
-        &owned,
-    )))
+    let stdout = listening_sockets(processes, &pids).await?;
+    Ok(Some(parse_ports(&String::from_utf8_lossy(&stdout), &owned)))
 }

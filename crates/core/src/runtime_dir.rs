@@ -164,7 +164,10 @@ mod tests {
         assert!(std::fs::metadata(&lock).unwrap().modified().unwrap() > old);
         let auth = root.path().join("auth");
         std::fs::write(&auth, "other").unwrap();
-        std::fs::File::open(&auth)
+        // Windows needs write access to set the time.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&auth)
             .unwrap()
             .set_modified(old)
             .unwrap();

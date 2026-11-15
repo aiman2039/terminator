@@ -83,9 +83,21 @@ pub(super) fn banners_to_remove(banners: &[Banner<'_>], marker: &str, summary: &
     banners
         .iter()
         .enumerate()
-        .filter(|(_, banner)| banner.title == summary && banner.text == BODY_LEAD)
+        .filter(|(_, banner)| banner.title == summary && lead_with_broken_marker(banner.text))
         .map(|(index, _)| index)
         .collect()
+}
+
+/// `BODY_LEAD` followed by nothing or by part of a marker. Notification
+/// Center can drop some of the zero-width characters, and then no waiter's
+/// marker matches. A complete marker belongs to another waiter.
+fn lead_with_broken_marker(text: &str) -> bool {
+    text.strip_prefix(BODY_LEAD).is_some_and(|rest| {
+        rest.chars().count() < 65
+            && rest
+                .chars()
+                .all(|c| matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}'))
+    })
 }
 
 #[cfg(any(target_os = "macos", test))]

@@ -10,6 +10,8 @@ name = "terminator"
 path = "src/lib.rs"
 
 [dependencies]
+# Windows: canonical paths without `\\?\`, which Git refuses.
+dunce = "1"
 terminator-core = { workspace = true, features = ["async-client"] }
 terminator-git.workspace = true
 terminator-integrations.workspace = true

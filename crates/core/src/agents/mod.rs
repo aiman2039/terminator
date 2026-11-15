@@ -375,6 +375,7 @@ fn match_shell_script(argv: &[&str]) -> Option<&'static str> {
 /// PID/start-time identity. A reused PID has a different start time and never
 /// matches an earlier observation.
 mod detect;
+pub mod quota;
 pub use detect::{
     DetectAgentsInput, DetectedAgent, PresenceOutcome, ProcView, ProcessIdentity, ShellDetection,
     ShellTarget, TerminalPresence, detect_agents, inspect_shells, observation_fresh,

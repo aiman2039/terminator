@@ -269,6 +269,7 @@ mod tests {
 
     /// Cmd+Up in a text field moves its caret; the prompt jump must leave
     /// it there when no terminal has the keyboard.
+    #[cfg(unix)]
     #[test]
     fn prompt_chords_stay_with_a_focused_text_field() {
         let (mut app, ctx, _dir) = crate::app::fixture();

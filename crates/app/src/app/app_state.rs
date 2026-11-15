@@ -220,6 +220,10 @@ pub struct App {
     pub(crate) metadata_jobs: tokio::sync::watch::Sender<Option<metadata_refresh::Request>>,
     pub(crate) metadata_request: Option<metadata_refresh::Request>,
     pub(crate) metadata_generation: u64,
+    pub(crate) ports_jobs: crate::ports_refresh::PortsJobs,
+    pub(crate) ports: crate::sidebar_ui::ports::PortsTool,
+    pub(crate) quota_jobs: crate::quota_refresh::QuotaJobs,
+    pub(crate) quota: crate::sidebar_ui::usage::UsageTool,
     pub(crate) resources: Option<resource_sample::Sample>,
     pub(crate) resource_tx: std::sync::mpsc::Sender<Option<resource_sample::Request>>,
     pub(crate) resource_request: Option<resource_sample::Request>,
@@ -261,6 +265,8 @@ pub struct App {
     /// System terminal and CJK font choices.
     pub(crate) fonts: crate::appearance::fonts::FontState,
     pub(crate) hook_status: HashMap<String, bool>,
+    /// The Claude Code status-line usage source is installed.
+    pub(crate) statusline_installed: Option<bool>,
     /// Catalog agents on PATH, for the agent launchers.
     pub(crate) installed_agents: Vec<crate::agent_launch::InstalledAgent>,
     /// Run task window and the last task run.

@@ -261,8 +261,7 @@ impl App {
     /// Right click on a port link: a Browser tab or the system browser.
     fn port_menu(&mut self, link: &egui::Response, url: &str) {
         appearance::context_menu(link, |ui| {
-            let project = self.selected.clone();
-            if let Some(project) = project
+            if self.selected.is_some()
                 && appearance::menu_item(appearance::MenuItemInput {
                     ui,
                     label: "Open in Browser tab",
@@ -271,9 +270,7 @@ impl App {
                 })
                 .clicked()
             {
-                if let Err(error) = self.open_browser_url(&project, url, None) {
-                    self.error.set(format!("Could not open {url}: {error:#}"));
-                }
+                self.open_port_tab(url);
                 ui.close();
             }
             if appearance::menu_item(appearance::MenuItemInput {

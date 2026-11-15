@@ -5,8 +5,10 @@ use super::view::checks_text;
 use std::path::{Path, PathBuf};
 use terminator_core::{CommandOptions, git, run_command};
 
+#[cfg(unix)]
 const VIEW: &str = r#"{"number":42,"title":"Fix login","state":"OPEN","url":"https://github.com/o/r/pull/42","isDraft":false,"reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"lint","status":"IN_PROGRESS","conclusion":""},{"__typename":"StatusContext","context":"ci/legacy","state":"SUCCESS"}]}"#;
 
+#[cfg(unix)]
 const THREADS: &str = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"path":"src/a.rs","line":12,"comments":{"nodes":[{"author":{"login":"ana"},"body":"Rename this\nplease"}]}},{"isResolved":true,"path":"src/b.rs","line":null,"comments":{"nodes":[{"author":{"login":"bo"},"body":"ok"}]}}]}}}}}"#;
 
 fn git_run(cwd: &Path, args: &[&str]) {

@@ -262,7 +262,7 @@ impl Shared {
             .flatten();
         drop(state);
         if os && let Some(id) = id {
-            let _ = self.alerts.try_send(id);
+            let _ = self.alerts.try_send(crate::workers::Alert::Notice(id));
         }
     }
 

@@ -225,10 +225,13 @@ fn parse_known(output: &str) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{known_hosts_path, parse_known};
-    use std::path::{Path, PathBuf};
+    use super::parse_known;
+    // Unix paths: `/home/dev` is not absolute on Windows.
+    #[cfg(unix)]
     #[test]
     fn trusted_keys_go_to_the_known_hosts_file_ssh_config_names() {
+        use super::known_hosts_path;
+        use std::path::{Path, PathBuf};
         let home = Some(Path::new("/home/dev"));
         assert_eq!(
             known_hosts_path(&[], home).unwrap(),

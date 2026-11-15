@@ -61,6 +61,8 @@ pub enum SidebarTool {
     #[serde(alias = "Vnc")]
     Vnc,
     Hosts,
+    Ports,
+    Usage,
 }
 
 /// A tool this build does not know (written by a newer build) falls back to
@@ -314,6 +316,9 @@ pub struct UiPreferences {
     /// Hosts sidebar lists the most recently connected projects first.
     #[serde(default)]
     pub hosts_recent_first: bool,
+    /// Agent quota alert channels; each is off until ticked.
+    #[serde(default)]
+    pub quota_alerts: crate::sidebar_ui::usage::QuotaAlerts,
     /// Release tag the user chose to skip: the status-bar update chip
     /// stays hidden for this version only.
     #[serde(default)]

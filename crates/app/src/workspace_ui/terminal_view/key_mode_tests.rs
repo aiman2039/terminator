@@ -1,3 +1,5 @@
+// The tests run `/bin/sh` in a real PTY.
+#![cfg(unix)]
 use super::*;
 
 fn press(key: egui::Key) -> egui::Event {

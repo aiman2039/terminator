@@ -155,6 +155,8 @@ impl eframe::App for App {
         self.sync_terminal_focus();
         self.notice_long_commands(&ctx);
         self.sync_metadata_request();
+        self.sync_ports_request();
+        self.sync_quota_request();
         self.sync_resource_sample();
         self.sync_refresh_request();
         if self.last_save.elapsed() > Duration::from_secs(1) {

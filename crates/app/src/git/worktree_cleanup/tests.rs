@@ -29,7 +29,8 @@ fn head(cwd: &Path) -> String {
 /// A main checkout on `main` and a task worktree on `task` with one commit.
 fn task_repo() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let dir = tempfile::tempdir().unwrap();
-    let base = dir.path().canonicalize().unwrap();
+    // Not `canonicalize`: Git on Windows refuses a `\\?\` path.
+    let base = dunce::canonicalize(dir.path()).unwrap();
     let (main, task) = (base.join("main"), base.join("task"));
     fs::create_dir(&main).unwrap();
     git(&main, &["init", "-q", "-b", "main"]);

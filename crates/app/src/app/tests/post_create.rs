@@ -104,6 +104,32 @@ fn resume_button_runs_resume_in_session_cwd() {
     );
 }
 
+/// History's resume picker opens a terminal at the project root and runs
+/// the agent CLI's own picker there; it reads no agent files.
+#[test]
+fn resume_picker_runs_the_cli_picker_at_the_project_root() {
+    let (mut app, _, _dir) = fixture();
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.selected = Some("a".into());
+    let root = app.selected_project().unwrap().path.clone();
+    app.open_resume_picker("codex resume");
+    let Job::Control(request, After::Workspace(id, _)) = received.try_recv().unwrap() else {
+        panic!("Expected workspace create")
+    };
+    let Request::Create { project, cwd, .. } = *request else {
+        panic!("Expected create")
+    };
+    assert_eq!((project.as_str(), cwd), ("a", Some(root)));
+    assert_eq!(
+        app.post_create.by_tab.get(&id),
+        Some(&PostCreate {
+            input: "codex resume".into(),
+            enter: true,
+        })
+    );
+}
+
 /// Ask agent opens only when a live agent terminal can take the text; it
 /// never starts an agent.
 #[test]

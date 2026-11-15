@@ -143,6 +143,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         snapshot::CAPABILITY.into(),
         NVIM_REVIEW_CAPABILITY.into(),
         TERMINAL_NOTICES_CAPABILITY.into(),
+        terminator_core::AGENT_QUOTA_CAPABILITY.into(),
         NOTIFICATION_SOUND_CAPABILITY.into(),
         terminator_core::EDITOR_SPELL_CAPABILITY.into(),
         NTFY_CAPABILITY.into(),
@@ -235,7 +236,7 @@ pub(crate) struct StartInput {
 pub(crate) struct Started {
     pub(crate) shared: Arc<Shared>,
     pub(crate) history_rx: mpsc::Receiver<HistoryJob>,
-    pub(crate) alert_rx: mpsc::Receiver<String>,
+    pub(crate) alert_rx: mpsc::Receiver<crate::workers::Alert>,
     pub(crate) local_history_rx: mpsc::Receiver<crate::workers::LocalHistoryJob>,
 }
 
@@ -249,7 +250,7 @@ pub(crate) fn start_shared(input: StartInput) -> Started {
         auth,
     } = input;
     let (history, history_rx) = mpsc::sync_channel::<HistoryJob>(512);
-    let (alerts, alert_rx) = mpsc::sync_channel::<String>(64);
+    let (alerts, alert_rx) = mpsc::sync_channel::<crate::workers::Alert>(64);
     let (local_history, local_history_rx) =
         mpsc::sync_channel::<crate::workers::LocalHistoryJob>(4096);
     // The credential store entry follows the shared data directory.

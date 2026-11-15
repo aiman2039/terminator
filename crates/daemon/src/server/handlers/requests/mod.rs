@@ -250,6 +250,13 @@ impl Shared {
                 body,
             } => self.on_terminal_notify(&session, &title, &body),
             Request::DismissTerminalNotice { id } => self.on_dismiss_terminal_notice(&id),
+            Request::QuotaNotify {
+                session,
+                title,
+                inbox,
+                os,
+                ntfy,
+            } => self.on_quota_notify(&session, &title, [inbox, os, ntfy]),
             Request::Settings(settings) => self.on_settings(settings),
             Request::Hook(event) => self.on_hook(event),
             Request::Rename { session, label } => self.on_rename(&session, label),

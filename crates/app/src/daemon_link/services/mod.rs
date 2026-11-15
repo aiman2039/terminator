@@ -352,7 +352,9 @@ pub fn resolve_target(text: &str, cwd: &Path) -> Result<Target> {
 /// The link filter then decodes escapes and a `#L7` line suffix.
 fn without_file_host(text: &str) -> Option<String> {
     let url = url::Url::parse(text).ok()?;
-    if url.scheme() != "file" || matches!(url.host_str(), None | Some("" | "localhost")) {
+    // Every `file:` URL is rebuilt from its path, so a host (dropped by the
+    // parser before a Windows drive letter) never matters.
+    if url.scheme() != "file" {
         return None;
     }
     let fragment = url.fragment().map(|f| format!("#{f}")).unwrap_or_default();

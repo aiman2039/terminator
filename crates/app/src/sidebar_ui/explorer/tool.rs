@@ -29,6 +29,8 @@ impl App {
             SidebarTool::Structure => self.structure_panel(ui),
             SidebarTool::Vnc => self.vnc_sidebar(ui),
             SidebarTool::Hosts => self.hosts_sidebar(ui),
+            SidebarTool::Ports => self.ports_panel(ui),
+            SidebarTool::Usage => self.usage_panel(ui),
             SidebarTool::Agents => self.agents_view(ui),
             SidebarTool::Explorer => self.explorer_tool(ui),
             SidebarTool::Git => self.git_tool(ui),
@@ -61,7 +63,7 @@ impl App {
         groups: &[crate::preferences::HistoryGroup],
     ) {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let width = (ui.available_width() - 160.0).max(60.0);
+        let width = (ui.available_width() - 190.0).max(60.0);
         let response = ui.add_sized(
             egui::vec2(width, 22.0),
             appearance::singleline(&mut self.preferences.history_filter)
@@ -78,7 +80,36 @@ impl App {
             self.preferences.history_filter.clear();
         }
         self.history_toggle_all(ui, groups);
+        self.resume_picker_menu(ui);
         self.history_sort_menu(ui);
+    }
+
+    /// Conversations Terminator did not see: the agent CLI's own picker,
+    /// run in a new terminal at the selected project's root.
+    fn resume_picker_menu(&mut self, ui: &mut egui::Ui) {
+        let local = self.selected_remote_project().is_none() && self.selected_project().is_some();
+        let menu = ui.add_enabled_ui(local, |ui| {
+            appearance::icon_menu_button(ui, "Terminal", |ui| {
+                for (kind, command) in crate::agent_presence::RESUME_PICKERS {
+                    let agent = terminator_core::agents::display_name(kind);
+                    let picked = appearance::menu_item(appearance::MenuItemInput {
+                        ui,
+                        label: &format!("{agent}…"),
+                        icon: "Terminal",
+                        shortcut: "",
+                    })
+                    .on_hover_text(format!("Runs `{command}` in a new terminal"));
+                    if picked.clicked() {
+                        self.open_resume_picker(command);
+                        ui.close();
+                    }
+                }
+            })
+        });
+        menu.inner
+            .response
+            .on_hover_text("Resume an earlier conversation of this project")
+            .on_disabled_hover_text("Select a local project");
     }
 
     fn history_toggle_all(

@@ -12,23 +12,34 @@ use crate::server::{Shared, relock};
 /// `notifications::send` coalesces bursts.
 pub(crate) struct AlertWorker;
 
+/// One desktop alert: a stored notice, or an agent quota alert whose user
+/// did not want it in the Agents inbox.
+pub(crate) enum Alert {
+    Notice(String),
+    Quota { summary: String, notice: String },
+}
+
 impl AlertWorker {
-    pub(crate) fn spawn(weak: Weak<Shared>, alerts: mpsc::Receiver<String>) {
+    pub(crate) fn spawn(weak: Weak<Shared>, alerts: mpsc::Receiver<Alert>) {
         thread::spawn(move || {
-            while let Ok(nid) = alerts.recv() {
+            while let Ok(alert) = alerts.recv() {
                 let Some(s) = weak.upgrade() else { break };
-                Self::deliver(&s, nid);
+                Self::deliver(&s, alert);
             }
         });
     }
 
-    fn deliver(s: &Shared, nid: String) {
+    fn deliver(s: &Shared, alert: Alert) {
         if std::env::var_os("TERMINATOR_NO_NOTIFICATIONS").is_some() {
             return;
         }
         let state = relock(&s.state);
-        let Some(summary) = Self::summary(&state, &nid) else {
-            return;
+        let (summary, nid) = match alert {
+            Alert::Notice(nid) => match Self::summary(&state, &nid) {
+                Some(summary) => (summary, nid),
+                None => return,
+            },
+            Alert::Quota { summary, notice } => (summary, notice),
         };
         let sound = state.settings.notification_sound;
         drop(state);

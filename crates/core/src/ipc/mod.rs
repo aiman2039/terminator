@@ -147,6 +147,15 @@ pub enum Request {
     DismissTerminalNotice {
         id: String,
     },
+    /// An agent quota limit was reached or its window reset. Each channel is
+    /// the GUI's own opt-in; never a lifecycle source (`agent-quota-v1`).
+    QuotaNotify {
+        session: String,
+        title: String,
+        inbox: bool,
+        os: bool,
+        ntfy: bool,
+    },
     Snapshot,
     /// The one live session whose shell PID is in `pids`: `Text(id)`, or `Ok`
     /// when none or several match. Sent only by hooks; older daemons reject

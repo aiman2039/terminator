@@ -112,6 +112,7 @@ fn request_sessions(request: &Request) -> (Option<&str>, Option<&str>) {
         | Request::Screen { session }
         | Request::CommandBlocks { session, .. }
         | Request::TerminalNotify { session, .. }
+        | Request::QuotaNotify { session, .. }
         | Request::ShellCommand { session }
         | Request::ShellPrompt { session, .. }
         | Request::SetSessionParent { session, .. }

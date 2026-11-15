@@ -8,6 +8,7 @@ mod mosh;
 mod output;
 use output::Output;
 mod shutdown;
+mod statusline;
 use anyhow::{Context, Result};
 use terminator_core::*;
 fn main() -> Result<()> {
@@ -37,6 +38,7 @@ fn main() -> Result<()> {
         Some("inbox") => control::inbox::run(args.get(1..).unwrap_or_default()),
         Some("mcp") => mcp::run(args.get(1..).unwrap_or_default()),
         Some("mosh") => mosh::run(args.get(1..).unwrap_or_default()),
+        Some("statusline") => statusline::run(args.get(1..).unwrap_or_default()),
         Some("attach") => attach::Attach::run(
             args.get(1).context("Missing session ID")?,
             args.get(2..).unwrap_or_default(),
@@ -76,7 +78,7 @@ fn main() -> Result<()> {
         }
         _ => {
             Output::line(
-                "terminator-hook ctl --help\nterminator-hook inbox\nterminator-hook mcp\nterminator-hook attach SESSION\nterminator-hook event AGENT < payload.json\nterminator-hook emit < normalized-event.json\nterminator-hook cwd PATH\nterminator-hook install|remove|inspect AGENT\nterminator-hook rpc JSON\n\nHooks are inert outside app-created terminals. They never approve or deny agent actions.",
+                "terminator-hook ctl --help\nterminator-hook inbox\nterminator-hook mcp\nterminator-hook attach SESSION\nterminator-hook event AGENT < payload.json\nterminator-hook emit < normalized-event.json\nterminator-hook cwd PATH\nterminator-hook install|remove|inspect AGENT\nterminator-hook statusline --data-dir DIR < statusline.json\nterminator-hook rpc JSON\n\nHooks are inert outside app-created terminals. They never approve or deny agent actions.",
             );
             Ok(())
         }

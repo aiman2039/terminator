@@ -12,9 +12,13 @@ use std::{
 mod cache;
 #[cfg(feature = "async-client")]
 mod cache_async;
+mod session_ports;
 pub use cache::Cache;
 #[cfg(feature = "async-client")]
 pub use cache_async::CollectAsyncInput;
+#[cfg(feature = "async-client")]
+pub use session_ports::session_ports;
+pub use session_ports::{SessionPort, stop_port_process};
 
 /// Why a URL was rejected, or Git, pull request, or port discovery failed.
 #[derive(Debug, thiserror::Error)]
@@ -43,6 +47,10 @@ pub enum MetadataError {
     IdentityChanged { pid: u32 },
     #[error("Too many session descendants for port discovery")]
     TooManyDescendants { pid: u32 },
+    #[error("Process {pid} has already ended or was replaced")]
+    ProcessGone { pid: u32 },
+    #[error("Could not signal process {pid}")]
+    SignalFailed { pid: u32 },
     #[error(transparent)]
     Process(#[from] crate::ProcessError),
     #[cfg(feature = "async-client")]
@@ -199,38 +207,83 @@ pub fn listening_ports(identity: (u32, u64)) -> Result<Vec<ListeningPort>> {
     Ok(parse_ports(&String::from_utf8_lossy(&out.stdout), &owned))
 }
 fn owned_processes(identity: (u32, u64)) -> Result<HashSet<u32>> {
-    use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
-    let system = System::new_with_specifics(
-        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
-    );
-    let root = Pid::from_u32(identity.0);
-    let Some(process) = system.process(root) else {
-        return Ok(HashSet::new());
-    };
-    if process.start_time().abs_diff(identity.1) > 2 {
-        return Err(MetadataError::IdentityChanged { pid: identity.0 });
-    }
-    let parents = system
-        .processes()
-        .iter()
-        .map(|(pid, p)| (*pid, p.parent()))
-        .collect::<Vec<_>>();
-    let mut owned = HashSet::from([root]);
-    for _ in 0..64 {
-        let old = owned.len();
-        for (pid, parent) in &parents {
-            if parent.is_some_and(|p| owned.contains(&p)) {
-                owned.insert(*pid);
+    ProcessTree::new(process_table()).owned(identity)
+}
+
+fn process_table() -> sysinfo::System {
+    use sysinfo::{ProcessRefreshKind, RefreshKind, System};
+    System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()))
+}
+
+/// A process table with each process's children, built once and then
+/// walked for any number of sessions.
+struct ProcessTree {
+    system: sysinfo::System,
+    children: std::collections::HashMap<sysinfo::Pid, Vec<sysinfo::Pid>>,
+}
+
+impl ProcessTree {
+    fn new(system: sysinfo::System) -> Self {
+        let mut children = std::collections::HashMap::<_, Vec<_>>::new();
+        for (pid, process) in system.processes() {
+            if let Some(parent) = process.parent() {
+                children.entry(parent).or_default().push(*pid);
             }
         }
-        if owned.len() > 256 {
-            return Err(MetadataError::TooManyDescendants { pid: identity.0 });
-        }
-        if owned.len() == old {
-            break;
-        }
+        Self { system, children }
     }
-    Ok(owned.iter().map(|p| p.as_u32()).collect())
+
+    /// The session process and its descendants, at most 64 levels down.
+    fn owned(&self, identity: (u32, u64)) -> Result<HashSet<u32>> {
+        let root = sysinfo::Pid::from_u32(identity.0);
+        let Some(process) = self.system.process(root) else {
+            return Ok(HashSet::new());
+        };
+        if process.start_time().abs_diff(identity.1) > 2 {
+            return Err(MetadataError::IdentityChanged { pid: identity.0 });
+        }
+        let mut owned = HashSet::from([identity.0]);
+        let mut level = vec![root];
+        for _ in 0..64 {
+            level = level
+                .iter()
+                .filter_map(|pid| self.children.get(pid))
+                .flatten()
+                .copied()
+                .filter(|child| owned.insert(child.as_u32()))
+                .collect();
+            if owned.len() > 256 {
+                return Err(MetadataError::TooManyDescendants { pid: identity.0 });
+            }
+            if level.is_empty() {
+                break;
+            }
+        }
+        Ok(owned)
+    }
+}
+
+/// `lsof` output for the TCP listeners of `pids` (comma separated).
+#[cfg(feature = "async-client")]
+async fn listening_sockets(
+    processes: &crate::async_process::Processes,
+    pids: &str,
+) -> Result<Vec<u8>> {
+    let mut command = Command::new("lsof");
+    command.args(["-nP", "-a", "-p", pids, "-iTCP", "-sTCP:LISTEN", "-Fpn"]);
+    let output = processes
+        .run(
+            command,
+            CommandOptions {
+                timeout: Duration::from_secs(3),
+                stdout_limit: 256 * 1024,
+                accepted_exit_codes: Some(vec![0, 1]),
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+    Ok(output.stdout)
 }
 
 fn parse_ports(text: &str, owned: &HashSet<u32>) -> Vec<ListeningPort> {

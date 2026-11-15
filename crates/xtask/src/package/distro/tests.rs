@@ -111,7 +111,10 @@ fn deb_holds_control_and_data_in_dpkg_order() {
         .iter()
         .find(|e| e.0 == "usr/lib/terminator-workspace/terminator-hook")
         .unwrap();
-    assert_eq!(hook.1 & 0o777, 0o755);
+    // Windows has no executable bit, so the staged files are not executable.
+    if cfg!(unix) {
+        assert_eq!(hook.1 & 0o777, 0o755);
+    }
     // Parent folders come before their files.
     let position = |name: &str| data.iter().position(|e| e.0 == name).unwrap();
     assert!(

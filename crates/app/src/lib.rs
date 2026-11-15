@@ -18,7 +18,8 @@ pub(crate) use browser::host as browser_host;
 pub(crate) use chrome::{popup, session_info, settings_controls, shortcuts, sidebar_cache};
 pub use daemon_link::daemon_connection;
 pub(crate) use daemon_link::{
-    metadata_refresh, native_jobs, nvim_rpc, refresh, services, ui_control,
+    metadata_refresh, native_jobs, nvim_rpc, ports_refresh, quota_refresh, refresh, services,
+    ui_control,
 };
 pub(crate) use files::{
     document_view, editor_close, external_editor, file_actions, image_preview, search,

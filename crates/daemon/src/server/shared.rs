@@ -82,7 +82,7 @@ pub(crate) struct Shared {
     /// A deferred change waits to be persisted (see `Outcome::Deferred`).
     pub(crate) persist_pending: AtomicBool,
     pub(crate) history: SyncSender<HistoryJob>,
-    pub(crate) alerts: SyncSender<String>,
+    pub(crate) alerts: SyncSender<crate::workers::Alert>,
     pub(crate) ntfy: SyncSender<ntfy::Job>,
     pub(crate) ntfy_cooldown: Mutex<ntfy::Cooldown>,
     /// Active SSH port forwards. Lock after `state`, never before.

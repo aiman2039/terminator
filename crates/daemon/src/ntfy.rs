@@ -20,44 +20,58 @@ pub struct Ping {
 }
 impl Ping {
     pub fn from_event(settings: &Settings, event: &HookEvent) -> Option<Self> {
-        if !settings.ntfy_enabled
-            || settings.ntfy_channel.is_empty()
-            || settings.validate().is_err()
-        {
-            return None;
-        }
         let agent: String = event
             .agent_kind
             .chars()
             .filter(|c| !c.is_control())
             .take(80)
             .collect();
-        let title = if settings.ntfy_machine.is_empty() {
-            format!("{agent}: {}", event.state.label())
-        } else {
-            format!(
-                "[{}] {agent}: {}",
-                settings.ntfy_machine,
-                event.state.label()
-            )
-        };
+        let subject = format!("{agent}: {}", event.state.label());
         let options = &settings.ntfy_options;
-        let mut message = format!("{agent}: {}", event.state.label());
+        let mut message = subject.clone();
         // Opt-in: the notice text can hold the agent's question.
         let text = notice_text(&event.summary);
         if options.include_text && !text.is_empty() && text != event.state.label() {
             message = format!("{message}\n{text}");
         }
+        Self::build(settings, (&subject, message), "robot", &options.click)
+    }
+
+    /// An agent quota push. It carries only `title` (agent name and window,
+    /// already cleaned), never notice text.
+    pub fn quota(settings: &Settings, title: &str) -> Option<Self> {
+        Self::build(settings, (title, title.to_owned()), "hourglass", "")
+    }
+
+    /// The push for `(subject, message)` when ntfy is on and valid. The
+    /// title carries the machine name when one is set.
+    fn build(
+        settings: &Settings,
+        (subject, message): (&str, String),
+        tag: &str,
+        click: &str,
+    ) -> Option<Self> {
+        if !settings.ntfy_enabled
+            || settings.ntfy_channel.is_empty()
+            || settings.validate().is_err()
+        {
+            return None;
+        }
+        let title = if settings.ntfy_machine.is_empty() {
+            subject.to_owned()
+        } else {
+            format!("[{}] {subject}", settings.ntfy_machine)
+        };
         let mut payload = serde_json::json!({
             "topic": settings.ntfy_channel,
             "title": title,
             "message": message,
-            "tags": ["robot"],
+            "tags": [tag],
         });
-        if !options.click.is_empty()
+        if !click.is_empty()
             && let Some(object) = payload.as_object_mut()
         {
-            object.insert("click".into(), options.click.clone().into());
+            object.insert("click".into(), click.into());
         }
         Some(Self {
             payload: serde_json::to_vec(&payload).ok()?,
@@ -262,6 +276,20 @@ mod tests {
         assert!(!String::from_utf8(ping.payload).unwrap().contains("private"));
         settings.ntfy_channel.clear();
         assert!(Ping::from_event(&settings, &event()).is_none());
+    }
+
+    #[test]
+    fn quota_pushes_are_opt_in_and_carry_only_the_title() {
+        let mut settings = Settings::default();
+        assert!(Ping::quota(&settings, "Codex: 5h limit reached").is_none());
+        settings.ntfy_enabled = true;
+        settings.ntfy_channel = "test-channel".into();
+        settings.ntfy_machine = "laptop".into();
+        let ping = Ping::quota(&settings, "Codex: 5h limit reached").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&ping.payload).unwrap();
+        assert_eq!(json["title"], "[laptop] Codex: 5h limit reached");
+        assert_eq!(json["message"], "Codex: 5h limit reached");
+        assert!(json.get("click").is_none());
     }
 
     fn payload(settings: &Settings) -> serde_json::Value {

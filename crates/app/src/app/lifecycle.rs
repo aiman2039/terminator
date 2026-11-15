@@ -58,6 +58,8 @@ impl App {
         let jobs = exit::JobQueue::supervised(services.clone());
         let refresh = refresh::spawn_async(services.clone());
         let metadata_jobs = metadata_refresh::spawn(services.clone());
+        let ports_jobs = crate::ports_refresh::spawn(services.clone());
+        let quota_jobs = crate::quota_refresh::spawn(services.clone(), paths.data.clone());
         let resource_tx = resource_sample::spawn(tx.clone(), {
             let ctx = ctx.clone();
             move || ctx.request_repaint()
@@ -225,6 +227,10 @@ impl App {
             metadata_jobs,
             metadata_request: None,
             metadata_generation: 0,
+            ports_jobs,
+            ports: Default::default(),
+            quota_jobs,
+            quota: Default::default(),
             resources: None,
             resource_tx,
             resource_request: None,
@@ -257,6 +263,7 @@ impl App {
             theme_conflict: false,
             fonts: crate::appearance::fonts::FontState::default(),
             hook_status: HashMap::new(),
+            statusline_installed: None,
             installed_agents: Vec::new(),
             tasks: crate::tasks::TaskState::default(),
             onboarding: crate::onboarding::Onboarding::default(),

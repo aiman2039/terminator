@@ -78,6 +78,7 @@ impl Default for UiPreferences {
             hosts_filter: String::new(),
             hosts_collapsed: HashSet::new(),
             hosts_recent_first: false,
+            quota_alerts: Default::default(),
             skipped_update_version: None,
             recent_native_files: Vec::new(),
             pinned_native_files: HashSet::new(),

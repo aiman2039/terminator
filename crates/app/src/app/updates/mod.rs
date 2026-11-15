@@ -101,6 +101,8 @@ impl App {
                 .send(self.handle_ui_request(ctx, request, deadline))
                 .unwrap_or_default(),
             Update::Metadata(generation, data) => self.handle_metadata(generation, data),
+            Update::Ports(update) => self.handle_ports(update),
+            Update::Quota(read) => self.handle_quota(read),
             Update::Resources(sample) => self.resources = Some(sample),
             Update::OpenImage(project, path, after) => {
                 self.open_gui_tab(project, Tab::Image { path }, after);
@@ -156,7 +158,10 @@ impl App {
                 },
             ),
             Update::TestPickerClosed => self.picker.close(),
-            Update::HookStatus(status) => self.hook_status = status,
+            Update::HookStatus(status, statusline) => {
+                self.hook_status = status;
+                self.statusline_installed = Some(statusline);
+            }
             Update::InstalledAgents(installed) => self.installed_agents = installed,
             Update::Appearance(file) => self.handle_appearance(ctx, *file),
             Update::Activation(notice) => self.handle_activation(ctx, notice),

@@ -117,6 +117,7 @@ impl Services {
                 })
                 .await
             }
+            Job::StatusLine(remove) => self.install_statusline(remove, cancel, updates).await,
             Job::TestNtfy {
                 channel,
                 machine,

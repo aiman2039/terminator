@@ -194,6 +194,7 @@ pub(crate) enum Job {
     ),
     DiffAction(Tab, Box<diff::actions::Request>),
     Install(String, bool),
+    StatusLine(bool),
     TestNtfy {
         channel: String,
         machine: String,
@@ -343,6 +344,8 @@ pub(crate) enum Update {
         Instant,
     ),
     Metadata(u64, metadata::Metadata),
+    Ports(crate::ports_refresh::PortsUpdate),
+    Quota(Vec<terminator_core::agents::quota::Quota>),
     Resources(resource_sample::Sample),
     OpenImage(String, PathBuf, After),
     /// Opens a GUI-only `Tab::Document` (see `document_view`).
@@ -411,7 +414,7 @@ pub(crate) enum Update {
     AttentionMigrated(Result<(), String>),
     Activation(String),
     Appearance(Box<AppearanceFile>),
-    HookStatus(HashMap<String, bool>),
+    HookStatus(HashMap<String, bool>, bool),
     /// Catalog agents found on PATH, probed off the GUI thread.
     InstalledAgents(Vec<crate::agent_launch::InstalledAgent>),
     EditorsClosed(editor_close::Target, Vec<String>, Result<(), String>),

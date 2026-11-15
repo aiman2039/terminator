@@ -120,7 +120,7 @@ impl Services {
         updates: &mut Vec<Update>,
     ) -> Result<()> {
         let client = self.client();
-        let (status, installed) = client
+        let (status, statusline, installed) = client
             .catalog
             .run(&cancel, move || {
                 let home = std::env::var_os("HOME")
@@ -136,11 +136,12 @@ impl Services {
                             )
                         })
                         .collect(),
+                    terminator_integrations::statusline::installed(&home),
                     crate::agent_launch::installed_agents(),
                 ))
             })
             .await?;
-        updates.push(Update::HookStatus(status));
+        updates.push(Update::HookStatus(status, statusline));
         updates.push(Update::InstalledAgents(installed));
         Ok(())
     }
@@ -174,6 +175,43 @@ impl Services {
                     })?;
                 Ok(format!(
                     "{} hooks: {}",
+                    if remove { "Removed" } else { "Installed" },
+                    path.display()
+                ))
+            })
+            .await?;
+        updates.push(Update::Info(message));
+        Ok(())
+    }
+
+    /// Installs or removes the Claude Code status-line usage source, then
+    /// reports the hook status again.
+    pub(in crate::gui_services) async fn install_statusline(
+        &self,
+        remove: bool,
+        cancel: CancellationToken,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let data = self.client().paths.data.clone();
+        let message = self
+            .client()
+            .catalog
+            .run(&cancel, move || {
+                anyhow::ensure!(
+                    remove || terminator_core::agents::find_installed("claude").is_some(),
+                    "Install Claude Code before configuring its status line"
+                );
+                let home = std::env::var_os("HOME").context("No home directory")?;
+                let helper =
+                    terminator_core::sibling_exe(&std::env::current_exe()?, "terminator-hook");
+                let path = terminator_integrations::statusline::install(
+                    Path::new(&home),
+                    &helper,
+                    &data,
+                    remove,
+                )?;
+                Ok(format!(
+                    "{} Claude Code usage status line: {}",
                     if remove { "Removed" } else { "Installed" },
                     path.display()
                 ))

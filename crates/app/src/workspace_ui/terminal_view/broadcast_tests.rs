@@ -48,6 +48,7 @@ fn tabs() -> (App, egui::Context, tempfile::TempDir) {
 }
 
 /// A real PTY running `cat`; its line discipline echoes what is written.
+#[cfg(unix)]
 fn echo_backend(app: &mut App, ctx: &egui::Context, sid: &str, id: u64) {
     let backend = egui_term::TerminalBackend::new(
         id,
@@ -62,6 +63,7 @@ fn echo_backend(app: &mut App, ctx: &egui::Context, sid: &str, id: u64) {
     app.backends.insert(sid.to_owned(), backend);
 }
 
+#[cfg(unix)]
 fn screen(app: &mut App, sid: &str) -> String {
     let backend = app.backends.get_mut(sid).unwrap();
     backend.sync();
@@ -70,6 +72,7 @@ fn screen(app: &mut App, sid: &str) -> String {
 }
 
 /// Waits until `sid` shows `text`; false after 5 s.
+#[cfg(unix)]
 fn shows(app: &mut App, sid: &str, text: &str) -> bool {
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(5) {
@@ -109,6 +112,7 @@ fn broadcast_targets_exactly_the_shells_of_the_tab_and_stops_on_tab_change() {
     assert!(app.broadcast_tab().is_none());
 }
 
+#[cfg(unix)]
 #[test]
 fn broadcast_sends_typed_keys_to_the_panes_of_the_tab_only() {
     let (mut app, ctx, _dir) = tabs();
@@ -132,6 +136,7 @@ fn broadcast_sends_typed_keys_to_the_panes_of_the_tab_only() {
     assert!(!screen(&mut app, "s2").contains("outside"));
 }
 
+#[cfg(unix)]
 #[test]
 fn multi_line_broadcast_paste_waits_for_the_confirmation() {
     let (mut app, ctx, _dir) = tabs();

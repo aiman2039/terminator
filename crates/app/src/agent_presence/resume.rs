@@ -1,7 +1,35 @@
 //! Resume conversation: an explicit click runs the stored resume command.
 use crate::*;
 
+/// Agent CLIs with their own resume picker, which lists the conversations
+/// of the folder it starts in. Terminator never reads their files.
+/// Agent kind and picker command.
+pub(crate) const RESUME_PICKERS: [(&str, &str); 2] =
+    [("claude", "claude --resume"), ("codex", "codex resume")];
+
 impl App {
+    /// Opens a new terminal at the selected local project's root and runs
+    /// an agent CLI's resume picker there. Only call it for an explicit
+    /// user click.
+    pub(crate) fn open_resume_picker(&mut self, command: &str) {
+        if self.selected_remote_project().is_some() {
+            return;
+        }
+        let Some(project) = self.selected_project() else {
+            return;
+        };
+        let (project, cwd) = (project.id.clone(), Some(project.path.clone()));
+        if self.missing_projects.contains(&project) {
+            return;
+        }
+        self.hide_center_overlay();
+        let post = PostCreate {
+            input: command.to_owned(),
+            enter: true,
+        };
+        self.create_terminal_tab((project, cwd), (None, Some(post)));
+    }
+
     /// The stored resume command of an agent in `session`, if any.
     pub(crate) fn resume_command(&self, session: &str) -> Option<String> {
         self.state

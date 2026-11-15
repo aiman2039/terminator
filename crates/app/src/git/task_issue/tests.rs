@@ -1,8 +1,12 @@
 //! New task from an issue or pull request. A fake `gh`/`glab` runs in a
 //! temporary repository; no real remote or account is used.
-use super::fetch::{Reference, fetch, parse_reference};
+#[cfg(unix)]
+use super::fetch::fetch;
+use super::fetch::{Reference, parse_reference};
 use super::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use terminator_core::{CommandOptions, git, run_command};
 
 fn git_run(cwd: &Path, args: &[&str]) {
@@ -13,6 +17,7 @@ fn git_run(cwd: &Path, args: &[&str]) {
     run_command(git::command(cwd, args), options).unwrap();
 }
 
+#[cfg(unix)]
 fn repo(dir: &Path, host: &str) -> PathBuf {
     let root = dir.join("repo");
     std::fs::create_dir_all(&root).unwrap();

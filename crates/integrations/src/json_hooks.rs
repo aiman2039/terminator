@@ -48,6 +48,15 @@ fn events(kind: &str) -> &'static [&'static str] {
 
 /// Claude-style `{"hooks": {event: [group]}}`: managed groups are removed,
 /// then one group per event is added unless removing.
+/// The configuration document in `before`, or `empty` when the file is
+/// blank. Invalid JSON is an error and the file is left untouched.
+pub(crate) fn json_doc(before: &str, empty: Value, context: &'static str) -> Result<Value> {
+    if before.trim().is_empty() {
+        return Ok(empty);
+    }
+    serde_json::from_str(before).map_err(|source| Error::Json { context, source })
+}
+
 pub(crate) fn json_config(rewrite: &Rewrite<'_>) -> Result<String> {
     let Rewrite {
         before,
@@ -66,14 +75,11 @@ pub(crate) fn json_config(rewrite: &Rewrite<'_>) -> Result<String> {
     } else {
         (command.to_owned(), 2)
     };
-    let mut doc: Value = if before.trim().is_empty() {
-        json!({})
-    } else {
-        serde_json::from_str(before).map_err(|source| Error::Json {
-            context: "Agent configuration is invalid JSON; left untouched",
-            source,
-        })?
-    };
+    let mut doc = json_doc(
+        before,
+        json!({}),
+        "Agent configuration is invalid JSON; left untouched",
+    )?;
     if !doc.is_object() {
         return Err(Error::ConfigNotObject);
     }
@@ -121,14 +127,11 @@ pub(crate) fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Re
     if before.is_empty() && remove {
         return Ok(());
     }
-    let mut doc: Value = if before.trim().is_empty() {
-        json!({"schema_version": 1})
-    } else {
-        serde_json::from_str(&before).map_err(|source| Error::Json {
-            context: "Muse settings are invalid JSON; left untouched",
-            source,
-        })?
-    };
+    let mut doc = json_doc(
+        &before,
+        json!({"schema_version": 1}),
+        "Muse settings are invalid JSON; left untouched",
+    )?;
     let object = doc.as_object_mut().ok_or(Error::MuseNotObject)?;
     match object.get("schema_version") {
         None => {
@@ -182,14 +185,11 @@ fn clean_json_groups(groups: &mut Value) -> Result<()> {
 }
 
 pub(crate) fn cursor_config(before: &str, invocation: &str, remove: bool) -> Result<String> {
-    let mut doc: Value = if before.trim().is_empty() {
-        json!({"version": 1})
-    } else {
-        serde_json::from_str(before).map_err(|source| Error::Json {
-            context: "Cursor hooks.json is invalid JSON; left untouched",
-            source,
-        })?
-    };
+    let mut doc = json_doc(
+        before,
+        json!({"version": 1}),
+        "Cursor hooks.json is invalid JSON; left untouched",
+    )?;
     let object = doc.as_object_mut().ok_or(Error::CursorNotObject)?;
     match object.get("version") {
         None => {

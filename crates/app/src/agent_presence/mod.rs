@@ -12,6 +12,7 @@ mod presence_tests;
 mod presentation;
 mod queries;
 mod resume;
+pub(crate) use resume::RESUME_PICKERS;
 mod usage;
 pub(crate) use cache::PresentationCache;
 pub(crate) use counts::{AttentionCounts, StateCounts, attention_status_icon, notice_pending};

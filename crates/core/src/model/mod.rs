@@ -263,6 +263,8 @@ pub const SCREEN_CAPABILITY: &str = "screen-v1";
 /// `Request::SessionForPids` maps hook ancestor PIDs to a session.
 pub const SESSION_FOR_PIDS_CAPABILITY: &str = "session-for-pids-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
+/// The daemon takes `QuotaNotify`: agent quota alerts per channel.
+pub const AGENT_QUOTA_CAPABILITY: &str = "agent-quota-v1";
 pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
 pub const NTFY_CAPABILITY: &str = "ntfy-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
@@ -383,18 +385,33 @@ impl State {
         title: &str,
         body: &str,
     ) -> Result<Option<String>, StateError> {
-        if !self
+        self.require_live_session(session)?;
+        if !self.settings.terminal_notifications {
+            return Ok(None);
+        }
+        self.push_terminal_notice(session, title, body)
+    }
+
+    fn require_live_session(&self, session: &str) -> Result<(), StateError> {
+        if self
             .sessions
             .iter()
             .any(|s| s.id == session && s.lifecycle.live())
         {
-            return Err(StateError::UnknownLiveSession {
+            Ok(())
+        } else {
+            Err(StateError::UnknownLiveSession {
                 session: session.to_owned(),
-            });
+            })
         }
-        if !self.settings.terminal_notifications {
-            return Ok(None);
-        }
+    }
+
+    fn push_terminal_notice(
+        &mut self,
+        session: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<Option<String>, StateError> {
         let clean = |text: &str, limit| {
             text.chars()
                 .filter(|c| !c.is_control() || *c == '\n')
