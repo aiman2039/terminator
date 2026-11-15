@@ -1,6 +1,6 @@
 //! Pieces of the terminal pane bar: layout, icons, title, and buttons.
 use super::*;
-use crate::appearance::{paint_focus, paint_unread_dot};
+use crate::appearance::{paint_focus, paint_status_dot, paint_unread_dot};
 
 /// One button slot plus its gap.
 const SLOT: f32 = TERMINAL_BUTTON + 2.0;
@@ -330,8 +330,11 @@ pub(super) fn paint_title(ui: &egui::Ui, input: BarTitle<'_>) {
         ))
         .galley(position, galley, tint);
     if let Some(color) = status {
-        ui.painter()
-            .circle_filled(egui::pos2(right + 6.0, rect.center().y), 3.5, color);
+        paint_status_dot(
+            ui.painter(),
+            egui::pos2(right + 6.0, rect.center().y),
+            color,
+        );
     }
 }
 

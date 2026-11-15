@@ -63,7 +63,7 @@ impl Viewer<'_> {
                 .find(|session| &session.id == sid)
                 .and_then(|session| self.app.terminal_status_color(session))
         }) {
-            ui.painter().circle_filled(dot.center(), 3.5, color);
+            appearance::paint_status_dot(ui.painter(), dot.center(), color);
         }
         // The branch is plain weak text; a click opens Git.
         let git = ui

@@ -1,6 +1,7 @@
 //! The shared full-width sidebar row.
-use super::super::scale::{FONT_CAPTION, FONT_SMALL, RADIUS_SMALL};
+use super::super::scale::{FONT_CAPTION, FONT_SMALL};
 use super::counters::{self, RowExtras};
+use super::marks;
 use super::{PaintStatusIconInput, icon_color, paint_status_icon};
 use eframe::egui::{self, Color32, FontId, TextStyle};
 
@@ -97,14 +98,15 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
             .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
         return response;
     }
-    paint_row_fill(ui, &response, selected);
+    marks::paint_row_fill(ui, &response, selected, extras.selection);
     // A tool window key or Tab can focus a row; arrow keys then move it.
     crate::appearance::paint_focus(ui, &response);
+    let inner = marks::trailing_area(response.rect, &extras);
     let (shown, trailing, right) = row_trailing(
         ui,
-        (response.rect, label_left),
+        (inner, label_left),
         (label, trailing, tint),
-        extras.counters,
+        (extras.counters, extras.count_pill),
     );
     let rect = label_rect(response.rect, label_left, right, after_label.is_some());
     let text = RowText::layout(LayoutInput {
@@ -132,7 +134,8 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         },
     );
     text.paint(ui, rect);
-    let anchor = egui::pos2(response.rect.right(), label_center);
+    marks::paint_edge_dot(ui, response.rect, label_center, &extras);
+    let anchor = egui::pos2(inner.right(), label_center);
     counters::paint(ui, anchor, &shown);
     paint_trailing(PaintTrailingInput {
         ui,
@@ -140,6 +143,7 @@ pub(super) fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         trailing,
         tint,
         tint_words: extras.tint_words,
+        pill: extras.count_pill,
     });
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
@@ -164,13 +168,13 @@ fn row_trailing<'c, 't>(
     ui: &egui::Ui,
     (row, label_left): (egui::Rect, f32),
     (label, trailing, tint): (&str, &'t str, Color32),
-    counters: &'c [counters::StateCounter],
+    (counters, pill): (&'c [counters::StateCounter], bool),
 ) -> (Vec<&'c counters::StateCounter>, &'t str, f32) {
     let room = row.width() - label_left;
     let shown = counters::fitted(ui, counters, room - label_width(ui, label));
     if shown.is_empty() {
-        let trailing = fitted_trailing(ui, label, trailing, room);
-        let right = row.right() - trailing_width(ui, trailing, tint);
+        let trailing = fitted_trailing(ui, label, (trailing, pill), room);
+        let right = row.right() - trailing_width(ui, (trailing, pill), tint);
         (shown, trailing, right)
     } else {
         let right = row.right() - counters::total_width(ui, &shown);
@@ -205,27 +209,18 @@ fn paint_after_label(ui: &egui::Ui, icon: &str, left_center: egui::Pos2) {
         .paint_at(ui, rect);
 }
 
-fn paint_row_fill(ui: &egui::Ui, response: &egui::Response, selected: bool) {
-    if response.hovered() || selected {
-        ui.painter().rect_filled(
-            response.rect,
-            RADIUS_SMALL,
-            if selected {
-                ui.visuals().selection.bg_fill
-            } else {
-                ui.visuals().widgets.hovered.bg_fill
-            },
-        );
-    }
-}
-
 /// The label wins over a trailing status word: when both do not fit, the
 /// word is dropped (row tooltips still carry it). The `●` dot always stays.
-fn fitted_trailing<'t>(ui: &egui::Ui, label: &str, trailing: &'t str, room: f32) -> &'t str {
+fn fitted_trailing<'t>(
+    ui: &egui::Ui,
+    label: &str,
+    (trailing, pill): (&'t str, bool),
+    room: f32,
+) -> &'t str {
     if trailing.is_empty() || trailing == "●" {
         return trailing;
     }
-    if label_width(ui, label) + trailing_width(ui, trailing, Color32::PLACEHOLDER) <= room {
+    if label_width(ui, label) + trailing_width(ui, (trailing, pill), Color32::PLACEHOLDER) <= room {
         trailing
     } else {
         ""
@@ -243,9 +238,11 @@ fn label_width(ui: &egui::Ui, label: &str) -> f32 {
         .x
 }
 
-fn trailing_width(ui: &egui::Ui, trailing: &str, tint: Color32) -> f32 {
+fn trailing_width(ui: &egui::Ui, (trailing, pill): (&str, bool), tint: Color32) -> f32 {
     if trailing.is_empty() {
         4.0
+    } else if pill && trailing != "●" {
+        counters::pill_width(ui, trailing)
     } else {
         ui.painter()
             .layout_no_wrap(trailing.into(), FontId::proportional(FONT_SMALL), tint)
@@ -409,11 +406,13 @@ struct PaintTrailingInput<'a> {
     trailing: &'a str,
     tint: Color32,
     tint_words: bool,
+    /// Paint the text as a count pill.
+    pill: bool,
 }
 
-/// A `●` trailing marker is a dot; other text is right-aligned at `anchor`
-/// (the row's right edge and label center). Text with a space is weak
-/// unless `tint_words` keeps the row tint.
+/// A `●` trailing marker is a dot; a count may be a pill; other text is
+/// right-aligned at `anchor` (the row's right edge and label center).
+/// Text with a space is weak unless `tint_words` keeps the row tint.
 fn paint_trailing(input: PaintTrailingInput<'_>) {
     let PaintTrailingInput {
         ui,
@@ -421,10 +420,15 @@ fn paint_trailing(input: PaintTrailingInput<'_>) {
         trailing,
         tint,
         tint_words,
+        pill,
     } = input;
+    if trailing.is_empty() {
+        return;
+    }
     if trailing == "●" {
-        ui.painter()
-            .circle_filled(egui::pos2(anchor.x - 10.0, anchor.y), 3.5, tint);
+        super::paint_status_dot(ui.painter(), egui::pos2(anchor.x - 10.0, anchor.y), tint);
+    } else if pill {
+        counters::paint_pill(ui, anchor, trailing, tint);
     } else {
         ui.painter().text(
             egui::pos2(anchor.x - 5.0, anchor.y),
