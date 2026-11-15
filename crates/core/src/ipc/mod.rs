@@ -280,6 +280,11 @@ pub enum Request {
         focused: bool,
     },
     Hook(HookEvent),
+    /// Usage only (`agent-usage-statusline-v1`): merges the event's `usage`
+    /// into an agent the daemon already knows. Its `state`, summary and
+    /// request are ignored, so it never changes lifecycle or notices. Older
+    /// daemons reject the unknown request.
+    HookUsage(HookEvent),
     Cwd {
         session: String,
         path: PathBuf,

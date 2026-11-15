@@ -53,6 +53,41 @@ impl State {
         Ok(self.push_hook_notification(e))
     }
 
+    /// A usage-only event (`Request::HookUsage`): merges `usage` into an
+    /// agent this state already knows. The event's state, summary, request,
+    /// sequence and process are ignored: it never creates an agent and never
+    /// changes lifecycle, notices, presence or notifications. Returns whether
+    /// the usage changed.
+    ///
+    /// # Errors
+    /// Fails for an invalid event or an unknown or stopped agent.
+    pub fn apply_hook_usage(&mut self, e: &HookEvent) -> Result<bool, StateError> {
+        self.validate_hook_event(e)?;
+        let known = self
+            .hook_existing(e)
+            .and_then(|i| self.agents.get(i))
+            .is_some_and(|a| a.state != AgentState::Stopped);
+        if !known {
+            return Err(StateError::UnknownAgent {
+                session: e.terminal_session_id.clone(),
+            });
+        }
+        let Some(usage) = e.usage.as_ref().filter(|u| !u.is_empty()) else {
+            return Ok(false);
+        };
+        let entry = self
+            .agent_usage
+            .entry(e.agent_invocation_id.clone())
+            .or_default();
+        let before = entry.clone();
+        entry.merge(usage);
+        let changed = *entry != before;
+        if changed {
+            self.revision = self.revision.saturating_add(1);
+        }
+        Ok(changed)
+    }
+
     fn validate_hook_event(&self, e: &HookEvent) -> Result<(), StateError> {
         if e.protocol_version != PROTOCOL_VERSION {
             return Err(StateError::UnsupportedHookVersion {

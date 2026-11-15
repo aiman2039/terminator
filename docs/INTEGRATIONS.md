@@ -36,6 +36,22 @@ only in `BeforeModel`/`AfterModel` `llm_request`, which is not installed, and
 Copilot CLI documents neither field. No agent's hook input documents context
 fullness or cost.
 
+Claude Code sends `model` in hook input only at SessionStart, so a `/model`
+change does not reach the hooks. When the opt-in Claude Code status-line
+source is installed, `terminator-hook statusline` also reads `model.id` (else
+`model.display_name`) from the status-line input. Inside an app-created
+terminal (`TERMINATOR_SESSION_ID` set, same ancestry check as hooks) it sends
+`Request::HookUsage` (`agent-usage-statusline-v1`): a normalized usage-only
+event for the same agent run. The daemon merges only its `usage` into an
+agent it already knows (the newer value wins). It never creates an agent and
+never changes lifecycle, notices, presence or notifications. The helper sends
+only when the model differs from the last one sent for that terminal and
+session (`claude-statusline-models.json` in the data folder), retries a
+failed send after 30 s, and sends in the background while the user's own
+status-line command runs; that command's output passes through unchanged.
+Failures are silent. Older daemons reject the unknown request, so nothing
+changes there. Without the status-line source, only hook input is used.
+
 These are capability targets, not an assertion that all providers report identical lifecycle events. A missing callback cannot reliably be replaced with “the terminal was silent.” In particular, failures and clarification prompts are only reported when the integration receives an appropriate event. CLI upgrades may change their configuration or payloads.
 
 Installers add/remove only managed command entries (or the app's own OpenCode plugin), retain unrelated configuration, and create a backup before mutation. No credentials or account setup are modified. Installation does not launch a provider.

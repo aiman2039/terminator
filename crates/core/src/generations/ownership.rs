@@ -119,7 +119,7 @@ fn request_sessions(request: &Request) -> (Option<&str>, Option<&str>) {
         | Request::ClearHistory {
             session: Some(session),
         } => Some(session.as_str()),
-        Request::Hook(e) => Some(e.terminal_session_id.as_str()),
+        Request::Hook(e) | Request::HookUsage(e) => Some(e.terminal_session_id.as_str()),
         _ => None,
     };
     let vnc_session = match request {

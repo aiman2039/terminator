@@ -10,6 +10,8 @@ pub const RESTORE_CAPABILITY: &str = "restore-shell-v1";
 
 /// Hook events carry `usage` and `State::agent_usage` keeps it.
 pub const USAGE_CAPABILITY: &str = "agent-usage-v1";
+/// `Request::HookUsage` updates usage from an agent's status-line input.
+pub const STATUSLINE_USAGE_CAPABILITY: &str = "agent-usage-statusline-v1";
 
 /// What an agent itself reports in its hook input: the model and the
 /// permission mode. Display only; never a lifecycle source. Fields no
