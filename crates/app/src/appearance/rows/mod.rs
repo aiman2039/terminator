@@ -1,6 +1,7 @@
 mod counters;
 mod list;
 mod markdown_header;
+mod marks;
 mod segmented;
 mod tree_rows;
 
@@ -20,7 +21,7 @@ pub use segmented::{SegmentCell, segmented};
 use std::time::Duration;
 pub(crate) use tree_rows::ProjectRowInput;
 pub use tree_rows::{
-    SESSION_ROW_DETAIL_HEIGHT, SESSION_ROW_HEIGHT, SessionRowSpec, project_row, project_row_with,
+    SESSION_ROW_DETAIL_HEIGHT, SESSION_ROW_HEIGHT, SessionRowSpec, project_row_with,
     session_row_spec,
 };
 
@@ -366,6 +367,15 @@ pub fn paint_status_icon(input: PaintStatusIconInput<'_>) {
         }
     }
     image.paint_at(ui, rect);
+}
+
+/// Radius of the live-state dot on a pane header and a session row.
+pub const STATUS_DOT_RADIUS: f32 = 3.5;
+
+/// The live-state dot of a session: the pane header and the sidebar
+/// session row paint the same mark.
+pub fn paint_status_dot(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    painter.circle_filled(center, STATUS_DOT_RADIUS, color);
 }
 
 /// Unread badge on a status icon: a small accent dot at its top-right

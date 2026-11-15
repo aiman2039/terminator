@@ -263,7 +263,7 @@ impl App {
         });
     }
 
-    pub(super) fn terminal_status_color(&self, session: &Session) -> Option<egui::Color32> {
+    pub(crate) fn terminal_status_color(&self, session: &Session) -> Option<egui::Color32> {
         let presented = self.present_session(&session.id);
         let theme = &self.theme;
         if let Some(state) = presented.lifecycle {

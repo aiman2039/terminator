@@ -72,6 +72,7 @@ impl App {
             note,
         } = view;
         let unread_terminal = note.is_some_and(|n| !n.dismissed);
+        let current = self.active_session.as_ref() == Some(&session.id);
         let secondary = self.session_row_secondary(session);
         // A live agent row shows its state ("waiting 2m", "working") in the
         // state color; "ended" and "background" still win.
@@ -107,8 +108,8 @@ impl App {
                     None if session.kind == SessionKind::Editor => "FileCode",
                     None => "Terminal",
                 },
-                selected: self.active_session.as_ref() == Some(&session.id)
-                    || self.session_selection.selected(&session.id),
+                selected: current || self.session_selection.selected(&session.id),
+                current,
                 trailing,
                 tint: color,
                 icon_tint: presented
@@ -117,6 +118,9 @@ impl App {
                 spin: presented.spin,
                 subtitle: presented.notice_preview.as_deref().filter(|_| !editing),
                 brand: presented.brand_icon,
+                // The pane header's dot: hook-reported agent state, else
+                // the live shell color; never terminal text.
+                status_dot: self.terminal_status_color(session),
             },
         )
         .on_hover_ui(|ui| {
@@ -329,7 +333,8 @@ impl App {
                     appearance::RowExtras {
                         counters: &counters,
                         detail: &detail,
-                        tint_words: false,
+                        count_pill: true,
+                        ..appearance::RowExtras::default()
                     },
                 )
             })

@@ -217,6 +217,8 @@ mod row_tests {
                     spin: true,
                     subtitle: Some("Waiting for a response"),
                     brand: Some("Terminal"),
+                    current: true,
+                    status_dot: Some(Color32::GREEN),
                 },
             );
             assert_eq!(response.rect.height(), SESSION_ROW_DETAIL_HEIGHT);
@@ -437,6 +439,8 @@ mod row_tests {
                     spin: false,
                     subtitle: Some("Tests pass; ready for review"),
                     brand: None,
+                    current: true,
+                    status_dot: None,
                 },
             );
         });
@@ -472,12 +476,14 @@ mod row_tests {
                         label: "Review checklist",
                         icon: "Terminal",
                         selected: false,
+                        current: false,
                         trailing: "background",
                         tint: Color32::GRAY,
                         icon_tint: None,
                         spin: false,
                         subtitle: None,
                         brand: None,
+                        status_dot: Some(Color32::GREEN),
                     },
                 );
             });
@@ -500,7 +506,8 @@ mod row_tests {
         painted(&ctx, 400.0);
         let wide = painted(&ctx, 400.0);
         assert!(whole(&wide, "Review checklist") && whole(&wide, "background"));
-        let narrow = painted(&ctx, 150.0);
+        // The live-state dot keeps its slot at the right edge.
+        let narrow = painted(&ctx, 170.0);
         assert!(
             whole(&narrow, "Review checklist") && !any(&narrow, "background"),
             "{narrow:?}"
@@ -523,6 +530,8 @@ mod row_tests {
                         spin: false,
                         subtitle: None,
                         brand,
+                        current: false,
+                        status_dot: None,
                     },
                 );
             });
@@ -1003,6 +1012,210 @@ mod row_tests {
         }
         assert_eq!(fill, Some(menu_fill()));
         assert_eq!(text, Some(menu_text()));
+    }
+}
+
+/// Project tree paint: one filled row (the active session), the open
+/// project in semibold text, a live-state dot per session, a count pill.
+mod tree_row_tests {
+    use super::*;
+
+    const GREEN: Color32 = Color32::from_rgb(80, 200, 120);
+
+    fn project(ui: &mut egui::Ui, selected: bool) -> egui::Response {
+        project_row_with(
+            ProjectRowInput {
+                ui,
+                label: "atlas-web",
+                icon: "FolderOpen",
+                color: None,
+                selected,
+                height: 24.0,
+                trailing: "2",
+                tint: Color32::GRAY,
+            },
+            RowExtras {
+                count_pill: true,
+                ..RowExtras::default()
+            },
+        )
+    }
+
+    fn session(ui: &mut egui::Ui, label: &str, current: bool) -> egui::Response {
+        session_row_spec(
+            ui,
+            SessionRowSpec {
+                label,
+                icon: "Terminal",
+                selected: current,
+                current,
+                trailing: "background",
+                tint: Color32::GRAY,
+                icon_tint: None,
+                spin: false,
+                subtitle: None,
+                brand: None,
+                status_dot: Some(GREEN),
+            },
+        )
+    }
+
+    /// Paints an open project, a session and the active session; returns
+    /// the shapes and the three row rects.
+    fn tree(
+        events: Vec<egui::Event>,
+        ctx: &egui::Context,
+    ) -> (
+        Vec<egui::epaint::ClippedShape>,
+        [egui::Rect; 3],
+        egui::Visuals,
+    ) {
+        let mut rects = [egui::Rect::NOTHING; 3];
+        let mut visuals = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                rects[0] = project(ui, true).rect;
+                rects[1] = session(ui, "Dev server", false).rect;
+                rects[2] = session(ui, "Tests", true).rect;
+                visuals = Some(ui.visuals().clone());
+            },
+        );
+        output.textures_delta.clear();
+        (output.shapes, rects, visuals.expect("ui ran"))
+    }
+
+    fn filled(shapes: &[egui::epaint::ClippedShape], fill: Color32) -> Vec<egui::Rect> {
+        shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == fill && rect.brush.is_none() => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn settled() -> egui::Context {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        tree(vec![], &ctx);
+        ctx
+    }
+
+    #[test]
+    fn only_the_active_session_row_is_filled() {
+        let ctx = settled();
+        let (shapes, rects, visuals) = tree(vec![], &ctx);
+        assert_eq!(filled(&shapes, visuals.selection.bg_fill), vec![rects[2]]);
+    }
+
+    #[test]
+    fn the_active_session_row_has_a_left_accent_bar() {
+        let ctx = settled();
+        let (shapes, rects, visuals) = tree(vec![], &ctx);
+        let bars = filled(&shapes, visuals.selection.stroke.color);
+        assert_eq!(bars.len(), 1, "{bars:?}");
+        assert_eq!(bars[0].left(), rects[2].left());
+        assert_eq!(bars[0].width(), 2.0);
+        assert!(rects[2].contains_rect(bars[0]));
+    }
+
+    #[test]
+    fn the_open_project_row_shows_semibold_text() {
+        let ctx = settled();
+        let (shapes, _, _) = tree(vec![], &ctx);
+        let family = shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "atlas-web" => {
+                Some(text.galley.job.sections[0].format.font_id.family.clone())
+            }
+            _ => None,
+        });
+        assert_eq!(family, Some(FontFamily::Name("Semibold".into())));
+    }
+
+    #[test]
+    fn a_hovered_project_row_still_gets_the_hover_fill() {
+        let ctx = settled();
+        let (_, rects, _) = tree(vec![], &ctx);
+        let pos = rects[0].center();
+        tree(vec![egui::Event::PointerMoved(pos)], &ctx);
+        let (shapes, rects, visuals) = tree(vec![egui::Event::PointerMoved(pos)], &ctx);
+        assert_eq!(
+            filled(&shapes, visuals.widgets.hovered.bg_fill),
+            vec![rects[0]]
+        );
+    }
+
+    #[test]
+    fn each_session_row_paints_the_status_dot_right_of_its_trailing_text() {
+        let ctx = settled();
+        let (shapes, rects, _) = tree(vec![], &ctx);
+        let dots: Vec<egui::Pos2> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) if circle.fill == GREEN => Some(circle.center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dots.len(), 2, "{dots:?}");
+        for (dot, row) in dots.iter().zip(&rects[1..]) {
+            assert!(row.contains(*dot));
+            assert!(
+                row.right() - dot.x < 12.0,
+                "dot {dot:?} not at the edge of {row:?}"
+            );
+        }
+        let words: Vec<f32> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "background" => {
+                    Some(text.pos.x + text.galley.size().x)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(words.len(), 2);
+        for (right, dot) in words.iter().zip(&dots) {
+            assert!(
+                *right < dot.x - STATUS_DOT_RADIUS,
+                "{right} overlaps {dot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_project_count_is_painted_in_a_pill() {
+        let ctx = settled();
+        let (shapes, rects, _) = tree(vec![], &ctx);
+        let pills = filled(&shapes, Color32::GRAY.gamma_multiply(0.18));
+        assert_eq!(pills.len(), 1, "{pills:?}");
+        assert!(rects[0].contains_rect(pills[0]));
+        let count = shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "2" => {
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        });
+        assert!(pills[0].contains_rect(count.expect("count text")));
+    }
+
+    #[test]
+    fn tree_rows_keep_their_heights() {
+        let ctx = settled();
+        let (_, rects, _) = tree(vec![], &ctx);
+        assert_eq!(rects[0].height(), 24.0);
+        assert_eq!(rects[1].height(), SESSION_ROW_HEIGHT);
+        assert_eq!(rects[2].height(), SESSION_ROW_HEIGHT);
     }
 }
 

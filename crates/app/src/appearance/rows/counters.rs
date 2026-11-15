@@ -1,6 +1,6 @@
 //! State counters: the trailing "icon + count" marks on project, tab
 //! group and worktree rows.
-use super::super::scale::FONT_SMALL;
+use super::super::scale::{FONT_SMALL, RADIUS_LARGE};
 use super::{PaintStatusIconInput, paint_status_icon};
 use eframe::egui::{self, Color32, FontId};
 
@@ -24,6 +24,26 @@ pub struct RowExtras<'a> {
     pub detail: &'a [(&'a str, Color32)],
     /// Trailing words keep the row tint, such as a session's "waiting 4m".
     pub tint_words: bool,
+    /// How a selected row shows its selection.
+    pub selection: RowSelection,
+    /// A live-state dot at the row's right edge, in this color.
+    pub status_dot: Option<Color32>,
+    /// The trailing text is a count, painted as a small pill.
+    pub count_pill: bool,
+}
+
+/// How a selected sidebar row shows its selection. Hover and keyboard
+/// focus paint the same way for every kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowSelection {
+    /// The selection fill.
+    #[default]
+    Fill,
+    /// The selection fill and an accent bar on the left edge: the one
+    /// current row of a tree (the active session).
+    Bar,
+    /// No fill: the caller paints stronger text (an open project).
+    Text,
 }
 
 const ICON: f32 = 12.0;
@@ -105,6 +125,40 @@ pub(super) fn paint(ui: &egui::Ui, anchor: egui::Pos2, counters: &[&StateCounter
         });
         right -= ICON + COUNTER_GAP;
     }
+}
+
+const PILL_HEIGHT: f32 = 16.0;
+const PILL_PAD: f32 = 6.0;
+
+fn pill_galley(ui: &egui::Ui, text: &str, color: Color32) -> std::sync::Arc<egui::Galley> {
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), FontId::proportional(FONT_SMALL), color)
+}
+
+/// Width of a count pill with the row edge.
+pub(super) fn pill_width(ui: &egui::Ui, text: &str) -> f32 {
+    pill_galley(ui, text, Color32::PLACEHOLDER).size().x + PILL_PAD * 2.0 + EDGE + 4.0
+}
+
+/// A count in a small rounded pill, right-aligned at `anchor` (the row's
+/// right edge and label center). The fill is a faint tint of `color`, so
+/// it reads on the panel and on a hovered or selected row.
+pub(super) fn paint_pill(ui: &egui::Ui, anchor: egui::Pos2, text: &str, color: Color32) {
+    let galley = pill_galley(ui, text, color);
+    let width = (galley.size().x + PILL_PAD * 2.0).max(PILL_HEIGHT);
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(anchor.x - EDGE - width, anchor.y - PILL_HEIGHT * 0.5),
+        egui::pos2(anchor.x - EDGE, anchor.y + PILL_HEIGHT * 0.5),
+    );
+    ui.painter()
+        .rect_filled(rect, RADIUS_LARGE, color.gamma_multiply(0.18));
+    let size = galley.size();
+    let center = rect.center();
+    ui.painter().galley(
+        egui::pos2(center.x - size.x * 0.5, center.y - size.y * 0.5),
+        galley,
+        color,
+    );
 }
 
 #[cfg(test)]

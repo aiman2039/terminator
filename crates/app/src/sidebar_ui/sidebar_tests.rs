@@ -120,6 +120,8 @@ mod tests {
                         spin: false,
                         subtitle: None,
                         brand: None,
+                        current: false,
+                        status_dot: Some(egui::Color32::GREEN),
                     },
                 );
             },

@@ -174,6 +174,7 @@ impl App {
                     None => "Terminal",
                 },
                 selected: self.active_session.as_ref() == Some(&session.id),
+                current: false,
                 trailing: &unread,
                 tint: appearance::color(&self.theme.secondary),
                 icon_tint: presented
@@ -182,6 +183,7 @@ impl App {
                 spin: presented.spin,
                 subtitle: Some(&subtitle),
                 brand: presented.brand_icon,
+                status_dot: None,
             },
         )
         .on_hover_ui(|ui| {
