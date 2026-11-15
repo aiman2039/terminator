@@ -72,6 +72,31 @@ pub fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// Blocks until child `pid` has terminated, without reaping it: the PID
+/// stays reserved until the caller reaps it, so the caller can first mark
+/// the child as gone for anyone who might still signal it.
+#[cfg(unix)]
+pub fn wait_exit_unreaped(pid: u32) -> std::io::Result<()> {
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+    let pid = pid_from(pid)?;
+    loop {
+        match waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        ) {
+            Ok(_) => return Ok(()),
+            Err(rustix::io::Errno::INTR) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+/// Windows reuses no PID while a handle is open: nothing to wait for.
+#[cfg(not(unix))]
+pub fn wait_exit_unreaped(_pid: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// `ESRCH`: the kernel has no such process. Other errors, including `EPERM`, do not count.
 #[cfg(unix)]
 #[must_use]
@@ -163,6 +188,18 @@ pub fn process_alive(pid: u32) -> bool {
 #[must_use]
 pub fn process_gone(pid: u32) -> bool {
     !process_alive(pid)
+}
+
+#[cfg(test)]
+mod exit_tests {
+    #[cfg(unix)]
+    #[test]
+    fn an_exited_child_is_seen_without_being_reaped() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        super::wait_exit_unreaped(child.id()).unwrap();
+        // Still waitable: the PID was not freed by the first wait.
+        assert!(child.try_wait().unwrap().is_some());
+    }
 }
 
 #[cfg(test)]

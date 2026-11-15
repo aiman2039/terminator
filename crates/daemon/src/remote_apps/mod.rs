@@ -175,13 +175,7 @@ impl Shared {
         let handle = self.remote_apps_handle(session)?;
         let runtime = relock(&handle.runtime);
         let input = runtime.input().context("Remote apps are not connected")?;
-        for item in inputs {
-            input
-                .send(item)
-                .ok()
-                .context("Remote apps are not connected")?;
-        }
-        Ok(())
+        runtime::enqueue(input, inputs)
     }
 
     /// `None` when nothing changed after `since` within `wait_ms`.
@@ -202,6 +196,13 @@ impl Shared {
             .get(session)
             .cloned()
             .context(UNKNOWN_SESSION)
+    }
+
+    /// Whether any remote-apps session is live.
+    pub(crate) fn remote_apps_live(&self) -> bool {
+        relock(&self.remote_apps)
+            .values()
+            .any(|h| h.read(|r| r.status().live()))
     }
 
     /// Whether a live remote-apps session uses `project`.

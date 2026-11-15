@@ -4,9 +4,12 @@
 use std::io::{BufReader, BufWriter, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
-use std::sync::{Arc, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use crate::server::relock;
 
 use terminator_core::remote::RemoteProject;
 use terminator_core::remote_apps::{
@@ -20,6 +23,8 @@ use super::runtime::Next;
 const STDERR_LIMIT: usize = 16 * 1024;
 /// How often the detach timeout is checked.
 const DETACH_CHECK: Duration = Duration::from_secs(10);
+/// After a stop, the bridge gets this long to exit before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// The detach timeout now; `None` is never. Read on every check so a
 /// Settings change applies to live sessions.
@@ -83,7 +88,7 @@ pub(super) fn watch_detach(handle: &Handle, limit: &DetachLimit, every: Duration
 }
 
 /// One bridge process: starts it, serves it, and waits for it to exit.
-fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) -> RunEnd {
+fn run_once(handle: &Arc<Handle>, project: &RemoteProject, control: Option<&Path>) -> RunEnd {
     let mut child = match spawn_bridge(project, control) {
         Ok(child) => child,
         Err(error) => return RunEnd::NoSsh(format!("Cannot run ssh: {error:#}")),
@@ -95,7 +100,7 @@ fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) ->
         let _ = child.wait();
         return RunEnd::NoSsh("ssh has no pipes".into());
     };
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(super::runtime::INPUT_QUEUE);
     let started = handle.update(|r| r.bridge_started(tx));
     if !started {
         // Disconnect came while ssh started: close stdin at once.
@@ -103,16 +108,66 @@ fn run_once(handle: &Handle, project: &RemoteProject, control: Option<&Path>) ->
     } else {
         thread::spawn(move || write_input(stdin, &rx));
     }
+    let child = Arc::new(Mutex::new(child));
+    let done = Arc::new(AtomicBool::new(false));
+    {
+        let (handle, child, done) = (Arc::clone(handle), Arc::clone(&child), Arc::clone(&done));
+        thread::spawn(move || kill_after_stop(&handle, &child, &done, STOP_GRACE));
+    }
     let stderr = thread::spawn(move || read_stderr(stderr));
     let mut input = BufReader::new(stdout);
     while let Ok(framed) = protocol::read_frame::<HostMessage>(&mut input) {
         let rgba = super::pixels::decode_frame(&framed);
         handle.apply(framed, rgba);
     }
-    let code = child.wait().ok().and_then(|status| status.code());
+    let code = reap(&child).and_then(|status| status.code());
+    done.store(true, Ordering::Release);
     RunEnd::Exited {
         code,
         stderr: stderr.join().unwrap_or_default(),
+    }
+}
+
+/// Waits for the bridge to exit without holding its lock across the wait,
+/// so [`kill_after_stop`] can still kill it.
+fn reap(child: &Mutex<Child>) -> Option<std::process::ExitStatus> {
+    loop {
+        match relock(child).try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// After a stop request, gives the bridge `grace` to exit on its closed
+/// stdin, then kills it: an ssh that hangs must not keep the session live.
+/// `done` is set once the run reaped its child.
+pub(super) fn kill_after_stop(
+    handle: &Handle,
+    child: &Mutex<Child>,
+    done: &AtomicBool,
+    grace: Duration,
+) {
+    loop {
+        if done.load(Ordering::Acquire) {
+            return;
+        }
+        if handle.wait_stop(Duration::from_millis(500)) {
+            break;
+        }
+    }
+    let started = Instant::now();
+    while started.elapsed() < grace {
+        if done.load(Ordering::Acquire) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    // `kill` after a reap is a no-op in std, never a signal to a reused PID.
+    if !done.load(Ordering::Acquire) {
+        let _ = relock(child).kill();
     }
 }
 

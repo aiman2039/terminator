@@ -206,6 +206,18 @@ fn forward_command(start: bool, control: &Path, forward: &Forward) -> Result<()>
     Ok(())
 }
 
+/// Cancels the forwards of a forgotten project; best-effort. Call it
+/// without the state lock: it starts `ssh -O cancel` processes.
+pub(crate) fn cancel_forwards(gone: Vec<Entry>) {
+    for entry in gone {
+        if let Ok(command) =
+            terminator_core::ssh::forward_control(false, &entry.control, &entry.forward)
+        {
+            spawn_bounded(command, "ssh-forward-cancel");
+        }
+    }
+}
+
 impl Shared {
     fn forward_target(
         &self,
@@ -352,18 +364,6 @@ impl Shared {
         drop(state);
         if !busy {
             stop_control(control);
-        }
-    }
-
-    /// Cancels `project`'s forwards before it is forgotten; best-effort.
-    pub(crate) fn drop_project_forwards(&self, project: &str) {
-        let gone = relock(&self.forwards).remove_project(project);
-        for entry in gone {
-            if let Ok(command) =
-                terminator_core::ssh::forward_control(false, &entry.control, &entry.forward)
-            {
-                spawn_bounded(command, "ssh-forward-cancel");
-            }
         }
     }
 

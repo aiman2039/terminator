@@ -201,33 +201,7 @@ pub(crate) fn finish_activation(weak: std::sync::Weak<crate::server::Shared>) {
             let Some(paths) = shared.catalog_paths.as_ref() else {
                 return;
             };
-            let result = (|| -> Result<bool> {
-                let _lock = terminator_core::generations::coordinate_timeout(
-                    paths,
-                    std::time::Duration::from_millis(100),
-                )?;
-                let catalog = terminator_core::generations::Catalog::open(paths)?;
-                let mut updated = crate::server::relock(&shared.state).clone();
-                if catalog.active()?.as_deref() != Some(&updated.generation) {
-                    return Ok(false);
-                }
-                catalog.refresh(&mut updated)?;
-                if !updated.vnc_profiles.iter().any(|p| !p.password.is_empty()) {
-                    return Ok(true);
-                }
-                ensure!(
-                    migrate(paths, &mut updated.vnc_profiles) == 0,
-                    "Unlock the OS credential store to finish legacy VNC migration"
-                );
-                catalog.save_workspace(&updated)?;
-                {
-                    let mut state = crate::server::relock(&shared.state);
-                    state.vnc_profiles = updated.vnc_profiles;
-                    state.revision = state.revision.saturating_add(1);
-                }
-                shared.persist()?;
-                Ok(true)
-            })();
+            let result = migrate_pass(&shared, paths);
             if matches!(result, Ok(true)) {
                 return;
             }
@@ -240,9 +214,99 @@ pub(crate) fn finish_activation(weak: std::sync::Weak<crate::server::Shared>) {
     });
 }
 
+/// One migration attempt. The keychain writes run first, without the
+/// coordination lock: a keychain prompt may wait on the user, and every
+/// coordinated request would fail with Busy meanwhile. The lock is taken
+/// only to publish profiles whose stored identity and password did not
+/// change since. True when nothing legacy remains.
+fn migrate_pass(shared: &crate::server::Shared, paths: &Paths) -> Result<bool> {
+    let generation = crate::server::relock(&shared.state).generation.clone();
+    let legacy: Vec<VncProfile> = {
+        let catalog = terminator_core::generations::Catalog::open(paths)?;
+        if catalog.active()?.as_deref() != Some(&generation) {
+            return Ok(false);
+        }
+        catalog
+            .workspace()?
+            .vnc_profiles
+            .into_iter()
+            .filter(|p| !p.password.is_empty())
+            .collect()
+    };
+    if legacy.is_empty() {
+        return Ok(true);
+    }
+    let mut stored = legacy.clone();
+    ensure!(
+        migrate(paths, &mut stored) == 0,
+        "Unlock the OS credential store to finish legacy VNC migration"
+    );
+    let _lock = terminator_core::generations::coordinate_timeout(
+        paths,
+        std::time::Duration::from_millis(100),
+    )?;
+    let catalog = terminator_core::generations::Catalog::open(paths)?;
+    if catalog.active()?.as_deref() != Some(&generation) {
+        return Ok(false);
+    }
+    let mut updated = crate::server::relock(&shared.state).clone();
+    catalog.workspace()?.apply(&mut updated);
+    let remaining = mark_migrated(&mut updated.vnc_profiles, &legacy)?;
+    catalog.save_workspace(&updated)?;
+    {
+        let mut state = crate::server::relock(&shared.state);
+        state.vnc_profiles = updated.vnc_profiles;
+        state.revision = state.revision.saturating_add(1);
+    }
+    shared.persist()?;
+    Ok(remaining == 0)
+}
+
+/// Clears the plaintext password of each profile that still matches a
+/// `migrated` one (same credential identity and password); returns how
+/// many legacy passwords remain for the next pass.
+fn mark_migrated(profiles: &mut [VncProfile], migrated: &[VncProfile]) -> Result<usize> {
+    let mut remaining = 0usize;
+    for p in profiles.iter_mut().filter(|p| !p.password.is_empty()) {
+        let account = credential_account(p)?;
+        let mut done = false;
+        for m in migrated {
+            if m.password == p.password && credential_account(m)? == account {
+                done = true;
+                break;
+            }
+        }
+        if done {
+            zeroize::Zeroize::zeroize(&mut p.password);
+            p.credential_saved = true;
+        } else {
+            remaining = remaining.saturating_add(1);
+        }
+    }
+    Ok(remaining)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_clears_only_passwords_that_were_stored_unchanged() {
+        let mut stored = profile();
+        stored.credential_saved = false;
+        stored.password = "secret".into();
+        let mut changed = stored.clone();
+        changed.id = "other".into();
+        changed.password = "typed later".into();
+        let mut moved = stored.clone();
+        moved.host = "two.example".into();
+        let mut profiles = vec![stored.clone(), changed, moved];
+        let remaining = mark_migrated(&mut profiles, std::slice::from_ref(&stored)).unwrap();
+        assert_eq!(remaining, 2);
+        assert!(profiles[0].password.is_empty() && profiles[0].credential_saved);
+        assert_eq!(profiles[1].password, "typed later");
+        assert_eq!(profiles[2].password, "secret");
+    }
     fn profile() -> VncProfile {
         VncProfile {
             id: "fixture".into(),

@@ -91,7 +91,10 @@ impl GenerationWorker {
         // A newer generation may write workspace data this build cannot
         // read. Draining generations do not need it: they must still see
         // that they drain and retire, so the error waits until then.
-        let refreshed = catalog.refresh(&mut relock(&shared.state));
+        // Read without the state lock; hold it only to apply the result.
+        let refreshed = catalog
+            .workspace()
+            .map(|workspace| workspace.apply(&mut relock(&shared.state)));
         if catalog.active()?.as_deref() == Some(&owner) && !shared.shutdown.load(Ordering::Acquire)
         {
             let _ = catalog.restore_serving();
