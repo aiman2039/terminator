@@ -201,13 +201,18 @@ impl App {
                 }
                 ui.separator();
                 appearance::menu_button(ui, "Pinned tools", |ui| {
-                    for (_, _, label) in STRIPE_TOOLS {
-                        let mut pinned = self.stripe_pinned(right, label);
-                        let response = ui.checkbox(&mut pinned, label);
+                    for (_, icon, label) in STRIPE_TOOLS {
+                        let pinned = self.stripe_pinned(right, label);
+                        let response = appearance::menu_item(appearance::MenuItemInput {
+                            ui,
+                            label,
+                            icon,
+                            shortcut: if pinned { "✓" } else { "" },
+                        });
                         #[cfg(feature = "test-support")]
                         diagnostics::record_ui(ui, &format!("stripe-pin:{label}"), response.rect);
-                        if response.changed() {
-                            self.set_stripe_pin(right, label, pinned);
+                        if response.clicked() {
+                            self.set_stripe_pin(right, label, !pinned);
                         }
                     }
                 });
