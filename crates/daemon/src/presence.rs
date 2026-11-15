@@ -16,8 +16,10 @@ fn targets(shared: &Shared) -> Vec<agents::ShellTarget> {
                 .map(|pid| (s.id.clone(), s.generation.clone(), pid, s.created))
         })
         .collect();
+    // Copy the handles, then lock each runtime without the sessions map
+    // lock: a busy runtime must not hold up session creation or lookup.
     #[cfg(unix)]
-    let runtimes = relock(&shared.sessions);
+    let runtimes = handles(&shared.sessions, live.iter().map(|(id, ..)| id.as_str()));
     live.into_iter()
         .map(|(id, generation, pid, created)| {
             // ConPTY exposes no process-group leader; foreground detection
@@ -39,6 +41,20 @@ fn targets(shared: &Shared) -> Vec<agents::ShellTarget> {
             }
         })
         .collect()
+}
+
+/// The handles of `ids` in `map`, copied so the map lock is released.
+#[cfg(any(unix, test))]
+fn handles<'a, T>(
+    map: &std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<T>>>,
+    ids: impl Iterator<Item = &'a str>,
+) -> std::collections::HashMap<String, std::sync::Arc<T>> {
+    let map = relock(map);
+    ids.filter_map(|id| {
+        map.get(id)
+            .map(|handle| (id.to_owned(), std::sync::Arc::clone(handle)))
+    })
+    .collect()
 }
 
 /// One batched inspection pass. Runs only on the inspector thread: passes
@@ -130,6 +146,22 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn inspecting_a_busy_runtime_does_not_hold_the_sessions_map() {
+        let busy = std::sync::Arc::new(std::sync::Mutex::new(0u8));
+        let map = std::sync::Mutex::new(std::collections::HashMap::from([
+            ("a".to_owned(), std::sync::Arc::clone(&busy)),
+            (
+                "b".to_owned(),
+                std::sync::Arc::new(std::sync::Mutex::new(1u8)),
+            ),
+        ]));
+        let _held = busy.lock().unwrap();
+        let copied = handles(&map, ["a", "missing"].into_iter());
+        assert_eq!(copied.len(), 1);
+        assert!(map.try_lock().is_ok(), "the map lock is released");
+    }
     #[cfg(unix)]
     use std::os::unix::process::CommandExt;
 
