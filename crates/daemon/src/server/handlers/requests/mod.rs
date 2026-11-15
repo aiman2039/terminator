@@ -259,6 +259,7 @@ impl Shared {
             } => self.on_quota_notify(&session, &title, [inbox, os, ntfy]),
             Request::Settings(settings) => self.on_settings(settings),
             Request::Hook(event) => self.on_hook(event),
+            Request::HookUsage(event) => self.on_hook_usage(&event),
             Request::Rename { session, label } => self.on_rename(&session, label),
             Request::Stop { session } => self.on_stop(&session),
             Request::Remove { session } => self.on_remove(session),

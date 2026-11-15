@@ -72,6 +72,38 @@ impl HookCommand {
         }
         Ok(())
     }
+    /// Sends a usage-only event (`Request::HookUsage`) built from what the
+    /// agent `kind` wrote about itself outside a hook (Claude Code's
+    /// status-line input). Same identity as `event`, and inert in the same
+    /// cases: outside an app-owned terminal, or under another agent. `Ok(true)`
+    /// only when the daemon accepted it; older daemons reject the request.
+    pub(crate) fn deliver_usage(
+        args: &[String],
+        kind: &str,
+        payload: &serde_json::Value,
+        usage: agent_workflow::AgentUsage,
+    ) -> Result<bool> {
+        let mut paths = Self::paths(args)?;
+        let ancestry = Self::agent_parent();
+        if ancestry.parent.is_empty() || ancestry.actual.as_deref().is_some_and(|a| a != kind) {
+            return Ok(false);
+        }
+        let (sid, token) = Self::identify(&mut paths, &ancestry.ancestors)?;
+        let Some(event) = terminator_integrations::usage_event(
+            terminator_integrations::NormalizeInput {
+                kind,
+                session: &sid,
+                parent: &ancestry.parent,
+                payload,
+            },
+            Some(usage),
+        ) else {
+            return Ok(false);
+        };
+        let mut stream = connect(&paths, Request::HookUsage(event), Some(token))?;
+        stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+        Ok(matches!(read_frame::<Response>(&mut stream)?, Response::Ok))
+    }
     fn paths(args: &[String]) -> Result<Paths> {
         let mut paths = Paths::discover()?;
         if let Some(i) = args.iter().position(|a| a == "--data-dir") {

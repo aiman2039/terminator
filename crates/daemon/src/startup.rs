@@ -155,6 +155,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         terminator_core::agent_workflow::TRIAGE_CAPABILITY.into(),
         terminator_core::agent_workflow::RESTORE_CAPABILITY.into(),
         terminator_core::agent_workflow::USAGE_CAPABILITY.into(),
+        terminator_core::agent_workflow::STATUSLINE_USAGE_CAPABILITY.into(),
         terminator_core::command_blocks::CAPABILITY.into(),
         SESSION_FOR_PIDS_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),

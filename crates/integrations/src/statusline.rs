@@ -1,7 +1,8 @@
 //! Opt-in Claude Code status-line source for the Usage tool. Install keeps
 //! the user's own `statusLine` (saved next to Terminator's data) and points
 //! Claude Code at `terminator-hook statusline`, which records only the
-//! `rate_limits` object and then runs the user's command unchanged. Remove
+//! `rate_limits` object, sends a changed `model` as usage only, and then
+//! runs the user's command unchanged. Remove
 //! restores the user's `statusLine`.
 use crate::{
     Error, Result, backup_path, config_path, json_hooks::json_doc, read_existing, write_config,
@@ -125,6 +126,93 @@ pub fn quota_record(input: &[u8], now: u64) -> Option<Vec<u8>> {
     }
     record.insert("observed_at".into(), now.into());
     serde_json::to_vec(&record).ok()
+}
+
+/// The current model in Claude Code's status-line input (`model.id`, else
+/// `model.display_name`) as usage. Nothing else is read.
+#[must_use]
+pub fn usage(input: &Value) -> Option<terminator_core::agent_workflow::AgentUsage> {
+    let model = input.get("model")?;
+    let text = ["id", "display_name"]
+        .iter()
+        .find_map(|key| model.get(*key).and_then(Value::as_str))?;
+    terminator_core::agent_workflow::AgentUsage::new(Some(text), None)
+}
+
+/// Last model sent per terminal and agent session, so the frequent status
+/// line sends only a change.
+#[must_use]
+pub fn sent_path(data: &Path) -> PathBuf {
+    data.join("claude-statusline-models.json")
+}
+
+/// Most sessions remembered; the oldest are dropped.
+const MAX_SENT: usize = 64;
+/// A failed send of the same model is tried again after this many seconds.
+pub const RETRY_SECS: u64 = 30;
+
+/// One send of a model: whether the daemon accepted it, and when.
+#[derive(Clone, Copy, Debug)]
+pub struct Attempt {
+    pub delivered: bool,
+    pub at: u64,
+}
+
+/// The models the status line sent (or tried to send), by key.
+#[derive(Debug, Default)]
+pub struct SentModels(serde_json::Map<String, Value>);
+
+impl SentModels {
+    #[must_use]
+    pub fn load(data: &Path) -> Self {
+        Self(
+            std::fs::read(sent_path(data))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Whether `model` should be sent for `key`: it differs from the last
+    /// one, or its last send failed more than [`RETRY_SECS`] ago.
+    #[must_use]
+    pub fn due(&self, key: &str, model: &str, now: u64) -> bool {
+        let Some(last) = self.0.get(key) else {
+            return true;
+        };
+        if last.get("model").and_then(Value::as_str) != Some(model) {
+            return true;
+        }
+        let delivered = last.get("delivered").and_then(Value::as_bool) == Some(true);
+        let at = last.get("at").and_then(Value::as_u64).unwrap_or(0);
+        !delivered && now.saturating_sub(at) >= RETRY_SECS
+    }
+
+    pub fn record(&mut self, key: &str, model: &str, attempt: Attempt) {
+        let Attempt { delivered, at } = attempt;
+        self.0.insert(
+            key.into(),
+            json!({"model": model, "delivered": delivered, "at": at}),
+        );
+        while self.0.len() > MAX_SENT {
+            let Some(oldest) = self
+                .0
+                .iter()
+                .min_by_key(|(_, entry)| entry.get("at").and_then(Value::as_u64).unwrap_or(0))
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.0.remove(&oldest);
+        }
+    }
+
+    /// # Errors
+    /// Fails when the file cannot be written.
+    pub fn save(&self, data: &Path) -> Result<()> {
+        atomic_write(&sent_path(data), &serde_json::to_vec(&self.0)?)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

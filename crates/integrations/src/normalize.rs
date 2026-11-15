@@ -171,6 +171,48 @@ pub struct NormalizeInput<'a> {
     pub payload: &'a Value,
 }
 
+/// One agent run: the agent kind, its process and its own session.
+fn invocation_id(kind: &str, parent: &str, payload: &Value, provider: &str) -> String {
+    let process = first_str(payload, &["terminator_invocation"]).unwrap_or(parent);
+    format!("{kind}:{process}:{provider}")
+}
+
+/// A usage-only event (`Request::HookUsage`) from what an agent wrote about
+/// itself outside a hook, such as Claude Code's status-line input. It names
+/// the same agent run as [`normalize`] does for that agent's hooks. The
+/// daemon reads only `usage` from it; its state is a placeholder. `None`
+/// without the agent's own session ID or without usage.
+#[must_use]
+pub fn usage_event(
+    input: NormalizeInput<'_>,
+    usage: Option<terminator_core::agent_workflow::AgentUsage>,
+) -> Option<HookEvent> {
+    let NormalizeInput {
+        kind,
+        session,
+        parent,
+        payload,
+    } = input;
+    let usage = usage.filter(|usage| !usage.is_empty())?;
+    let provider = first_str(payload, PROVIDER_SESSION_KEYS)?;
+    Some(HookEvent {
+        protocol_version: PROTOCOL_VERSION,
+        event_id: id(),
+        terminal_session_id: session.into(),
+        agent_invocation_id: invocation_id(kind, parent, payload, provider),
+        agent_kind: kind.into(),
+        provider_session_id: Some(provider.into()),
+        state: AgentState::Unknown,
+        request_id: None,
+        sequence: None,
+        summary: String::new(),
+        details: String::new(),
+        resume: None,
+        process: None,
+        usage: Some(usage),
+    })
+}
+
 pub fn normalize(input: NormalizeInput<'_>) -> Result<Option<HookEvent>> {
     let NormalizeInput {
         kind,
@@ -194,8 +236,7 @@ pub fn normalize(input: NormalizeInput<'_>) -> Result<Option<HookEvent>> {
     let Some(provider) = provider else {
         return Ok(None);
     };
-    let process = first_str(payload, &["terminator_invocation"]).unwrap_or(parent);
-    let invocation = format!("{kind}:{process}:{provider}");
+    let invocation = invocation_id(kind, parent, payload, provider);
     let summary = first_str(payload, SUMMARY_KEYS)
         .unwrap_or(state.label())
         .chars()

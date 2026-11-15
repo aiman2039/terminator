@@ -253,7 +253,7 @@ use codex::codex_config;
 use copilot::copilot_config;
 pub use error::Error;
 use json_hooks::{cursor_config, json_config, sync_muse_settings};
-pub use normalize::{NormalizeInput, normalize};
+pub use normalize::{NormalizeInput, normalize, usage_event};
 use opencode::opencode_plugin;
 
 #[cfg(test)]

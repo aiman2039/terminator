@@ -117,7 +117,7 @@ fn authenticated(env: &Envelope, shared: &Shared) -> bool {
         return true;
     }
     match &env.request {
-        Request::Hook(e) => shared
+        Request::Hook(e) | Request::HookUsage(e) => shared
             .runtime(&e.terminal_session_id)
             .is_ok_and(|r| relock(&r).token == env.auth),
         Request::ShellCommand { session }

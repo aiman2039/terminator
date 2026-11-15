@@ -124,6 +124,17 @@ impl Shared {
         Ok(Outcome::Deferred)
     }
 
+    /// Usage only (`agent-usage-statusline-v1`): no turn, notice, alert or
+    /// ntfy push, and no lifecycle change.
+    pub(super) fn on_hook_usage(&self, event: &HookEvent) -> Result<Outcome> {
+        let changed = relock(&self.state).apply_hook_usage(event)?;
+        Ok(if changed {
+            Outcome::Deferred
+        } else {
+            Outcome::Reply(Response::Ok)
+        })
+    }
+
     /// Queues the token for the ntfy worker, which writes the OS credential
     /// store; this request never waits for it.
     pub(super) fn on_ntfy_token(&self, token: String) -> Result<Outcome> {
