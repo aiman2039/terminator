@@ -344,3 +344,13 @@ fn newer_alert_supersedes_the_waiting_one() {
         "only one waiter at a time"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn starting_the_gui_does_not_wait_for_it_to_exit() {
+    let mut command = Command::new("sleep");
+    command.arg("5");
+    let started = Instant::now();
+    spawn_detached(command).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+}

@@ -18,7 +18,6 @@ pub(super) fn mark_colors(colors: DiffColors) -> diff::live::MarkColors {
     let tints = colors.tints();
     diff::live::MarkColors {
         added: colors.added,
-        modified: colors.accent,
         row: tints.row,
         word: tints.word,
     }

@@ -125,6 +125,8 @@ enum Status {
 
 /// Normal poll cadence (AGENTS.md: once per minute).
 const POLL_INTERVAL: Duration = Duration::from_mins(1);
+/// Failed checks in a row that keep the minute cadence.
+const ERRORS_BEFORE_BACKOFF: u32 = 2;
 /// Longest wait after repeated rate-limit replies.
 const MAX_BACKOFF: Duration = Duration::from_hours(1);
 
@@ -150,6 +152,9 @@ pub struct WindowsUpdateCheck {
     cached: Option<Latest>,
     /// Rate-limit replies in a row; drives the poll backoff.
     rate_limit_streak: u32,
+    /// Other failed checks in a row; past [`ERRORS_BEFORE_BACKOFF`] they
+    /// slow the poll.
+    error_streak: u32,
     /// Release-notes Markdown render cache.
     notes_cache: egui_commonmark::CommonMarkCache,
 }
@@ -193,6 +198,7 @@ impl WindowsUpdateCheck {
             etag: None,
             cached: None,
             rate_limit_streak: 0,
+            error_streak: 0,
             notes_cache: egui_commonmark::CommonMarkCache::default(),
         }
     }
@@ -219,6 +225,7 @@ impl WindowsUpdateCheck {
         match result {
             Ok((tag, html_url, assets, notes)) => {
                 self.rate_limit_streak = 0;
+                self.error_streak = 0;
                 if newer_than(&tag) {
                     let url = download_url(&html_url, &assets, &platform_asset_suffix());
                     // One offer per version per launch, like Sparkle.
@@ -241,6 +248,15 @@ impl WindowsUpdateCheck {
                     let delay = rate_limit_delay(self.rate_limit_streak, wait);
                     self.rate_limit_streak = self.rate_limit_streak.saturating_add(1);
                     self.next = self.started.elapsed().saturating_add(delay);
+                } else {
+                    // A network error: keep the minute cadence for a
+                    // couple of failures, then back off as for rate limits.
+                    self.error_streak = self.error_streak.saturating_add(1);
+                    if self.error_streak > ERRORS_BEFORE_BACKOFF {
+                        let over = self.error_streak.saturating_sub(ERRORS_BEFORE_BACKOFF);
+                        let delay = rate_limit_delay(over, Duration::ZERO);
+                        self.next = self.started.elapsed().saturating_add(delay);
+                    }
                 }
                 // A transient failure must not hide a known download offer.
                 if !matches!(self.status, Status::Available { .. }) {

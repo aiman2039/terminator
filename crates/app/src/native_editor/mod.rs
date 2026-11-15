@@ -32,7 +32,7 @@ mod rename;
 mod reopen;
 mod status;
 mod view;
-pub(crate) use actions::ActionsPopup;
+pub(crate) use actions::{ActionApply, ActionsPopup};
 pub(crate) use agent_context::agent_reference;
 pub(crate) use blame::{EditorBlame, ymd};
 use close::CloseIssuerInput;

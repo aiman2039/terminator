@@ -165,11 +165,13 @@ impl Attach {
                 ws_xpixel: 0,
                 ws_ypixel: 0,
             });
-        (size.ws_row.max(1), size.ws_col.max(1))
+        // A huge window must not make the daemon refuse the attach.
+        clamp_terminal_size(size.ws_row, size.ws_col)
     }
     #[cfg(not(unix))]
     fn dimensions() -> (u16, u16) {
-        terminator_sys::dimensions()
+        let (rows, cols) = terminator_sys::dimensions();
+        clamp_terminal_size(rows, cols)
     }
     /// Track the last forwarded size; true when `current` is a new resize.
     /// Resize frames go out on change only, so an idle poll loop never floods

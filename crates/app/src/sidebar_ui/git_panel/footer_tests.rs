@@ -158,7 +158,12 @@ fn the_readiness_line_counts_the_staged_set_only() {
     context.changes[0].status = "MM".into();
     assert_eq!(readiness::readiness(&context).lines, None);
     let (_, texts) = paint(&ctx, &context, vec![]);
-    assert!(has(&texts, "1 of 3 files staged") && !has(&texts, "+2"));
+    // Only a.rs's two rows (Staged and Changes) paint `+2`; the line does not.
+    let plus_two = texts.iter().filter(|text| *text == "+2").count();
+    assert!(
+        has(&texts, "1 of 3 files staged") && plus_two == 2,
+        "{texts:?}"
+    );
 }
 
 #[test]

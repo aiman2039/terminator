@@ -48,7 +48,7 @@ impl App {
     #[cfg(feature = "test-support")]
     fn fixture_snapshot_chrome(&self, ctx: &egui::Context, snapshot: &mut serde_json::Value) {
         if let Some(controls) = snapshot.get_mut("controls") {
-            for key in ["left-agent-bar", "project-header-menu"] {
+            for key in ["left-agent-bar", "project-header-menu", "header-overflow"] {
                 SnapshotHelpers::insert(
                     controls,
                     key,

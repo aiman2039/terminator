@@ -175,7 +175,7 @@ impl Viewer<'_> {
     ) -> appearance::TerminalBar {
         let session = frame.session;
         let sid = &session.id;
-        let branch = self.app.branch_at(&session.cwd);
+        let branch = self.app.pane_branch(&session.cwd);
         let active = self.app.active_session.as_ref() == Some(sid);
         let vertical_tip = self.app.action_tip("Split vertically", Action::SplitRight);
         let horizontal_tip = self.app.action_tip("Split horizontally", Action::SplitDown);

@@ -79,11 +79,17 @@ case "${1:-all}" in
         need_plugin deny
         cargo deny check bans licenses sources
         ;;
+    quick)
+        # Pre-commit set: no network, one compile. Pre-push and CI run `all`.
+        sh "$0" async-boundary
+        sh "$0" fmt
+        TERMINATOR_CLIPPY_ONE_PASS=1 sh "$0" clippy
+        ;;
     all)
         # Clippy includes compilation checks; keep `lint` as a standalone command.
         for check in async-boundary fmt build clippy audit deny; do
             sh "$0" "$check"
         done
         ;;
-    *) echo "Usage: $0 [all|async-boundary|fmt|lint|build|clippy|sarah|test|coverage|audit|deny|windows-check|windows-clippy]" >&2; exit 2 ;;
+    *) echo "Usage: $0 [all|quick|async-boundary|fmt|lint|build|clippy|sarah|test|coverage|audit|deny|windows-check|windows-clippy]" >&2; exit 2 ;;
 esac

@@ -1,8 +1,8 @@
 //! Production refresh worker: watcher-driven, cancellable, partial re-listing.
 pub(super) use super::watch_state::{WatchState, WatcherFactory, rewatch};
 use super::{
-    DirectoriesToListInput, Dirty, Request, Wake, directories_to_list, full_refresh, normalize,
-    watch_targets,
+    DirectoriesToListInput, Dirty, Request, Wake, below_ignored, directories_to_list, full_refresh,
+    ignored_directories, normalize, watch_targets,
 };
 use crate::{Update, gui_services::Services, services};
 use std::{
@@ -36,6 +36,14 @@ pub fn spawn_async(service: Services) -> watch::Sender<Option<Request>> {
     sender
 }
 
+/// What the watcher callback shares with the worker: the changed paths,
+/// and the ignored folders whose contents change no visible listing.
+#[derive(Default)]
+pub(super) struct Watched {
+    pub(super) dirty: Mutex<Dirty>,
+    pub(super) ignored: Mutex<Vec<PathBuf>>,
+}
+
 /// One refresh: its request, the dirty paths it covers, and whether it
 /// re-lists every visible folder.
 struct RefreshPass {
@@ -57,7 +65,7 @@ struct RefreshWorker {
     requests: watch::Receiver<Option<Request>>,
     /// Bumped by the watcher callback for each recorded event.
     changed: watch::Receiver<u64>,
-    dirty: Arc<Mutex<Dirty>>,
+    watched: Arc<Watched>,
     watcher: SharedWatcher,
     missing_path: crate::retry_budget::RetryBudget,
     /// Final listings (with ignored flags) of the visible directories,
@@ -76,8 +84,8 @@ impl RefreshWorker {
     ) -> anyhow::Result<Self> {
         let (events, changed) = watch::channel(0_u64);
         let events = Arc::new(events);
-        let dirty = Arc::new(Mutex::new(Dirty::default()));
-        let recorder = Arc::clone(&dirty);
+        let watched = Arc::new(Watched::default());
+        let recorder = Arc::clone(&watched);
         let make: WatcherFactory = Box::new(move || {
             let (recorder, events) = (Arc::clone(&recorder), Arc::clone(&events));
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -94,7 +102,7 @@ impl RefreshWorker {
             token,
             requests,
             changed,
-            dirty,
+            watched,
             watcher: Arc::new(Mutex::new(watcher)),
             missing_path: crate::retry_budget::RetryBudget::default(),
             listed: HashMap::new(),
@@ -155,6 +163,7 @@ impl RefreshWorker {
         let operation = self.token.child_token();
         let _guard = operation.clone().drop_guard();
         let seen = self
+            .watched
             .dirty
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -266,7 +275,14 @@ impl RefreshWorker {
             ))
             .await?;
         self.listed_for = Some(request.clone());
-        self.dirty
+        let ignored = ignored_directories(request, self.listed.values());
+        *self
+            .watched
+            .ignored
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = ignored;
+        self.watched
+            .dirty
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .settle(seen);
@@ -316,7 +332,7 @@ impl RefreshWorker {
 }
 
 pub(super) fn record_event(
-    dirty: &Mutex<Dirty>,
+    watched: &Watched,
     events: &watch::Sender<u64>,
     event: notify::Result<notify::Event>,
 ) {
@@ -330,6 +346,14 @@ pub(super) fn record_event(
         event.paths = event.paths.iter().map(|path| normalize(path)).collect();
         event
     });
+    if let Ok(event) = &event
+        && below_ignored(&event.paths, &watched.ignored)
+        && !event.need_rescan()
+    {
+        // A build writing into `target/` changes no listing and no status.
+        return;
+    }
+    let dirty = &watched.dirty;
     dirty
         .lock()
         .unwrap_or_else(PoisonError::into_inner)

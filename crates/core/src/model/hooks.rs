@@ -34,6 +34,9 @@ impl State {
             .is_some_and(|i| self.agents.get(i).is_some_and(|a| a.state == e.state))
             && e.request_id.is_none();
         self.upsert_hook_agent(&e, existing);
+        if existing.is_none() {
+            self.cap_agents();
+        }
         self.record_agent_usage(&e);
         self.resolve_hook_notifications(&e);
         self.revision = self.revision.saturating_add(1);
@@ -51,6 +54,41 @@ impl State {
             return Ok(None);
         }
         Ok(self.push_hook_notification(e))
+    }
+
+    /// A usage-only event (`Request::HookUsage`): merges `usage` into an
+    /// agent this state already knows. The event's state, summary, request,
+    /// sequence and process are ignored: it never creates an agent and never
+    /// changes lifecycle, notices, presence or notifications. Returns whether
+    /// the usage changed.
+    ///
+    /// # Errors
+    /// Fails for an invalid event or an unknown or stopped agent.
+    pub fn apply_hook_usage(&mut self, e: &HookEvent) -> Result<bool, StateError> {
+        self.validate_hook_event(e)?;
+        let known = self
+            .hook_existing(e)
+            .and_then(|i| self.agents.get(i))
+            .is_some_and(|a| a.state != AgentState::Stopped);
+        if !known {
+            return Err(StateError::UnknownAgent {
+                session: e.terminal_session_id.clone(),
+            });
+        }
+        let Some(usage) = e.usage.as_ref().filter(|u| !u.is_empty()) else {
+            return Ok(false);
+        };
+        let entry = self
+            .agent_usage
+            .entry(e.agent_invocation_id.clone())
+            .or_default();
+        let before = entry.clone();
+        entry.merge(usage);
+        let changed = *entry != before;
+        if changed {
+            self.revision = self.revision.saturating_add(1);
+        }
+        Ok(changed)
     }
 
     fn validate_hook_event(&self, e: &HookEvent) -> Result<(), StateError> {
@@ -180,6 +218,42 @@ impl State {
         } else {
             self.agents.push(agent);
         }
+    }
+
+    /// Bounds `agents` in a live daemon. Above `MAX_AGENTS`, drops the
+    /// oldest records that no longer matter: not resumable, in a session
+    /// that is no longer live (its hook events are refused, so a dropped
+    /// record cannot come back), and with no pending notification.
+    fn cap_agents(&mut self) {
+        let excess = self.agents.len().saturating_sub(MAX_AGENTS);
+        if excess == 0 {
+            return;
+        }
+        let sessions = &self.sessions;
+        let notifications = &self.notifications;
+        let mut candidates: Vec<(u64, String, String)> = self
+            .agents
+            .iter()
+            .filter(|a| {
+                !a.resumable()
+                    && !sessions
+                        .iter()
+                        .any(|s| s.id == a.session_id && s.lifecycle.live())
+                    && !notifications.iter().any(|n| {
+                        n.invocation_id == a.invocation_id
+                            && n.session_id == a.session_id
+                            && !(n.dismissed || n.resolved)
+                    })
+            })
+            .map(|a| (a.updated, a.session_id.clone(), a.invocation_id.clone()))
+            .collect();
+        candidates.sort_unstable();
+        candidates.truncate(excess);
+        self.agents.retain(|a| {
+            !candidates
+                .iter()
+                .any(|(_, s, i)| *s == a.session_id && *i == a.invocation_id)
+        });
     }
 
     /// Keeps the newest model and mode each agent reported. Display only:

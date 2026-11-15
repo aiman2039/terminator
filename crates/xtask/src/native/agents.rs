@@ -38,7 +38,7 @@ fn toggle_agents(input: ToggleAgentsInput<'_>) -> Result<()> {
                     gui(h).is_ok_and(|s| {
                         (s.pointer("/controls/left-agent-bar")
                             .is_some_and(Value::is_array)
-                            || s.pointer("/controls/project-header-menu")
+                            || s.pointer("/controls/header-overflow")
                                 .is_some_and(Value::is_array))
                             && s.get("agent_bar_badge")
                                 .and_then(Value::as_str)
@@ -54,11 +54,13 @@ fn toggle_agents(input: ToggleAgentsInput<'_>) -> Result<()> {
             {
                 json!([{"at_ms":900,"target":"left-agent-bar"}])
             } else {
+                // A narrow right sidebar folds the bell into the header's
+                // overflow menu.
                 ensure!(
                     snapshot
-                        .pointer("/controls/project-header-menu")
+                        .pointer("/controls/header-overflow")
                         .is_some_and(Value::is_array),
-                    "Missing Agents button and header menu"
+                    "Missing Agents button and header overflow menu"
                 );
                 let badge = snapshot
                     .get("agent_bar_badge")
@@ -69,7 +71,7 @@ fn toggle_agents(input: ToggleAgentsInput<'_>) -> Result<()> {
                 } else {
                     format!("Agents · {badge}")
                 };
-                json!([{"at_ms":900,"target":"project-header-menu"},{"at_ms":1400,"target":label}])
+                json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1400,"target":label}])
             };
             terminator_core::atomic_write(&path, &serde_json::to_vec(&actions)?)?;
             h.wait(

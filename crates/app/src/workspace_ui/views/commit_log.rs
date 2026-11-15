@@ -78,7 +78,7 @@ impl App {
             pane.details(col, selected, &mut pick);
         });
         if let Some(hash) = pick.fetch {
-            self.commit_files.insert(hash.clone(), None);
+            remember_fetch(&mut self.commit_files, hash.clone());
             let _ = self.jobs.send(Job::CommitFiles(cwd.clone(), hash));
         }
         if let Some(tab) = pick.open {
@@ -186,6 +186,9 @@ impl CommitLogPane<'_> {
             }
             Some(Some(Err(error))) => {
                 col.colored_label(appearance::color(&self.theme.status_failed), error);
+                if col.link("Retry").clicked() {
+                    pick.fetch = Some(hash.to_owned());
+                }
                 return;
             }
             Some(Some(Ok(files))) => files,
@@ -217,5 +220,34 @@ impl CommitLogPane<'_> {
                 });
             }
         }
+    }
+}
+
+/// At most this many commits keep their changed files.
+const COMMIT_FILES_LIMIT: usize = 256;
+
+/// Mark `hash` as loading. A full map drops the answered entries; a commit
+/// shown again loads its files again.
+fn remember_fetch(files: &mut HashMap<String, Option<CommitFiles>>, hash: String) {
+    if files.len() >= COMMIT_FILES_LIMIT {
+        files.retain(|_, answer| answer.is_none());
+    }
+    files.insert(hash, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_files_cache_stays_bounded() {
+        let mut files = HashMap::new();
+        for n in 0..COMMIT_FILES_LIMIT * 3 {
+            remember_fetch(&mut files, n.to_string());
+            files.insert(n.to_string(), Some(Ok(Vec::new())));
+        }
+        assert!(files.len() <= COMMIT_FILES_LIMIT);
+        remember_fetch(&mut files, "pending".into());
+        assert_eq!(files.get("pending"), Some(&None));
     }
 }

@@ -136,6 +136,20 @@ fn replace_all_reaches_matches_past_the_highlight_cap() {
 }
 
 #[test]
+fn matches_on_a_long_multibyte_line_keep_char_columns() {
+    // 200k matches on one 1 MiB line: quadratic column counting would
+    // not finish; the running counter keeps it linear.
+    let count = 200_000usize;
+    let doc = Doc::new(format!("{}\n", "é x ".repeat(count)));
+    let pattern = regex::Regex::new("x").unwrap();
+    let matches = find_in(&doc, &pattern, None, usize::MAX);
+    assert_eq!(matches.len(), count);
+    assert_eq!((matches[0].start, matches[0].end), (2, 3));
+    let last = matches[matches.len().saturating_sub(1)];
+    assert_eq!((last.start, last.end), (799_998, 799_999));
+}
+
+#[test]
 fn regex_replace_keeps_line_context_for_groups() {
     // `\Bb` matches the "b" inside "ab" but not a lone "b": the
     // replacement must see the whole line, not the matched text alone.

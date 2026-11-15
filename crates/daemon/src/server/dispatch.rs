@@ -78,7 +78,7 @@ fn attach_setup(input: AttachSetupInput<'_>) -> Result<Attached> {
         cols,
     } = input;
     anyhow::ensure!(
-        rows > 0 && cols > 0 && rows <= 500 && cols <= 1000,
+        rows > 0 && cols > 0 && rows <= MAX_TERMINAL_ROWS && cols <= MAX_TERMINAL_COLS,
         "Invalid terminal dimensions"
     );
     let rt = shared.runtime(session)?;
@@ -117,7 +117,7 @@ fn authenticated(env: &Envelope, shared: &Shared) -> bool {
         return true;
     }
     match &env.request {
-        Request::Hook(e) => shared
+        Request::Hook(e) | Request::HookUsage(e) => shared
             .runtime(&e.terminal_session_id)
             .is_ok_and(|r| relock(&r).token == env.auth),
         Request::ShellCommand { session }
@@ -198,6 +198,32 @@ fn serve_attach(
     relay_attach_output(stream, &rx, &rt)
 }
 
+/// What one frame on an attach input stream asks for.
+#[derive(Debug, PartialEq, Eq)]
+enum AttachInput {
+    Input(Vec<u8>),
+    /// Already clamped to the accepted terminal size.
+    Resize(u16, u16),
+    /// Undecodable input: dropped, the stream goes on.
+    Skip,
+    /// Not an input frame: the stream ends.
+    End,
+}
+
+impl From<Request> for AttachInput {
+    fn from(req: Request) -> Self {
+        match req {
+            Request::Input { data } => B64.decode(data).map_or(Self::Skip, Self::Input),
+            // An oversized window is clamped, not a reason to drop the attach.
+            Request::Resize { rows, cols } => {
+                let (rows, cols) = clamp_terminal_size(rows, cols);
+                Self::Resize(rows, cols)
+            }
+            _ => Self::End,
+        }
+    }
+}
+
 /// The input half of an attach: client keystrokes and resizes for one session.
 struct AttachedInput {
     shared: Arc<Shared>,
@@ -226,18 +252,14 @@ impl AttachedInput {
 
     /// Applies one input frame; `false` ends the input stream.
     fn apply(&self, req: Request) -> bool {
-        match req {
-            Request::Input { data } => match B64.decode(data) {
-                Ok(bytes) => self.shared.forward_input(&self.rt, &bytes).is_ok(),
-                Err(_) => true,
-            },
-            Request::Resize { rows, cols }
-                if rows > 0 && cols > 0 && rows <= 500 && cols <= 1000 =>
-            {
+        match AttachInput::from(req) {
+            AttachInput::Input(bytes) => self.shared.forward_input(&self.rt, &bytes).is_ok(),
+            AttachInput::Resize(rows, cols) => {
                 self.resize(rows, cols);
                 true
             }
-            _ => false,
+            AttachInput::Skip => true,
+            AttachInput::End => false,
         }
     }
 
@@ -395,5 +417,31 @@ mod tests {
             panic!("expected an error frame");
         };
         assert_eq!(text, "Authentication failed");
+    }
+
+    #[test]
+    fn oversized_resize_is_clamped_and_keeps_the_attach() {
+        let resize = |rows, cols| AttachInput::from(Request::Resize { rows, cols });
+        assert_eq!(resize(2000, 5000), AttachInput::Resize(500, 1000));
+        assert_eq!(resize(0, 0), AttachInput::Resize(1, 1));
+        assert_eq!(resize(40, 120), AttachInput::Resize(40, 120));
+        assert_eq!(
+            AttachInput::from(Request::Input {
+                data: "not base64!".into()
+            }),
+            AttachInput::Skip
+        );
+        assert_eq!(
+            AttachInput::from(Request::Input {
+                data: B64.encode(b"ls")
+            }),
+            AttachInput::Input(b"ls".to_vec())
+        );
+        assert_eq!(
+            AttachInput::from(Request::History {
+                session: "s".into()
+            }),
+            AttachInput::End
+        );
     }
 }

@@ -645,3 +645,16 @@ fn reattaching_a_vnc_view_does_not_replace_the_local_clipboard() {
         Some("copied".into())
     );
 }
+
+#[test]
+fn failed_frame_request_waits_before_the_next_one() {
+    let mut view = VncViewState::default();
+    let now = Instant::now();
+    assert!(view.poll_due(Duration::ZERO, now));
+    view.fetching = true;
+    view.frame_failed("gone".into(), now);
+    assert!(!view.fetching);
+    assert_eq!(view.error.as_deref(), Some("gone"));
+    assert!(!view.poll_due(Duration::ZERO, now));
+    assert!(view.poll_due(Duration::ZERO, now + state::FRAME_ERROR_BACKOFF));
+}

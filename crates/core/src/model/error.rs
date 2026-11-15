@@ -13,6 +13,8 @@ pub enum StateError {
     MissingEventIdentity { session: String },
     #[error("Hook too large")]
     HookTooLarge { event: String },
+    #[error("Unknown or stopped agent")]
+    UnknownAgent { session: String },
 }
 
 /// Why user settings are invalid.

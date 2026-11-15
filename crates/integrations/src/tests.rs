@@ -142,6 +142,45 @@ fn hook_model_and_permission_mode_become_usage_without_changing_state() {
     assert!(plain.usage.is_none());
 }
 #[test]
+fn a_usage_event_names_the_same_agent_run_as_its_hooks() {
+    use terminator_core::agent_workflow::AgentUsage;
+    let payload = json!({"session_id": "a", "model": {"id": "claude-opus"}});
+    let hook = normalize(NormalizeInput {
+        kind: "claude",
+        session: "s",
+        parent: "p",
+        payload: &json!({"hook_event_name": "SessionStart", "session_id": "a"}),
+    })
+    .unwrap()
+    .unwrap();
+    let input = || NormalizeInput {
+        kind: "claude",
+        session: "s",
+        parent: "p",
+        payload: &payload,
+    };
+    let event = usage_event(input(), AgentUsage::new(Some("claude-opus"), None)).unwrap();
+    assert_eq!(event.agent_invocation_id, hook.agent_invocation_id);
+    assert_eq!(event.terminal_session_id, "s");
+    assert_eq!(event.request_id, None);
+    assert!(event.summary.is_empty() && event.details.is_empty() && event.resume.is_none());
+    assert_eq!(event.usage.unwrap().model.as_deref(), Some("claude-opus"));
+    assert!(usage_event(input(), None).is_none());
+    let no_session = json!({"model": {"id": "m"}});
+    assert!(
+        usage_event(
+            NormalizeInput {
+                kind: "claude",
+                session: "s",
+                parent: "p",
+                payload: &no_session,
+            },
+            AgentUsage::new(Some("m"), None),
+        )
+        .is_none()
+    );
+}
+#[test]
 fn newer_agents_get_their_documented_resume_commands() {
     for (kind, program, args) in [
         ("gemini", "gemini", vec!["--resume", "a"]),

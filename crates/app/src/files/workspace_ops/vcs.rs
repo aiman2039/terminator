@@ -15,7 +15,9 @@ pub(super) fn git_options() -> CommandOptions {
 
 pub(super) fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     let output = run_command(git::command(root, args), git_options())?;
-    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    // Lossy: one commit subject or branch name in another encoding must not
+    // fail the whole list.
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 pub(super) struct GitPathInput<'a> {

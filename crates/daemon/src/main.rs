@@ -12,6 +12,7 @@ mod presence;
 mod review;
 mod terminal_env;
 mod terminal_events;
+mod terminate;
 mod vnc_session;
 mod workers;
 
@@ -73,6 +74,7 @@ fn main() -> Result<()> {
     workers::GenerationWorker::spawn(Arc::downgrade(&shared));
     workers::LocalHistoryWorker::spawn(Arc::downgrade(&shared), started.local_history_rx);
     presence::start(Arc::downgrade(&shared));
+    terminate::install(Arc::downgrade(&shared));
     let active = Arc::new(AtomicUsize::new(0));
     let mut wake = startup::install_waker()?;
     accept::AcceptLoop {

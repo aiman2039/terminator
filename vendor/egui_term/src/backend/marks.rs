@@ -17,6 +17,7 @@ use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
 use polling::{Event as PollEvent, PollMode, Poller};
 use std::collections::VecDeque;
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -48,11 +49,25 @@ pub struct CommandEnded {
 
 /// Finished commands, shared between the PTY reader and the backend.
 #[derive(Clone, Default)]
-pub struct CommandLog(Arc<Mutex<VecDeque<CommandEnded>>>);
+pub struct CommandLog {
+    ended: Arc<Mutex<VecDeque<CommandEnded>>>,
+    /// The shell sent a prompt or command mark at least once.
+    seen: Arc<AtomicBool>,
+}
 
 impl CommandLog {
+    /// False until the PTY stream carried a mark: then the grid has none and
+    /// a full-grid scan for them can be skipped.
+    pub fn marks_seen(&self) -> bool {
+        self.seen.load(Ordering::Relaxed)
+    }
+
+    fn saw_mark(&self) {
+        self.seen.store(true, Ordering::Relaxed);
+    }
+
     fn push(&self, ended: CommandEnded) {
-        let mut queue = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = self.ended.lock().unwrap_or_else(|e| e.into_inner());
         if queue.len() >= MAX_ENDED {
             queue.pop_front();
         }
@@ -61,7 +76,7 @@ impl CommandLog {
 
     /// Commands that finished since the last call, oldest first.
     pub fn take(&self) -> Vec<CommandEnded> {
-        let mut queue = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = self.ended.lock().unwrap_or_else(|e| e.into_inner());
         queue.drain(..).collect()
     }
 }
@@ -223,6 +238,7 @@ impl MarkRewriter {
     }
 
     fn apply(&mut self, mark: Mark, out: &mut Vec<u8>) {
+        self.log.saw_mark();
         match mark {
             Mark::PromptStart => {
                 // A prompt without `D` (Ctrl-C in some shells) ends the command.

@@ -31,6 +31,8 @@ pub(crate) struct VncViewState {
     pub(crate) clipboard_seeded: bool,
     pub(crate) fetching: bool,
     pub(crate) last_poll: Option<Instant>,
+    /// A failed frame request waits until this time before the next one.
+    pub(crate) wait_until: Option<Instant>,
     /// Newest cursor image received (`vnc-shm-v1` sends it only on change).
     pub(crate) cursor_serial: u64,
     /// The shared-memory frame file was unusable: stay on compressed frames.
@@ -112,6 +114,7 @@ impl Default for VncViewState {
             remote_clipboard: None,
             clipboard_seeded: false,
             last_poll: None,
+            wait_until: None,
             cursor_serial: 0,
             shm_failed: false,
             scale: super::scale::VncScale::Fit,
@@ -139,6 +142,29 @@ impl Default for VncViewState {
             speed: super::speed::ViewSpeed::default(),
             prompted_for: None,
         }
+    }
+}
+
+/// How long a failed frame request waits before the next one: a shared
+/// memory poll has no other pacing.
+pub(crate) const FRAME_ERROR_BACKOFF: Duration = Duration::from_secs(2);
+
+impl VncViewState {
+    /// Whether the next frame request may go: none in flight, `interval`
+    /// since the last one, and past the wait after a failure.
+    pub(crate) fn poll_due(&self, interval: Duration, now: Instant) -> bool {
+        !self.fetching
+            && self
+                .last_poll
+                .is_none_or(|t| now.saturating_duration_since(t) >= interval)
+            && self.wait_until.is_none_or(|t| now >= t)
+    }
+
+    /// A frame request failed: show `error` and wait before the next.
+    pub(crate) fn frame_failed(&mut self, error: String, now: Instant) {
+        self.fetching = false;
+        self.error = Some(error);
+        self.wait_until = now.checked_add(FRAME_ERROR_BACKOFF);
     }
 }
 

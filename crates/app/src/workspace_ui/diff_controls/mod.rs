@@ -113,6 +113,14 @@ pub(super) fn change_color(
     }
 }
 
+/// Width of the accent bar on the left edge of the focused hunk.
+pub(super) const FOCUS_BAR_WIDTH: f32 = 2.0;
+
+/// The focused-hunk bar: a strip on the left edge of the hunk's band.
+pub(super) fn focus_bar(band: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_size(band.min, egui::vec2(FOCUS_BAR_WIDTH, band.height()))
+}
+
 /// Fill a smooth from/to band as a triangle strip, including zero-line sides.
 pub(crate) struct PaintConnectorInput<'a> {
     pub(crate) ui: &'a egui::Ui,

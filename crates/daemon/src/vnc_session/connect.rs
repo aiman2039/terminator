@@ -40,8 +40,10 @@ impl Shared {
         let sid = id();
         let (record, stale) = self.record_vnc_session(&mut spec, &sid)?;
         if let Some(paths) = &self.catalog_paths {
+            // Copy under the lock, write without it (the request is coordinated).
+            let state = relock(&self.state).clone();
             let _ = terminator_core::generations::Catalog::open(paths)
-                .and_then(|c| c.save_workspace(&relock(&self.state)));
+                .and_then(|c| c.save_workspace(&state));
         }
         if let Err(e) = self.persist() {
             self.degraded(&format!("VNC session not saved: {e}"));

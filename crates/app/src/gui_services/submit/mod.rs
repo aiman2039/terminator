@@ -64,6 +64,8 @@ struct Inner {
     events: tokio::sync::mpsc::Sender<Update>,
     ctx: egui::Context,
     paused: std::sync::atomic::AtomicBool,
+    /// Wakes an idle snapshot poll back to its fast rate.
+    poll_wake: tokio::sync::Notify,
     snapshot_received: std::sync::Mutex<Option<Instant>>,
     editors: std::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     snapshot: Arc<std::sync::Mutex<Option<Box<State>>>>,
@@ -125,6 +127,7 @@ impl Services {
             events: events.clone(),
             ctx,
             paused: std::sync::atomic::AtomicBool::default(),
+            poll_wake: tokio::sync::Notify::new(),
             snapshot_received: std::sync::Mutex::default(),
             editors: std::sync::Mutex::default(),
             snapshot: Arc::clone(&snapshot),
@@ -347,6 +350,11 @@ impl Services {
     }
     pub fn idle(&self) -> bool {
         self.0.handle.diagnostics().required == 0
+    }
+    /// User input: the daemon state may change soon, so an idle snapshot
+    /// poll returns to its fast rate.
+    pub fn poll_soon(&self) {
+        self.0.poll_wake.notify_one();
     }
     pub fn send(&self, job: Job) -> Result<(), ()> {
         let context = JobRouting::context(&job);

@@ -29,11 +29,115 @@ fn change_bands_distinguish_replacements_additions_and_deletions() {
             split: true,
             colors,
         });
-        if hunk.replacement() {
-            assert_eq!(row.added, Color32::BLUE);
-            assert_eq!(row.deleted, Color32::BLUE);
-        }
+        // Rows keep the side colors, a replacement included; only the
+        // band and rail use the modified color.
+        assert_eq!(row.added, Color32::GREEN);
+        assert_eq!(row.deleted, Color32::RED);
     }
+}
+
+#[test]
+fn removed_and_added_rows_use_different_tints() {
+    use super::super::diff_paint::{DiffColors, RowColorsInput, diff_row_style, row_colors};
+    let colors = DiffColors {
+        added: Color32::GREEN,
+        deleted: Color32::RED,
+        accent: Color32::BLUE,
+        moved: Color32::LIGHT_BLUE,
+        text: Color32::WHITE,
+    };
+    let doc = diff::build_with_context(diff::BuildWithContextInput {
+        path: std::path::Path::new("file.txt"),
+        left: "a\nold\nc\n",
+        right: "a\nnew\nc\n",
+        staged: false,
+        context: 3,
+    });
+    let hunk = doc.hunks.first().unwrap();
+    assert!(hunk.replacement());
+    let row = row_colors(RowColorsInput {
+        doc: &doc,
+        row: hunk.row(false),
+        split: false,
+        colors,
+    });
+    let (removed, minus) = diff_row_style(diff::LineKind::Delete, row);
+    let (added, plus) = diff_row_style(diff::LineKind::Insert, row);
+    assert_ne!(removed, added);
+    assert_eq!((minus, plus), ("-", "+"));
+    let alpha = colors.tints().row;
+    assert_eq!(
+        removed,
+        Color32::from_rgba_unmultiplied(255, 0, 0, alpha),
+        "removed rows are red"
+    );
+    assert_eq!(
+        added,
+        Color32::from_rgba_unmultiplied(0, 255, 0, alpha),
+        "added rows are green"
+    );
+}
+
+#[test]
+fn changed_words_use_a_stronger_tint_of_the_row_hue() {
+    use super::super::diff_paint::{DiffColors, diff_code_job, diff_row_style};
+    let colors = DiffColors {
+        added: Color32::GREEN,
+        deleted: Color32::RED,
+        accent: Color32::BLUE,
+        moved: Color32::LIGHT_BLUE,
+        text: Color32::WHITE,
+    };
+    let doc = diff::build_with_context(diff::BuildWithContextInput {
+        path: std::path::Path::new("file.txt"),
+        left: "let a = 1;\n",
+        right: "let a = 2;\n",
+        staged: false,
+        context: 3,
+    });
+    let font = egui::FontId::monospace(appearance::FONT_SMALL);
+    for kind in [diff::LineKind::Delete, diff::LineKind::Insert] {
+        let line = doc.unified.iter().find(|line| line.kind == kind).unwrap();
+        let (row, _) = diff_row_style(kind, colors);
+        let job = diff_code_job(line, &font, colors);
+        let word = job
+            .sections
+            .iter()
+            .map(|section| section.format.background)
+            .find(|bg| *bg != Color32::TRANSPARENT)
+            .expect("a changed word is highlighted");
+        let unmultiplied = |c: Color32| c.to_srgba_unmultiplied();
+        let ([wr, wg, wb, wa], [rr, rg, rb, ra]) = (unmultiplied(word), unmultiplied(row));
+        assert_eq!((wr, wg, wb), (rr, rg, rb), "same hue as the row: {kind:?}");
+        assert!(wa > ra, "stronger than the row: {kind:?}");
+    }
+}
+
+#[test]
+fn every_theme_tints_words_stronger_than_rows() {
+    for dark in [true, false] {
+        let tints = appearance::diff_tints(dark);
+        assert!(tints.row > 0, "rows stay visible; dark={dark}");
+        assert!(tints.word > tints.row, "dark={dark}");
+    }
+}
+
+#[test]
+fn the_focused_hunk_is_a_thin_bar_on_its_left_edge() {
+    let band = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(300.0, 48.0));
+    let bar = focus_bar(band);
+    assert_eq!(bar.left(), band.left());
+    assert_eq!(bar.y_range(), band.y_range());
+    assert_eq!(bar.width(), FOCUS_BAR_WIDTH);
+    assert_eq!(FOCUS_BAR_WIDTH, 2.0);
+    let colors = super::super::diff_paint::DiffColors {
+        added: Color32::GREEN,
+        deleted: Color32::RED,
+        accent: Color32::YELLOW,
+        moved: Color32::LIGHT_BLUE,
+        text: Color32::WHITE,
+    };
+    assert_eq!(colors.focus(), Color32::LIGHT_BLUE, "the theme accent");
 }
 
 #[test]

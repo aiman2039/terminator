@@ -194,6 +194,27 @@ impl TerminalFind {
         Some(TERMINAL_FIND_RESCAN.saturating_sub(elapsed))
     }
 
+    /// Store a finished search. Returns the line of the current hit to
+    /// reveal, only when the query or the selected match changed: a rescan
+    /// for new output must not pull a view the user scrolled back to the hit.
+    pub fn apply_search(&mut self, outcome: egui_term::FindOutcome, now: Instant) -> Option<i32> {
+        let was_dirty = self.dirty();
+        let previous = self.current;
+        let had_hit = self.outcome.matches.get(previous).is_some();
+        self.outcome = outcome;
+        self.searched_query.clone_from(&self.query);
+        self.searched_case = self.case_insensitive;
+        self.last_search = Some(now);
+        self.content_stale = false;
+        self.current = if was_dirty {
+            0
+        } else {
+            previous.min(self.outcome.matches.len().saturating_sub(1))
+        };
+        let hit = self.outcome.matches.get(self.current)?;
+        (was_dirty || !had_hit || self.current != previous).then_some(hit.line)
+    }
+
     pub fn step(&mut self, delta: isize) {
         let n = self.outcome.matches.len();
         if n == 0 {

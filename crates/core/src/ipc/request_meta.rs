@@ -32,6 +32,7 @@ impl Request {
     }
     /// Short stable name for timeouts and diagnostics. Never includes IDs,
     /// paths, or labels.
+    // sarah-allow(large_function): one-line name arms over every IPC request variant
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
@@ -90,6 +91,7 @@ impl Request {
             Self::Settings(_) => "Settings",
             Self::Heartbeat { .. } => "Heartbeat",
             Self::Hook(_) => "Hook",
+            Self::HookUsage(_) => "HookUsage",
             Self::Cwd { .. } => "Cwd",
             Self::Attach { .. } => "Attach",
             Self::Input { .. } => "Input",

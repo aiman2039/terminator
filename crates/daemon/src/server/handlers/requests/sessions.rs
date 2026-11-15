@@ -147,23 +147,34 @@ impl Shared {
             .iter_mut()
             .find(|r| r.id == session)
             .context("Unknown session")?;
-        ensure!(relock(&rt).child_live(), "Session ended");
         if let Some(pid) = rec.pid {
-            Self::hang_up_session(&rt, pid)?;
+            ensure!(Self::hang_up_if_live(&rt, pid)?, "Session ended");
             // A shell can catch the hang-up just before it `exec`s a command
             // and lose it, which leaves the session stopping forever. Send
             // it once more if the session is still live after a short wait.
             let rt = Arc::clone(&rt);
             std::thread::spawn(move || {
                 std::thread::sleep(STOP_REPEAT);
-                if relock(&rt).child_live() {
-                    let _ = Self::hang_up_session(&rt, pid);
-                }
+                let _ = Self::hang_up_if_live(&rt, pid);
             });
+        } else {
+            ensure!(relock(&rt).child_live(), "Session ended");
         }
         rec.lifecycle = Lifecycle::Stopping;
         s.revision = s.revision.saturating_add(1);
         Ok(Outcome::Changed)
+    }
+
+    /// Hangs up while holding the runtime lock, so the child cannot be
+    /// marked gone (and its PID freed) between the check and the signal.
+    /// False when the child already ended.
+    fn hang_up_if_live(rt: &Mutex<Runtime>, pid: u32) -> Result<bool> {
+        let runtime = relock(rt);
+        if !runtime.child_live() {
+            return Ok(false);
+        }
+        Self::hang_up_session(&runtime, pid)?;
+        Ok(true)
     }
 
     fn hang_up_session(
@@ -171,13 +182,13 @@ impl Shared {
             not(unix),
             expect(unused_variables, reason = "only Unix signals the foreground job")
         )]
-        rt: &Arc<Mutex<Runtime>>,
+        rt: &Runtime,
         pid: u32,
     ) -> Result<()> {
         // Signal the PTY's foreground job as well as its owning shell.
         #[cfg(unix)]
         if let Ok(shell_pid) = i32::try_from(pid)
-            && let Some(foreground) = relock(rt).master.process_group_leader()
+            && let Some(foreground) = rt.master.process_group_leader()
             && foreground > 1
             && foreground != shell_pid
             && let Ok(foreground) = u32::try_from(foreground)
@@ -238,7 +249,7 @@ impl Shared {
     }
 
     /// Waits up to 3 s for the history worker to write pending scrollback.
-    pub(super) fn flush_history(&self) -> Result<()> {
+    pub(crate) fn flush_history(&self) -> Result<()> {
         self.history_request(HistoryJob::Flush)
     }
 }

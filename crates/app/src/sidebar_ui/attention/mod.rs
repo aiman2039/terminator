@@ -6,6 +6,7 @@ mod restore;
 #[cfg(test)]
 mod restore_tests;
 mod status;
+mod terminal_card;
 mod triage;
 #[cfg(test)]
 mod triage_tests;
@@ -22,7 +23,8 @@ use crate::{
     session_info,
 };
 pub(crate) use card::{attention_card, attention_card_in};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
+pub(crate) use terminal_card::{TerminalCard, terminal_card};
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{AgentState, Notification, Session, now};
 pub(crate) use triage::{SNOOZE_CHOICES, Triage, TriageUndo};

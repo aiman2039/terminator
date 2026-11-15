@@ -7,6 +7,7 @@ mod confirm;
 mod menus;
 mod popup_list;
 mod rest_outline;
+mod search_field;
 mod tabs;
 pub use buttons::*;
 pub use confirm::*;
@@ -14,6 +15,7 @@ pub use menus::*;
 pub use popup_list::*;
 pub use rest_outline::slider;
 pub(super) use rest_outline::{control_line_for, install_rest_outlines};
+pub use search_field::*;
 pub use tabs::*;
 
 /// Glyph size of every icon-only toolbar control. The window header keeps it
@@ -26,7 +28,7 @@ pub const TOOLBAR_ICON: f32 = 14.0;
 pub const TOOLBAR_BUTTON: f32 = 22.0;
 
 /// Window-header square. Header tools, sidebar toggles, Player, Agents,
-/// search, and the header menus all use it.
+/// and the header menus all use it; the search field shares its height.
 pub const HEADER_BUTTON: f32 = 28.0;
 
 /// Title-bar sidebar glyph. Resting state has no frame; hover fills only.

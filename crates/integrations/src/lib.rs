@@ -140,6 +140,14 @@ pub fn install_at(input: InstallAtInput<'_>) -> Result<PathBuf> {
         quote(&paths.runtime.to_string_lossy())
     );
     let command = format!("{invocation} # {MARKER}");
+    if remove && !before.contains(MARKER) {
+        // Nothing of ours is installed: leave the file, and its backups,
+        // exactly as they are.
+        if kind == "muse" {
+            sync_muse_settings(home, &command, remove)?;
+        }
+        return Ok(path);
+    }
     let after = Rewrite {
         path: &path,
         kind,
@@ -253,7 +261,7 @@ use codex::codex_config;
 use copilot::copilot_config;
 pub use error::Error;
 use json_hooks::{cursor_config, json_config, sync_muse_settings};
-pub use normalize::{NormalizeInput, normalize};
+pub use normalize::{NormalizeInput, normalize, usage_event};
 use opencode::opencode_plugin;
 
 #[cfg(test)]

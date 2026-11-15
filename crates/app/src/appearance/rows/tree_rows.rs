@@ -1,10 +1,10 @@
 //! Project-tree rows: project, tab group and worktree rows, and session
 //! rows. Each can carry [`RowExtras`]: state counters, a colored second
 //! line, and state-colored trailing words.
-use super::counters::RowExtras;
+use super::counters::{RowExtras, RowSelection};
 use super::list::{RowSpec, row_ext};
-use super::scale::FONT_LARGE;
-use eframe::egui::{self, Color32, FontId, TextStyle};
+use super::scale::{FONT_LARGE, semibold};
+use eframe::egui::{self, Color32, FontFamily, FontId, TextStyle};
 
 pub(crate) struct ProjectRowInput<'a> {
     pub ui: &'a mut egui::Ui,
@@ -18,11 +18,11 @@ pub(crate) struct ProjectRowInput<'a> {
     pub tint: Color32,
 }
 
-pub fn project_row(input: ProjectRowInput<'_>) -> egui::Response {
-    project_row_with(input, RowExtras::default())
-}
-
-/// A [`project_row`] with state counters or a second line.
+/// A project, tab group or worktree row, with optional state counters,
+/// a count pill or a second line.
+///
+/// A project-tree node never takes the selection fill: only the active
+/// session row is filled. A selected (open) node shows semibold text.
 pub fn project_row_with(input: ProjectRowInput<'_>, extras: RowExtras<'_>) -> egui::Response {
     let ProjectRowInput {
         ui,
@@ -35,9 +35,14 @@ pub fn project_row_with(input: ProjectRowInput<'_>, extras: RowExtras<'_>) -> eg
         tint,
     } = input;
     ui.scope(|ui| {
+        let family = if selected {
+            semibold()
+        } else {
+            FontFamily::Proportional
+        };
         ui.style_mut()
             .text_styles
-            .insert(TextStyle::Body, FontId::proportional(FONT_LARGE));
+            .insert(TextStyle::Body, FontId::new(FONT_LARGE, family));
         if color.is_some() {
             ui.visuals_mut().override_text_color = color;
         }
@@ -56,7 +61,10 @@ pub fn project_row_with(input: ProjectRowInput<'_>, extras: RowExtras<'_>) -> eg
                 brand: None,
                 reserve_brand: false,
                 after_label: None,
-                extras,
+                extras: RowExtras {
+                    selection: RowSelection::Text,
+                    ..extras
+                },
             },
         )
     })
@@ -70,12 +78,16 @@ pub struct SessionRowSpec<'a> {
     pub label: &'a str,
     pub icon: &'a str,
     pub selected: bool,
+    /// The active session: its selected row also gets the accent bar.
+    pub current: bool,
     pub trailing: &'a str,
     pub tint: Color32,
     pub icon_tint: Option<Color32>,
     pub spin: bool,
     pub subtitle: Option<&'a str>,
     pub brand: Option<&'a str>,
+    /// The live-state dot at the right edge (the pane header's dot).
+    pub status_dot: Option<Color32>,
 }
 
 pub const SESSION_ROW_HEIGHT: f32 = 24.0;
@@ -124,7 +136,15 @@ pub fn session_row_with(
                 brand: spec.brand,
                 reserve_brand: true,
                 after_label: None,
-                extras,
+                extras: RowExtras {
+                    selection: if spec.current {
+                        RowSelection::Bar
+                    } else {
+                        RowSelection::Fill
+                    },
+                    status_dot: spec.status_dot,
+                    ..extras
+                },
             },
         )
     })

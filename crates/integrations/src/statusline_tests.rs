@@ -81,6 +81,73 @@ fn a_users_line_is_never_removed_by_remove() {
 }
 
 #[test]
+fn the_status_line_model_becomes_usage_only() {
+    let input = json!({
+        "session_id": "s",
+        "cwd": "/secret",
+        "model": {"id": "claude-opus-4-1", "display_name": "Opus"},
+        "cost": {"total_cost_usd": 3}
+    });
+    let found = usage(&input).unwrap();
+    assert_eq!(found.model.as_deref(), Some("claude-opus-4-1"));
+    assert_eq!(found.permission_mode, None);
+    let named = usage(&json!({"model": {"display_name": "Opus"}})).unwrap();
+    assert_eq!(named.model.as_deref(), Some("Opus"));
+    assert!(usage(&json!({"model": {}})).is_none());
+    assert!(usage(&json!({"cwd": "/x"})).is_none());
+}
+
+#[test]
+fn a_model_is_sent_again_only_after_a_change_or_a_failed_send() {
+    let (_dir, _home, data) = fixture();
+    let mut sent = SentModels::load(&data);
+    assert!(sent.due("t:s", "a", 100));
+    sent.record(
+        "t:s",
+        "a",
+        Attempt {
+            delivered: true,
+            at: 100,
+        },
+    );
+    sent.save(&data).unwrap();
+    let sent = SentModels::load(&data);
+    assert!(!sent.due("t:s", "a", 10_000), "delivered: never again");
+    assert!(sent.due("t:s", "b", 101), "a new model is sent");
+    assert!(sent.due("t:other", "a", 101), "another session is its own");
+    let mut sent = sent;
+    sent.record(
+        "t:s",
+        "b",
+        Attempt {
+            delivered: false,
+            at: 200,
+        },
+    );
+    assert!(!sent.due("t:s", "b", 200 + RETRY_SECS - 1));
+    assert!(sent.due("t:s", "b", 200 + RETRY_SECS));
+}
+
+#[test]
+fn sent_models_keep_only_the_newest_sessions() {
+    let (_dir, _home, data) = fixture();
+    let mut sent = SentModels::load(&data);
+    for at in 0..(MAX_SENT as u64 + 5) {
+        sent.record(
+            &format!("t:{at}"),
+            "m",
+            Attempt {
+                delivered: true,
+                at,
+            },
+        );
+    }
+    assert_eq!(sent.0.len(), MAX_SENT);
+    assert!(sent.due("t:0", "m", 1_000), "the oldest was dropped");
+    assert!(!sent.due(&format!("t:{}", MAX_SENT as u64 + 4), "m", 1_000));
+}
+
+#[test]
 fn the_record_keeps_only_the_rate_limit_windows() {
     let input = br#"{"session_id":"s","cwd":"/secret","cost":{"total_cost_usd":3},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":100},"seven_day":{"used_percentage":41.2,"resets_at":200}}}"#;
     let record: Value = serde_json::from_slice(&quota_record(input, 7).unwrap()).unwrap();

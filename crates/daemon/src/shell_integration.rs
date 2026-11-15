@@ -26,7 +26,7 @@ pub(crate) const BASH: &str = r#"if [[ "${TERMINATOR_SHELL_INTEGRATION:-1}" != 0
 _terminator_si=1
 _terminator_si_prompt() {
   local ec=$? cwd=${PWD//\\/\\\\}
-  cwd=${cwd//;/\\x3b}
+  cwd=${cwd//;/\\x3b}; cwd=${cwd//$'\n'/\\x0a}; cwd=${cwd//$'\a'/\\x07}; cwd=${cwd//$'\e'/\\x1b}
   builtin printf '\e]133;D;%s\a\e]633;P;Cwd=%s\a\e]133;A\a' "$ec" "$cwd"
   [[ "$PS1" == *'133;B'* ]] || PS1+='\[\e]133;B\a\]'
   return $ec
@@ -92,6 +92,20 @@ mod tests {
         assert!(out.contains("\x1b]133;D;1\x07"), "{out:?}");
         assert!(out.contains("|1|"), "the user's $? survives: {out:?}");
         assert!(out.contains("133;C"), "{out:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_cwd_with_newline_bel_or_esc_cannot_end_the_mark_early() {
+        let script = format!("{BASH}\nPWD=$'/t/a;b\\nc\\ad\\ee'\n_terminator_si_prompt");
+        let Some(output) = run("bash", &["--norc", "--noprofile", "-c", &script]) else {
+            return;
+        };
+        let out = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            out.contains("\x1b]633;P;Cwd=/t/a\\x3bb\\x0ac\\x07d\\x1be\x07\x1b]133;A\x07"),
+            "{out:?}"
+        );
     }
 
     #[test]

@@ -7,7 +7,10 @@ mod committed;
 mod footer_tests;
 mod group_header;
 mod name_row;
+#[cfg(test)]
+mod paint_tests;
 mod readiness;
+mod repository_line;
 mod rows;
 mod sync_progress;
 #[cfg(test)]
@@ -29,6 +32,7 @@ use eframe::egui::{self, Color32, RichText};
 use group_header::*;
 use name_row::*;
 pub(crate) use readiness::{KnownPr, publish as publish_known_pr};
+pub(crate) use repository_line::repository_line;
 #[cfg(test)]
 pub(super) use rows::GIT_TREE_ROW_HEIGHT;
 use rows::*;

@@ -63,6 +63,11 @@ impl RequestClass {
             coordinated,
         }
     }
+
+    /// Only admission checks and coordinated refreshes read the catalog.
+    fn reads_catalog(&self) -> bool {
+        self.admission || self.coordinated
+    }
 }
 
 impl Shared {
@@ -109,59 +114,97 @@ impl Shared {
     }
 
     /// Rejects requests this generation may not run, then refreshes
-    /// coordinated requests from the shared catalog.
+    /// coordinated requests from the shared catalog. Requests that need
+    /// neither (hooks, Heartbeat, History, VNC frames…) touch no SQLite.
+    /// The catalog I/O runs outside the state lock; only applying the
+    /// result takes it. Coordination serializes catalog writers, so the
+    /// read cannot be overtaken by another write before it is applied.
     fn admit_and_refresh(self: &Arc<Self>, class: &RequestClass) -> Result<Option<Response>> {
+        if !class.reads_catalog() {
+            return Ok(None);
+        }
         let Some(paths) = &self.catalog_paths else {
             return Ok(None);
         };
         let catalog = generations::Catalog::open(paths)?;
-        let mut state = relock(&self.state);
-        if let Some(early) = Self::admission_reply(&catalog, &state, class)? {
+        let generation = relock(&self.state).generation.clone();
+        let active = catalog.active()?;
+        if let Some(early) = Self::admission_reply(&catalog, active.as_deref(), &generation, class)?
+        {
             return Ok(Some(early));
         }
-        if class.coordinated
-            && Self::refresh_from_catalog(&catalog, &mut state)?
-            && catalog.active()?.as_deref() == Some(&state.generation)
-        {
-            drop(state);
-            // Keychain access may wait on a user prompt: never inside this
-            // short-deadline request or under the state lock.
-            crate::vnc_session::credentials::finish_activation(Arc::downgrade(self));
+        if class.coordinated {
+            let workspace = catalog.workspace()?;
+            let legacy = workspace
+                .vnc_profiles
+                .iter()
+                .any(|p| !p.password.is_empty());
+            workspace.apply(&mut relock(&self.state));
+            if legacy && active.as_deref() == Some(generation.as_str()) {
+                // Keychain access may wait on a user prompt: never inside this
+                // short-deadline request or under the state lock.
+                crate::vnc_session::credentials::finish_activation(Arc::downgrade(self));
+            }
         }
         Ok(None)
     }
 
     fn admission_reply(
         catalog: &generations::Catalog,
-        state: &State,
+        active: Option<&str>,
+        generation: &str,
         class: &RequestClass,
     ) -> Result<Option<Response>> {
         if !class.admission {
             return Ok(None);
         }
-        if catalog.active()?.as_deref() != Some(&state.generation) {
+        if active != Some(generation) {
             return Ok(Some(Response::Redirect {
-                generation: catalog.active()?.context("No active generation")?,
+                generation: active.context("No active generation")?.to_owned(),
             }));
         }
-        if !class.shared_write && !catalog.admitted(&state.generation)? {
+        if !class.shared_write && !catalog.admitted(generation)? {
             return Ok(Some(Response::Error(
                 "Creation rejected before execution: recovery is in progress".into(),
             )));
         }
         Ok(None)
     }
+}
 
-    /// Refreshes `state` from the catalog. True when legacy plaintext VNC
-    /// passwords still need migration to the OS credential store.
-    fn refresh_from_catalog(catalog: &generations::Catalog, state: &mut State) -> Result<bool> {
-        let mut refreshed = state.clone();
-        catalog.refresh(&mut refreshed)?;
-        let legacy = refreshed
-            .vnc_profiles
-            .iter()
-            .any(|p| !p.password.is_empty());
-        *state = refreshed;
-        Ok(legacy)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_rate_requests_do_not_open_the_catalog() {
+        for request in [
+            Request::Heartbeat { focused: true },
+            Request::Focus {
+                session: "s".into(),
+            },
+            Request::History {
+                session: "s".into(),
+            },
+            Request::Snapshot,
+        ] {
+            assert!(!RequestClass::of(&request).reads_catalog(), "{request:?}");
+        }
+    }
+
+    #[test]
+    fn creation_and_cwd_still_refresh_from_the_catalog() {
+        for request in [
+            Request::Cwd {
+                session: "s".into(),
+                path: "/".into(),
+            },
+            Request::Shutdown,
+            Request::SelectProject {
+                project: "p".into(),
+            },
+        ] {
+            assert!(RequestClass::of(&request).reads_catalog(), "{request:?}");
+        }
     }
 }

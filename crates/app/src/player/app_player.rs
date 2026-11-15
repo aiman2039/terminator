@@ -138,7 +138,7 @@ impl App {
         }
     }
 
-    pub(super) fn open_player_from_chrome(&mut self) {
+    pub(crate) fn open_player_from_chrome(&mut self) {
         if self.preferences.player_chrome_collapsed && self.player_active() {
             self.preferences.player_chrome_collapsed = false;
         } else {
@@ -167,7 +167,8 @@ impl App {
         }
     }
 
-    /// Project-header Player control. Matches the hide-sidebar square.
+    /// Window-header Player control, beside the Agents bell in the right
+    /// header tools. Matches the other header squares.
     pub(crate) fn header_player_button(&mut self, ui: &mut egui::Ui) {
         if matches!(self.player.status, Status::Playing { .. }) {
             ui.ctx().request_repaint_after(Duration::from_millis(200));
@@ -276,7 +277,7 @@ impl App {
         });
     }
 
-    pub(super) fn player_active(&self) -> bool {
+    pub(crate) fn player_active(&self) -> bool {
         self.player.project.is_some() && !matches!(self.player.status, Status::Stopped)
     }
 

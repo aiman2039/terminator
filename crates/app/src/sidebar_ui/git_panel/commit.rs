@@ -191,8 +191,8 @@ impl GitPanelPass<'_, '_> {
         }
     }
 
-    /// Commit (the main action) and Commit and Push on one row; each
-    /// disabled one says why on hover.
+    /// Commit (the filled main action) and Commit and Push (outlined) on one
+    /// row; each disabled one says why on hover.
     fn commit_buttons(&mut self, ui: &mut egui::Ui, blocked: Option<&str>) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let outcome = &mut *self.outcome;
@@ -204,8 +204,9 @@ impl GitPanelPass<'_, '_> {
         if commit.clicked() {
             outcome.commit = true;
         }
-        let commit_push =
-            appearance::enabled_unless(ui, blocked, |ui| ui.button("Commit and Push"));
+        let commit_push = appearance::enabled_unless(ui, blocked, |ui| {
+            appearance::secondary_button(ui, "Commit and Push")
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-commit-push", commit_push.rect);
         if commit_push.clicked() {

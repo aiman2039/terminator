@@ -45,6 +45,51 @@ fn mode_input_leaves_no_keyboard_event_for_the_terminal() {
     assert_eq!(events, [egui::Event::PointerMoved(egui::pos2(1.0, 1.0))]);
 }
 
+fn wheel() -> egui::Event {
+    egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 3.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    }
+}
+
+fn click() -> egui::Event {
+    egui::Event::PointerButton {
+        pos: egui::pos2(4.0, 4.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[test]
+fn mode_pointer_gate_keeps_wheel_and_clicks_from_a_mouse_mode_program() {
+    let mut events = vec![
+        wheel(),
+        click(),
+        egui::Event::PointerMoved(egui::pos2(1.0, 1.0)),
+    ];
+    drop_pty_pointer_events(
+        &mut events,
+        TerminalMode::SGR_MOUSE | TerminalMode::MOUSE_REPORT_CLICK,
+    );
+    assert_eq!(events, [egui::Event::PointerMoved(egui::pos2(1.0, 1.0))]);
+
+    let mut events = vec![wheel(), click()];
+    drop_pty_pointer_events(&mut events, TerminalMode::ALT_SCREEN);
+    assert_eq!(events, [click()], "alt-screen wheel would type arrow keys");
+
+    let mut events = vec![wheel(), click()];
+    drop_pty_pointer_events(&mut events, TerminalMode::empty());
+    assert_eq!(
+        events.len(),
+        2,
+        "a plain shell wheel scrolls history locally"
+    );
+}
+
 #[test]
 fn labels_are_unique_and_none_is_a_prefix_of_another() {
     assert_eq!(labels(3), ["a", "s", "d"]);

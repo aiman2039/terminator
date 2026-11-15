@@ -6,4 +6,4 @@ mod local_history;
 pub(crate) use alerts::{Alert, AlertWorker};
 pub(crate) use generation::GenerationWorker;
 pub(crate) use history::HistoryWorker;
-pub(crate) use local_history::{LocalHistoryJob, LocalHistoryWorker};
+pub(crate) use local_history::{LocalHistoryJob, LocalHistoryWorker, queue_local_history};

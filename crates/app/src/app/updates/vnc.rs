@@ -113,17 +113,21 @@ impl App {
     ) {
         match result {
             Ok(Some(decoded)) => {
+                if let Some(view) = self.vnc_views.get_mut(session) {
+                    view.wait_until = None;
+                }
                 self.apply_vnc_frame(ctx, decoded);
             }
             Ok(None) => {
                 if let Some(view) = self.vnc_views.get_mut(session) {
                     view.fetching = false;
+                    view.wait_until = None;
                 }
             }
             Err(err) => {
                 if let Some(view) = self.vnc_views.get_mut(session) {
-                    view.fetching = false;
-                    view.error = Some(err);
+                    // The next request waits out a backoff.
+                    view.frame_failed(err, std::time::Instant::now());
                 }
             }
         }

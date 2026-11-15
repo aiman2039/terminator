@@ -50,7 +50,8 @@ enum Control {
     Focus {
         session: String,
     },
-    /// Send literal text to a session. --stdin reads at most 1 MiB.
+    /// Send literal text to a session. --stdin reads at most 1 MiB. Text with
+    /// line breaks or control characters is refused; only --enter presses Enter.
     Send(SendArgs),
     Read {
         session: String,

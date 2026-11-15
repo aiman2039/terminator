@@ -34,20 +34,31 @@ impl Viewer<'_> {
             })
     }
 
-    pub(super) fn strip_terminal_actions(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
-        let sid = self.strip_pane_session(path);
-        let branch = sid.as_ref().and_then(|sid| {
+    /// The strip pane's branch text and Git tip. The header names the
+    /// project's branch, so the text shows only another branch; the tip
+    /// always names it.
+    fn strip_branch(&self, sid: Option<&str>) -> (Option<String>, String) {
+        let cwd = sid.and_then(|sid| {
             self.app
                 .state
                 .sessions
                 .iter()
-                .find(|session| &session.id == sid)
-                .and_then(|session| self.app.branch_at(&session.cwd))
+                .find(|session| session.id == sid)
+                .map(|session| session.cwd.clone())
         });
-        let git_tip = match &branch {
+        let Some(cwd) = cwd else {
+            return (None, "Open Git".into());
+        };
+        let tip = match self.app.branch_at(&cwd) {
             Some(name) => format!("{name}\nOpen Git"),
             None => "Open Git".into(),
         };
+        (self.app.pane_branch(&cwd), tip)
+    }
+
+    pub(super) fn strip_terminal_actions(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
+        let sid = self.strip_pane_session(path);
+        let (shown, git_tip) = self.strip_branch(sid.as_deref());
         let vertical_tip = self.app.action_tip("Split vertically", Action::SplitRight);
         let horizontal_tip = self.app.action_tip("Split horizontally", Action::SplitDown);
         // Same rule as pane captions: the split buttons show while this
@@ -63,14 +74,14 @@ impl Viewer<'_> {
                 .find(|session| &session.id == sid)
                 .and_then(|session| self.app.terminal_status_color(session))
         }) {
-            ui.painter().circle_filled(dot.center(), 3.5, color);
+            appearance::paint_status_dot(ui.painter(), dot.center(), color);
         }
         // The branch is plain weak text; a click opens Git.
         let git = ui
             .add_sized(
                 [appearance::TERMINAL_BRANCH_MAX, appearance::TERMINAL_BUTTON],
                 egui::Label::new(
-                    egui::RichText::new(branch.as_deref().unwrap_or(""))
+                    egui::RichText::new(shown.as_deref().unwrap_or(""))
                         .size(appearance::FONT_SMALL)
                         .color(ui.visuals().weak_text_color()),
                 )
@@ -334,19 +345,8 @@ impl Viewer<'_> {
             ui.ctx().request_repaint_after(wait);
             return None;
         }
-        let was_dirty = find.dirty();
-        find.outcome = backend.find(&find.query, find.case_insensitive);
-        find.searched_query.clone_from(&find.query);
-        find.searched_case = find.case_insensitive;
-        find.last_search = Some(now);
-        find.content_stale = false;
-        find.current = if was_dirty {
-            0
-        } else {
-            find.current
-                .min(find.outcome.matches.len().saturating_sub(1))
-        };
-        find.outcome.matches.get(find.current).map(|hit| hit.line)
+        let outcome = backend.find(&find.query, find.case_insensitive);
+        find.apply_search(outcome, now)
     }
 
     pub(super) fn find_bar_nav(

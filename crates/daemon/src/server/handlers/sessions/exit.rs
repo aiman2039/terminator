@@ -36,6 +36,13 @@ impl Shared {
             reader_finished,
             review_files,
         } = watch;
+        // Mark the child gone before the reap frees its PID: a delayed
+        // hang-up checks `child_live` under the same lock it signals in.
+        if let Some(pid) = child.process_id()
+            && signals::wait_exit_unreaped(pid).is_ok()
+        {
+            relock(&runtime).exited = true;
+        }
         let exit = child.wait();
         relock(&runtime).exited = true;
         // Output still buffered in the PTY (often the error that made a

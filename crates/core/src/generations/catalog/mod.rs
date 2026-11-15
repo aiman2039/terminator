@@ -138,6 +138,31 @@ pub fn coordinate_timeout(paths: &Paths, wait: Duration) -> Result<fs::File> {
     }
 }
 
+/// The shared workspace fields of the catalog, read by [`Catalog::workspace`].
+#[derive(Clone, Debug)]
+pub struct Workspace {
+    pub projects: Vec<crate::Project>,
+    pub remote_projects: Vec<crate::remote::RemoteProject>,
+    pub worktrees: Vec<crate::worktrees::Registration>,
+    pub vnc_profiles: Vec<crate::vnc::VncProfile>,
+    pub settings: crate::Settings,
+    pub selected_project: Option<String>,
+    pub revision: u64,
+}
+impl Workspace {
+    /// Replaces only the shared fields of `state`; owned sessions, agents
+    /// and notices stay as they are.
+    pub fn apply(self, state: &mut State) {
+        state.projects = self.projects;
+        state.remote_projects = self.remote_projects;
+        state.worktrees = self.worktrees;
+        state.vnc_profiles = self.vnc_profiles;
+        state.settings = self.settings;
+        state.selected_project = self.selected_project;
+        state.catalog_revision = self.revision;
+    }
+}
+
 pub struct Catalog(Connection);
 impl Catalog {
     pub fn open(paths: &Paths) -> Result<Self> {
@@ -346,11 +371,16 @@ impl Catalog {
         Ok(true)
     }
     pub fn refresh(&self, state: &mut State) -> Result<()> {
+        self.workspace()?.apply(state);
+        Ok(())
+    }
+    /// Reads the shared workspace without touching any `State`, so callers
+    /// can run the SQLite I/O outside their state lock and apply it after.
+    pub fn workspace(&self) -> Result<Workspace> {
         let json: String = self
             .0
             .query_row("SELECT json FROM workspace WHERE id=1", [], |r| r.get(0))?;
         let shared: State = serde_json::from_str(&json)?;
-        state.projects = shared.projects;
         let mut remote = shared.remote_projects;
         let mut query = self
             .0
@@ -363,17 +393,15 @@ impl Catalog {
                 remote.push(project);
             }
         }
-        state.remote_projects = remote;
-        state.worktrees = shared.worktrees;
-        state.vnc_profiles = shared.vnc_profiles;
-        state.settings = shared.settings;
-        state.selected_project = shared.selected_project;
-        state.catalog_revision = u64::try_from(self.0.query_row(
-            "SELECT revision FROM workspace WHERE id=1",
-            [],
-            |r| r.get::<_, i64>(0),
-        )?)?;
-        Ok(())
+        Ok(Workspace {
+            projects: shared.projects,
+            remote_projects: remote,
+            worktrees: shared.worktrees,
+            vnc_profiles: shared.vnc_profiles,
+            settings: shared.settings,
+            selected_project: shared.selected_project,
+            revision: self.revision()?,
+        })
     }
     /// `save_workspace` only upserts project rows, so older writers can't
     /// erase them; a deliberate removal deletes the row here.

@@ -418,7 +418,13 @@ fn pump_guarded(
 ) {
     let mut bytes = [0u8; 8192];
     let mut panicked = false;
-    while let Ok(n) = reader.read(&mut bytes) {
+    loop {
+        let n = match reader.read(&mut bytes) {
+            Ok(n) => n,
+            // A signal interrupted the read; the PTY is still open.
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
         if n == 0 {
             break;
         }
@@ -473,5 +479,31 @@ mod pump_tests {
             [b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
         );
         assert_eq!(again, 1, "reported once, not per chunk");
+    }
+
+    /// Fails each read once with `Interrupted` before handing out a chunk.
+    struct Interrupting(Chunks, bool);
+
+    impl std::io::Read for Interrupting {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.1 = !self.1;
+            if self.1 {
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            self.0.read(buf)
+        }
+    }
+
+    #[test]
+    fn an_interrupted_read_does_not_end_the_session_output() {
+        let mut reader = Interrupting(Chunks([b"one".as_slice(), b"two"].into()), false);
+        let mut drained = Vec::new();
+        pump_guarded(
+            &mut reader,
+            |_| {},
+            || {},
+            |data| drained.push(data.to_vec()),
+        );
+        assert_eq!(drained, [b"one".to_vec(), b"two".to_vec()]);
     }
 }

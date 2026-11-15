@@ -43,6 +43,29 @@ fn service_timeout_clears_vnc_fetching() {
 }
 
 #[test]
+fn timed_out_commit_files_and_blame_end_their_loading_state() {
+    let mut owed_jobs = Owed::default();
+    record(
+        &mut owed_jobs,
+        1,
+        &Job::CommitFiles(PathBuf::from("/repo"), "abc".into()),
+    );
+    record(
+        &mut owed_jobs,
+        2,
+        &Job::EditorBlame(PathBuf::from("/repo/a.rs"), 7, String::new()),
+    );
+    assert!(matches!(
+        owed_jobs.settle(OperationId(1), Err(&Failure::Timeout)).as_slice(),
+        [Update::CommitFiles(hash, Err(_))] if hash == "abc"
+    ));
+    assert!(matches!(
+        owed_jobs.settle(OperationId(2), Err(&Failure::Cancelled)).as_slice(),
+        [Update::EditorBlame(path, 7, Err(_))] if path.ends_with("a.rs")
+    ));
+}
+
+#[test]
 fn panicked_remote_read_answers_the_sidebar_and_success_owes_nothing() {
     let mut owed_jobs = Owed::default();
     record(&mut owed_jobs, 1, &remote_list("p"));

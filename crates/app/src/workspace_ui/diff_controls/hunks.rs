@@ -4,7 +4,8 @@ use super::chevrons::action_target;
 use super::chevrons::{ChevronBand, action_icon, action_tip};
 use super::rows::HunkLine;
 use super::{
-    ControlsFrame, ControlsState, PaintConnectorInput, PaneOutput, change_color, paint_connector,
+    ControlsFrame, ControlsState, PaintConnectorInput, PaneOutput, change_color, focus_bar,
+    paint_connector,
 };
 use diff::actions::Kind;
 
@@ -179,11 +180,10 @@ impl ControlsFrame<'_> {
             return;
         }
         if band.selected {
-            ui.painter().with_clip_rect(clip).rect_stroke(
-                rect,
+            ui.painter().with_clip_rect(clip).rect_filled(
+                focus_bar(rect),
                 egui::CornerRadius::ZERO,
-                egui::Stroke::new(1.0, band.color),
-                egui::StrokeKind::Inside,
+                self.colors.focus(),
             );
         }
         // Observe the pointer without covering the text's selection widget.

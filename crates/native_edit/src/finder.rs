@@ -34,9 +34,31 @@ pub struct IndexedFile {
 /// Cap for a single scan; beyond it the tail is dropped (still sorted).
 pub const MAX_INDEX_FILES: usize = 50_000;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct FileIndex {
     files: Vec<IndexedFile>,
+    /// The last query's matching file indexes. Typing extends the pattern,
+    /// and a fuzzy match of the longer pattern is always a match of the
+    /// shorter one, so the next query scans only these.
+    narrowed: std::sync::Mutex<Option<Narrowed>>,
+}
+
+/// Files that matched `pattern` within one root/exclude scope.
+#[derive(Debug)]
+struct Narrowed {
+    pattern: String,
+    root: Option<PathBuf>,
+    exclude: Vec<PathBuf>,
+    matches: Vec<usize>,
+}
+
+impl Clone for FileIndex {
+    fn clone(&self) -> Self {
+        Self {
+            files: self.files.clone(),
+            narrowed: std::sync::Mutex::default(),
+        }
+    }
 }
 
 pub struct QueryScoredInInput<'a> {
@@ -130,7 +152,10 @@ impl FileIndex {
         }
         files.sort_by(|a, b| a.display.cmp(&b.display));
         files.truncate(max_files);
-        Self { files }
+        Self {
+            files,
+            narrowed: std::sync::Mutex::default(),
+        }
     }
 
     /// Fuzzy-rank display paths against `pattern` (best first, `limit`
@@ -183,16 +208,47 @@ impl FileIndex {
         let mut needle_buf = Vec::new();
         let mut haystack_buf = Vec::new();
         let needle = nucleo::Utf32Str::new(pattern, &mut needle_buf);
-        let mut scored: Vec<(u16, &IndexedFile)> = Vec::new();
-        for file in &self.files {
-            if !allowed(&file.path) {
-                continue;
+        let mut narrowed = self
+            .narrowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Only the files that matched a shorter pattern in the same scope
+        // can match this one.
+        let candidates: Vec<usize> = match narrowed.take() {
+            Some(last)
+                if pattern.starts_with(last.pattern.as_str())
+                    && last.root.as_deref() == root
+                    && last.exclude == exclude =>
+            {
+                last.matches
             }
+            _ => (0..self.files.len())
+                .filter(|&index| {
+                    self.files
+                        .get(index)
+                        .is_some_and(|file| allowed(&file.path))
+                })
+                .collect(),
+        };
+        let mut matches = Vec::new();
+        let mut scored: Vec<(u16, &IndexedFile)> = Vec::new();
+        for index in candidates {
+            let Some(file) = self.files.get(index) else {
+                continue;
+            };
             let haystack = nucleo::Utf32Str::new(&file.display, &mut haystack_buf);
             if let Some(score) = matcher.fuzzy_match(haystack, needle) {
+                matches.push(index);
                 scored.push((score, file));
             }
         }
+        *narrowed = Some(Narrowed {
+            pattern: pattern.to_owned(),
+            root: root.map(Path::to_path_buf),
+            exclude: exclude.to_vec(),
+            matches,
+        });
+        drop(narrowed);
         scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.display.cmp(&b.1.display)));
         scored
             .into_iter()
@@ -264,6 +320,43 @@ mod tests {
         let hits = index.query("main", 10);
         assert_eq!(hits.len(), 1);
         assert!(hits[0].ends_with("src/main.rs"));
+    }
+
+    #[test]
+    fn typing_narrows_the_last_matches_and_gives_the_same_ranking() {
+        let (_dir, root) = fixture_tree();
+        let index = FileIndex::scan(std::slice::from_ref(&root), MAX_INDEX_FILES);
+        let fresh = |pattern: &str| index.clone().query(pattern, 10);
+        assert_eq!(index.query("r", 10), fresh("r"));
+        // Extending the pattern scans only the last matches.
+        assert_eq!(index.query("rs", 10), fresh("rs"));
+        assert_eq!(
+            index
+                .narrowed
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|last| last.matches.len()),
+            Some(2)
+        );
+        assert_eq!(index.query("main", 10), fresh("main"));
+        // A shorter pattern or another scope scans everything again.
+        assert_eq!(index.query("r", 10), fresh("r"));
+        let scoped = index.query_scored_in(QueryScoredInInput {
+            root: Some(&root.join("src")),
+            exclude: &[],
+            pattern: "rs",
+            limit: 10,
+        });
+        assert_eq!(scoped.len(), 2);
+        let all = index.query_scored_in(QueryScoredInInput {
+            root: None,
+            exclude: &[root.join("src")],
+            pattern: "rsx",
+            limit: 10,
+        });
+        assert!(all.is_empty());
+        assert_eq!(index.query("README", 10).len(), 1);
     }
 
     #[test]

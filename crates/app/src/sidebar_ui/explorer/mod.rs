@@ -58,7 +58,7 @@ pub(crate) struct SessionRowInTabInput<'a> {
     pub(crate) tab_id: &'a str,
 }
 
-use eframe::egui::{self, RichText};
+use eframe::egui;
 use std::path::{Path, PathBuf};
 use terminator_core::{
     AgentState, NVIM_REVIEW_CAPABILITY, Project, Request, Session, SessionKind, now,

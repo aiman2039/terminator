@@ -51,7 +51,8 @@ impl LspManager {
             .docs
             .get(path)
             .ok_or("No language server tracks this file")?;
-        let (key, uri) = (doc.server.clone(), doc.uri.clone());
+        let (key, uri, revision) = (doc.server.clone(), doc.uri.clone(), doc.observed);
+        let generation = self.next_goto_generation();
         let server = self
             .servers
             .get_mut(&key)
@@ -80,6 +81,8 @@ impl LspManager {
             number,
             Pending::Definition {
                 path: path.to_owned(),
+                generation,
+                revision,
             },
         );
         Ok(())

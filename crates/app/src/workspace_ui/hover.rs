@@ -110,7 +110,7 @@ impl App {
             || self.active_session.as_ref().is_some_and(|sid| {
                 self.backends
                     .get(sid)
-                    .is_some_and(|backend| !backend.last_content().selected_text.is_empty())
+                    .is_some_and(|backend| backend.last_content().has_selection())
             })
         {
             return;
@@ -233,13 +233,16 @@ impl App {
             return;
         };
         // Build the text only for an actual copy, fresh from the terminal.
-        if backend.last_content().selected_text.is_empty()
+        if !backend.last_content().has_selection()
             || !ctx
                 .input(|input| clipboard::terminal_copy_requested(&input.events, input.modifiers))
         {
             return;
         }
         let selection = backend.selectable_content();
+        if selection.is_empty() {
+            return;
+        }
         if let Some(text) = ctx.input_mut(|input| {
             clipboard::take_terminal_copy(&mut input.events, input.modifiers, &selection)
         }) {
@@ -263,7 +266,7 @@ impl App {
         });
     }
 
-    pub(super) fn terminal_status_color(&self, session: &Session) -> Option<egui::Color32> {
+    pub(crate) fn terminal_status_color(&self, session: &Session) -> Option<egui::Color32> {
         let presented = self.present_session(&session.id);
         let theme = &self.theme;
         if let Some(state) = presented.lifecycle {
@@ -273,6 +276,17 @@ impl App {
             .lifecycle
             .live()
             .then(|| appearance::color(&theme.status_running))
+    }
+
+    /// The branch a pane caption shows: only one that differs from the
+    /// window header's branch, which already names the project's branch.
+    pub(crate) fn pane_branch(&self, cwd: &std::path::Path) -> Option<String> {
+        let header = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.branch.as_deref());
+        self.branch_at(cwd)
+            .filter(|branch| Some(branch.as_str()) != header)
     }
 
     pub(crate) fn branch_at(&self, cwd: &std::path::Path) -> Option<String> {

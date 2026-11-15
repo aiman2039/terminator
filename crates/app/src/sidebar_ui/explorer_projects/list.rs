@@ -169,7 +169,7 @@ impl App {
             return left;
         }
         let response = self
-            .project_row(ui, p, (count, *expanded))
+            .project_row(ui, p, count)
             .on_hover_text(self.project_hover(p));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), &format!("project-row:{}", p.id), response.rect);
@@ -182,11 +182,11 @@ impl App {
     }
 
     /// A warning icon and a dim name when the folder is missing, else the
-    /// project's folder (or chosen icon and color) and name. Live agents
-    /// show as state counters in place of the terminal count; the agent
-    /// brand stays on the session rows.
-    fn project_row(&self, ui: &mut egui::Ui, p: &Project, state: (usize, bool)) -> egui::Response {
-        let (count, expanded) = state;
+    /// project's folder (or chosen icon and color) and name. The open
+    /// project shows an open folder and semibold text; the others a closed
+    /// folder. Live agents show as state counters in place of the terminal
+    /// count pill; the agent brand stays on the session rows.
+    fn project_row(&self, ui: &mut egui::Ui, p: &Project, count: usize) -> egui::Response {
         let selected = self.selected.as_ref() == Some(&p.id);
         if self.project_folder_missing(&p.id) {
             return self.missing_project_row(ui, p, (count, selected));
@@ -194,9 +194,10 @@ impl App {
         let counters = self.project_state_counters(&p.id);
         let extras = appearance::RowExtras {
             counters: &counters,
+            count_pill: true,
             ..appearance::RowExtras::default()
         };
-        let folder = if expanded { "FolderOpen" } else { "Folder" };
+        let folder = project_folder_icon(selected);
         appearance::project_row_with(
             appearance::ProjectRowInput {
                 ui,
@@ -234,16 +235,22 @@ impl App {
         let response = ui
             .scope(|ui| {
                 ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
-                appearance::project_row(appearance::ProjectRowInput {
-                    ui,
-                    label: &p.name,
-                    icon: MISSING_ICON,
-                    color: None,
-                    selected,
-                    height: self.theme.row_height(),
-                    trailing: &count.to_string(),
-                    tint: appearance::color(&self.theme.secondary),
-                })
+                appearance::project_row_with(
+                    appearance::ProjectRowInput {
+                        ui,
+                        label: &p.name,
+                        icon: MISSING_ICON,
+                        color: None,
+                        selected,
+                        height: self.theme.row_height(),
+                        trailing: &count.to_string(),
+                        tint: appearance::color(&self.theme.secondary),
+                    },
+                    appearance::RowExtras {
+                        count_pill: true,
+                        ..appearance::RowExtras::default()
+                    },
+                )
             })
             .inner;
         #[cfg(feature = "test-support")]
@@ -334,5 +341,22 @@ impl App {
             self.hide_project(&p.id);
             ui.close();
         }
+    }
+}
+
+/// The default project glyph: an open folder for the open (selected)
+/// project, a closed folder for the others.
+fn project_folder_icon(selected: bool) -> &'static str {
+    if selected { "FolderOpen" } else { "Folder" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_folder_icon;
+
+    #[test]
+    fn only_the_open_project_shows_an_open_folder() {
+        assert_eq!(project_folder_icon(true), "FolderOpen");
+        assert_eq!(project_folder_icon(false), "Folder");
     }
 }

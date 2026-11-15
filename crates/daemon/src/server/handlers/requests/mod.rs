@@ -78,7 +78,10 @@ impl Shared {
 
     fn commit_change(&self, shared_write: bool) -> Result<Response> {
         if shared_write && let Some(paths) = &self.catalog_paths {
-            generations::Catalog::open(paths)?.save_workspace(&relock(&self.state))?;
+            // Copy under the lock, write without it: the caller holds the
+            // coordination lock, so no other catalog write interleaves.
+            let state = relock(&self.state).clone();
+            generations::Catalog::open(paths)?.save_workspace(&state)?;
         }
         self.persist()?;
         Ok(Response::Ok)
@@ -259,6 +262,7 @@ impl Shared {
             } => self.on_quota_notify(&session, &title, [inbox, os, ntfy]),
             Request::Settings(settings) => self.on_settings(settings),
             Request::Hook(event) => self.on_hook(event),
+            Request::HookUsage(event) => self.on_hook_usage(&event),
             Request::Rename { session, label } => self.on_rename(&session, label),
             Request::Stop { session } => self.on_stop(&session),
             Request::Remove { session } => self.on_remove(session),

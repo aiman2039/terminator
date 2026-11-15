@@ -248,6 +248,59 @@ fn supervised_spawn_needs_no_caller_runtime() {
     );
 }
 
+/// A stopped server reads `shutdown`/`exit` before it is killed, and the
+/// children it started (`cargo check` for rust-analyzer) end with it.
+#[cfg(unix)]
+#[test]
+fn shutdown_reaches_the_server_and_ends_its_children() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("server.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nsleep 300 &\necho $! > child.pid\nexec cat > received.log\n",
+    )
+    .expect("script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let ctx = eframe::egui::Context::default();
+    let (tx, _rx) = std::sync::mpsc::channel::<crate::Update>();
+    let paths = terminator_core::Paths::at(dir.path().join("data"));
+    let (services, _owner) = crate::gui_services::Services::new(paths, ctx, tx).expect("services");
+    let mut manager = LspManager::trusting();
+    manager.set_services(services);
+    let key = ServerKey {
+        language: "rust",
+        root: dir.path().to_owned(),
+    };
+    manager
+        .spawn_supervised(&key, &script)
+        .expect("spawn accepted");
+    let pid_file = dir.path().join("child.pid");
+    let start = Instant::now();
+    let child = loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            break pid;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "server starts");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    manager.shutdown_server(&key);
+    let start = Instant::now();
+    while !terminator_core::signals::process_gone(child) {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the server's child ends with it"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let received = std::fs::read_to_string(dir.path().join("received.log")).expect("log");
+    assert!(received.contains("\"shutdown\""), "{received}");
+    assert!(received.contains("\"exit\""), "{received}");
+}
+
 #[test]
 fn server_resources_scope_by_root() {
     let first = ServerKey {
@@ -779,6 +832,117 @@ pub(super) fn ready_key(
         },
     );
     outbox
+}
+
+#[test]
+fn a_late_definition_answer_does_not_jump() {
+    let mut manager = LspManager::trusting();
+    let path = crate::test_path("/tmp/goto.rs");
+    tracked(&mut manager, &path);
+    let (key, _sent) = ready_server(&mut manager, &path);
+    let at = L::Position {
+        line: 0,
+        character: 1,
+    };
+    let uri = L::file_uri(&path).expect("uri").to_string();
+    let target = serde_json::json!({"uri": uri, "range": {
+        "start": {"line": 3, "character": 0}, "end": {"line": 3, "character": 1}}});
+    let newest = |manager: &LspManager| {
+        *manager.servers[&key]
+            .pending
+            .keys()
+            .max()
+            .expect("pending goto")
+    };
+    let answer = |manager: &mut LspManager, id| {
+        manager.on_response(OnResponseInput {
+            key: &key,
+            id: L::RequestId::Number(id),
+            result: Some(target.clone()),
+            error: None,
+        });
+    };
+    manager.request_definition(&path, at);
+    let first = newest(&manager);
+    manager.request_definition(&path, at);
+    let second = newest(&manager);
+    answer(&mut manager, first);
+    assert!(manager.take_goto().is_none(), "a newer goto was asked");
+    answer(&mut manager, second);
+    assert!(manager.take_goto().is_some());
+    manager.request_definition(&path, at);
+    let third = newest(&manager);
+    manager.docs.get_mut(&path).expect("doc").observed = 2;
+    answer(&mut manager, third);
+    assert!(manager.take_goto().is_none(), "the text changed");
+}
+
+#[test]
+fn a_server_silent_on_initialize_is_stopped_and_shown_failed() {
+    let mut manager = LspManager::trusting();
+    let path = crate::test_path("/tmp/silent.rs");
+    tracked(&mut manager, &path);
+    let (key, _sent) = ready_server(&mut manager, &path);
+    let server = manager.servers.get_mut(&key).expect("server");
+    server.ready = false;
+    server.init_id = Some(1);
+    manager.init_started.insert(key.clone(), Instant::now());
+    manager.poll();
+    assert!(
+        manager.servers.contains_key(&key),
+        "still within the timeout"
+    );
+    assert!(
+        manager
+            .server_status(&path)
+            .is_some_and(|note| note.starts_with("Starting"))
+    );
+    let late = Instant::now()
+        .checked_sub(INIT_TIMEOUT + Duration::from_secs(1))
+        .expect("backdate");
+    manager.init_started.insert(key.clone(), late);
+    manager.poll();
+    assert!(!manager.servers.contains_key(&key));
+    let note = manager.server_status(&path).expect("failed note");
+    assert!(note.contains("did not answer"), "{note}");
+}
+
+#[test]
+fn a_crashed_server_fails_its_pending_rename_and_hierarchy() {
+    let mut manager = LspManager::trusting();
+    let path = crate::test_path("/tmp/crash.rs");
+    tracked(&mut manager, &path);
+    let (key, _sent) = ready_server(&mut manager, &path);
+    let server = manager.servers.get_mut(&key).expect("server");
+    server.pending.insert(
+        1,
+        Pending::Rename {
+            path: path.clone(),
+            new_name: "bar".into(),
+            revision: 1,
+        },
+    );
+    server.pending.insert(
+        2,
+        Pending::Hierarchy {
+            generation: 5,
+            node: None,
+        },
+    );
+    manager.on_server_down(&key);
+    let rename = manager.take_rename().expect("rename settles");
+    assert!(
+        rename
+            .edits
+            .as_ref()
+            .is_err_and(|error| error.contains("stopped")),
+        "{:?}",
+        rename.edits.as_ref().err()
+    );
+    assert!(matches!(
+        manager.hierarchy_answers.as_slice(),
+        [HierarchyAnswer::Roots { generation: 5, items }] if items.is_empty()
+    ));
 }
 
 #[test]
@@ -1376,6 +1540,50 @@ impl LiveHierarchy<'_> {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+}
+
+#[test]
+fn inlay_hints_need_the_capability_and_an_empty_answer_holds_until_refresh() {
+    let mut manager = LspManager::trusting();
+    let path = crate::test_path("/tmp/inlay.rs");
+    tracked(&mut manager, &path);
+    let (key, mut sent) = ready_server(&mut manager, &path);
+    manager.request_inlay_hints(&path, 5);
+    assert!(sent.try_recv().is_err(), "no capability, no request");
+
+    manager.servers.get_mut(&key).expect("server").capabilities =
+        serde_json::json!({ "inlayHintProvider": true });
+    manager.request_inlay_hints(&path, 5);
+    assert!(sent.try_recv().is_ok(), "first request goes out");
+    let id = *manager.servers[&key]
+        .pending
+        .keys()
+        .next()
+        .expect("pending");
+    manager.on_response(OnResponseInput {
+        key: &key,
+        id: L::RequestId::Number(id),
+        result: Some(serde_json::json!([])),
+        error: None,
+    });
+    let backdate = Instant::now()
+        .checked_sub(SYMBOLS_RETRY + Duration::from_secs(1))
+        .expect("backdate");
+    // Even after the retry pause, the unchanged document is not asked again.
+    if let Some(at) = manager.inlay_retry.get_mut(&path) {
+        *at = backdate;
+    }
+    manager.request_inlay_hints(&path, 5);
+    assert!(sent.try_recv().is_err(), "an empty answer holds");
+
+    // The server's refresh request asks again.
+    let refresh = serde_json::json!({
+        "jsonrpc": "2.0", "id": 99, "method": "workspace/inlayHint/refresh",
+    });
+    manager.on_body(&key, refresh.to_string().as_bytes());
+    assert!(sent.try_recv().is_ok(), "refresh is answered");
+    manager.request_inlay_hints(&path, 5);
+    assert!(sent.try_recv().is_ok(), "refresh asks again");
 }
 
 #[test]

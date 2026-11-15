@@ -219,6 +219,29 @@ fn rate_limit_backs_off_beyond_one_minute() {
     assert_eq!(check.rate_limit_streak, 0);
 }
 
+#[test]
+fn network_errors_back_off_only_after_repeated_failures() {
+    let mut check = WindowsUpdateCheck::new();
+    let minute = Duration::from_mins(1);
+    for _ in 0..ERRORS_BEFORE_BACKOFF {
+        check.next = Duration::ZERO;
+        check.finish(failure(None));
+        // The minute cadence set at probe time stays.
+        assert_eq!(check.next, Duration::ZERO);
+    }
+    check.finish(failure(None));
+    assert!(check.next >= minute.saturating_mul(2));
+    check.finish(failure(None));
+    assert!(check.next >= minute.saturating_mul(4));
+    check.finish(release((
+        "v0.0.0".into(),
+        "https://example.com/release".into(),
+        Vec::new(),
+        String::new(),
+    )));
+    assert_eq!(check.error_streak, 0);
+}
+
 fn headers(pairs: &[(&'static str, &'static str)]) -> reqwest::header::HeaderMap {
     let mut map = reqwest::header::HeaderMap::new();
     for (name, value) in pairs {

@@ -77,21 +77,21 @@ impl LspManager {
     }
 
     /// Ask for inlay hints over a tracked buffer's `lines` lines, once per
-    /// submitted revision (like [`Self::request_symbols`]); empty or failed
-    /// answers are retried on a slow cadence while the server indexes.
+    /// submitted revision, only from a server that advertises them. An
+    /// answer (empty too) holds until the text changes or the server asks
+    /// for a refresh; a failed answer is retried on a slow cadence.
     pub fn request_inlay_hints(&mut self, path: &Path, lines: usize) {
         let Some(doc) = self.docs.get(path) else {
             return;
         };
         let (key, uri, revision) = (doc.server.clone(), doc.uri.clone(), doc.submitted);
-        if self
-            .inlay_retry
-            .get(path)
-            .is_some_and(|at| at.elapsed() < SYMBOLS_RETRY)
-            || self
-                .inlay
-                .get(path)
-                .is_some_and(|(answered, hints)| *answered == revision && !hints.is_empty())
+        let retry = self.inlay_retry.get(path);
+        if retry.is_some_and(|at| at.elapsed() < SYMBOLS_RETRY)
+            || (retry.is_none()
+                && self
+                    .inlay
+                    .get(path)
+                    .is_some_and(|(answered, _)| *answered == revision))
         {
             return;
         }
@@ -99,6 +99,7 @@ impl LspManager {
             return;
         };
         if !server.ready
+            || !L::supports(&server.capabilities, "inlayHintProvider")
             || server
                 .pending
                 .values()

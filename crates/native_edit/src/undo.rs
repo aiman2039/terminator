@@ -84,6 +84,33 @@ pub(crate) enum UndoEntry {
     Group(Vec<UndoOp>),
 }
 
+/// Undo steps one buffer keeps; older steps are dropped.
+pub(crate) const MAX_UNDO_STEPS: usize = 1000;
+/// Bytes of kept text across one buffer's undo steps (the newest step is
+/// always kept, however large).
+pub(crate) const MAX_UNDO_BYTES: usize = 64 << 20;
+
+impl UndoOp {
+    fn text_bytes(&self) -> usize {
+        match self {
+            Self::Insert { text, .. } => text.len(),
+            Self::Delete { .. } => 0,
+        }
+    }
+}
+
+impl UndoEntry {
+    /// Bytes of text this entry keeps for its replay.
+    pub(crate) fn text_bytes(&self) -> usize {
+        match self {
+            Self::Op(op) => op.text_bytes(),
+            Self::Group(ops) => ops
+                .iter()
+                .fold(0usize, |sum, op| sum.saturating_add(op.text_bytes())),
+        }
+    }
+}
+
 /// An undo or redo stack slot: the entry, plus the caret and selection
 /// noted before the original edit. Undo and redo carry it along.
 #[derive(Clone, Debug)]

@@ -11,12 +11,14 @@ impl Viewer<'_> {
         appearance::context_menu(&frame.response, |ui| {
             let cwd = crate::remote_ui::location_label(session);
             appearance::target_header(ui, &cwd, &cwd);
+            // The selected text is built only when an item uses it, not on
+            // each frame while the menu is open.
             let selected = self
                 .app
                 .backends
                 .get(sid)
-                .map_or_else(String::new, TerminalBackend::selectable_content);
-            self.terminal_clipboard_items(ui, sid, &selected);
+                .is_some_and(|backend| backend.last_content().has_selection());
+            self.terminal_clipboard_items(ui, sid, selected);
             ui.separator();
             let key = Tab::Terminal(sid.clone()).key();
             let pane = self.pane_for(&key);
@@ -28,7 +30,7 @@ impl Viewer<'_> {
                     window: self.window,
                 });
             ui.separator();
-            self.terminal_target_items(ui, frame, &selected);
+            self.terminal_target_items(ui, frame);
             ui.separator();
             self.terminal_session_items(ui, session);
             ui.separator();
@@ -51,13 +53,13 @@ impl Viewer<'_> {
         });
     }
 
-    fn terminal_clipboard_items(&mut self, ui: &mut egui::Ui, sid: &String, selected: &str) {
+    fn terminal_clipboard_items(&mut self, ui: &mut egui::Ui, sid: &String, selected: bool) {
         let command = if cfg!(target_os = "macos") {
             "⌘"
         } else {
             "Ctrl+Shift+"
         };
-        ui.add_enabled_ui(!selected.is_empty(), |ui| {
+        ui.add_enabled_ui(selected, |ui| {
             if appearance::menu_item(appearance::MenuItemInput {
                 ui,
                 label: "Copy",
@@ -66,7 +68,7 @@ impl Viewer<'_> {
             })
             .clicked()
             {
-                ui.ctx().copy_text(selected.to_owned());
+                ui.ctx().copy_text(self.selected_terminal_text(sid));
                 ui.close();
             }
         });
@@ -97,12 +99,15 @@ impl Viewer<'_> {
     }
 
     /// File actions for the right-clicked target, and Open file path.
-    fn terminal_target_items(
-        &mut self,
-        ui: &mut egui::Ui,
-        frame: &TerminalFrame<'_>,
-        selected: &str,
-    ) {
+    /// The terminal's selection, built fresh for one menu action.
+    fn selected_terminal_text(&self, sid: &str) -> String {
+        self.app
+            .backends
+            .get(sid)
+            .map_or_else(String::new, TerminalBackend::selectable_content)
+    }
+
+    fn terminal_target_items(&mut self, ui: &mut egui::Ui, frame: &TerminalFrame<'_>) {
         let key = ui
             .ctx()
             .data(|d| d.get_temp::<String>(frame.menu_key))
@@ -127,7 +132,7 @@ impl Viewer<'_> {
         .clicked()
         {
             if self.app.request_pick(PickKind::OpenFile) {
-                selected.clone_into(&mut self.app.path_text);
+                self.app.path_text = self.selected_terminal_text(&frame.session.id);
             }
             ui.close();
         }

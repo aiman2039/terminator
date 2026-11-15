@@ -74,5 +74,4 @@ impl ImageJobs {
     }
 }
 pub(in crate::gui_services) use git::DiffExpandInput;
-#[cfg(test)]
 pub(in crate::gui_services) use git::JobGit;

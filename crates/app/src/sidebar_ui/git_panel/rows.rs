@@ -41,13 +41,19 @@ pub(super) fn tri_checkbox(ui: &mut egui::Ui, state: CheckState, lock: Option<&s
     .clicked()
 }
 
+/// The box is custom paint, not an egui checkbox, so the rest outline
+/// provider never reaches it: an unchecked box takes `control_line` here,
+/// like every other checkbox at rest.
 fn paint_check(ui: &egui::Ui, rect: egui::Rect, state: CheckState) {
     let box_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(13.0, 13.0));
     let visuals = ui.visuals();
     let (fill, stroke) = match state {
         CheckState::Unchecked => (
             visuals.widgets.inactive.bg_fill,
-            visuals.widgets.inactive.bg_stroke,
+            egui::Stroke::new(
+                visuals.widgets.inactive.bg_stroke.width.max(1.0),
+                appearance::control_line(),
+            ),
         ),
         _ => (visuals.selection.bg_fill, egui::Stroke::NONE),
     };
@@ -227,13 +233,9 @@ impl ChangeRow<'_> {
     }
 
     /// Diffstat and status letter.
-    fn trailing(&self) -> String {
-        let letter = self.letter;
-        match self.ctx.stats.get(&self.change.path).copied() {
-            Some((added, deleted)) if deleted > 0 => format!("+{added} -{deleted} {letter}"),
-            Some((added, _)) => format!("+{added} {letter}"),
-            None => letter.to_string(),
-        }
+    fn trailing(&self) -> Vec<TrailPart> {
+        let stat = self.ctx.stats.get(&self.change.path).copied();
+        change_trailer(self.ctx.theme, stat, self.letter)
     }
 
     fn click_action(&self, clicked: bool) -> Option<FileAction> {

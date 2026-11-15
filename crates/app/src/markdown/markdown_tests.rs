@@ -306,9 +306,12 @@ mod tests {
         }
     }
 
-    /// A painted text row: where its glyphs are, its text, and its font
-    /// family.
-    type PaintedRow = (egui::Rect, String, egui::FontFamily);
+    /// One styled run of a label: its text and text format.
+    type Run = (String, egui::text::TextFormat);
+
+    /// A painted text row: where its glyphs are, its text, and the styled
+    /// runs of the label it belongs to.
+    type PaintedRow = (egui::Rect, String, Vec<Run>);
 
     /// Every painted text row of `source` in a `width` wide preview.
     fn painted_rows(source: &str, width: f32) -> Vec<PaintedRow> {
@@ -316,6 +319,16 @@ mod tests {
             match shape {
                 egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
                 egui::Shape::Text(text) => {
+                    let job = &text.galley.job;
+                    let runs: Vec<Run> = job
+                        .sections
+                        .iter()
+                        .map(|section| {
+                            let range = section.byte_range.start.0..section.byte_range.end.0;
+                            let run = job.text.get(range).unwrap_or("");
+                            (run.to_owned(), section.format.clone())
+                        })
+                        .collect();
                     for row in &text.galley.rows {
                         let (Some(first), Some(last)) = (row.glyphs.first(), row.glyphs.last())
                         else {
@@ -327,22 +340,31 @@ mod tests {
                             x + first.pos.x..=x + last.pos.x + last.advance_width,
                             y..=y + row.rect().height(),
                         );
-                        // The viewer paints each run of styled text as its
-                        // own label: one section per galley.
-                        let family = text
-                            .galley
-                            .job
-                            .sections
-                            .first()
-                            .map(|section| section.format.font_id.family.clone())
-                            .unwrap_or_default();
                         let chars = row.glyphs.iter().map(|glyph| glyph.chr).collect();
-                        out.push((rect, chars, family));
+                        out.push((rect, chars, runs.clone()));
                     }
                 }
                 _ => {}
             }
         }
+        let mut rows = Vec::new();
+        for clipped in &rendered_shapes(source, width) {
+            collect(&clipped.shape, &mut rows);
+        }
+        rows
+    }
+
+    /// The text format of the painted run that contains `word`.
+    fn run_format(rows: &[PaintedRow], word: &str) -> egui::text::TextFormat {
+        rows.iter()
+            .flat_map(|(_, _, runs)| runs)
+            .find(|(text, _)| text.contains(word))
+            .map(|(_, format)| format.clone())
+            .unwrap_or_else(|| panic!("{word:?} is not painted: {rows:?}"))
+    }
+
+    /// Every shape of `source` in a `width` wide preview.
+    fn rendered_shapes(source: &str, width: f32) -> Vec<egui::epaint::ClippedShape> {
         let ctx = egui::Context::default();
         crate::appearance::install(&ctx);
         let mut preview = Preview::default();
@@ -365,11 +387,22 @@ mod tests {
             output.textures_delta.clear();
             shapes = output.shapes;
         }
-        let mut rows = Vec::new();
-        for clipped in &shapes {
-            collect(&clipped.shape, &mut rows);
+        shapes
+    }
+
+    /// Every shape in `shapes`, nested ones included.
+    fn flat_shapes(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Shape> {
+        fn flatten(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flatten(shape, out)),
+                shape => out.push(shape.clone()),
+            }
         }
-        rows
+        let mut out = Vec::new();
+        for clipped in shapes {
+            flatten(&clipped.shape, &mut out);
+        }
+        out
     }
 
     fn painted<'a>(rows: &'a [PaintedRow], word: &str) -> &'a PaintedRow {
@@ -451,10 +484,87 @@ mod tests {
     fn bold_text_and_table_headers_use_the_bold_face() {
         let rows = painted_rows("Plain **Bold** text.\n\n| Head |\n|---|\n| cell |\n", 800.0);
         let bold = egui::FontFamily::Name("Semibold".into());
-        assert_eq!(painted(&rows, "Bold").2, bold);
-        assert_eq!(painted(&rows, "Head").2, bold);
-        assert_ne!(painted(&rows, "Plain").2, bold);
-        assert_ne!(painted(&rows, "cell").2, bold);
+        let family = |word: &str| run_format(&rows, word).font_id.family;
+        assert_eq!(family("Bold"), bold);
+        assert_eq!(family("Head"), bold);
+        assert_ne!(family("Plain"), bold);
+        assert_ne!(family("cell"), bold);
+    }
+
+    #[test]
+    fn a_full_stop_after_bold_text_stays_with_the_bold_word() {
+        // At every width the full stop paints right after "project", on
+        // the same row: never alone at the start of the next row.
+        for width in (160..=420).step_by(4) {
+            let width = width as f32;
+            let rows = painted_rows("A small **sample project**.\n", width);
+            assert!(
+                rows.iter().any(|(_, text, _)| text.contains("project.")),
+                "width {width}: {rows:?}"
+            );
+            assert!(
+                !rows.iter().any(|(_, text, _)| text.trim() == "."),
+                "width {width}: the full stop wraps alone: {rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_list_items_show_the_checkbox_without_a_bullet() {
+        let bullets = |source: &str| {
+            flat_shapes(&rendered_shapes(source, 800.0))
+                .iter()
+                .filter(|shape| matches!(shape, egui::Shape::Circle(_)))
+                .count()
+        };
+        assert_eq!(bullets("- [x] Auth\n- [ ] Billing\n"), 0);
+        assert_eq!(bullets("- [x] Auth\n- Plain\n"), 1, "a plain item keeps it");
+        assert_eq!(bullets("- Parent\n  - [ ] Nested task\n"), 1);
+    }
+
+    #[test]
+    fn tables_fill_the_content_width_with_a_quiet_header_and_row_rules() {
+        let source = "| Route | Status |\n|---|---|\n| /home | ok |\n| /pay | ok |\n";
+        let width = 800.0;
+        let rows = painted_rows(source, width);
+        // Columns spread over the content width.
+        let status = painted(&rows, "Status").0;
+        assert!(status.min.x > width * 0.35, "Status at {status:?}");
+        assert_eq!(painted(&rows, "ok").0.min.x, status.min.x);
+        // A muted header.
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let weak = ctx.global_style().visuals.weak_text_color();
+        assert_eq!(run_format(&rows, "Route").color, weak);
+        assert_ne!(run_format(&rows, "/home").color, weak);
+        let shapes = flat_shapes(&rendered_shapes(source, width));
+        // No outer box and no stripe fill around or in the table (the
+        // preview's status pill paints below it).
+        let table = painted(&rows, "Route")
+            .0
+            .union(painted(&rows, "/pay").0)
+            .expand(8.0);
+        let boxes = shapes
+            .iter()
+            .filter(|shape| match shape {
+                egui::Shape::Rect(rect) => {
+                    rect.rect.intersects(table)
+                        && (rect.fill.a() > 0
+                            || (rect.stroke.width > 0.0 && rect.stroke.color.a() > 0))
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!(boxes, 0, "{shapes:?}");
+        // A rule under the header and one between the two body rows.
+        let rules = shapes
+            .iter()
+            .filter(|shape| match shape {
+                egui::Shape::LineSegment { points, .. } => table.contains(points[0]),
+                _ => false,
+            })
+            .count();
+        assert_eq!(rules, 2, "{shapes:?}");
     }
 
     #[test]

@@ -379,7 +379,7 @@ impl TreeFolder<'_> {
             name: self.name,
             color,
             hint,
-            trailing: "",
+            trailing: &[],
         });
         (check_clicked, response)
     }

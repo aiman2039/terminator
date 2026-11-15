@@ -411,9 +411,20 @@ fn launch_gui(paths: &Paths) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Ok(mut child) = command.spawn() {
-        let _ = child.wait();
-    }
+    let _ = spawn_detached(command);
+}
+
+/// Starts `command` and reaps it on its own thread. On Linux the child is
+/// the GUI itself: waiting on the notification worker would hold every
+/// later notification until that GUI exits.
+fn spawn_detached(mut command: Command) -> std::io::Result<()> {
+    let mut child = command.spawn()?;
+    std::thread::Builder::new()
+        .name("gui-reap".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })?;
+    Ok(())
 }
 
 /// Install the daemon event-loop waker. It is called when a waiter starts or
