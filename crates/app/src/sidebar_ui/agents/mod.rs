@@ -1,8 +1,8 @@
 mod live;
 
 use super::attention::{
-    AttentionCard, NoticeGroup, activity_label, attention_badge_label, attention_card_in,
-    join_labels, state_color,
+    AttentionAction, AttentionCard, NoticeGroup, TerminalCard, activity_label,
+    attention_badge_label, attention_card_in, join_labels, state_color, terminal_card,
 };
 use super::explorer_rows::{
     PaintHeaderCountInput, cached_variable_card, paint_header_count, skip_clipped_row,
@@ -243,63 +243,51 @@ impl App {
         self.apply_group_action(group, action);
     }
 
-    /// A terminal notice card with Go to terminal and Dismiss.
+    /// A terminal notice as an attention card: Go to terminal (also a click
+    /// on the card) and Dismiss. Display only; no lifecycle effect.
     fn terminal_notice_card(
         &mut self,
         ui: &mut egui::Ui,
         notice: &terminator_core::TerminalNotice,
         layout_key: u64,
     ) {
-        let row = cached_variable_card(ui, layout_key, |ui| {
-            ui.group(|ui| self.terminal_notice_body(ui, notice))
-                .response
-                .rect
+        let index = self.sidebar_index();
+        let session = index
+            .sessions
+            .get(&notice.session_id)
+            .map(std::convert::AsRef::as_ref);
+        let project = session.and_then(|session| {
+            self.state
+                .projects
+                .iter()
+                .find(|project| project.id == session.project_id)
+                .map(|project| project.name.as_str())
         });
-        #[cfg(feature = "test-support")]
-        if let Some(rect) = row {
-            diagnostics::record(
-                ui.ctx(),
-                &format!("terminal-row:{}", notice.session_id),
-                rect,
-            );
-        }
-        let _ = row;
-    }
-
-    fn terminal_notice_body(
-        &mut self,
-        ui: &mut egui::Ui,
-        notice: &terminator_core::TerminalNotice,
-    ) {
-        ui.label(if notice.title.is_empty() {
-            "Terminal"
-        } else {
-            &notice.title
-        });
-        ui.label(&notice.body);
-        ui.horizontal(|ui| {
-            let go = ui.button("Go to terminal");
-            #[cfg(feature = "test-support")]
-            diagnostics::record(
-                ui.ctx(),
-                &format!("terminal-go:{}", notice.session_id),
-                go.rect,
-            );
-            if go.clicked() {
-                self.go_session(&notice.session_id);
-            }
-            if self
+        let input = TerminalCard {
+            theme: &self.theme,
+            notice,
+            session,
+            project,
+            selected: self.active_session.as_ref() == Some(&notice.session_id),
+            dismiss: self
                 .state
                 .capabilities
                 .iter()
-                .any(|c| c == TERMINAL_NOTICES_CAPABILITY)
-                && ui.button("Dismiss").clicked()
-            {
-                self.send(Request::DismissTerminalNotice {
-                    id: notice.id.clone(),
-                });
-            }
+                .any(|c| c == TERMINAL_NOTICES_CAPABILITY),
+        };
+        let mut action = AttentionAction::None;
+        cached_variable_card(ui, layout_key, |ui| {
+            let (picked, rect) = terminal_card(ui, &input);
+            action = picked;
+            rect
         });
+        match action {
+            AttentionAction::Go => self.go_session(&notice.session_id),
+            AttentionAction::Dismiss => self.send(Request::DismissTerminalNotice {
+                id: notice.id.clone(),
+            }),
+            _ => {}
+        }
     }
 
     /// Marks every unread notice read with the per-card Mark read request.
