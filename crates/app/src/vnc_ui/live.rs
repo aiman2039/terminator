@@ -108,7 +108,7 @@ impl App {
         };
         let should_poll = {
             let view = self.vnc_views.entry(sid.to_owned()).or_default();
-            !view.fetching && view.last_poll.is_none_or(|t| t.elapsed() >= interval)
+            view.poll_due(interval, Instant::now())
         };
         if !should_poll {
             return shm;

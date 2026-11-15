@@ -91,19 +91,61 @@ fn git(root: &Path, args: &[&str]) {
 }
 
 #[test]
+fn build_output_below_an_ignored_folder_does_not_wake_the_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = normalize(dir.path());
+    let entry = |name: &str, ignored: bool| terminator_git::Entry {
+        path: root.join(name),
+        directory: true,
+        ignored,
+    };
+    let listing: services::Listing = (
+        root.clone(),
+        Ok(vec![
+            entry("target", true),
+            entry(".git", true),
+            entry("src", false),
+            entry("shown", true),
+        ]),
+    );
+    let request = Request {
+        cwd: root.clone(),
+        generation: 1,
+        directories: vec![root.clone(), root.join("shown")],
+        include_stats: true,
+    };
+    let watched = live::Watched::default();
+    *watched.ignored.lock().unwrap() = ignored_directories(&request, std::iter::once(&listing));
+    assert_eq!(*watched.ignored.lock().unwrap(), vec![root.join("target")]);
+    let (events, _changed) = tokio::sync::watch::channel(0_u64);
+    let record = |path: PathBuf| {
+        let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+            .add_path(path);
+        live::record_event(&watched, &events, Ok(event));
+        watched.dirty.lock().unwrap().epoch
+    };
+    assert_eq!(record(root.join("target/debug/build/out.o")), 0);
+    // The folder itself (deleted or created) changes the root listing.
+    assert_eq!(record(root.join("target")), 1);
+    assert_eq!(record(root.join(".git/index")), 2);
+    assert_eq!(record(root.join("src/main.rs")), 3);
+    assert_eq!(record(root.join("shown/a.txt")), 4);
+}
+
+#[test]
 fn event_burst_stays_bounded_and_wakes_the_worker_once() {
-    let dirty = std::sync::Mutex::new(Dirty::default());
+    let watched = live::Watched::default();
     let (events, mut changed) = tokio::sync::watch::channel(0_u64);
     changed.borrow_and_update();
     for index in 0..10_000 {
         let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
             .add_path(PathBuf::from(format!("/burst/{index}")));
-        live::record_event(&dirty, &events, Ok(event));
+        live::record_event(&watched, &events, Ok(event));
     }
     let access = notify::Event::new(notify::EventKind::Access(notify::event::AccessKind::Any))
         .add_path(PathBuf::from("/burst/read"));
-    live::record_event(&dirty, &events, Ok(access));
-    let state = dirty.lock().unwrap().clone();
+    live::record_event(&watched, &events, Ok(access));
+    let state = watched.dirty.lock().unwrap().clone();
     assert!(state.full, "an overflowing burst becomes one full rescan");
     assert!(state.paths.is_empty(), "no path backlog is kept");
     assert_eq!(state.epoch, 10_000, "access events are ignored");

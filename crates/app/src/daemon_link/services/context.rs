@@ -5,6 +5,10 @@ use crate::gui_services::Services;
 use std::{ffi::OsString, path::Path, path::PathBuf};
 use terminator_core::{CommandOptions, async_service::CancellationToken};
 
+/// Leads every refresh Git command. No fsmonitor: its cookie files land in
+/// the watched Git dir, and each status or diff would wake the next refresh.
+const NO_FSMONITOR: [&str; 2] = ["-c", "core.fsmonitor=false"];
+
 pub struct ContextAsyncInput<'a> {
     pub service: &'a Services,
     pub cwd: PathBuf,
@@ -88,7 +92,11 @@ impl GitRunner<'_> {
             self.service.fs(),
             terminator_git::RunInput {
                 cwd: root,
-                args: args.iter().map(OsString::from).collect(),
+                args: NO_FSMONITOR
+                    .iter()
+                    .chain(args)
+                    .map(OsString::from)
+                    .collect(),
                 options: CommandOptions {
                     stdout_limit: 4 * 1024 * 1024,
                     ..Default::default()
@@ -176,6 +184,47 @@ impl GitRunner<'_> {
 mod tests {
     use super::*;
     use crate::gui_services::Services;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn refresh_status_never_runs_the_fsmonitor() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path().canonicalize().unwrap();
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        run(&["init", "-q"]);
+        let marker = root.join("fsmonitor-ran");
+        let hook = root.join("hook.sh");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        let mut mode = std::fs::metadata(&hook).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+        std::fs::set_permissions(&hook, mode).unwrap();
+        run(&["config", "core.fsmonitor", hook.to_str().unwrap()]);
+        let state = tempfile::tempdir().unwrap();
+        let (tx, _) = std::sync::mpsc::channel();
+        let (service, _owner) = Services::new(
+            terminator_core::Paths::at(state.path().into()),
+            eframe::egui::Context::default(),
+            tx,
+        )
+        .unwrap();
+        let context = context_async(ContextAsyncInput {
+            service: &service,
+            cwd: root.clone(),
+            include_stats: true,
+            cancel: &CancellationToken::new(),
+        })
+        .await;
+        assert!(context.error.is_none(), "{:?}", context.error);
+        assert!(!context.changes.is_empty(), "hook.sh is untracked");
+        assert!(!marker.exists(), "the fsmonitor hook ran");
+    }
 
     #[tokio::test]
     async fn git_dirs_resolve_against_repo_root_from_subfolder() {

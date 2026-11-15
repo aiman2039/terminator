@@ -35,6 +35,15 @@ pub enum ProcessError {
 }
 type Result<T, E = ProcessError> = std::result::Result<T, E>;
 
+/// How long a timed-out or cancelled command may clean up after Ctrl-C
+/// (Git removes its lock files) before its process group is killed.
+pub const INTERRUPT_GRACE: Duration = Duration::from_secs(5);
+
+/// How long the pipes are still read after the child exited. A background
+/// process (for example one a Git hook started) can hold them open; the
+/// command still finished.
+pub const EXIT_DRAIN: Duration = Duration::from_millis(500);
+
 /// `Err` unless `status` is one of `accepted` (any status when `None`).
 fn check_status(
     status: std::process::ExitStatus,
@@ -129,6 +138,7 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
         let mut written = 0;
         let started = Instant::now();
         let mut status = None;
+        let mut exited = None;
         loop {
             let out_done = drain(&mut out, &mut stdout, options.stdout_limit)?;
             let err_done = drain(&mut err, &mut stderr, options.stderr_limit)?;
@@ -150,10 +160,14 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
             }
             if status.is_none() {
                 status = child.try_wait()?;
+                if status.is_some() {
+                    exited = Some(Instant::now());
+                }
             }
+            let drained = (out_done && err_done)
+                || exited.is_some_and(|exited: Instant| exited.elapsed() >= EXIT_DRAIN);
             if let Some(status) = status
-                && out_done
-                && err_done
+                && drained
             {
                 check_status(status, options.accepted_exit_codes.as_deref(), &stderr)?;
                 return Ok(Output {
@@ -170,12 +184,31 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
             std::thread::sleep(Duration::from_millis(5));
         }
     })();
+    if matches!(result, Err(ProcessError::TimedOut { .. })) {
+        interrupt_and_wait(&mut child);
+    }
     if result.is_err() {
         let _ = crate::signals::signal_group(child.id(), crate::signals::ProcSignal::Kill);
         let _ = child.kill();
         let _ = child.wait();
     }
     result
+}
+
+/// Ctrl-C to the process group, as in a terminal, so Git removes its lock
+/// files; waits up to [`INTERRUPT_GRACE`] for the child to exit.
+#[cfg(unix)]
+fn interrupt_and_wait(child: &mut std::process::Child) {
+    if crate::signals::signal_group(child.id(), crate::signals::ProcSignal::Interrupt).is_err() {
+        return;
+    }
+    let started = Instant::now();
+    while started.elapsed() < INTERRUPT_GRACE {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Bounded reader threads drain stdout/stderr so a verbose child cannot wedge

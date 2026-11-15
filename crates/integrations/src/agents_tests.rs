@@ -52,6 +52,24 @@ fn new_agent_installers_keep_user_settings_and_hooks_and_are_idempotent() {
 }
 
 #[test]
+fn remove_of_an_agent_never_installed_leaves_its_file_unchanged() {
+    for kind in ["claude", "gemini", "codex", "cursor", "copilot", "opencode"] {
+        let home = tempfile::tempdir().unwrap();
+        let path = config_path(home.path(), kind).unwrap();
+        let source = if kind == "codex" {
+            "model = \"o3\"\n"
+        } else {
+            "{\"theme\":\"dark\"}"
+        };
+        atomic_write(&path, source.as_bytes()).unwrap();
+        run(home.path(), kind, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), source, "{kind}");
+        let entries = fs::read_dir(path.parent().unwrap()).unwrap().count();
+        assert_eq!(entries, 1, "{kind} wrote a backup");
+    }
+}
+
+#[test]
 fn gemini_hooks_print_json_and_use_millisecond_timeouts() {
     let home = tempfile::tempdir().unwrap();
     let path = run(home.path(), "gemini", false);

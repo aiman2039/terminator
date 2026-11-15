@@ -60,6 +60,24 @@ fn fetch_log_reads_commits_refs_and_the_active_branch() {
 }
 
 #[test]
+fn commit_log_of_a_repository_without_commits_is_empty_not_an_error() {
+    let dir = repo();
+    let log = fetch_log(dir.path()).expect("an empty repository has an empty log");
+    assert!(log.commits.is_empty());
+    assert_eq!(log.active_branch, "main");
+    let head = LogQuery {
+        filter: LogFilter {
+            branch: LogBranch::Head,
+            ..LogFilter::default()
+        },
+        ..LogQuery::default()
+    };
+    let log = query_log(&BlockingGit, dir.path(), &head);
+    assert!(log.error.is_none(), "{:?}", log.error);
+    assert!(log.commits.is_empty());
+}
+
+#[test]
 fn fetch_log_reports_a_directory_outside_a_repository() {
     let dir = tempfile::tempdir().unwrap();
     let log = fetch_log(dir.path());
@@ -241,6 +259,45 @@ fn fetch_blame_annotates_every_line() {
         .expect("contents blame");
     let flags: Vec<bool> = edited.entries.iter().map(BlameEntry::uncommitted).collect();
     assert_eq!(flags, [false, true, true]);
+}
+
+/// Records each Git call, then runs it: a job's Git must all go through
+/// the runner a replaced job can stop.
+struct RecordingGit(std::cell::RefCell<Vec<String>>);
+
+impl LogGit for RecordingGit {
+    fn git(&self, dir: &Path, args: &[&str], options: CommandOptions) -> Result<Vec<u8>, String> {
+        self.0.borrow_mut().push(args.join(" "));
+        BlockingGit.git(dir, args, options)
+    }
+}
+
+#[test]
+fn blame_and_commit_files_run_their_git_through_the_jobs_runner() {
+    let dir = repo();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+    git_cmd(root, &["add", "."]);
+    git_cmd(root, &["commit", "-qm", "base"]);
+    let runner = RecordingGit(std::cell::RefCell::default());
+    let blame = blame_with(&runner, root, Path::new("a.txt"), Some("one\n")).unwrap();
+    assert_eq!(blame.entries.len(), 1);
+    assert!(
+        runner
+            .0
+            .borrow()
+            .iter()
+            .any(|call| call.starts_with("blame"))
+    );
+    let files = commit_files_with(&runner, root, "HEAD").unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(
+        runner
+            .0
+            .borrow()
+            .iter()
+            .any(|call| call.starts_with("show"))
+    );
 }
 
 #[test]

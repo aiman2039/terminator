@@ -29,6 +29,25 @@ fn new_file_with_a_nested_name_creates_its_folders() {
 }
 
 #[test]
+fn log_lists_commits_whose_subject_is_not_utf8() {
+    let dir = repo();
+    let root = dir.path();
+    fs::write(root.join("a.txt"), "next\n").unwrap();
+    let message = root.join("message.txt");
+    // "café" in Latin-1: 0xE9 alone is not UTF-8.
+    fs::write(&message, b"caf\xe9\n").unwrap();
+    git(
+        root,
+        &["commit", "-q", "-a", "-F", message.to_str().unwrap()],
+    );
+    let Ok(Report::Log(entries)) = perform(root, Op::Log) else {
+        panic!("Log should list commits");
+    };
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].1, "base");
+}
+
+#[test]
 fn head_message_returns_the_full_last_message() {
     let dir = repo();
     let root = dir.path();

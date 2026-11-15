@@ -13,11 +13,27 @@ fn shell(script: &str) -> Command {
 }
 #[cfg(unix)]
 #[test]
-fn timeout_includes_inherited_pipes() {
+fn background_process_holding_the_pipes_does_not_fail_a_finished_command() {
+    let start = Instant::now();
+    let output = run_command(
+        shell("echo done; sleep 10 & exit 0"),
+        CommandOptions {
+            timeout: Duration::from_secs(5),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(output.stdout, b"done\n");
+    assert!(start.elapsed() < Duration::from_secs(3));
+}
+
+#[cfg(unix)]
+#[test]
+fn timeout_still_applies_to_a_child_that_never_exits() {
     let start = Instant::now();
     assert!(
         run_command(
-            shell("sleep 10 & exit 0"),
+            shell("sleep 10"),
             CommandOptions {
                 timeout: Duration::from_millis(80),
                 ..Default::default()
@@ -28,6 +44,27 @@ fn timeout_includes_inherited_pipes() {
         .contains("timed out")
     );
     assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn timed_out_command_gets_ctrl_c_to_clean_up_before_the_kill() {
+    let dir = tempfile::tempdir().unwrap();
+    let cleaned = dir.path().join("cleaned");
+    let script = format!(
+        "trap 'echo yes > {}; exit 130' INT; sleep 10 & wait",
+        cleaned.display()
+    );
+    let error = run_command(
+        shell(&script),
+        CommandOptions {
+            timeout: Duration::from_millis(200),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("timed out"), "{error}");
+    assert_eq!(std::fs::read_to_string(&cleaned).unwrap(), "yes\n");
 }
 /// A child that never reads stdin must not wedge the caller in a blocking
 /// write: the timeout clock starts before stdin is touched.

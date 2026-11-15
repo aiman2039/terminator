@@ -140,6 +140,14 @@ pub fn install_at(input: InstallAtInput<'_>) -> Result<PathBuf> {
         quote(&paths.runtime.to_string_lossy())
     );
     let command = format!("{invocation} # {MARKER}");
+    if remove && !before.contains(MARKER) {
+        // Nothing of ours is installed: leave the file, and its backups,
+        // exactly as they are.
+        if kind == "muse" {
+            sync_muse_settings(home, &command, remove)?;
+        }
+        return Ok(path);
+    }
     let after = Rewrite {
         path: &path,
         kind,

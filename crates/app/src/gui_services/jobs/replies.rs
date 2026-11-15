@@ -121,6 +121,14 @@ fn waiting(job: &Job) -> Option<Reply> {
         Job::GitBase(path, generation) => reply((path.clone(), *generation), |(p, g), _| {
             vec![Update::GitBaseFailed(p, g)]
         }),
+        // The Commit Log shows "Loading files…" and the editor keeps its
+        // blame pending until an answer lands.
+        Job::CommitFiles(_, hash) => {
+            reply(hash.clone(), |h, e| vec![Update::CommitFiles(h, Err(e))])
+        }
+        Job::EditorBlame(path, revision, _) => reply((path.clone(), *revision), |(p, r), e| {
+            vec![Update::EditorBlame(p, r, Err(e))]
+        }),
         _ => created(job),
     }
 }

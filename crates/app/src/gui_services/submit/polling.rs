@@ -75,6 +75,20 @@ struct SnapshotPoller {
     directory_probe: DirectoryProbe,
     appearance_source: Option<String>,
     config_check: Instant,
+    /// Unchanged snapshots in a row; slows the poll while nothing happens.
+    idle_polls: u32,
+}
+
+/// The poll rate after a change, and the slowest idle rate.
+const FAST_POLL: Duration = Duration::from_millis(100);
+const IDLE_POLL: Duration = Duration::from_secs(1);
+
+/// Wait before the next snapshot poll: 100 ms after a change, doubling
+/// with each unchanged reply up to one second.
+fn poll_interval(idle_polls: u32) -> Duration {
+    FAST_POLL
+        .saturating_mul(1u32 << idle_polls.min(4))
+        .min(IDLE_POLL)
 }
 
 impl Services {
@@ -112,6 +126,7 @@ impl SnapshotPoller {
             config_check: Instant::now()
                 .checked_sub(Duration::from_secs(3))
                 .unwrap_or_else(Instant::now),
+            idle_polls: 0,
         }
     }
 
@@ -119,7 +134,9 @@ impl SnapshotPoller {
         loop {
             tokio::select! {
                 () = self.token.cancelled() => break,
-                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+                () = tokio::time::sleep(poll_interval(self.idle_polls)) => {}
+                // Input or a job: poll at the fast rate again.
+                () = self.service.0.poll_wake.notified() => self.idle_polls = 0,
             }
             if self.service.reads_paused() {
                 continue;
@@ -127,6 +144,11 @@ impl SnapshotPoller {
             let result = tokio::select! {
                 () = self.token.cancelled() => break,
                 result = self.service.client().snapshot(self.revision.clone()) => result,
+            };
+            self.idle_polls = if matches!(result, Ok(Response::Unchanged)) {
+                self.idle_polls.saturating_add(1)
+            } else {
+                0
             };
             self.note_snapshot(&result);
             if self.recover_unavailable(&result).await?.is_break() {
@@ -334,18 +356,18 @@ impl SnapshotPoller {
             .client()
             .catalog
             .run(&self.token, move || {
-                let path = config_path(&paths)?;
-                let source = fs::read_to_string(&path).unwrap_or_default();
-                if previous.as_ref() == Some(&source) {
-                    return Ok(None);
-                }
-                anyhow::Ok(Some((source, AppearanceFile::load(&path)?)))
+                anyhow::Ok(changed_appearance(&config_path(&paths)?, previous.as_ref()))
             })
             .await;
         let update = match changed {
-            Ok(Some((source, file))) => {
+            Ok(Some((source, loaded))) => {
+                // Kept on error too: a broken file is reported once, not
+                // again each second until it changes.
                 self.appearance_source = Some(source);
-                Update::Appearance(Box::new(file))
+                match loaded {
+                    Ok(file) => Update::Appearance(Box::new(file)),
+                    Err(error) => Update::Error(format!("Appearance: {error:#}")),
+                }
             }
             Ok(None) => return Ok(ControlFlow::Continue(())),
             Err(error) => Update::Error(format!("Appearance: {error:#}")),
@@ -354,9 +376,44 @@ impl SnapshotPoller {
     }
 }
 
+/// The config source and its load result, or `None` when the text equals
+/// `previous` (the source last loaded or reported).
+fn changed_appearance(
+    path: &std::path::Path,
+    previous: Option<&String>,
+) -> Option<(String, Result<AppearanceFile>)> {
+    let source = fs::read_to_string(path).unwrap_or_default();
+    if previous == Some(&source) {
+        return None;
+    }
+    Some((source, AppearanceFile::load(path).map_err(Into::into)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_snapshot_polls_slow_down_to_one_second() {
+        assert_eq!(poll_interval(0), FAST_POLL);
+        assert_eq!(poll_interval(1), Duration::from_millis(200));
+        assert_eq!(poll_interval(3), Duration::from_millis(800));
+        assert_eq!(poll_interval(4), IDLE_POLL);
+        assert_eq!(poll_interval(u32::MAX), IDLE_POLL);
+    }
+
+    #[test]
+    fn broken_config_is_reported_once_until_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[theme\n").unwrap();
+        let (source, loaded) = changed_appearance(&path, None).unwrap();
+        assert!(loaded.is_err());
+        assert!(changed_appearance(&path, Some(&source)).is_none());
+        fs::write(&path, "").unwrap();
+        let (_, loaded) = changed_appearance(&path, Some(&source)).unwrap();
+        assert!(loaded.is_ok());
+    }
 
     #[test]
     fn hung_project_stat_does_not_block_the_poller() {
