@@ -22,8 +22,9 @@ impl App {
             .is_some_and(|dialog| dialog.applying_to(path));
         // Diagnostics snapshots for this frame: the manager borrow ends
         // before the buffer borrow begins.
-        let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
-        let problems = self.lsp.editor_diagnostics(path);
+        // Cached per diagnostics generation: no rebuild or deep clone
+        // each frame.
+        let (marks, problems) = self.lsp.view_diagnostics(path);
         let problems_generation = self.lsp.diagnostics_generation();
         let reference = self
             .selected_project()

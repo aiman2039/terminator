@@ -6,11 +6,12 @@ impl LspManager {
     /// (nothing to jump to, same as an empty answer).
     pub fn request_definition(&mut self, path: &Path, position: L::Position) {
         let path = path.to_owned();
-        let key = self.docs.get(&path).map(|doc| doc.server.clone());
-        let uri = self.docs.get(&path).map(|doc| doc.uri.clone());
-        let (Some(key), Some(uri)) = (key, uri) else {
+        let Some(doc) = self.docs.get(&path) else {
             return;
         };
+        let (key, uri, revision) = (doc.server.clone(), doc.uri.clone(), doc.observed);
+        // A newer goto makes any answer still in flight stale.
+        let generation = self.next_goto_generation();
         let Some(server) = self.servers.get_mut(&key) else {
             return;
         };
@@ -23,7 +24,19 @@ impl LspManager {
         let _ = server
             .inbox
             .send(L::definition(&L::RequestId::Number(number), &uri, position));
-        server.pending.insert(number, Pending::Definition { path });
+        server.pending.insert(
+            number,
+            Pending::Definition {
+                path,
+                generation,
+                revision,
+            },
+        );
+    }
+
+    pub(super) fn next_goto_generation(&mut self) -> u64 {
+        self.goto_generation = self.goto_generation.wrapping_add(1);
+        self.goto_generation
     }
 
     /// Ask for references at a UTF-16 position. The response is available

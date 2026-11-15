@@ -136,6 +136,96 @@ pub fn timed_out(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether `bytes` starts with one whole `MessagePack` value. Walks the
+/// markers and skips payloads by length, so it costs one step per item,
+/// not per byte. An invalid marker counts as complete: the decoder then
+/// reports the error.
+fn msgpack_complete(bytes: &[u8]) -> bool {
+    let be = |at: usize, len: usize| -> Option<usize> {
+        let field = bytes.get(at..at.checked_add(len)?)?;
+        Some(field.iter().fold(0usize, |value, byte| {
+            value.checked_shl(8).unwrap_or(usize::MAX) | usize::from(*byte)
+        }))
+    };
+    let mut at = 0usize;
+    // Values still to read (array items, map keys and values).
+    let mut left = 1usize;
+    while left > 0 {
+        let Some(&marker) = bytes.get(at) else {
+            return false;
+        };
+        left = left.saturating_sub(1);
+        let next = at.checked_add(1);
+        // (header bytes after the marker, payload bytes, child values)
+        let (header, payload, children) = match marker {
+            0x00..=0x7f | 0xc0 | 0xc2 | 0xc3 | 0xe0..=0xff => (0, Some(0), 0),
+            0x80..=0x8f => (0, Some(0), usize::from(marker & 0x0f).saturating_mul(2)),
+            0x90..=0x9f => (0, Some(0), usize::from(marker & 0x0f)),
+            0xa0..=0xbf => (0, Some(usize::from(marker & 0x1f)), 0),
+            0xc4 | 0xd9 => (1, next.and_then(|at| be(at, 1)), 0),
+            0xc5 | 0xda => (2, next.and_then(|at| be(at, 2)), 0),
+            0xc6 | 0xdb => (4, next.and_then(|at| be(at, 4)), 0),
+            // ext: length, then one type byte
+            0xc7 => (2, next.and_then(|at| be(at, 1)), 0),
+            0xc8 => (3, next.and_then(|at| be(at, 2)), 0),
+            0xc9 => (5, next.and_then(|at| be(at, 4)), 0),
+            0xcc | 0xd0 => (0, Some(1), 0),
+            0xcd | 0xd1 => (0, Some(2), 0),
+            0xca | 0xce | 0xd2 => (0, Some(4), 0),
+            0xcb | 0xcf | 0xd3 => (0, Some(8), 0),
+            0xd4 => (1, Some(1), 0),
+            0xd5 => (1, Some(2), 0),
+            0xd6 => (1, Some(4), 0),
+            0xd7 => (1, Some(8), 0),
+            0xd8 => (1, Some(16), 0),
+            0xdc | 0xde => {
+                let count = next.and_then(|at| be(at, 2));
+                let Some(count) = count else {
+                    return false;
+                };
+                (
+                    2,
+                    Some(0),
+                    if marker == 0xde {
+                        count.saturating_mul(2)
+                    } else {
+                        count
+                    },
+                )
+            }
+            0xdd | 0xdf => {
+                let count = next.and_then(|at| be(at, 4));
+                let Some(count) = count else {
+                    return false;
+                };
+                (
+                    4,
+                    Some(0),
+                    if marker == 0xdf {
+                        count.saturating_mul(2)
+                    } else {
+                        count
+                    },
+                )
+            }
+            // 0xc1 is never used.
+            _ => return true,
+        };
+        let Some(payload) = payload else {
+            return false;
+        };
+        at = at
+            .saturating_add(1)
+            .saturating_add(header)
+            .saturating_add(payload);
+        if at > bytes.len() {
+            return false;
+        }
+        left = left.saturating_add(children);
+    }
+    true
+}
+
 pub struct AsyncConnection {
     #[cfg(unix)]
     stream: tokio::net::UnixStream,
@@ -221,6 +311,11 @@ impl AsyncConnection {
                     anyhow::bail!("Neovim read exceeded the buffer");
                 };
                 bytes.extend_from_slice(read);
+                // Decode once the whole value arrived: decoding after each
+                // read is quadratic in the reply size.
+                if !msgpack_complete(&bytes) {
+                    continue;
+                }
                 let parse = move || {
                     let mut decoder = rmp_serde::Deserializer::from_read_ref(&bytes);
                     decoder.set_max_depth(32);
@@ -267,6 +362,30 @@ impl AsyncConnection {
 mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn a_reply_is_decoded_only_once_it_is_complete() {
+        let lines: Vec<String> = (0..20_000).map(|line| format!("line {line} é")).collect();
+        let reply = rmp_serde::to_vec(&(
+            1,
+            7,
+            Value::Null,
+            serde_json::json!({"lines": lines, "n": -3, "f": 1.5, "ok": true, "big": u64::MAX}),
+        ))
+        .unwrap();
+        assert!(msgpack_complete(&reply));
+        // Every cut that a read can end on is incomplete.
+        for cut in (0..reply.len())
+            .step_by(997)
+            .chain([reply.len().saturating_sub(1)])
+        {
+            assert!(!msgpack_complete(&reply[..cut]), "cut {cut}");
+        }
+        // Trailing bytes after one value do not matter.
+        let mut longer = reply.clone();
+        longer.push(0xc0);
+        assert!(msgpack_complete(&longer));
+    }
 
     #[test]
     fn mismatched_rpc_response_is_rejected() {

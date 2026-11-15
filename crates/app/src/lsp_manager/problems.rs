@@ -67,6 +67,26 @@ impl LspManager {
         items
     }
 
+    /// [`Self::row_marks`] and [`Self::editor_diagnostics`] for an editor
+    /// view, built once per diagnostics generation and shared after that:
+    /// views ask every frame.
+    pub fn view_diagnostics(&self, path: &Path) -> ViewDiagnostics {
+        let mut cache = self.view_cache.borrow_mut();
+        if cache.0 != self.diagnostics_generation {
+            *cache = (self.diagnostics_generation, HashMap::new());
+        }
+        cache
+            .1
+            .entry(path.to_owned())
+            .or_insert_with(|| {
+                (
+                    self.row_marks(path).into(),
+                    std::sync::Arc::new(self.editor_diagnostics(path)),
+                )
+            })
+            .clone()
+    }
+
     /// Every tracked file's diagnostics, sorted by path, for the
     /// global Problems panel.
     #[must_use]
@@ -165,5 +185,37 @@ mod tests {
         assert_eq!(manager.problem_counts(), (1, 0, 1), "same generation");
         manager.bump_diagnostics();
         assert_eq!(manager.problem_counts(), (2, 0, 2));
+    }
+
+    #[test]
+    fn view_diagnostics_are_built_once_per_generation() {
+        let mut manager = LspManager::trusting();
+        let path = crate::test_path("/tmp/view.rs");
+        let error = L::Diagnostic {
+            range: L::Range {
+                start: L::Position {
+                    line: 2,
+                    character: 0,
+                },
+                end: L::Position {
+                    line: 2,
+                    character: 1,
+                },
+            },
+            severity: Some(L::Severity::Error),
+            message: "bad".into(),
+        };
+        manager.diagnostics.insert(path.clone(), vec![error]);
+        manager.bump_diagnostics();
+        let (marks, problems) = manager.view_diagnostics(&path);
+        assert_eq!(marks.len(), 1);
+        assert_eq!(problems.len(), 1);
+        let (again_marks, again_problems) = manager.view_diagnostics(&path);
+        assert!(std::sync::Arc::ptr_eq(&marks, &again_marks));
+        assert!(std::sync::Arc::ptr_eq(&problems, &again_problems));
+        manager.diagnostics.remove(&path);
+        manager.bump_diagnostics();
+        let (marks, problems) = manager.view_diagnostics(&path);
+        assert!(marks.is_empty() && problems.is_empty());
     }
 }

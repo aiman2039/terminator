@@ -68,6 +68,9 @@ const MAX_CRASHES: u32 = 3;
 /// answers `documentSymbol` with nothing, and caching that would hide
 /// symbols until the next edit.
 const SYMBOLS_RETRY: Duration = Duration::from_secs(2);
+/// A server that does not answer `initialize` in this time is stopped
+/// and shown as failed instead of "Starting…" without end.
+const INIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct ServerKey {
@@ -108,8 +111,12 @@ struct OpenDoc {
 enum Pending {
     /// Quick Documentation for one spot.
     Hover(HoverKey),
+    /// Go to definition / implementation; stale when a newer goto was
+    /// asked or the buffer changed (`revision` is its observed revision).
     Definition {
         path: PathBuf,
+        generation: u64,
+        revision: u64,
     },
     References {
         path: PathBuf,
@@ -256,6 +263,12 @@ enum PumpEvent {
     },
 }
 
+/// One view's gutter marks and underline diagnostics, shared.
+pub type ViewDiagnostics = (
+    std::sync::Arc<[DiagnosticMark]>,
+    std::sync::Arc<Vec<L::Diagnostic>>,
+);
+
 /// `(errors, warnings, total)` problems, for the status bar.
 pub type ProblemCounts = (usize, usize, usize);
 
@@ -274,12 +287,16 @@ pub struct LspManager {
     diagnostics_generation: u64,
     /// Status-bar `problem_counts` and the generation they were counted at.
     problem_totals: std::cell::Cell<Option<(u64, ProblemCounts)>>,
+    /// [`LspManager::view_diagnostics`] per path, for one generation.
+    view_cache: std::cell::RefCell<(u64, HashMap<PathBuf, ViewDiagnostics>)>,
     /// Settings → Check spelling.
     spell_enabled: bool,
     action_wait: Option<ActionWait>,
     /// Quick Documentation answers by spot.
     hover: hover::HoverCache,
     goto: Option<GotoJump>,
+    /// Bumped by each goto request; older answers are dropped.
+    goto_generation: u64,
     references: Option<ReferenceResults>,
     completion: Option<CompletionResults>,
     completion_generation: u64,
@@ -317,6 +334,8 @@ pub struct LspManager {
     failures: HashMap<&'static str, u32>,
     /// Last crash/spawn-failure time per language (respawn cooldown).
     cooled: HashMap<&'static str, Instant>,
+    /// When each server's `initialize` was sent (see [`INIT_TIMEOUT`]).
+    init_started: HashMap<ServerKey, Instant>,
     pump_tx: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
     pump_rx: tokio::sync::mpsc::UnboundedReceiver<PumpEvent>,
     /// GUI service supervisor: server processes and stdio pumps run as
@@ -345,11 +364,13 @@ impl LspManager {
             spell_diagnostics: HashMap::new(),
             diagnostics_generation: 0,
             problem_totals: std::cell::Cell::new(None),
+            view_cache: std::cell::RefCell::new((0, HashMap::new())),
             // Settings turn it on (default true) when the state loads.
             spell_enabled: false,
             action_wait: None,
             hover: hover::HoverCache::default(),
             goto: None,
+            goto_generation: 0,
             references: None,
             completion: None,
             completion_generation: 0,
@@ -375,6 +396,7 @@ impl LspManager {
             unavailable: HashMap::new(),
             failures: HashMap::new(),
             cooled: HashMap::new(),
+            init_started: HashMap::new(),
             pump_tx,
             pump_rx,
             services: None,
@@ -456,6 +478,7 @@ impl LspManager {
     /// arrive parsed from the reader task; the cap keeps a burst from
     /// stalling one frame. True when events remain for a later frame.
     pub fn poll(&mut self) -> bool {
+        self.expire_silent_starts();
         for _ in 0..POLL_BUDGET {
             let Ok(event) = self.pump_rx.try_recv() else {
                 return false;

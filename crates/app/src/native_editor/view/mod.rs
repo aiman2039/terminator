@@ -59,7 +59,7 @@ struct ViewFrame {
     /// pane's scroll offset and keyboard focus.
     source_id: String,
     rename_applying: bool,
-    problems: Vec<native_lsp::Diagnostic>,
+    problems: Arc<Vec<native_lsp::Diagnostic>>,
     /// [`crate::lsp_manager::LspManager::diagnostics_generation`] of `problems`.
     problems_generation: u64,
     blame_offer: Option<bool>,
@@ -75,7 +75,7 @@ struct ViewFrame {
 
 /// Values moved into the source view's options.
 struct SourceDecor {
-    marks: Vec<DiagnosticMark>,
+    marks: Arc<[DiagnosticMark]>,
     /// "Copy reference" names the file relative to its project.
     reference: String,
     annotations: Option<Arc<Vec<Annotation>>>,
