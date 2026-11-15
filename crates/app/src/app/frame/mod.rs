@@ -79,6 +79,9 @@ impl eframe::App for App {
             }
         }
         self.process_updates(ctx);
+        if ctx.input(|input| !input.events.is_empty()) {
+            self.services.poll_soon();
+        }
         // A terminal tab whose session record was pruned (an ended shell or
         // editor with no resume handle) should disappear on its own.
         self.prune_unavailable_tabs();
@@ -186,7 +189,8 @@ impl App {
         for (key, target) in self.browser_host.take_navigations() {
             self.apply_browser_navigation(&key, target);
         }
-        self.reconcile_gui_resources();
+        // GUI resources are reconciled once per frame, in `paint_windows`,
+        // after this frame's tab changes and before the browsers sync.
         // Diagnostics also land with no native editor on screen (a check
         // started by a save), so Problems and the status bar stay current.
         if self.lsp.poll() {
