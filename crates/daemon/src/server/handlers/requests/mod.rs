@@ -78,7 +78,10 @@ impl Shared {
 
     fn commit_change(&self, shared_write: bool) -> Result<Response> {
         if shared_write && let Some(paths) = &self.catalog_paths {
-            generations::Catalog::open(paths)?.save_workspace(&relock(&self.state))?;
+            // Copy under the lock, write without it: the caller holds the
+            // coordination lock, so no other catalog write interleaves.
+            let state = relock(&self.state).clone();
+            generations::Catalog::open(paths)?.save_workspace(&state)?;
         }
         self.persist()?;
         Ok(Response::Ok)

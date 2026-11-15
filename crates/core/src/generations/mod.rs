@@ -9,8 +9,8 @@ mod ownership;
 mod recovery;
 
 pub use catalog::{
-    CAPABILITY, CATALOG_VERSION, Catalog, Generation, Health, Status, build_identity, coordinate,
-    coordinate_timeout, exists, workspace_paths,
+    CAPABILITY, CATALOG_VERSION, Catalog, Generation, Health, Status, Workspace, build_identity,
+    coordinate, coordinate_timeout, exists, workspace_paths,
 };
 pub use error::GenerationsError;
 pub use migration::{migrate_after_legacy_exit, migrate_idle};

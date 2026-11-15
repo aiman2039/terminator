@@ -10,6 +10,7 @@ mod transfers;
 use crate::server::{Shared, relock};
 use anyhow::{Context, Result, ensure};
 pub(crate) use forwards::Forwards;
+use forwards::cancel_forwards;
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -285,7 +286,10 @@ impl Shared {
     /// belongs to it. Its OpenSSH master stops unless something else that
     /// remains resolves to the same control socket.
     pub(crate) fn remove_remote_project(&self, id: &str) -> Result<()> {
-        let control = {
+        // Only bookkeeping under the state lock; SQLite and `ssh -O` run
+        // after it. The request is coordinated, so no catalog refresh can
+        // bring the project back before its row is deleted.
+        let (control, forwards) = {
             let mut state = relock(&self.state);
             let index = state
                 .remote_projects
@@ -311,21 +315,24 @@ impl Shared {
                 !self.remote_apps_live_for(id),
                 "Disconnect this SSH project's remote apps before removing it"
             );
-            if let Some(paths) = &self.catalog_paths {
-                terminator_core::generations::Catalog::open(paths)?.remove_remote_project(id)?;
-            }
             // State, then forwards: the established lock order.
-            self.drop_project_forwards(id);
+            let forwards = relock(&self.forwards).remove_project(id);
             let project = state.remote_projects.remove(index);
             if state.selected_project.as_deref() == Some(id) {
                 state.selected_project = None;
             }
             state.revision = state.revision.saturating_add(1);
-            self.ssh_control(&project.ssh)
-                .filter(|control| !control_in_use(&state, control, |ssh| self.ssh_control(ssh)))
+            let control = self
+                .ssh_control(&project.ssh)
+                .filter(|control| !control_in_use(&state, control, |ssh| self.ssh_control(ssh)));
+            (control, forwards)
         };
+        cancel_forwards(forwards);
         if let Some(control) = control {
             stop_control(&control);
+        }
+        if let Some(paths) = &self.catalog_paths {
+            terminator_core::generations::Catalog::open(paths)?.remove_remote_project(id)?;
         }
         Ok(())
     }
