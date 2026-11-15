@@ -358,7 +358,9 @@ impl List {
         self.items.len() == 1
     }
 
-    pub fn start_item(&mut self, ui: &mut egui::Ui, options: &CommonMarkOptions) {
+    /// Starts an item row with its marker. A bulleted task item (`- [x]`)
+    /// gets no bullet: its checkbox is the marker, as in GitHub.
+    pub fn start_item(&mut self, ui: &mut egui::Ui, options: &CommonMarkOptions, task: bool) {
         // To ensure that newlines are only inserted within the list and not before it
         if self.has_list_begun {
             newline(ui);
@@ -373,6 +375,8 @@ impl List {
             if let Some(number) = &mut item.current_number {
                 number_point(ui, &number.to_string());
                 *number += 1;
+            } else if task {
+                return;
             } else if len > 1 {
                 bullet_point_hollow(ui);
             } else {
