@@ -440,3 +440,26 @@ fn atomic_replace_rewrites_symlink_target_and_keeps_mode() {
     );
     assert_eq!(fs::read_dir(d.path()).unwrap().count(), 2);
 }
+
+#[test]
+fn a_live_daemon_drops_the_oldest_ended_agents_above_the_cap() {
+    let mut state = setup();
+    state.agents.push(agent_for("resumable-old", true));
+    let mut live = agent_for("s", false);
+    live.invocation_id = "live-old".into();
+    state.agents.push(live);
+    // Two above the cap once the new agent arrives.
+    for i in 0..MAX_AGENTS.saturating_sub(1) {
+        let mut ended = agent_for(&format!("ended-{i}"), false);
+        ended.updated = u64::try_from(i).unwrap().saturating_add(1);
+        state.agents.push(ended);
+    }
+    state.apply_hook(event(1, AgentState::Running)).unwrap();
+    assert_eq!(state.agents.len(), MAX_AGENTS);
+    assert!(state.agents.iter().any(|a| a.session_id == "resumable-old"));
+    assert!(state.agents.iter().any(|a| a.invocation_id == "live-old"));
+    assert!(state.agents.iter().any(|a| a.invocation_id == "a"));
+    assert!(!state.agents.iter().any(|a| a.session_id == "ended-0"));
+    assert!(!state.agents.iter().any(|a| a.session_id == "ended-1"));
+    assert!(state.agents.iter().any(|a| a.session_id == "ended-2"));
+}

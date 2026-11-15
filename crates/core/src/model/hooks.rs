@@ -34,6 +34,9 @@ impl State {
             .is_some_and(|i| self.agents.get(i).is_some_and(|a| a.state == e.state))
             && e.request_id.is_none();
         self.upsert_hook_agent(&e, existing);
+        if existing.is_none() {
+            self.cap_agents();
+        }
         self.record_agent_usage(&e);
         self.resolve_hook_notifications(&e);
         self.revision = self.revision.saturating_add(1);
@@ -180,6 +183,42 @@ impl State {
         } else {
             self.agents.push(agent);
         }
+    }
+
+    /// Bounds `agents` in a live daemon. Above `MAX_AGENTS`, drops the
+    /// oldest records that no longer matter: not resumable, in a session
+    /// that is no longer live (its hook events are refused, so a dropped
+    /// record cannot come back), and with no pending notification.
+    fn cap_agents(&mut self) {
+        let excess = self.agents.len().saturating_sub(MAX_AGENTS);
+        if excess == 0 {
+            return;
+        }
+        let sessions = &self.sessions;
+        let notifications = &self.notifications;
+        let mut candidates: Vec<(u64, String, String)> = self
+            .agents
+            .iter()
+            .filter(|a| {
+                !a.resumable()
+                    && !sessions
+                        .iter()
+                        .any(|s| s.id == a.session_id && s.lifecycle.live())
+                    && !notifications.iter().any(|n| {
+                        n.invocation_id == a.invocation_id
+                            && n.session_id == a.session_id
+                            && !(n.dismissed || n.resolved)
+                    })
+            })
+            .map(|a| (a.updated, a.session_id.clone(), a.invocation_id.clone()))
+            .collect();
+        candidates.sort_unstable();
+        candidates.truncate(excess);
+        self.agents.retain(|a| {
+            !candidates
+                .iter()
+                .any(|(_, s, i)| *s == a.session_id && *i == a.invocation_id)
+        });
     }
 
     /// Keeps the newest model and mode each agent reported. Display only:
