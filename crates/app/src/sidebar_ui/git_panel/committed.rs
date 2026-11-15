@@ -88,11 +88,7 @@ pub(super) fn git_committed_row(input: GitCommittedRowInput<'_>) {
         .display()
         .to_string();
     let (folder, name) = split_label(&relative);
-    let trailing = if file.deleted > 0 {
-        format!("+{} -{} {}", file.added, file.deleted, file.letter)
-    } else {
-        format!("+{} {}", file.added, file.letter)
-    };
+    let trailing = change_trailer(ctx.theme, Some((file.added, file.deleted)), file.letter);
     let response = name_row(NameRowInput {
         ui,
         icon: icons::file_icon(&file.path),
