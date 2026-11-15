@@ -95,6 +95,45 @@ pub struct CommonMarkViewerInternal {
     deferred_scroll_to_heading: Option<String>,
     /// Painted area of the current heading's text, for the H1/H2 divider.
     heading_rect: Option<egui::Rect>,
+    /// Styled text runs not painted yet. Adjacent runs (plain, bold,
+    /// italic, code) paint as one label, so text wraps only at spaces:
+    /// separate labels each wrapped on their own, which put the full stop
+    /// after `**bold**` text alone on the next row.
+    inline: Option<egui::text::LayoutJob>,
+    /// Source starts of the list items that are task items (`- [x]`).
+    task_items: std::collections::HashSet<usize>,
+    /// The item being started is a task item.
+    item_is_task: bool,
+    /// Text is in a table header cell.
+    table_header: bool,
+}
+
+/// Source starts of the list items in `text` that begin with a task list
+/// marker. A marker belongs to the innermost open item.
+fn task_item_starts(
+    text: &str,
+    options: pulldown_cmark::Options,
+) -> std::collections::HashSet<usize> {
+    let mut starts = std::collections::HashSet::new();
+    if !options.contains(pulldown_cmark::Options::ENABLE_TASKLISTS) || !text.contains('[') {
+        return starts;
+    }
+    let mut open = Vec::new();
+    for (event, range) in pulldown_cmark::Parser::new_ext(text, options).into_offset_iter() {
+        match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Item) => open.push(range.start),
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Item) => {
+                open.pop();
+            }
+            pulldown_cmark::Event::TaskListMarker(_) => {
+                if let Some(start) = open.last() {
+                    starts.insert(*start);
+                }
+            }
+            _ => {}
+        }
+    }
+    starts
 }
 
 pub(crate) struct CheckboxClickEvent {
@@ -120,7 +159,32 @@ impl CommonMarkViewerInternal {
             checkbox_events: Vec::new(),
             deferred_scroll_to_heading: None,
             heading_rect: None,
+            inline: None,
+            task_items: std::collections::HashSet::new(),
+            item_is_task: false,
+            table_header: false,
         }
+    }
+
+    /// Paint the pending text runs as one label.
+    fn flush_inline(&mut self, ui: &mut Ui) {
+        if let Some(job) = self.inline.take() {
+            let rect = ui.label(job).rect;
+            if self.text_style.heading.is_some() {
+                self.heading_rect = Some(self.heading_rect.map_or(rect, |r| r.union(rect)));
+            }
+        }
+    }
+
+    /// Add a text run to the pending label.
+    fn push_inline(&mut self, ui: &Ui, text: egui::RichText) {
+        let job = self.inline.get_or_insert_with(Default::default);
+        text.append_to(
+            job,
+            ui.style(),
+            egui::FontSelection::Default,
+            ui.text_valign(),
+        );
     }
 }
 
@@ -177,20 +241,21 @@ fn table_column_widths(
     let columns = header.len();
     let bold_family = bold_family(ui);
     // A little room for rounding to whole points.
-    let measure = |text: &str, code: bool, bold: bool| {
+    let measure = |text: &str, code: bool, bold: bool, is_header: bool| {
         let mut text = egui::RichText::new(text);
         if code {
             text = text.code();
         } else if bold && let Some(family) = &bold_family {
             text = text.family(family.clone());
         }
+        // Header text is small (see `event_text`).
+        let style = if is_header && !code {
+            TextStyle::Small
+        } else {
+            TextStyle::Body
+        };
         egui::WidgetText::from(text)
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                TextStyle::Body,
-            )
+            .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
             .size()
             .x
             + 2.0
@@ -206,7 +271,7 @@ fn table_column_widths(
     for (is_header, row) in all_rows() {
         for (index, cell) in row.iter().enumerate().take(columns) {
             let width = cell_runs(cell, is_header)
-                .map(|(text, code, bold)| measure(text, code, bold))
+                .map(|(text, code, bold)| measure(text, code, bold, is_header))
                 .sum::<f32>();
             natural[index] = natural[index].max(width);
         }
@@ -214,7 +279,17 @@ fn table_column_widths(
     let natural = whole(natural);
     let natural_sum: f32 = natural.iter().sum();
     if natural_sum <= available {
-        return (natural, true);
+        // The table takes the content width (CSS `width: 100%`): the spare
+        // width goes to the columns in proportion to their unwrapped width.
+        if natural_sum <= 0.0 {
+            return (natural, true);
+        }
+        let scale = available / natural_sum;
+        let widths = natural
+            .iter()
+            .map(|width| (width * scale).floor())
+            .collect();
+        return (widths, true);
     }
 
     // Only a table that overflows measures its words.
@@ -223,7 +298,7 @@ fn table_column_widths(
         for (index, cell) in row.iter().enumerate().take(columns) {
             for (text, code, bold) in cell_runs(cell, is_header) {
                 for word in text.split_whitespace() {
-                    minimum[index] = minimum[index].max(measure(word, code, bold));
+                    minimum[index] = minimum[index].max(measure(word, code, bold, is_header));
                 }
             }
         }
@@ -347,12 +422,10 @@ impl CommonMarkViewerInternal {
             let height = ui.text_style_height(&TextStyle::Body);
             ui.set_row_height(height);
 
-            let mut events = spaced_events(
-                text,
-                parser_options_extras(options.math_fn.is_some(), options.enable_scroll_to_heading),
-            )
-            .enumerate()
-            .peekable();
+            let parser_options =
+                parser_options_extras(options.math_fn.is_some(), options.enable_scroll_to_heading);
+            self.task_items = task_item_starts(text, parser_options);
+            let mut events = spaced_events(text, parser_options).enumerate().peekable();
 
             while let Some((index, (e, src_span))) = events.next() {
                 let start_position = ui.next_widget_position();
@@ -390,6 +463,7 @@ impl CommonMarkViewerInternal {
                     self.line.should_not_start_newline_forced = false;
                 }
             }
+            self.flush_inline(ui);
 
             // deferral to make it consistent no matter whether the target is before or after the link
             let source_id = viewer_id(options);
@@ -432,11 +506,10 @@ impl CommonMarkViewerInternal {
             return;
         };
 
-        let events = spaced_events(
-            text,
-            parser_options_extras(options.math_fn.is_some(), options.enable_scroll_to_heading),
-        )
-        .collect::<Vec<_>>();
+        let parser_options =
+            parser_options_extras(options.math_fn.is_some(), options.enable_scroll_to_heading);
+        self.task_items = task_item_starts(text, parser_options);
+        let events = spaced_events(text, parser_options).collect::<Vec<_>>();
 
         let num_rows = events.len();
 
@@ -494,6 +567,7 @@ impl CommonMarkViewerInternal {
                             self.line.should_not_start_newline_forced = false;
                         }
                     }
+                    self.flush_inline(ui);
                 });
             });
 
@@ -571,6 +645,7 @@ impl CommonMarkViewerInternal {
             if let Some((_, (e, src_span))) = events_iter.next() {
                 self.process_event(ui, &mut events_iter, e, src_span, cache, options, max_width);
             }
+            self.flush_inline(ui);
 
             ui.label(" ".repeat(options.indentation_spaces));
             self.line.should_start_newline = true;
@@ -588,6 +663,7 @@ impl CommonMarkViewerInternal {
                         max_width,
                     );
                 }
+                self.flush_inline(ui);
             });
             self.line.should_end_newline = true;
 
@@ -637,6 +713,7 @@ impl CommonMarkViewerInternal {
                         max_width,
                     );
                 }
+                self.flush_inline(ui);
             });
         }
     }
@@ -664,6 +741,7 @@ impl CommonMarkViewerInternal {
                     for (event, src_span) in collected_events {
                         self.event(ui, event, src_span, cache, options, max_width);
                     }
+                    self.flush_inline(ui);
                 })
             } else {
                 blockquote(ui, ui.visuals().weak_text_color(), |ui| {
@@ -671,6 +749,7 @@ impl CommonMarkViewerInternal {
                     for (event, src_span) in collected_events {
                         self.event(ui, event, src_span, cache, options, max_width);
                     }
+                    self.flush_inline(ui);
                     self.text_style.quote = false;
                 });
             }
@@ -700,36 +779,32 @@ impl CommonMarkViewerInternal {
 
             let Table { header, rows } = parse_table(events);
             // Measured outside the scroll area: inside it the width is unbounded.
-            let frame = egui::Frame::group(ui.style());
-            let available = ui.available_width().min(max_width) - frame.total_margin().sum().x;
+            let available = ui.available_width().min(max_width);
             let (widths, fits) = table_column_widths(ui, &header, &rows, available);
 
             let draw = |ui: &mut Ui| {
                 // The document flows in a wrapping row layout; rows of a
-                // table stack top to bottom.
-                frame.show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        let gap = ui.spacing().item_spacing.y;
-                        let stripe = ui.visuals().faint_bg_color;
-                        let header = std::iter::once((true, header));
-                        // `parse_table` ends with an empty row.
-                        let body = rows
-                            .into_iter()
-                            .filter(|row| !row.is_empty())
-                            .map(|row| (false, row));
-                        for (row_index, (is_header, row)) in header.chain(body).enumerate() {
-                            let background = ui.painter().add(egui::Shape::Noop);
-                            let row_rect = self
-                                .table_row(ui, row, &widths, is_header, cache, options, max_width);
-                            if row_index % 2 == 1 {
-                                let rect = row_rect.expand2(egui::vec2(2.0, 0.5 * gap));
-                                ui.painter().set(
-                                    background,
-                                    egui::epaint::RectShape::filled(rect, 2.0, stripe),
-                                );
-                            }
+                // table stack top to bottom. No outer box and no stripes:
+                // a thin rule under the header and between rows.
+                ui.vertical(|ui| {
+                    let gap = ui.spacing().item_spacing.y;
+                    let rule = ui.visuals().widgets.noninteractive.bg_stroke;
+                    let header = std::iter::once((true, header));
+                    // `parse_table` ends with an empty row.
+                    let body = rows
+                        .into_iter()
+                        .filter(|row| !row.is_empty())
+                        .map(|row| (false, row));
+                    let all: Vec<_> = header.chain(body).collect();
+                    let last = all.len().saturating_sub(1);
+                    for (row_index, (is_header, row)) in all.into_iter().enumerate() {
+                        let row_rect =
+                            self.table_row(ui, row, &widths, is_header, cache, options, max_width);
+                        if row_index < last {
+                            let y = row_rect.bottom() + 0.5 * gap;
+                            ui.painter().hline(row_rect.x_range(), y, rule);
                         }
-                    })
+                    }
                 });
             };
             // Long cells wrap so the table fits the text column, as in a
@@ -788,7 +863,7 @@ impl CommonMarkViewerInternal {
     }
 
     /// One table cell: exactly `width` wide (so the columns line up), its
-    /// content wrapping inside. Header cells are bold, as in GitHub.
+    /// content wrapping inside. Header cells are bold, small and muted.
     #[allow(clippy::too_many_arguments)]
     fn table_cell(
         &mut self,
@@ -807,6 +882,7 @@ impl CommonMarkViewerInternal {
             ui.set_row_height(row_height);
             let strong = self.text_style.strong;
             self.text_style.strong |= is_header;
+            self.table_header = is_header;
             for (e, src_span) in cell {
                 let tmp_start = std::mem::replace(&mut self.line.should_start_newline, false);
                 let tmp_end = std::mem::replace(&mut self.line.should_end_newline, false);
@@ -814,6 +890,8 @@ impl CommonMarkViewerInternal {
                 self.line.should_start_newline = tmp_start;
                 self.line.should_end_newline = tmp_end;
             }
+            self.flush_inline(ui);
+            self.table_header = false;
             self.text_style.strong = strong;
             // The full column width, after the content: a minimum width set
             // first counts as an earlier item (the first label then starts
@@ -832,6 +910,23 @@ impl CommonMarkViewerInternal {
         options: &CommonMarkOptions,
         max_width: f32,
     ) {
+        use pulldown_cmark::{Event, Tag, TagEnd};
+        // Runs of styled text collect into one label; anything else paints
+        // the collected text first.
+        let in_text_widget = self.link.is_some() || self.image.is_some();
+        let inline = match &event {
+            Event::Text(_) | Event::Code(_) | Event::InlineHtml(_) => true,
+            Event::SoftBreak => !in_text_widget && self.code_block.is_none(),
+            Event::Start(Tag::Emphasis | Tag::Strong | Tag::Strikethrough)
+            | Event::End(TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough) => true,
+            _ => false,
+        };
+        if !inline {
+            self.flush_inline(ui);
+        }
+        if matches!(event, Event::Start(Tag::Item)) {
+            self.item_is_task = self.task_items.contains(&src_span.start);
+        }
         match event {
             pulldown_cmark::Event::Start(tag) => self.start_tag(ui, tag, cache, options),
             pulldown_cmark::Event::End(tag) => self.end_tag(ui, tag, cache, options, max_width),
@@ -856,6 +951,9 @@ impl CommonMarkViewerInternal {
             }
             pulldown_cmark::Event::FootnoteReference(footnote) => {
                 footnote_start(ui, &footnote);
+            }
+            pulldown_cmark::Event::SoftBreak if inline => {
+                self.push_inline(ui, egui::RichText::new(" "));
             }
             pulldown_cmark::Event::SoftBreak => {
                 soft_break(ui);
@@ -906,6 +1004,12 @@ impl CommonMarkViewerInternal {
             // The backend only gives strong text the strong color.
             rich_text = rich_text.family(family);
         }
+        if self.table_header && !self.text_style.code {
+            // A quiet header row: small, muted text.
+            rich_text = rich_text
+                .text_style(TextStyle::Small)
+                .color(ui.visuals().weak_text_color());
+        }
         if let Some(image) = &mut self.image {
             image.alt_text.push(rich_text);
         } else if let Some(block) = &mut self.code_block {
@@ -913,10 +1017,7 @@ impl CommonMarkViewerInternal {
         } else if let Some(link) = &mut self.link {
             link.text.push(rich_text);
         } else {
-            let rect = ui.label(rich_text).rect;
-            if self.text_style.heading.is_some() {
-                self.heading_rect = Some(self.heading_rect.map_or(rect, |r| r.union(rect)));
-            }
+            self.push_inline(ui, rich_text);
         }
     }
 
@@ -1005,7 +1106,8 @@ impl CommonMarkViewerInternal {
 
             pulldown_cmark::Tag::Item => {
                 self.is_list_item = true;
-                self.list.start_item(ui, options);
+                self.list
+                    .start_item(ui, options, std::mem::take(&mut self.item_is_task));
             }
 
             pulldown_cmark::Tag::FootnoteDefinition(note) => {

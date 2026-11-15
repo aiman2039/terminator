@@ -44,8 +44,7 @@ Local changes (2026-11-10), to match GitHub-style previews:
 - Tables no longer use `egui::Grid`. A Grid places cells by the previous
   frame's row heights, so a wrapped cell overlapped the next row. Each row is
   now laid out directly (`table_cell`): cells have a fixed column width, wrap
-  inside it, and a row is as tall as its tallest cell. Odd rows keep the
-  stripe. `table_column_widths` is close to the CSS automatic table layout:
+  inside it, and a row is as tall as its tallest cell. `table_column_widths` is close to the CSS automatic table layout:
   columns that fit stay unwrapped; otherwise each column gets its longest
   word and the rest goes to the columns in proportion to their unwrapped
   width. A table that still does not fit scrolls in a horizontal
@@ -63,3 +62,20 @@ Local changes (2026-11-10), to match GitHub-style previews:
   (`List::continue_item`); it used to continue on the nested list's last row.
 - A heading that is the first event of a `show` call no longer adds an empty
   row above itself.
+
+Local changes (2026-11-15):
+
+- Adjacent styled text runs (plain, `**strong**`, `*emphasis*`,
+  strikethrough, inline code, soft breaks) collect into one `LayoutJob` and
+  paint as one label (`flush_inline`). Each run used to be its own label,
+  and each label wrapped on its own, so the full stop after bold text could
+  wrap alone to the next row. Any other event paints the pending runs first.
+  Links and images keep their own widgets.
+- A bulleted task list item (`- [ ]`, `- [x]`) paints no bullet: the
+  checkbox is the marker, as in GitHub (`task_item_starts`,
+  `List::start_item`). Numbered task items keep their number.
+- Tables take the content width (spare width goes to the columns in
+  proportion to their unwrapped width), have no outer group frame and no
+  stripe. A thin rule (`noninteractive.bg_stroke`) is painted under the
+  header and between rows. Header text is small and muted (`Small` text
+  style, weak text color) in the bold face.
