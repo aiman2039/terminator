@@ -174,6 +174,43 @@ fn accumulate_dirty(paths: &mut Vec<PathBuf>, incoming: Vec<PathBuf>, full: &mut
     paths.extend(incoming.into_iter().map(|path| normalize(&path)));
 }
 
+/// Whether every path is inside (not equal to) an ignored folder: such an
+/// event changes neither Git status nor a visible listing.
+fn below_ignored(paths: &[PathBuf], ignored: &std::sync::Mutex<Vec<PathBuf>>) -> bool {
+    let ignored = ignored
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    !paths.is_empty()
+        && !ignored.is_empty()
+        && paths.iter().all(|path| {
+            ignored
+                .iter()
+                .any(|folder| path != folder && path.starts_with(folder))
+        })
+}
+
+/// Ignored folders in the listings, normalized, whose contents no visible
+/// folder shows. `.git` is listed as ignored but its changes matter.
+fn ignored_directories<'a>(
+    request: &Request,
+    listings: impl Iterator<Item = &'a services::Listing>,
+) -> Vec<PathBuf> {
+    let visible: Vec<PathBuf> = request
+        .directories
+        .iter()
+        .map(|path| normalize(path))
+        .collect();
+    listings
+        .filter_map(|(_, entries)| entries.as_ref().ok())
+        .flatten()
+        .filter(|entry| {
+            entry.directory && entry.ignored && entry.path.file_name() != Some(".git".as_ref())
+        })
+        .map(|entry| normalize(&entry.path))
+        .filter(|folder| !visible.iter().any(|shown| shown.starts_with(folder)))
+        .collect()
+}
+
 fn normalize(path: &std::path::Path) -> PathBuf {
     if let Ok(path) = path.canonicalize() {
         return path;
