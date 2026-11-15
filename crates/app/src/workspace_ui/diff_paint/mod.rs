@@ -60,6 +60,11 @@ impl DiffColors {
         let luma = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
         appearance::diff_tints(luma > 128.0)
     }
+
+    /// The focused-hunk bar color: the theme's `accent`.
+    pub(super) fn focus(self) -> Color32 {
+        self.moved
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -289,15 +294,10 @@ pub(super) fn row_colors(input: RowColorsInput<'_>) -> DiffColors {
             ..colors
         };
     }
-    if change.is_some_and(diff::review::Hunk::replacement) {
-        DiffColors {
-            added: colors.accent,
-            deleted: colors.accent,
-            ..colors
-        }
-    } else {
-        colors
-    }
+    // A replaced block keeps the side colors on its rows: removed lines
+    // red, added lines green. Its connector band and rail marker keep the
+    // modified color (`change_color`).
+    colors
 }
 
 /// `color` at `alpha`; a transparent color stays transparent.

@@ -5,7 +5,6 @@ use terminator_native_edit::doc::Buffer;
 
 const COLORS: MarkColors = MarkColors {
     added: Color32::GREEN,
-    modified: Color32::BLUE,
     row: 25,
     word: 70,
 };
@@ -44,9 +43,10 @@ fn a_longer_replaced_block_pads_the_buffer_side() {
     assert_eq!(*marks.spacers, [(2, 1)]);
     let fill = marks.line_fills.first().expect("replaced line tint");
     assert_eq!(fill.line, 1);
+    // The added side of a replacement is green, not the modified color.
     assert_eq!(
         fill.color,
-        Color32::from_rgba_unmultiplied(0, 0, 255, COLORS.row)
+        Color32::from_rgba_unmultiplied(0, 255, 0, COLORS.row)
     );
 }
 

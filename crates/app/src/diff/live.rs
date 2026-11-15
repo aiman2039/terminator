@@ -296,7 +296,6 @@ pub(crate) fn build_live(document: &DiffDocument, text: &str, path: &Path) -> Di
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MarkColors {
     pub added: Color32,
-    pub modified: Color32,
     pub row: u8,
     pub word: u8,
 }
@@ -314,7 +313,8 @@ pub(crate) struct EditorMarks {
 /// Map the right side of `doc`'s split rows onto buffer lines: every
 /// right-side filler becomes an editor filler row before the next buffer
 /// line, every inserted line a row tint, and every changed word a range
-/// tint. Replaced blocks use the modified color, like the painted panes.
+/// tint. Added lines of a replaced block are green too, like the painted
+/// panes.
 pub(crate) fn editor_marks(doc: &DiffDocument, colors: MarkColors) -> EditorMarks {
     let tint = |color: Color32, alpha: u8| {
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
@@ -322,7 +322,7 @@ pub(crate) fn editor_marks(doc: &DiffDocument, colors: MarkColors) -> EditorMark
     let highlight = doc.options.highlight != Highlight::None;
     let (mut spacers, mut line_fills, mut range_fills) = (Vec::new(), Vec::new(), Vec::new());
     let mut pending = 0usize;
-    for (row, split) in doc.split.iter().enumerate() {
+    for split in &doc.split {
         let Some(line) = split
             .right
             .as_ref()
@@ -343,14 +343,7 @@ pub(crate) fn editor_marks(doc: &DiffDocument, colors: MarkColors) -> EditorMark
         if !highlight || line.kind != LineKind::Insert {
             continue;
         }
-        let replaced = doc
-            .change_at(row, true)
-            .is_some_and(review::Hunk::replacement);
-        let color = if replaced {
-            colors.modified
-        } else {
-            colors.added
-        };
+        let color = colors.added;
         line_fills.push(LineFill {
             line: index,
             color: tint(color, colors.row),
