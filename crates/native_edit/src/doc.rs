@@ -6,7 +6,9 @@
 
 use crate::indent::IndentStyle;
 pub use crate::undo::UndoChange;
-use crate::undo::{ChangeSpan, EditRun, UndoEntry, UndoOp, UndoStep};
+use crate::undo::{
+    ChangeSpan, EditRun, MAX_UNDO_BYTES, MAX_UNDO_STEPS, UndoEntry, UndoOp, UndoStep,
+};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -235,12 +237,31 @@ impl Doc {
                 *slot = stored;
             }
         } else {
-            self.undo.push(UndoStep {
+            self.push_undo(UndoStep {
                 entry: UndoEntry::Op(op),
                 before,
             });
         }
         self.redo.clear();
+    }
+
+    /// Push an undo step, dropping the oldest steps past
+    /// [`MAX_UNDO_STEPS`] or [`MAX_UNDO_BYTES`] of removed text (each
+    /// reload from disk keeps the whole old text). The newest step stays.
+    fn push_undo(&mut self, step: UndoStep) {
+        self.undo.push(step);
+        let excess = self.undo.len().saturating_sub(MAX_UNDO_STEPS);
+        self.undo.drain(..excess);
+        let mut bytes = 0usize;
+        let mut keep_from = 0usize;
+        for (index, step) in self.undo.iter().enumerate().rev() {
+            bytes = bytes.saturating_add(step.entry.text_bytes());
+            if bytes > MAX_UNDO_BYTES && index.saturating_add(1) < self.undo.len() {
+                keep_from = index.saturating_add(1);
+                break;
+            }
+        }
+        self.undo.drain(..keep_from);
     }
 
     /// Bank the edits of the open unit as one entry. Undo and redo call
@@ -250,8 +271,9 @@ impl Doc {
         let before = self.group_before.take();
         if !self.group.is_empty() {
             self.redo.clear();
-            self.undo.push(UndoStep {
-                entry: UndoEntry::Group(std::mem::take(&mut self.group)),
+            let group = std::mem::take(&mut self.group);
+            self.push_undo(UndoStep {
+                entry: UndoEntry::Group(group),
                 before,
             });
         }
@@ -457,7 +479,7 @@ impl Buffer for Doc {
         self.flush_group();
         let step = self.redo.pop()?;
         let (change, inverse) = self.replay(step);
-        self.undo.push(inverse);
+        self.push_undo(inverse);
         Some(UndoChange {
             selection: None,
             ..change

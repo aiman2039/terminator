@@ -308,3 +308,40 @@ fn the_journal_lists_the_edits_after_a_revision_until_it_forgets_them() {
     }
     assert_eq!(doc.changes_since(now), None);
 }
+
+#[test]
+fn undo_history_drops_its_oldest_steps_past_the_limit() {
+    let mut doc = Doc::new("");
+    let edits = MAX_UNDO_STEPS.saturating_add(500);
+    for at in 0..edits {
+        doc.insert(at, "x");
+        doc.end_run();
+    }
+    let mut undone = 0usize;
+    while doc.undo() {
+        undone = undone.saturating_add(1);
+    }
+    assert_eq!(undone, MAX_UNDO_STEPS);
+    assert_eq!(doc.text().len(), 500);
+    // Redo still walks the kept steps forward.
+    assert!(doc.redo());
+    assert_eq!(doc.text().len(), 501);
+}
+
+#[test]
+fn undo_history_keeps_its_text_under_the_byte_budget() {
+    let mut doc = Doc::new("");
+    let big = "y".repeat(MAX_UNDO_BYTES.div_ceil(2).saturating_add(1));
+    for _ in 0..3 {
+        doc.insert(0, &big);
+        doc.end_run();
+        let len = doc.len_chars();
+        doc.delete(0..len);
+        doc.end_run();
+    }
+    let kept: usize = doc.undo.iter().map(|step| step.entry.text_bytes()).sum();
+    assert!(kept <= MAX_UNDO_BYTES, "{kept}");
+    // The newest step always stays.
+    assert!(doc.undo());
+    assert_eq!(doc.text(), big);
+}
