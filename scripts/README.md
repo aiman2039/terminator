@@ -162,9 +162,12 @@ lockfile and do not rewrite files. Pre-commit uses the same `all` path; install
 `cargo deny check advisories` is CI-only (same RustSec DB as `cargo audit`).
 
 [cargo-husky](https://github.com/rhysd/cargo-husky) installs the tracked
-`.cargo-husky/hooks/pre-commit` when its development dependency is first built
-(for example, `cargo test -p terminator --no-run --locked`). The hook runs
-`sh scripts/check.sh` against the working tree; stage any fixes before committing.
+`.cargo-husky/hooks/pre-commit` and `.cargo-husky/hooks/pre-push` when its
+development dependency is first built (for example,
+`cargo test -p terminator --no-run --locked`). The pre-commit hook runs
+`sh scripts/check.sh quick` (async-boundary, fmt, one clippy pass; no network)
+against the working tree; stage any fixes before committing. The pre-push hook
+runs the full `sh scripts/check.sh` (build, both clippy passes, audit, deny).
 Existing non-cargo-husky hooks are preserved. CI skips hook installation and runs
 all checks plus tests on native macOS, Linux, and Windows through the reusable
 CI workflow called by Release. Native `focus-editor-close` and `file-close`

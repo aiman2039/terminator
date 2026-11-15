@@ -6,4 +6,5 @@ if [ -n "${TERMINATOR_RELEASE_VALIDATED_TREE:-}" ] && \
     [ "$(git write-tree)" = "$TERMINATOR_RELEASE_VALIDATED_TREE" ]; then
     exit 0
 fi
-exec sh scripts/check.sh
+# Quick checks only; pre-push runs the full set.
+exec sh scripts/check.sh quick
