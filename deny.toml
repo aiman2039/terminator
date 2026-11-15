@@ -69,13 +69,24 @@ skip = [
     { crate = "kurbo", reason = "0.11 via resvg vs 0.13 via vello/epaint" },
     { crate = "svgtypes", reason = "0.15 via resvg 0.45/usvg vs 0.16 via merman-render; resvg stays on 0.45 until egui_extras moves" },
     { crate = "roxmltree", reason = "0.20 via usvg/resvg 0.45 vs 0.21 via merman-render" },
-    # merman 0.9 pulls lol_html cssparser 0.36 and its own cssparser 0.38.
-    { crate = "cssparser", reason = "0.36 via lol_html/selectors vs 0.38 via merman-render" },
-    { crate = "cssparser-macros", reason = "0.6 via cssparser 0.36 vs 0.7 via cssparser 0.38" },
-    { crate = "phf", reason = "0.13 via accesskit/lol_html vs 0.14 via merman cssparser 0.38" },
+    # merman 0.9: htmlize pulls phf 0.13 while html5ever/web_atoms pull phf 0.14.
+    { crate = "phf", reason = "0.13 via accesskit/htmlize vs 0.14 via web_atoms" },
+    { crate = "phf_codegen", reason = "0.13 via htmlize vs 0.14 via web_atoms" },
     { crate = "phf_generator", reason = "0.13 via phf 0.13 vs 0.14 via phf 0.14" },
-    { crate = "phf_macros", reason = "0.13 via phf 0.13 vs 0.14 via phf 0.14" },
     { crate = "phf_shared", reason = "0.13 via phf 0.13 vs 0.14 via phf 0.14" },
+    { crate = "pastey", reason = "0.1 via htmlize vs 0.2 via ksni" },
+    # RustCrypto 0.10 (keyring, rpm, tungstenite, smithay) vs sha2 0.11 direct.
+    { crate = "block-buffer", reason = "0.10 via digest 0.10 vs 0.12 via digest 0.11" },
+    { crate = "crypto-common", reason = "0.1 via digest 0.10 vs 0.2 via digest 0.11" },
+    { crate = "digest", reason = "0.10 via keyring/rpm/tungstenite/smithay vs 0.11 via sha2 0.11" },
+    { crate = "sha2", reason = "0.10 via keyring/rpm/smithay vs 0.11 direct" },
+    # wprs uses smithay-client-toolkit 0.20 while winit 0.30 stays on 0.19.
+    { crate = "calloop", reason = "0.13 via winit/sctk 0.19 vs 0.14 via wprs/sctk 0.20" },
+    { crate = "calloop-wayland-source", reason = "0.3 via sctk 0.19 vs 0.4 via sctk 0.20" },
+    { crate = "smithay-client-toolkit", reason = "0.19 via winit 0.30 vs 0.20 via wprs" },
+    { crate = "nix", reason = "0.28 via portable-pty vs 0.30 via wprs vs 0.31 via calloop 0.14" },
+    { crate = "itertools", reason = "0.14 via ratatui/wprs vs 0.15 via egui/rpm" },
+    { crate = "signal-hook", reason = "0.3 via crossterm vs 0.4 via alacritty/terminator-hook" },
     # rfd 0.17 vs eframe 0.36.
     { crate = "pollster", reason = "0.4 via rfd vs 1.0 via eframe" },
     { crate = "miniz_oxide", reason = "0.8 via png 0.17 vs 0.9 via flate2" },
