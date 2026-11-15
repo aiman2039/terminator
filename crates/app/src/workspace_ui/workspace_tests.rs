@@ -96,50 +96,38 @@ mod tests {
     }
 
     #[test]
-    fn wide_project_header_keeps_icons_and_the_natural_name() {
+    fn wide_project_header_keeps_the_toggle_and_the_natural_name() {
         assert_eq!(
             project_header_chrome(400.0, 52.0),
-            ProjectHeaderChrome::Icons { name: 52.0 }
+            ProjectHeaderChrome::Toggle { name: 52.0 }
+        );
+        // With no name (the toolbar switcher shows it) the toggle alone fits.
+        assert_eq!(
+            project_header_chrome(28.0, 0.0),
+            ProjectHeaderChrome::Toggle { name: 0.0 }
         );
     }
 
     #[test]
     fn medium_project_header_truncates_the_name_before_the_menu() {
-        // Three icons are 88px. A 140px row leaves 50px for an 80px name.
+        // The toggle and its gap are 30px. A 70px row leaves 40px for an 80px name.
         assert_eq!(
-            project_header_chrome(140.0, 80.0),
-            ProjectHeaderChrome::Icons { name: 50.0 }
+            project_header_chrome(70.0, 80.0),
+            ProjectHeaderChrome::Toggle { name: 40.0 }
         );
     }
 
     #[test]
-    fn narrow_project_header_moves_player_and_agents_into_the_menu() {
-        // 110px cannot keep a 36px name plus three icons (126px).
-        // The menu and hide control still fit, and the name gets the leftover 50px.
-        assert_eq!(
-            project_header_chrome(110.0, 80.0),
-            ProjectHeaderChrome::Menu {
-                name: 50.0,
-                hide: false
-            }
-        );
-    }
-
-    #[test]
-    fn tighter_project_header_puts_hide_in_the_menu() {
+    fn tight_project_header_puts_the_toggle_in_the_menu() {
+        // 50px cannot keep a 36px name plus the toggle (66px); the menu
+        // takes the toggle's place and the name gets the leftover 20px.
         assert_eq!(
             project_header_chrome(50.0, 80.0),
-            ProjectHeaderChrome::Menu {
-                name: 20.0,
-                hide: true
-            }
+            ProjectHeaderChrome::Menu { name: 20.0 }
         );
         assert_eq!(
             project_header_chrome(20.0, 80.0),
-            ProjectHeaderChrome::Menu {
-                name: 0.0,
-                hide: true
-            }
+            ProjectHeaderChrome::Menu { name: 0.0 }
         );
     }
 

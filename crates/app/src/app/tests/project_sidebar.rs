@@ -668,7 +668,7 @@ fn project_filter_field_owns_text_keys() {
 
 #[test]
 #[cfg(feature = "test-support")]
-fn player_chrome_paints_next_to_the_project_bell() {
+fn project_header_keeps_only_hide_beside_the_traffic_lights() {
     let (mut app, ctx, _dir) = fixture();
     app.project_width = 420.0;
     if let Some(project) = app
@@ -682,7 +682,7 @@ fn player_chrome_paints_next_to_the_project_bell() {
     paint_header(&mut app, &ctx, &[]);
     let rect = header_target(&ctx);
     let chrome = rect("player-chrome").expect("player chrome");
-    let bell = rect("left-agent-bar").expect("project bell");
+    let bell = rect("left-agent-bar").expect("header bell");
     let toggle = rect("toggle-left-sidebar").expect("hide sidebar");
     let controls = rect("window-controls").expect("window controls");
     assert!(rect("project-header-menu").is_none());
@@ -691,16 +691,16 @@ fn player_chrome_paints_next_to_the_project_bell() {
         "the project name shows once, in the toolbar switcher"
     );
     assert!(
-        chrome.left() - controls.right() > 8.0,
-        "spare width sits between the traffic lights and the player, controls={controls:?} chrome={chrome:?}"
+        toggle.left() - controls.right() > 8.0,
+        "spare width sits between the traffic lights and hide, controls={controls:?} toggle={toggle:?}"
+    );
+    assert!(
+        chrome.left() > app.project_width && bell.left() > app.project_width,
+        "Player and Agents are in the right header tools, chrome={chrome:?} bell={bell:?}"
     );
     assert!(
         chrome.right() <= bell.left() + 1.0 && bell.left() - chrome.right() < 8.0,
         "player sits against the bell, chrome={chrome:?} bell={bell:?}"
-    );
-    assert!(
-        bell.right() <= toggle.left() + 1.0 && toggle.left() - bell.right() < 8.0,
-        "bell sits against hide, bell={bell:?} toggle={toggle:?}"
     );
     assert!(
         (controls.center().y - toggle.center().y).abs() < 2.0,
@@ -715,7 +715,7 @@ fn player_chrome_paints_next_to_the_project_bell() {
 
 #[test]
 #[cfg(feature = "test-support")]
-fn default_sidebar_keeps_player_and_bell_beside_hide() {
+fn default_sidebar_keeps_hide_and_the_header_keeps_player_and_bell() {
     let (mut app, ctx, _dir) = fixture();
     app.project_width = 225.0;
     if let Some(project) = app
@@ -735,9 +735,10 @@ fn default_sidebar_keeps_player_and_bell_beside_hide() {
     );
     assert!(
         rect("player-chrome").is_some() && rect("left-agent-bar").is_some(),
-        "a default sidebar fits the player and the bell, menu={:?}",
-        rect("project-header-menu")
+        "the header fits the player and the bell, menu={:?}",
+        rect("header-overflow")
     );
+    assert!(rect("toggle-left-sidebar").is_some());
     assert!(rect("project-header-menu").is_none());
     if let Some(project) = app
         .state
@@ -770,9 +771,9 @@ fn project_name_stays_in_the_sidebar_header_when_the_toolbar_has_no_room() {
 
 #[test]
 #[cfg(feature = "test-support")]
-fn narrow_project_header_puts_player_and_bell_in_the_menu() {
+fn narrow_project_header_puts_hide_in_the_menu() {
     let (mut app, ctx, _dir) = fixture();
-    app.project_width = 120.0;
+    app.project_width = 100.0;
     if let Some(project) = app
         .state
         .projects
@@ -784,8 +785,10 @@ fn narrow_project_header_puts_player_and_bell_in_the_menu() {
     paint_header(&mut app, &ctx, &[]);
     let rect = header_target(&ctx);
     assert!(rect("project-header-menu").is_some());
-    assert!(rect("player-chrome").is_none());
-    assert!(rect("left-agent-bar").is_none());
+    assert!(rect("toggle-left-sidebar").is_none());
+    // Player and Agents are not in the left cluster; the right tools keep them.
+    assert!(rect("player-chrome").is_some_and(|r| r.left() > app.project_width));
+    assert!(rect("left-agent-bar").is_some_and(|r| r.left() > app.project_width));
     assert!(
         rect("project-header-name").is_none(),
         "the toolbar switcher already names the project"
@@ -815,6 +818,7 @@ fn narrow_project_header_puts_player_and_bell_in_the_menu() {
     );
     paint_header(&mut app, &ctx, &[]);
     let rect = header_target(&ctx);
-    assert!(rect("Player").is_some(), "menu offers Player");
-    assert!(rect("Agents").is_some(), "menu offers Agents");
+    assert!(rect("Hide sidebar").is_some(), "menu offers Hide sidebar");
+    assert!(rect("Player").is_none(), "Player is not in the left menu");
+    assert!(rect("Agents").is_none(), "Agents is not in the left menu");
 }

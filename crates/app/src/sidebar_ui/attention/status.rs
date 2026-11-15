@@ -80,13 +80,13 @@ impl App {
                 session_info::format_bytes(stats.memory)
             )
         };
-        let label = format!(
-            "{} · {}",
-            session_info::format_percent(total.cpu),
-            session_info::format_bytes(total.memory)
+        let label = resource_meters(
+            ui.visuals(),
+            &session_info::format_percent(total.cpu),
+            &session_info::format_bytes(total.memory),
         );
         let response = ui
-            .add(egui::Label::new(RichText::new(label).small().weak()).sense(egui::Sense::click()))
+            .add(egui::Label::new(label).sense(egui::Sense::click()))
             .on_hover_text(format!(
                 "Terminator app processes ({})\n{}\n{}\n{}\n\nClick to open Info → Resources.",
                 total.processes,
@@ -139,6 +139,25 @@ impl App {
             AgentSegment::Waiting | AgentSegment::Unread => {}
         }
     }
+}
+
+/// "CPU 4.9%  MEM 362 MB": muted small labels, and the figures in the
+/// monospace font so their digits keep one width while they change.
+fn resource_meters(visuals: &egui::Visuals, cpu: &str, memory: &str) -> egui::text::LayoutJob {
+    let label = egui::TextFormat::simple(
+        egui::FontId::proportional(appearance::FONT_CAPTION),
+        visuals.weak_text_color(),
+    );
+    let value = egui::TextFormat::simple(
+        egui::FontId::monospace(appearance::FONT_CAPTION),
+        visuals.text_color(),
+    );
+    let mut job = egui::text::LayoutJob::default();
+    job.append("CPU ", 0.0, label.clone());
+    job.append(cpu, 0.0, value.clone());
+    job.append("  MEM ", 0.0, label);
+    job.append(memory, 0.0, value);
+    job
 }
 
 /// One count in the status-bar agent summary.

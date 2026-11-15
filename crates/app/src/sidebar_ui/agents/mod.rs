@@ -79,7 +79,8 @@ impl App {
         self.preferences.left_visible = true;
     }
 
-    /// Header bell. Same square as the hide-sidebar control, with a corner count.
+    /// Header bell in the right header tools. Same square as the other header
+    /// controls, with a corner count.
     pub(crate) fn header_agents_button(&mut self, ui: &mut egui::Ui) {
         let (waiting, unread) = self.attention_counts();
         let summary = self.agents_summary();

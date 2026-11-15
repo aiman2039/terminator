@@ -275,6 +275,17 @@ impl App {
             .then(|| appearance::color(&theme.status_running))
     }
 
+    /// The branch a pane caption shows: only one that differs from the
+    /// window header's branch, which already names the project's branch.
+    pub(crate) fn pane_branch(&self, cwd: &std::path::Path) -> Option<String> {
+        let header = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.branch.as_deref());
+        self.branch_at(cwd)
+            .filter(|branch| Some(branch.as_str()) != header)
+    }
+
     pub(crate) fn branch_at(&self, cwd: &std::path::Path) -> Option<String> {
         if let Some(metadata) = &self.metadata
             && metadata.cwd == cwd

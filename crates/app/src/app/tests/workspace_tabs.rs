@@ -295,11 +295,27 @@ fn split_panes_keep_their_captions() {
     assert!(app.fixture_rect(&ctx, "pane-caption:right").is_some());
 }
 
-/// The focused caption carries the branch and both split buttons on one
-/// row; a split button of another pane works once the pointer is on it.
+/// The panes' Git context for `/a` on `branch`.
+#[cfg(feature = "test-support")]
+fn pane_context(branch: &str) -> services::ContextData {
+    services::ContextData {
+        cwd: "/a".into(),
+        root: None,
+        perforce: None,
+        git_dirs: vec![],
+        branch: branch.into(),
+        changes: vec![],
+        decorations: std::collections::HashMap::default(),
+        stats: std::collections::HashMap::default(),
+        error: None,
+    }
+}
+
+/// A pane on the header's branch shows no branch chip: the header already
+/// names it.
 #[cfg(feature = "test-support")]
 #[test]
-fn focused_caption_keeps_branch_and_splits_on_one_row() {
+fn caption_hides_the_branch_the_header_shows() {
     let (mut app, ctx, _dir) = fixture();
     for sid in ["left", "right"] {
         app.state
@@ -311,6 +327,46 @@ fn focused_caption_keeps_branch_and_splits_on_one_row() {
         branch: Some("master".into()),
         ..Default::default()
     });
+    app.context = Some(pane_context("master"));
+    assert_eq!(
+        app.branch_at(std::path::Path::new("/a")).as_deref(),
+        Some("master")
+    );
+    assert!(app.pane_branch(std::path::Path::new("/a")).is_none());
+    let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+    workspace.main_surface_mut().split_right(
+        egui_dock::NodeIndex::root(),
+        0.5,
+        vec![Tab::Terminal("right".into())],
+    );
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+    app.active_session = Some("left".into());
+    combined_frame(&mut app, &ctx, vec![]);
+    assert!(app.fixture_rect(&ctx, "pane-caption:left").is_some());
+    assert!(app.fixture_rect(&ctx, "pane-git:left").is_none());
+    assert!(app.fixture_rect(&ctx, "pane-split-vertical:left").is_some());
+}
+
+/// The focused caption carries a branch other than the header's and both
+/// split buttons on one row; a split button of another pane works once the
+/// pointer is on it.
+#[cfg(feature = "test-support")]
+#[test]
+fn focused_caption_keeps_branch_and_splits_on_one_row() {
+    let (mut app, ctx, _dir) = fixture();
+    for sid in ["left", "right"] {
+        app.state
+            .sessions
+            .push(session_fixture(sid, SessionKind::Shell));
+    }
+    // The header shows another checkout's branch; the panes are on `feature`.
+    app.metadata = Some(metadata::Metadata {
+        cwd: "/elsewhere".into(),
+        branch: Some("master".into()),
+        ..Default::default()
+    });
+    app.context = Some(pane_context("feature"));
     let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
     workspace.main_surface_mut().split_right(
         egui_dock::NodeIndex::root(),
