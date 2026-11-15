@@ -13,7 +13,18 @@ pub fn blame_with_contents(
     path: &Path,
     contents: Option<&str>,
 ) -> Result<BlameData, String> {
-    let root = git_root(cwd)?;
+    blame_with(&BlockingGit, cwd, path, contents)
+}
+
+/// [`blame_with_contents`] with Git run by `git`: a background job passes
+/// Git that a replaced or cancelled job stops at once.
+pub fn blame_with(
+    git: &impl LogGit,
+    cwd: &Path,
+    path: &Path,
+    contents: Option<&str>,
+) -> Result<BlameData, String> {
+    let root = query::root_with(git, cwd)?;
     let options = CommandOptions {
         stdout_limit: 16 * 1024 * 1024,
         input: contents.map(|text| text.as_bytes().to_vec()),
@@ -29,7 +40,8 @@ pub fn blame_with_contents(
         args.extend(["--contents", "-"]);
     }
     args.extend(["--", path.as_ref()]);
-    let bytes = terminator_core::git::run_blocking(&root, &args, options)
+    let bytes = git
+        .git(&root, &args, options)
         .map_err(|e| format!("git blame: {e}"))?;
     let text = String::from_utf8_lossy(&bytes);
     let mut entries = Vec::new();
@@ -137,25 +149,36 @@ pub fn file_history(cwd: &Path, path: &Path) -> Result<Vec<HistoryEntry>, String
 }
 
 /// Files a commit changed: `(status letter, absolute path)`.
+#[cfg(test)]
 pub fn commit_files(cwd: &Path, hash: &str) -> Result<Vec<(char, std::path::PathBuf)>, String> {
-    let root = git_root(cwd)?;
-    let bytes = terminator_core::git::run_blocking(
-        &root,
-        &[
-            "show",
-            "--name-status",
-            "-z",
-            "--format=",
-            "--first-parent",
-            "-m",
-            hash,
-        ],
-        CommandOptions {
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
-        },
-    )
-    .map_err(|error| format!("git show: {error}"))?;
+    commit_files_with(&BlockingGit, cwd, hash)
+}
+
+/// [`commit_files`] with Git run by `git` (see [`blame_with`]).
+pub fn commit_files_with(
+    git: &impl LogGit,
+    cwd: &Path,
+    hash: &str,
+) -> Result<Vec<(char, std::path::PathBuf)>, String> {
+    let root = query::root_with(git, cwd)?;
+    let bytes = git
+        .git(
+            &root,
+            &[
+                "show",
+                "--name-status",
+                "-z",
+                "--format=",
+                "--first-parent",
+                "-m",
+                hash,
+            ],
+            CommandOptions {
+                stdout_limit: 4 * 1024 * 1024,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| format!("git show: {error}"))?;
     Ok(parse_name_status_z(&root, &String::from_utf8_lossy(&bytes)))
 }
 

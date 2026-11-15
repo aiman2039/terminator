@@ -54,9 +54,29 @@ pub fn query_log(git: &impl LogGit, cwd: &Path, query: &LogQuery) -> CommitLog {
 
 fn load(git: &impl LogGit, cwd: &Path, query: &LogQuery) -> Result<CommitLog, String> {
     let root = root_with(git, cwd).map_err(|error| format!("Git root: {error}"))?;
-    let branch = git
-        .git(&root, &["rev-parse", "--abbrev-ref", "HEAD"], quick())
-        .map_err(|error| format!("Branch: {error}"))?;
+    let unborn = git
+        .git(
+            &root,
+            &["rev-parse", "--verify", "--quiet", "HEAD"],
+            quick(),
+        )
+        .is_err();
+    let branch = if unborn {
+        // A repository with no commits yet: HEAD names a branch that does
+        // not exist, so `rev-parse --abbrev-ref` fails.
+        git.git(
+            &root,
+            &["symbolic-ref", "--short", "--quiet", "HEAD"],
+            quick(),
+        )
+        .unwrap_or_default()
+    } else {
+        git.git(&root, &["rev-parse", "--abbrev-ref", "HEAD"], quick())
+            .map_err(|error| format!("Branch: {error}"))?
+    };
+    if unborn && query.filter.branch == super::LogBranch::Head {
+        return Ok(empty_log(git, &root, &branch, query));
+    }
     let args = query.filter.log_args()?;
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let options = CommandOptions {
@@ -66,9 +86,12 @@ fn load(git: &impl LogGit, cwd: &Path, query: &LogQuery) -> Result<CommitLog, St
         timeout: std::time::Duration::from_secs(20),
         ..Default::default()
     };
-    let bytes = git
-        .git(&root, &args, options)
-        .map_err(|error| format!("git log: {error}"))?;
+    let bytes = match git.git(&root, &args, options) {
+        Ok(bytes) => bytes,
+        // No commits on any ref yet: an empty log, not an error.
+        Err(_) if unborn => return Ok(empty_log(git, &root, &branch, query)),
+        Err(error) => return Err(format!("git log: {error}")),
+    };
     let mut commits = parse_commits(&String::from_utf8_lossy(&bytes));
     if let Some(first) = hash_match(git, &root, &query.filter, &commits) {
         // The text also names this commit: it comes first.
@@ -90,6 +113,17 @@ fn load(git: &impl LogGit, cwd: &Path, query: &LogQuery) -> Result<CommitLog, St
     log.lanes = lay_out(&mut commits, query.filter.hides_commits());
     log.commits = commits;
     Ok(log)
+}
+
+/// The log of a repository with no commits yet.
+fn empty_log(git: &impl LogGit, root: &Path, branch: &[u8], query: &LogQuery) -> CommitLog {
+    CommitLog {
+        refs: super::fetch_refs(git, root),
+        active_branch: text(branch),
+        me: user_name(git, root),
+        query: Box::new(query.clone()),
+        ..CommitLog::default()
+    }
 }
 
 /// The commit that the text names by hash, when the message search did not

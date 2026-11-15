@@ -227,10 +227,13 @@ impl Services {
             updates,
         } = input;
         let query = hash.clone();
+        // A replaced or cancelled job stops its Git at once, so it does not
+        // hold a file-pool thread that Explorer listings wait for.
+        let git = crate::gui_services::jobs::JobGit::new(self, &cancel);
         let files = self
             .fs()
             .run(&cancel, move || {
-                anyhow::Ok(crate::git_log::commit_files(&cwd, &query))
+                anyhow::Ok(crate::git_log::commit_files_with(&git, &cwd, &query))
             })
             .await
             .unwrap_or_else(|error| Err(format!("{error:#}")));
@@ -247,6 +250,7 @@ impl Services {
             updates,
         } = input;
         let file = path.clone();
+        let git = crate::gui_services::jobs::JobGit::new(self, &cancel);
         let entries = self
             .fs()
             .run(&cancel, move || {
@@ -254,11 +258,7 @@ impl Services {
                     .parent()
                     .map(std::path::Path::to_path_buf)
                     .unwrap_or_default();
-                anyhow::Ok(crate::git_log::blame_with_contents(
-                    &cwd,
-                    &file,
-                    Some(&text),
-                ))
+                anyhow::Ok(crate::git_log::blame_with(&git, &cwd, &file, Some(&text)))
             })
             .await
             .unwrap_or_else(|error| Err(format!("{error:#}")));
