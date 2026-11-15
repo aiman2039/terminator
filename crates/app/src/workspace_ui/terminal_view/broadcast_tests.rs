@@ -164,6 +164,34 @@ fn multi_line_broadcast_paste_waits_for_the_confirmation() {
     assert!(shows(&mut app, "s1", "echo one"));
 }
 
+#[cfg(unix)]
+#[test]
+fn broadcast_counts_attached_terminals_and_keeps_them_attached_while_hidden() {
+    let (mut app, ctx, _dir) = tabs();
+    echo_backend(&mut app, &ctx, "s1", 990);
+    app.toggle_broadcast();
+    assert_eq!(app.broadcast_targets(), ["s1", "s2"]);
+    assert_eq!(app.broadcast_receivers(), ["s1"], "s2 has no terminal");
+    assert!(
+        app.info
+            .as_deref()
+            .is_some_and(|note| note.contains("keys go to 1 terminals")),
+        "{:?}",
+        app.info
+    );
+    // Hidden and never painted, the broadcast panes outlast more recently
+    // painted hidden terminals.
+    echo_backend(&mut app, &ctx, "s2", 991);
+    for (n, sid) in ["x1", "x2", "x3", "x4", "x5"].into_iter().enumerate() {
+        echo_backend(&mut app, &ctx, sid, 992 + n as u64);
+        app.backends[sid].set_painted(true);
+    }
+    app.visible_sessions.clear();
+    app.prune_hidden_backends();
+    assert!(app.backends.contains_key("s1") && app.backends.contains_key("s2"));
+    assert_eq!(app.broadcast_receivers(), ["s1", "s2"]);
+}
+
 #[test]
 fn esc_twice_stops_broadcast_and_the_second_esc_never_reaches_a_pty() {
     let (mut app, ctx, _dir) = tabs();

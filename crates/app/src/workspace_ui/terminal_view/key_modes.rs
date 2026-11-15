@@ -4,7 +4,7 @@
 //! [`take_mode_keys`] removes every keyboard event before the terminal
 //! widget reads input.
 use eframe::egui;
-use egui_term::LinkTarget;
+use egui_term::{LinkTarget, TerminalMode};
 
 /// Label letters, home row first. Lower case only: Shift+label copies.
 const LABEL_KEYS: &str = "asdfghjklqwertyuiopzxcvbnm";
@@ -82,6 +82,19 @@ pub(crate) fn take_mode_keys(events: &mut Vec<egui::Event>) -> Vec<ModeKey> {
         _ => true,
     });
     keys
+}
+
+/// Remove the wheel and click events that the terminal widget would turn
+/// into PTY input in `mode`: mouse reports, or alternate-screen arrow keys.
+/// A wheel over a plain shell still scrolls history locally.
+pub(crate) fn drop_pty_pointer_events(events: &mut Vec<egui::Event>, mode: TerminalMode) {
+    let wheel_writes = mode.intersects(TerminalMode::MOUSE_MODE | TerminalMode::ALT_SCREEN);
+    let click_writes = mode.intersects(TerminalMode::MOUSE_MODE);
+    events.retain(|event| match event {
+        egui::Event::MouseWheel { .. } => !wheel_writes,
+        egui::Event::PointerButton { .. } => !click_writes,
+        _ => true,
+    });
 }
 
 fn named_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<ModeKey> {
