@@ -99,6 +99,20 @@ fn only_a_started_command_is_logged_when_it_ends() {
     assert_eq!(log.take()[0].exit_code, None);
 }
 
+#[test]
+fn shell_without_marks_never_reports_a_mark_seen() {
+    let log = CommandLog::default();
+    let mut rewriter = MarkRewriter::new(log.clone());
+    let mut out = Vec::new();
+    rewriter.feed(
+        b"$ ls\r\n\x1b]0;title\x07\x1b]8;;https://x\x1b\\x\r\n",
+        &mut out,
+    );
+    assert!(!log.marks_seen());
+    rewriter.feed(b"\x1b]633;A\x07$ ", &mut out);
+    assert!(log.marks_seen());
+}
+
 fn term_with(stream: &[u8], lines: usize) -> Term<VoidListener> {
     let mut term = Term::new(Config::default(), &TermSize::new(20, lines), VoidListener);
     Processor::<alacritty_terminal::vte::ansi::StdSyncHandler>::new()

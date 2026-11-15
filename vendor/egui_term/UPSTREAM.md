@@ -32,10 +32,9 @@ channel. Other events are forwarded as before.
 
 ## Selection text on demand (2026-11-06)
 
-`sync` rebuilds `RenderableContent::selected_text` only when the selection
-range changes, so a large selection held while output streams does not cost
-a full text build under the term lock on every sync. `selectable_content`
-reads the selection fresh from the terminal, for copy.
+Superseded on 2026-11-15 (see "Input and backend hardening"): `sync` no
+longer builds the selection text at all. `selectable_content` reads the
+selection fresh from the terminal, for copy.
 
 ## Type-ahead prediction (2026-11-02)
 
@@ -410,3 +409,29 @@ input sends those bytes to the other terminals of a tab. Without a tap
 the view is unchanged.
 
 Test: `input_tap_copies_key_writes_but_not_mouse_reports`.
+
+## Input and backend hardening (2026-11-15)
+
+- `paste_input` drops ESC and ETX from the text when bracketed paste is
+  on (as alacritty does), so a pasted `ESC[201~` cannot end the bracket
+  early. Test: `bracketed_paste_cannot_be_ended_early_by_pasted_end_marker`.
+- `RenderableContent::selected_text` is removed. `sync` and selection
+  commands no longer build the selection text; `has_selection()` reads the
+  range, and `selectable_content` builds the text on demand (copy, menu
+  action). This replaces the 2026-11-06 note above. Test:
+  `frame_content_reports_a_selection_without_building_its_text`.
+- `LinkAction::Open` looks up the OSC 8 link or URL match again at the
+  click point in the current grid (checked access) instead of indexing the
+  stored hover range, which a resize could leave past the row end. This
+  also removes a second term lock in the old `open_link` while
+  `process_command` held it. A resize clears the hover. Tests:
+  `link_open_reads_the_link_under_the_click_after_a_resize`,
+  `link_open_returns_the_whole_url_under_the_click`.
+- URL hover reuses the backend's one compiled `RegexSearch` instead of a
+  clone on each pointer move.
+- The last Resize request is stored also when the pane is smaller than one
+  cell, so that pane is not a resize (and a dirty grid) on every frame.
+  Test: `pane_smaller_than_one_cell_is_not_a_resize_on_every_frame`.
+- `CommandLog::marks_seen` records that the PTY stream carried a shell
+  mark. `prompt_marks()` skips the full-grid scan until then. Test:
+  `shell_without_marks_never_reports_a_mark_seen`.

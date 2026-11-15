@@ -24,7 +24,7 @@ use settings::BackendSettings;
 use std::borrow::Cow;
 use std::cmp::min;
 use std::io::Result;
-use std::ops::{Index, RangeInclusive};
+use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{mpsc, Arc, Mutex};
@@ -229,6 +229,9 @@ pub struct TerminalBackend {
     url_regex: RegexSearch,
     term: Arc<FairMutex<Term<EventProxy>>>,
     size: TerminalSize,
+    /// Layout and font size of the last Resize, also when it was too small
+    /// to apply.
+    last_resize_request: Option<(Size, Size)>,
     notifier: Notifier,
     last_content: RenderableContent,
     grid_dirty: Arc<AtomicBool>,
@@ -289,7 +292,6 @@ impl TerminalBackend {
         let initial_content = RenderableContent {
             grid: snapshot_viewport(term.grid()),
             display_offset: term.grid().display_offset(),
-            selected_text: String::new(),
             selectable_range: None,
             terminal_mode: *term.mode(),
             terminal_size,
@@ -359,6 +361,7 @@ impl TerminalBackend {
             url_regex,
             term: term.clone(),
             size: terminal_size,
+            last_resize_request: None,
             notifier,
             last_content: initial_content,
             grid_dirty,
@@ -460,9 +463,12 @@ impl TerminalBackend {
     }
 
     fn resize_is_noop(&self, layout_size: Size, font_size: Size) -> bool {
-        layout_size == self.size.layout_size
-            && font_size.width as u16 == self.size.cell_width
-            && font_size.height as u16 == self.size.cell_height
+        // A pane smaller than one cell never changes `self.size`; the last
+        // request stops it from counting as a resize on every frame.
+        self.last_resize_request == Some((layout_size, font_size))
+            || layout_size == self.size.layout_size
+                && font_size.width as u16 == self.size.cell_width
+                && font_size.height as u16 == self.size.cell_height
     }
 
     fn command_dirties_grid(cmd: &BackendCommand) -> bool {
@@ -480,7 +486,6 @@ impl TerminalBackend {
             .selection
             .as_ref()
             .and_then(|selection| selection.to_range(terminal));
-        self.last_content.selected_text = terminal.selection_to_string().unwrap_or_default();
     }
 
     pub fn selection_point(
@@ -603,14 +608,9 @@ impl TerminalBackend {
         let cursor = terminal.grid_mut().cursor_cell().clone();
         self.last_content.grid = snapshot_viewport(terminal.grid());
         self.last_content.display_offset = terminal.grid().display_offset();
-        // The selected text is built only when the selection moves: with a
-        // large selection held while output streams, building it on every
-        // sync (under the term lock) is slow. Copy reads it fresh
-        // ([`Self::selectable_content`]); this copy answers "is anything
-        // selected" for the frame.
-        if selectable_range != previous_range {
-            self.last_content.selected_text = terminal.selection_to_string().unwrap_or_default();
-        }
+        // The selected text is never built here: output scrolls the range on
+        // each frame, and a large selection is slow to build under the term
+        // lock. Copy and menus read it on demand ([`Self::selectable_content`]).
         self.last_content.selectable_range = selectable_range;
         self.prompt_cache.mark_stale();
         self.last_content.cursor = cursor;
@@ -697,46 +697,37 @@ impl TerminalBackend {
                     self.hovered_uri = Some(uri);
                 } else {
                     self.last_content.hovered_hyperlink =
-                        self.regex_match_at(terminal, point, &mut self.url_regex.clone());
+                        regex_match_at(terminal, point, &mut self.url_regex);
                     self.hovered_uri = None;
                 }
             }
             LinkAction::Clear => {
-                self.last_content.hovered_hyperlink = None;
-                self.hovered_uri = None;
+                self.clear_hovered_link();
             }
             LinkAction::Open => {
-                self.open_link();
+                if let Some(url) = self.link_at(terminal, point) {
+                    // A link that no app can open must not crash the GUI.
+                    if let Err(error) = open::that(&url) {
+                        eprintln!("Could not open link {url}: {error}");
+                    }
+                }
             }
         };
     }
 
-    fn open_link(&self) {
-        let Some(range) = &self.last_content.hovered_hyperlink else {
-            return;
-        };
-        let url = if let Some(uri) = &self.hovered_uri {
-            uri.clone()
-        } else {
-            let start = *range.start();
-            let end = *range.end();
-            let term = self.term.clone();
-            let term = term.lock();
-            let grid = term.grid();
-            let mut url = String::from(grid.index(start).c);
-            for indexed in grid.iter_from(start) {
-                url.push(indexed.c);
-                if indexed.point == end {
-                    break;
-                }
-            }
-            url
-        };
+    fn clear_hovered_link(&mut self) {
+        self.last_content.hovered_hyperlink = None;
+        self.hovered_uri = None;
+    }
 
-        // A link that no app can open must not crash the GUI.
-        if let Err(error) = open::that(&url) {
-            eprintln!("Could not open link {url}: {error}");
+    /// The link under `point` in the grid as it is now. The stored hover
+    /// range can be stale after a resize or new output, so it is not reused.
+    fn link_at(&mut self, terminal: &Term<EventProxy>, point: Point) -> Option<String> {
+        if let Some((_, uri)) = hyperlink_at(terminal.grid(), point) {
+            return Some(uri);
         }
+        let found = regex_match_at(terminal, point, &mut self.url_regex)?;
+        Some(match_text(terminal.grid(), &found))
     }
 
     fn process_mouse_report(
@@ -860,18 +851,18 @@ impl TerminalBackend {
     }
 
     fn resize(&mut self, terminal: &mut Term<EventProxy>, layout_size: Size, font_size: Size) {
-        if layout_size == self.size.layout_size
-            && font_size.width as u16 == self.size.cell_width
-            && font_size.height as u16 == self.size.cell_height
-        {
+        if self.resize_is_noop(layout_size, font_size) {
             return;
         }
+        self.last_resize_request = Some((layout_size, font_size));
 
         let size = TerminalSize::from_layout(layout_size, font_size);
         if size.is_empty() {
             return;
         }
         self.size = size;
+        // The hovered range points at cells of the old geometry.
+        self.clear_hovered_link();
         self.notifier.on_resize(self.size.into());
         terminal.resize(TermSize::new(
             self.size.num_cols as usize,
@@ -914,18 +905,33 @@ impl TerminalBackend {
                 .scroll_display(Scroll::Delta(delta_value));
         }
     }
+}
 
-    /// Based on alacritty/src/display/hint.rs > regex_match_at
-    /// Retrieve the match, if the specified point is inside the content matching the regex.
-    fn regex_match_at(
-        &self,
-        terminal: &Term<EventProxy>,
-        point: Point,
-        regex: &mut RegexSearch,
-    ) -> Option<Match> {
-        let x = visible_regex_match_iter(terminal, regex).find(|rm| rm.contains(&point));
-        x
+/// Based on alacritty/src/display/hint.rs > regex_match_at
+/// Retrieve the match, if the specified point is inside the content matching the regex.
+/// `regex` is the backend's one compiled searcher; it is not cloned per call.
+fn regex_match_at(
+    terminal: &Term<EventProxy>,
+    point: Point,
+    regex: &mut RegexSearch,
+) -> Option<Match> {
+    visible_regex_match_iter(terminal, regex).find(|rm| rm.contains(&point))
+}
+
+/// Text of a match found on this same grid, so its ends are valid points.
+fn match_text(grid: &Grid<Cell>, found: &Match) -> String {
+    let (start, end) = (*found.start(), *found.end());
+    let mut text = String::from(grid[start].c);
+    for indexed in grid.iter_from(start) {
+        if indexed.point > end {
+            break;
+        }
+        text.push(indexed.c);
+        if indexed.point == end {
+            break;
+        }
     }
+    text
 }
 
 /// Lines the viewport actually moved. Positive reaches into history.
@@ -1734,7 +1740,6 @@ pub struct RenderableContent {
     pub grid: Grid<Cell>,
     /// Live `Term` display offset. Mouse reports and fixtures use this, not `grid`.
     pub display_offset: usize,
-    pub selected_text: String,
     pub hovered_hyperlink: Option<RangeInclusive<Point>>,
     pub selectable_range: Option<SelectionRange>,
     pub cursor: Cell,
@@ -1744,12 +1749,19 @@ pub struct RenderableContent {
     pub predictions: Vec<(Point, char)>,
 }
 
+impl RenderableContent {
+    /// Whether a selection covered cells at the last sync. The text itself is
+    /// built only on demand by [`TerminalBackend::selectable_content`].
+    pub fn has_selection(&self) -> bool {
+        self.selectable_range.is_some()
+    }
+}
+
 impl Default for RenderableContent {
     fn default() -> Self {
         Self {
             grid: Grid::new(0, 0, 0),
             display_offset: 0,
-            selected_text: String::new(),
             hovered_hyperlink: None,
             selectable_range: None,
             cursor: Cell::default(),
@@ -2161,28 +2173,15 @@ mod target_tests {
     }
 
     #[test]
-    fn offscreen_copy_uses_cached_string_because_snapshot_has_no_history() {
-        let mut grid = Grid::<Cell>::new(2, 6, 4);
-        for (col, c) in "first".chars().enumerate() {
-            grid[Line(0)][Column(col)].c = c;
-        }
-        grid.scroll_up(&(Line(0)..Line(2)), 1);
-        for (col, c) in "second".chars().enumerate() {
-            grid[Line(0)][Column(col)].c = c;
-        }
-        let content = RenderableContent {
-            grid: snapshot_viewport(&grid),
-            selected_text: "first\nsecond".into(),
-            selectable_range: Some(SelectionRange::new(
-                Point::new(Line(-1), Column(0)),
-                Point::new(Line(0), Column(5)),
-                false,
-            )),
-            ..Default::default()
-        };
-        assert_eq!(content.selected_text, "first\nsecond");
-        assert_eq!(content.grid.history_size(), 0);
-        assert_eq!(content.grid.topmost_line(), Line(0));
+    fn frame_content_reports_a_selection_without_building_its_text() {
+        let mut content = RenderableContent::default();
+        assert!(!content.has_selection());
+        content.selectable_range = Some(SelectionRange::new(
+            Point::new(Line(-1), Column(0)),
+            Point::new(Line(0), Column(5)),
+            false,
+        ));
+        assert!(content.has_selection());
     }
     #[test]
     fn wrapped_and_scrolled_wide_character_hit_testing() {
@@ -2388,6 +2387,10 @@ mod search_row_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "link_resize_tests.rs"]
+mod link_resize_tests;
 
 #[cfg(test)]
 mod wakeup_tests {

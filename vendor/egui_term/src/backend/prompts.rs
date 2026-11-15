@@ -45,9 +45,10 @@ impl TerminalBackend {
 
     /// Every prompt in the grid, oldest first. Cached; rescanned at most
     /// every 250 ms while output arrives. Grid lines, not viewport rows.
+    /// Empty without a scan while the shell has never sent a mark.
     pub fn prompt_marks(&mut self) -> &[PromptMark] {
         let now = Instant::now();
-        if self.prompt_cache.due(now) {
+        if self.command_log.marks_seen() && self.prompt_cache.due(now) {
             let term = self.term.lock();
             self.prompt_cache.marks = if term.mode().contains(TermMode::ALT_SCREEN) {
                 Vec::new()

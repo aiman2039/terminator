@@ -48,6 +48,9 @@ pub fn paste_input(text: &str, terminal_mode: TerminalMode) -> Vec<u8> {
     }
     let mut paste = text.replace("\r\n", "\r").replace('\n', "\r");
     if terminal_mode.contains(TerminalMode::BRACKETED_PASTE) {
+        // Like alacritty: drop ESC and ETX so a pasted `ESC[201~` cannot end
+        // the bracket early and run the rest as typed keys.
+        paste.retain(|c| c != '\x1b' && c != '\x03');
         paste.insert_str(0, "\x1b[200~");
         paste.push_str("\x1b[201~");
     }
@@ -430,6 +433,14 @@ mod tests {
         assert_eq!(
             paste_input("a\r\nb\nc", TerminalMode::empty()),
             b"a\rb\rc".to_vec()
+        );
+    }
+
+    #[test]
+    fn bracketed_paste_cannot_be_ended_early_by_pasted_end_marker() {
+        assert_eq!(
+            paste_input("a\x1b[201~rm x\x03\n", TerminalMode::BRACKETED_PASTE),
+            b"\x1b[200~a[201~rm x\r\x1b[201~".to_vec()
         );
     }
 
