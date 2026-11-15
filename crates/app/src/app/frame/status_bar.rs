@@ -1,5 +1,5 @@
-//! Bottom status bar: connection, the highest-priority banner, branch and
-//! PR metadata, breadcrumb (see `crumbs`), diagnostics, and the
+//! Bottom status bar: connection, the highest-priority banner, PR and port
+//! metadata (the branch is in the window header), breadcrumb (see `crumbs`), diagnostics, and the
 //! right-aligned readouts.
 
 use crate::*;
@@ -227,18 +227,12 @@ impl App {
         ));
     }
 
-    /// Branch or worktree, the pull request link, and up to three ports.
+    /// The pull request link and up to three ports. The branch is in the
+    /// window header only.
     fn status_metadata(&mut self, ui: &mut egui::Ui) {
         let Some(metadata) = self.metadata.clone() else {
             return;
         };
-        if let Some(branch) = metadata.branch {
-            ui.weak(if metadata.worktree {
-                format!("Worktree · {branch}")
-            } else {
-                branch
-            });
-        }
         if let Some(pr) = metadata.pull_request
             && ui
                 .link(format!("PR #{}", pr.number))
@@ -419,16 +413,16 @@ fn one_line(ui: &mut egui::Ui, text: RichText) {
     .on_hover_text(full);
 }
 
-/// "1 session running", "2 sessions running".
+/// "1 session", "2 sessions": live sessions.
 fn running_sessions_text(count: usize) -> String {
     let noun = if count == 1 { "session" } else { "sessions" };
-    format!("{count} {noun} running")
+    format!("{count} {noun}")
 }
 
 #[cfg(test)]
 #[test]
 fn running_sessions_text_uses_singular_for_one() {
-    assert_eq!(running_sessions_text(0), "0 sessions running");
-    assert_eq!(running_sessions_text(1), "1 session running");
-    assert_eq!(running_sessions_text(2), "2 sessions running");
+    assert_eq!(running_sessions_text(0), "0 sessions");
+    assert_eq!(running_sessions_text(1), "1 session");
+    assert_eq!(running_sessions_text(2), "2 sessions");
 }

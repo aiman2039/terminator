@@ -9,12 +9,20 @@ pub(super) const HEADER_TOGGLE_RESERVE: f32 = HEADER_SLOT + 2.0 * HEADER_GAP;
 /// home, the stripes; Search Everywhere is the header's centre button.
 #[derive(Clone, Copy)]
 pub(super) enum HeaderAction {
+    Player,
+    Agents,
     IdeMode,
     Settings,
 }
 
-pub(super) const HEADER_ACTIONS: [HeaderAction; 2] =
-    [HeaderAction::Settings, HeaderAction::IdeMode];
+/// Left to right. A narrow right sidebar moves the trailing ones into the
+/// overflow menu first, so Player and the Agents bell stay longest.
+pub(super) const HEADER_ACTIONS: [HeaderAction; 4] = [
+    HeaderAction::Player,
+    HeaderAction::Agents,
+    HeaderAction::Settings,
+    HeaderAction::IdeMode,
+];
 
 pub(super) struct HeaderActionView {
     pub(super) label: &'static str,
@@ -49,16 +57,16 @@ pub(super) fn header_row_width(buttons: usize, menu: bool) -> f32 {
 /// Project-header icon, same square as [`appearance::framed_icon`].
 pub(super) const PROJECT_HEADER_SLOT: f32 = appearance::HEADER_BUTTON;
 pub(super) const PROJECT_HEADER_GAP: f32 = 2.0;
-/// Shortest name kept beside Player, Agents, and hide. Narrower than this, those
-/// icons move into the menu so the name stays readable.
+/// Shortest name kept beside the sidebar toggle. Narrower than this, the
+/// toggle moves into the menu so the name stays readable.
 pub(super) const PROJECT_HEADER_NAME_MIN: f32 = 36.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ProjectHeaderChrome {
-    /// Name on the left; Player, Agents, and hide packed against the sidebar's right edge.
-    Icons { name: f32 },
-    /// Player and Agents are in the menu. `hide` puts the sidebar toggle there too.
-    Menu { name: f32, hide: bool },
+    /// Name on the left; the sidebar toggle against the sidebar's right edge.
+    Toggle { name: f32 },
+    /// The sidebar toggle (and Check for Updates outside macOS) is in the menu.
+    Menu { name: f32 },
 }
 
 pub(super) fn project_title_width(ui: &egui::Ui, name: &str) -> f32 {
@@ -72,59 +80,34 @@ pub(super) fn project_title_width(ui: &egui::Ui, name: &str) -> f32 {
     measured + 2.0
 }
 
-pub(super) fn project_header_icons(count: u8) -> f32 {
-    match count {
-        0 => 0.0,
-        1 => PROJECT_HEADER_SLOT,
-        2 => PROJECT_HEADER_SLOT + PROJECT_HEADER_GAP + PROJECT_HEADER_SLOT,
-        _ => {
-            PROJECT_HEADER_SLOT
-                + PROJECT_HEADER_GAP
-                + PROJECT_HEADER_SLOT
-                + PROJECT_HEADER_GAP
-                + PROJECT_HEADER_SLOT
-        }
-    }
-}
-
-pub(super) fn project_header_row(icons: u8, name: f32) -> f32 {
-    let icons = project_header_icons(icons);
-    if name > 0.0 && icons > 0.0 {
-        name + PROJECT_HEADER_GAP + icons
+/// The name, a gap, and one header square.
+pub(super) fn project_header_row(name: f32) -> f32 {
+    if name > 0.0 {
+        name + PROJECT_HEADER_GAP + PROJECT_HEADER_SLOT
     } else {
-        name + icons
+        PROJECT_HEADER_SLOT
     }
 }
 
-/// Fit the project name against the header icons. Icons stay until the name
-/// would shrink below [`PROJECT_HEADER_NAME_MIN`]; then Player and Agents
-/// collapse into a menu, and the hide control follows if it still does not fit.
+/// Fit the project name against the sidebar toggle. The toggle stays until
+/// the name would shrink below [`PROJECT_HEADER_NAME_MIN`]; then it moves
+/// into a menu and the name takes what is left.
 pub(super) fn project_header_chrome(available: f32, natural: f32) -> ProjectHeaderChrome {
     let available = available.max(0.0);
     let natural = natural.max(0.0);
     let name_min = PROJECT_HEADER_NAME_MIN.min(natural);
-    if project_header_row(3, name_min) <= available {
-        let name = if project_header_row(3, natural) <= available {
+    let room = available - PROJECT_HEADER_SLOT - PROJECT_HEADER_GAP;
+    if project_header_row(name_min) <= available {
+        let name = if project_header_row(natural) <= available {
             natural
         } else {
-            (available - project_header_icons(3) - PROJECT_HEADER_GAP).max(name_min)
+            room.max(name_min)
         };
-        return ProjectHeaderChrome::Icons { name };
+        return ProjectHeaderChrome::Toggle { name };
     }
-    if project_header_row(2, name_min) <= available {
-        let room = (available - project_header_icons(2) - PROJECT_HEADER_GAP).max(0.0);
-        return ProjectHeaderChrome::Menu {
-            name: natural.min(room),
-            hide: false,
-        };
+    ProjectHeaderChrome::Menu {
+        name: if room <= 0.0 { 0.0 } else { natural.min(room) },
     }
-    let menu = project_header_icons(1);
-    let name = if menu + PROJECT_HEADER_GAP >= available {
-        0.0
-    } else {
-        natural.min(available - menu - PROJECT_HEADER_GAP)
-    };
-    ProjectHeaderChrome::Menu { name, hide: true }
 }
 
 /// How many leading header actions fit. The rest go behind the overflow menu.
@@ -141,6 +124,18 @@ pub(super) fn header_visible_count(budget: f32, count: usize) -> usize {
 
 pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
     match action {
+        HeaderAction::Player => HeaderActionView {
+            label: "Player",
+            icon: "AudioLines",
+            #[cfg(feature = "test-support")]
+            target: "player-chrome",
+        },
+        HeaderAction::Agents => HeaderActionView {
+            label: "Agents",
+            icon: "Bell",
+            #[cfg(feature = "test-support")]
+            target: "left-agent-bar",
+        },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
             icon: Action::ToggleIdeMode.icon(),

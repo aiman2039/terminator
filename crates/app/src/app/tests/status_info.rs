@@ -158,6 +158,12 @@ fn status_strip_shows_app_totals_and_opens_info() {
         text.iter().any(|line| line.contains("160 MB")),
         "totals memory {text:?}"
     );
+    // Each meter carries its label.
+    assert!(
+        text.iter()
+            .any(|line| line.contains("CPU 16%") && line.contains("MEM 160 MB")),
+        "meter labels {text:?}"
+    );
     let pos = rect.center();
     paint(
         &mut app,

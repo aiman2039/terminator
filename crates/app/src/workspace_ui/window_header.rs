@@ -8,6 +8,11 @@ use super::header::{
 };
 /// Narrower than this, the center toolbar and its project switcher are hidden.
 const TOOLBAR_MIN_WIDTH: f32 = 120.0;
+const SEARCH_LABEL: &str = "Search everywhere";
+/// The header search field is at least this wide; narrower, it is an icon.
+const SEARCH_FIELD_MIN: f32 = 220.0;
+/// Least drag space kept between the branch and the search field.
+const SEARCH_FIELD_GAP: f32 = 12.0;
 
 impl App {
     pub(crate) fn show_git_sidebar(&mut self) {
@@ -73,8 +78,8 @@ impl App {
     }
 
     /// macOS traffic lights and the Linux close, minimize, and maximize
-    /// buttons share this width. Wider Linux buttons steal the project name
-    /// and fold Player and Agents into the menu at the default sidebar width.
+    /// buttons share this width. Wider Linux buttons would steal the project
+    /// name and fold the sidebar toggle into the menu at the default width.
     const WINDOW_CONTROL_RESERVE: f32 = 72.0;
 
     pub(super) fn window_controls(&mut self, ui: &mut egui::Ui) {
@@ -98,15 +103,15 @@ impl App {
     }
 
     /// Left-align the project name; spare width is drag space between the
-    /// name and Player, Agents, and hide, which stay packed on the right.
-    /// The name is left out while the toolbar project switcher shows it.
-    /// A narrow sidebar folds Player and Agents into the menu.
+    /// name and the sidebar toggle, which stays on the right. The name is
+    /// left out while the toolbar project switcher shows it. A very narrow
+    /// sidebar folds the toggle into the menu. Player and Agents are in
+    /// the right header tools.
     pub(super) fn project_header_cluster(
         &mut self,
         ui: &mut egui::Ui,
         toolbar_shows_project: bool,
     ) {
-        self.note_agent_bar_badge(ui);
         let name = if toolbar_shows_project {
             String::new()
         } else {
@@ -116,29 +121,17 @@ impl App {
         let chrome = project_header_chrome(ui.available_width(), natural);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
-            match chrome {
-                ProjectHeaderChrome::Icons { name: width } => {
-                    self.project_header_title(ui, &name, width);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
-                        self.sidebar_toggle(ui, false);
-                        self.header_agents_button(ui);
-                        self.header_player_button(ui);
-                        header_drag_space(ui);
-                    });
+            let (ProjectHeaderChrome::Toggle { name: width }
+            | ProjectHeaderChrome::Menu { name: width }) = chrome;
+            self.project_header_title(ui, &name, width);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
+                match chrome {
+                    ProjectHeaderChrome::Toggle { .. } => self.sidebar_toggle(ui, false),
+                    ProjectHeaderChrome::Menu { .. } => self.project_header_menu(ui),
                 }
-                ProjectHeaderChrome::Menu { name: width, hide } => {
-                    self.project_header_title(ui, &name, width);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
-                        if !hide {
-                            self.sidebar_toggle(ui, false);
-                        }
-                        self.project_header_menu(ui, hide);
-                        header_drag_space(ui);
-                    });
-                }
-            }
+                header_drag_space(ui);
+            });
         });
     }
 
@@ -159,23 +152,17 @@ impl App {
         }
     }
 
-    pub(super) fn project_header_menu(&mut self, ui: &mut egui::Ui, hide: bool) {
+    pub(super) fn project_header_menu(&mut self, ui: &mut egui::Ui) {
         let response = appearance::framed_icon(ui, "Menu", "More");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "project-header-menu", response.rect);
         egui::Popup::menu(&response)
             .style(appearance::menu_style)
             .show(|ui| {
-                if self.header_player_menu(ui) {
-                    ui.close();
-                }
-                if self.header_agents_menu(ui) {
-                    ui.close();
-                }
                 if self.header_updates_menu(ui) {
                     ui.close();
                 }
-                if hide && self.header_sidebar_menu(ui) {
+                if self.header_sidebar_menu(ui) {
                     ui.close();
                 }
             });
@@ -331,11 +318,41 @@ impl App {
                 self.show_git_sidebar();
             }
         }
-        let search = appearance::framed_icon(
-            ui,
-            "Search",
-            &self.action_tip("Search everywhere", Action::OpenPalette),
-        );
+        self.toolbar_search(ui);
+    }
+
+    /// Search everywhere: a field-like button centred in the header's middle
+    /// region, with drag space on each side. Where it does not fit after
+    /// the branch, the plain Search icon takes its place.
+    pub(super) fn toolbar_search(&mut self, ui: &mut egui::Ui) {
+        let keys = self.shortcut_label(Action::OpenPalette);
+        let tip = self.action_tip(SEARCH_LABEL, Action::OpenPalette);
+        let width = appearance::search_field_width(ui, SEARCH_LABEL, &keys).max(SEARCH_FIELD_MIN);
+        let region = ui.max_rect();
+        let left = ui.cursor().left();
+        let spacing = ui.spacing().item_spacing.x;
+        let search = if region.right() - left - SEARCH_FIELD_GAP >= width {
+            let start = (region.center().x - width * 0.5)
+                .max(left + SEARCH_FIELD_GAP)
+                .min(region.right() - width);
+            let lead = start - left - spacing;
+            if lead > 0.0 {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(lead, ui.available_height()),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    header_drag_space,
+                );
+            }
+            appearance::search_field_button(appearance::SearchFieldButtonInput {
+                ui,
+                label: SEARCH_LABEL,
+                keys: &keys,
+                tip: &tip,
+                width,
+            })
+        } else {
+            appearance::framed_icon(ui, "Search", &tip)
+        };
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "toolbar-search", search.rect);
         if search.clicked() {
@@ -344,6 +361,7 @@ impl App {
     }
 
     pub(super) fn header_tools(&mut self, ui: &mut egui::Ui) {
+        self.note_agent_bar_badge(ui);
         ui.spacing_mut().item_spacing.x = HEADER_GAP;
         let HeaderToolBounds { budget, toggle } = header_tool_bounds(ui);
         ui.set_max_width(budget);
@@ -391,6 +409,15 @@ impl App {
     }
 
     pub(super) fn paint_header_action(&mut self, ui: &mut egui::Ui, action: HeaderAction) {
+        // Player and the bell paint their own state: selected fill, badge.
+        if matches!(action, HeaderAction::Player) {
+            self.header_player_button(ui);
+            return;
+        }
+        if matches!(action, HeaderAction::Agents) {
+            self.header_agents_button(ui);
+            return;
+        }
         let view = header_action_view(action);
         let response = appearance::framed_icon(ui, view.icon, &self.header_tip(action));
         #[cfg(feature = "test-support")]
@@ -401,6 +428,13 @@ impl App {
     }
 
     pub(super) fn header_menu_choice(&mut self, ui: &mut egui::Ui, action: HeaderAction) -> bool {
+        // Player and Agents keep their own menu items (Agents shows its summary).
+        if matches!(action, HeaderAction::Player) {
+            return self.header_player_menu(ui);
+        }
+        if matches!(action, HeaderAction::Agents) {
+            return self.header_agents_menu(ui);
+        }
         let view = header_action_view(action);
         let mark = self.header_menu_mark(action);
         let response = appearance::menu_item(appearance::MenuItemInput {
@@ -429,6 +463,9 @@ impl App {
     pub(super) fn header_menu_mark(&self, action: HeaderAction) -> String {
         match action {
             HeaderAction::IdeMode if self.preferences.ide_mode => "✓".into(),
+            HeaderAction::Player if self.player_active() => "✓".into(),
+            HeaderAction::Agents if self.left_agents_shown() => "✓".into(),
+            HeaderAction::Player | HeaderAction::Agents => String::new(),
             HeaderAction::Settings => self.shortcut_label(Action::OpenSettings),
             HeaderAction::IdeMode => self.shortcut_label(Action::ToggleIdeMode),
         }
@@ -436,6 +473,8 @@ impl App {
 
     pub(super) fn run_header_action(&mut self, action: HeaderAction) {
         match action {
+            HeaderAction::Player => self.open_player_from_chrome(),
+            HeaderAction::Agents => self.toggle_left_agents(),
             HeaderAction::IdeMode => self.toggle_ide_mode(),
             HeaderAction::Settings => self.open_settings(),
         }

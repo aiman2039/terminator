@@ -22,7 +22,7 @@ use crate::{
     session_info,
 };
 pub(crate) use card::{attention_card, attention_card_in};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{AgentState, Notification, Session, now};
 pub(crate) use triage::{SNOOZE_CHOICES, Triage, TriageUndo};

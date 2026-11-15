@@ -315,13 +315,13 @@ fn wide_header_has_one_search_and_no_tool_buttons() {
     assert!(rect("header-overflow").is_none());
 }
 
-/// Every window-header control with a glyph, left to right.
+/// Every window-header icon square, left to right. The search field between
+/// the toggles shares their height, not their width.
 #[cfg(feature = "test-support")]
-const HEADER_SQUARES: [&str; 7] = [
+const HEADER_SQUARES: [&str; 6] = [
     "toggle-left-sidebar",
     "player-chrome",
     "left-agent-bar",
-    "toolbar-search",
     "settings",
     "tool-ide-mode",
     "toggle-right-sidebar",
@@ -393,12 +393,136 @@ fn window_header_buttons_share_one_square_and_icon_size() {
     let branch = header_target(&ctx)("toolbar-branch").expect("branch button");
     assert_eq!(branch.height(), appearance::HEADER_BUTTON);
     assert!((branch.center().y - 20.0).abs() < 0.5, "{branch:?}");
+    let search = header_target(&ctx)("toolbar-search").expect("search field");
+    assert_eq!(search.height(), appearance::HEADER_BUTTON);
+    assert!(
+        search.width() > 2.0 * appearance::HEADER_BUTTON,
+        "{search:?}"
+    );
+    assert!((search.center().y - 20.0).abs() < 0.5, "{search:?}");
     // Narrow sidebars fold controls into the two header menus, same size.
-    app.project_width = 120.0;
-    app.preferences.width = 220.0;
+    app.project_width = 100.0;
+    app.preferences.width = 120.0;
     header_icon_sizes(&mut app, &ctx);
     let icons = header_icon_sizes(&mut app, &ctx);
-    assert_one_header_size(&ctx, &["project-header-menu", "settings"], &icons);
+    assert_one_header_size(
+        &ctx,
+        &["project-header-menu", "player-chrome", "header-overflow"],
+        &icons,
+    );
+}
+
+/// Player and the Agents bell sit in the right header tools, side by side
+/// and just before Settings; the left side keeps the toggle, project, and
+/// branch. The search field is between them, near the middle's centre.
+#[test]
+#[cfg(feature = "test-support")]
+fn player_and_bell_sit_beside_settings_and_search_is_centred() {
+    let (mut app, ctx, _dir) = fixture();
+    app.metadata = Some(terminator_core::metadata::Metadata {
+        cwd: PathBuf::from("/a"),
+        branch: Some("main".into()),
+        ..Default::default()
+    });
+    paint_header(&mut app, &ctx, &[]);
+    paint_header(&mut app, &ctx, &[]);
+    let rect = header_target(&ctx);
+    let toggle = rect("toggle-left-sidebar").expect("left toggle");
+    let branch = rect("toolbar-branch").expect("branch");
+    let search = rect("toolbar-search").expect("search");
+    let player = rect("player-chrome").expect("player");
+    let bell = rect("left-agent-bar").expect("bell");
+    let settings = rect("settings").expect("settings");
+    assert!(toggle.right() < branch.left() && branch.right() < search.left());
+    assert!(search.right() < player.left(), "{search:?} {player:?}");
+    assert!(
+        player.right() <= bell.left() + 1.0 && bell.left() - player.right() < 8.0,
+        "player sits against the bell, player={player:?} bell={bell:?}"
+    );
+    assert!(
+        bell.right() <= settings.left() + 1.0 && settings.left() - bell.right() < 8.0,
+        "bell sits against Settings, bell={bell:?} settings={settings:?}"
+    );
+    // Centred in the middle region, between the left and right header
+    // clusters (each inset 4px and 8px from its edge).
+    let middle = (toggle.right() + 4.0 + player.left() - 8.0) * 0.5;
+    assert!(
+        (search.center().x - middle).abs() < 2.0,
+        "search={search:?} middle={middle}"
+    );
+    assert!(rect("project-header-menu").is_none());
+}
+
+/// A middle region too narrow for the field falls back to the Search icon,
+/// which still opens the palette.
+#[test]
+#[cfg(feature = "test-support")]
+fn narrow_middle_shows_the_search_icon() {
+    let (mut app, ctx, _dir) = fixture();
+    app.metadata = Some(terminator_core::metadata::Metadata {
+        cwd: PathBuf::from("/a"),
+        branch: Some("a-long-feature-branch-name".into()),
+        ..Default::default()
+    });
+    app.project_width = 400.0;
+    app.preferences.width = 380.0;
+    paint_header(&mut app, &ctx, &[]);
+    paint_header(&mut app, &ctx, &[]);
+    let search = header_target(&ctx)("toolbar-search").expect("search icon");
+    assert_eq!(search.size(), egui::Vec2::splat(appearance::HEADER_BUTTON));
+}
+
+/// A narrow right sidebar folds the trailing header tools into the overflow
+/// menu; Player stays, and the menu offers the bell's Agents item.
+#[test]
+#[cfg(feature = "test-support")]
+fn narrow_right_header_folds_agents_and_settings_into_the_overflow() {
+    let (mut app, ctx, _dir) = fixture();
+    app.preferences.width = 120.0;
+    paint_header(&mut app, &ctx, &[]);
+    let rect = header_target(&ctx);
+    assert!(rect("player-chrome").is_some());
+    assert!(rect("left-agent-bar").is_none());
+    assert!(rect("settings").is_none());
+    let menu = rect("header-overflow").expect("overflow menu");
+    let pos = menu.center();
+    paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+    }
+    paint_header(&mut app, &ctx, &[]);
+    let rect = header_target(&ctx);
+    assert!(rect("Agents").is_some(), "menu offers Agents");
+    assert!(rect("settings").is_some(), "menu offers Settings");
+    let agents = rect("Agents").expect("Agents item");
+    assert!(!app.left_agents_shown());
+    let pos = agents.center();
+    paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+    }
+    assert!(
+        app.left_agents_shown(),
+        "the menu item runs the bell's action"
+    );
 }
 
 #[test]
