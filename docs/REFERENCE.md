@@ -754,6 +754,9 @@ terminator-hook ctl shutdown --stop-all
 terminator-hook ctl shutdown --stop-all --relaunch
 ```
 
+`ctl send` refuses text (literal or `--stdin`) that holds a line break or
+another control character; tab is allowed. Only `--enter` presses Enter.
+
 `ctl agents` prints each session's newest agent record as JSON: session,
 project, label, live, kind, hook-reported state and age in seconds. `ctl wait`
 checks the daemon snapshot every 500 ms. `--state` is `waiting` (input or

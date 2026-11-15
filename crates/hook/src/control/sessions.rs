@@ -92,6 +92,10 @@ impl Ctl {
         self.session(&sid)?;
         let mut bytes = Self::send_bytes(stdin, text)?;
         ensure!(bytes.len() <= 1024 * 1024, "Input exceeds 1 MiB");
+        ensure!(
+            !has_control_chars(&bytes),
+            "Text must not contain line breaks or control characters; use --enter to press Enter"
+        );
         if enter {
             bytes.push(b'\r');
         }
@@ -220,5 +224,34 @@ impl Ctl {
             &self.paths,
             ui_control::Request::Window { action },
         )?)
+    }
+}
+
+/// True when typed text holds a character that a terminal can act on as a
+/// key (CR, LF, ESC, Ctrl-C and the like). Tab is plain text. Enter comes
+/// only from `--enter`, so a line break in the text must not run it.
+fn has_control_chars(bytes: &[u8]) -> bool {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .any(|c| c.is_control() && c != '\t')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_control_chars;
+
+    #[test]
+    fn send_text_with_line_break_or_escape_is_refused() {
+        for text in ["ls\r", "ls\nrm -rf x", "\x1b[201~", "a\x03", "\u{9b}"] {
+            assert!(has_control_chars(text.as_bytes()), "{text:?}");
+        }
+        assert!(has_control_chars(b"ok\xff\n"));
+    }
+
+    #[test]
+    fn send_plain_text_and_tabs_are_accepted() {
+        for text in ["cargo test", "a\tb", "naïve ✓", ""] {
+            assert!(!has_control_chars(text.as_bytes()), "{text:?}");
+        }
     }
 }
