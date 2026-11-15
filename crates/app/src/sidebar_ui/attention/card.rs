@@ -1,7 +1,8 @@
 //! The attention card: two lines. Line 1: status glyph, session label,
 //! project and age; the action buttons take the age's place while the
 //! pointer is on the card or the keyboard is in it. Line 2: brand glyph and
-//! the notice text, one line with an ellipsis.
+//! the notice text, one line with an ellipsis. Agent notices and terminal
+//! notices share this painter through [`CardFace`].
 use super::*;
 
 /// Height of the notice line under the title row.
@@ -13,33 +14,82 @@ const BRAND_SIZE: f32 = 12.0;
 /// Height of the "This event has resolved." line.
 const RESOLVED_LINE: f32 = 18.0;
 
-pub(super) fn attention_status_glyph(
-    ui: &mut egui::Ui,
-    state: AgentState,
-    theme: &AppearanceConfig,
-) -> egui::Response {
-    let tint = state_color(state, theme);
+/// The glyph at the start of line 1, with its hover text.
+#[derive(Clone, Copy)]
+pub(super) struct CardGlyph {
+    pub icon: &'static str,
+    pub tint: Color32,
+    pub label: &'static str,
+    pub detail: &'static str,
+}
+
+impl CardGlyph {
+    /// The glyph of an agent state.
+    pub(super) fn state(state: AgentState, theme: &AppearanceConfig) -> Self {
+        Self {
+            icon: attention_status_icon(state),
+            tint: state_color(state, theme),
+            label: state.label(),
+            detail: attention_status_detail(state),
+        }
+    }
+}
+
+/// What one card shows, whatever raised it.
+pub(super) struct CardFace<'a> {
+    pub theme: &'a AppearanceConfig,
+    pub session_id: &'a str,
+    pub session: Option<&'a Session>,
+    pub project: Option<&'a str>,
+    pub selected: bool,
+    pub highlight: bool,
+    pub glyph: CardGlyph,
+    /// When the event happened; no age shows without it.
+    pub created: Option<u64>,
+    /// The plain notice text on line 2.
+    pub text: String,
+    pub resolved: bool,
+    pub brand_icon: Option<&'static str>,
+    pub brand_label: Option<&'a str>,
+    /// Brand glyphs carry their own colors and take white (left as-is);
+    /// a plain Lucide glyph takes the icon color.
+    pub brand_tint: Color32,
+    pub pinned: bool,
+    pub usage: &'a [String],
+    /// Further notices folded into this card.
+    pub extra: &'a [Notification],
+    /// Prefix of the test-support targets: `agent` or `terminal`.
+    pub target: &'static str,
+}
+
+/// The card's verbs: its buttons, then its keys and context menu.
+pub(super) struct CardVerbs<K, M> {
+    pub buttons: Vec<CardButton>,
+    pub keys: K,
+    pub menu: M,
+}
+
+fn status_glyph(ui: &mut egui::Ui, glyph: CardGlyph) -> egui::Response {
     // An exact button, not `Button::image`: the button minimum follows
     // `interact_size` and inflated this glyph past the 22px row.
     let response = appearance::toolbar_button(ui).on_hover_ui(|ui| {
         ui.set_max_width(240.0);
-        ui.colored_label(tint, state.label());
-        ui.label(attention_status_detail(state));
+        ui.colored_label(glyph.tint, glyph.label);
+        ui.label(glyph.detail);
     });
     appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
         ui,
         rect: response.rect,
-        icon: attention_status_icon(state),
+        icon: glyph.icon,
         size: 14.0,
-        tint,
+        tint: glyph.tint,
     });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, state.label()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, glyph.label));
     response
 }
 
-use super::card_actions::{
-    ActionsInput, CardButton, action_buttons, attention_actions, card_keys, card_menu,
-};
+pub(super) use super::card_actions::CardButton;
+use super::card_actions::{ActionsInput, action_buttons, attention_actions, card_keys, card_menu};
 
 /// One line of text cut with an ellipsis at `width`.
 fn one_line(
@@ -73,7 +123,32 @@ pub(crate) fn attention_card_in(
     project: Option<&str>,
 ) -> AttentionAction {
     ui.push_id(("attention-card", &input.notice.session_id), |ui| {
-        attention_card_contents(ui, input, project)
+        let notice = input.notice;
+        let face = CardFace {
+            theme: input.theme,
+            session_id: &notice.session_id,
+            session: input.session,
+            project,
+            selected: input.selected,
+            highlight: input.highlight,
+            glyph: CardGlyph::state(notice.state, input.theme),
+            created: Some(notice.created),
+            text: notice_preview(&notice.summary),
+            resolved: notice.resolved,
+            brand_icon: input.brand_icon,
+            brand_label: input.brand_label,
+            brand_tint: Color32::WHITE,
+            pinned: input.pinned,
+            usage: input.usage,
+            extra: input.group_extra,
+            target: "agent",
+        };
+        let verbs = CardVerbs {
+            buttons: action_buttons(&input),
+            keys: |ui: &egui::Ui| card_keys(ui, &input),
+            menu: |card: &egui::Response| card_menu(card, &input),
+        };
+        paint_card(ui, &face, verbs).0
     })
     .inner
 }
@@ -83,11 +158,11 @@ fn card_height(resolved: bool) -> f32 {
 }
 
 /// The card frame: hover fill, and an accent, selection or border line.
-fn paint_card_frame(ui: &egui::Ui, input: &AttentionCard<'_>, rect: egui::Rect, hovered: bool) {
-    let theme = input.theme;
-    let stroke = if input.highlight {
+fn paint_card_frame(ui: &egui::Ui, face: &CardFace<'_>, rect: egui::Rect, hovered: bool) {
+    let theme = face.theme;
+    let stroke = if face.highlight {
         egui::Stroke::new(1.0, appearance::color(&theme.accent))
-    } else if input.selected {
+    } else if face.selected {
         egui::Stroke::new(1.0, appearance::color(&theme.selection))
     } else {
         egui::Stroke::new(theme.border_width, appearance::color(&theme.border))
@@ -112,20 +187,32 @@ fn paint_resolved_line(ui: &egui::Ui, left: f32, line1_bottom: f32) {
     );
 }
 
-fn attention_card_contents(
+/// Paints one card and returns its action and its rect.
+pub(super) fn paint_card<K, M>(
     ui: &mut egui::Ui,
-    input: AttentionCard<'_>,
-    project: Option<&str>,
-) -> AttentionAction {
-    let notice = input.notice;
-    let height = card_height(notice.resolved);
-    if !notice.resolved && skip_clipped_row(ui, height) {
-        return AttentionAction::None;
+    face: &CardFace<'_>,
+    verbs: CardVerbs<K, M>,
+) -> (AttentionAction, egui::Rect)
+where
+    K: FnOnce(&egui::Ui) -> AttentionAction,
+    M: FnOnce(&egui::Response) -> AttentionAction,
+{
+    let height = card_height(face.resolved);
+    let rect = egui::Rect::from_min_size(
+        ui.next_widget_position(),
+        egui::vec2(ui.available_width(), height),
+    );
+    if !face.resolved && skip_clipped_row(ui, height) {
+        return (AttentionAction::None, rect);
     }
     // The card is registered before its glyph and buttons, so they sit on
     // top of it in egui and keep their own clicks.
     let card_id = ui.scope_id().with("card");
-    let buttons = action_buttons(&input);
+    let CardVerbs {
+        buttons,
+        keys,
+        menu,
+    } = verbs;
     let keyboard_inside = ui.memory(|memory| memory.focused()).is_some_and(|id| {
         id == card_id
             || buttons
@@ -134,14 +221,14 @@ fn attention_card_contents(
     });
     // Read before the card takes input, so Space peeks instead of clicking.
     let key_action = if keyboard_inside {
-        card_keys(ui, &input)
+        keys(ui)
     } else {
         AttentionAction::None
     };
     let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), height));
     let card = ui.interact(rect, card_id, egui::Sense::click());
     let hovered = ui.rect_contains_pointer(rect);
-    paint_card_frame(ui, &input, rect, hovered);
+    paint_card_frame(ui, face, rect, hovered);
     appearance::paint_focus(ui, &card);
     let inner = rect.shrink2(PAD);
     let line1 =
@@ -152,53 +239,48 @@ fn attention_card_contents(
                 line1.min,
                 egui::Vec2::splat(ATTENTION_ACTION_SIZE),
             )),
-            |ui| attention_status_glyph(ui, notice.state, input.theme),
+            |ui| status_glyph(ui, face.glyph),
         )
         .inner;
     #[cfg(feature = "test-support")]
     diagnostics::record(
         ui.ctx(),
-        &format!("agent-status:{}", notice.session_id),
+        &format!("{}-status:{}", face.target, face.session_id),
         glyph.rect,
     );
-    let show = hovered || keyboard_inside;
     let action = paint_title_row(
         ui,
         TitleRow {
-            input: &input,
+            face,
             card: card.id,
             line1,
             title_left: glyph.rect.right() + 4.0,
-            project,
-            show,
+            show: hovered || keyboard_inside,
             buttons,
         },
     );
-    paint_notice_line(ui, &input, line1);
-    if notice.resolved {
+    paint_notice_line(ui, face, line1);
+    if face.resolved {
         paint_resolved_line(ui, inner.left(), line1.bottom());
     }
-    let card = card_hover(card, &input);
-    let menu_action = card_menu(&card, &input);
-    if action != AttentionAction::None {
-        action
-    } else if key_action != AttentionAction::None {
-        key_action
-    } else if menu_action != AttentionAction::None {
-        menu_action
-    } else if card.clicked() || glyph.clicked() {
-        AttentionAction::Go
-    } else {
-        AttentionAction::None
-    }
+    let card = card_hover(card, face);
+    let menu_action = menu(&card);
+    let action = [action, key_action, menu_action]
+        .into_iter()
+        .find(|action| *action != AttentionAction::None)
+        .unwrap_or(if card.clicked() || glyph.clicked() {
+            AttentionAction::Go
+        } else {
+            AttentionAction::None
+        });
+    (action, rect)
 }
 
 struct TitleRow<'a> {
-    input: &'a AttentionCard<'a>,
+    face: &'a CardFace<'a>,
     card: egui::Id,
     line1: egui::Rect,
     title_left: f32,
-    project: Option<&'a str>,
     /// Buttons in place of the age.
     show: bool,
     buttons: Vec<CardButton>,
@@ -207,41 +289,42 @@ struct TitleRow<'a> {
 /// Session label, project and age (or the buttons) on line 1.
 fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
     let TitleRow {
-        input,
+        face,
         card,
         line1,
         title_left,
-        project,
         show,
         buttons,
     } = row;
-    let notice = input.notice;
     #[expect(clippy::cast_precision_loss, reason = "a handful of buttons")]
     let count = buttons.len() as f32;
     let actions_rect = egui::Rect::from_min_max(
         egui::pos2(line1.right() - ATTENTION_ACTION_SIZE * count, line1.top()),
         line1.max,
     );
-    let tint = state_color(notice.state, input.theme);
-    let age = crate::agent_presence::short_age(notice.created, now());
-    let age_width = ui
-        .painter()
-        .layout_no_wrap(
-            age.clone(),
-            egui::FontId::proportional(appearance::FONT_CAPTION),
-            tint,
-        )
-        .size()
-        .x;
+    let tint = face.glyph.tint;
+    let age = face
+        .created
+        .map(|created| crate::agent_presence::short_age(created, now()));
+    let age_width = age.as_ref().map_or(0.0, |age| {
+        ui.painter()
+            .layout_no_wrap(
+                age.clone(),
+                egui::FontId::proportional(appearance::FONT_CAPTION),
+                tint,
+            )
+            .size()
+            .x
+            + 6.0
+    });
     let title_right = if show {
         actions_rect.left() - 4.0
     } else {
-        line1.right() - age_width - 6.0
+        line1.right() - age_width
     };
     paint_title_text(
         ui,
-        input,
-        project,
+        face,
         egui::Rect::from_min_max(
             egui::pos2(title_left, line1.top()),
             egui::pos2(title_right, line1.bottom()),
@@ -255,11 +338,11 @@ fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
     #[cfg(feature = "test-support")]
     diagnostics::record(
         ui.ctx(),
-        &format!("agent-row:{}", notice.session_id),
+        &format!("{}-row:{}", face.target, face.session_id),
         title_rect,
     );
     let _ = title_rect;
-    if !show {
+    if !show && let Some(age) = age {
         ui.painter().text(
             egui::pos2(line1.right(), line1.center().y),
             egui::Align2::RIGHT_CENTER,
@@ -273,7 +356,8 @@ fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
         ActionsInput {
             card,
             rect: actions_rect,
-            session_id: &notice.session_id,
+            target: face.target,
+            session_id: face.session_id,
             buttons,
             show,
         },
@@ -281,24 +365,22 @@ fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
 }
 
 /// "label · project · N events" in `rect`, cut with an ellipsis.
-fn paint_title_text(
-    ui: &egui::Ui,
-    input: &AttentionCard<'_>,
-    project: Option<&str>,
-    rect: egui::Rect,
-) {
-    let label = input
+fn paint_title_text(ui: &egui::Ui, face: &CardFace<'_>, rect: egui::Rect) {
+    let label = face
         .session
         .map_or("Unknown session", |session| session.label.as_str());
     let weak = ui.visuals().weak_text_color();
-    let mut project = project.map(|name| format!(" · {name}")).unwrap_or_default();
-    if input.pinned {
+    let mut project = face
+        .project
+        .map(|name| format!(" · {name}"))
+        .unwrap_or_default();
+    if face.pinned {
         project.push_str(" · pinned");
     }
-    let events = if input.group_extra.is_empty() {
+    let events = if face.extra.is_empty() {
         String::new()
     } else {
-        format!(" · {} events", input.group_extra.len().saturating_add(1))
+        format!(" · {} events", face.extra.len().saturating_add(1))
     };
     let small = appearance::FONT_SMALL;
     let title = one_line(
@@ -318,14 +400,13 @@ fn paint_title_text(
 }
 
 /// Line 2: the brand glyph, then the notice text cut with an ellipsis.
-fn paint_notice_line(ui: &egui::Ui, input: &AttentionCard<'_>, line1: egui::Rect) {
+fn paint_notice_line(ui: &egui::Ui, face: &CardFace<'_>, line1: egui::Rect) {
     let line = egui::Rect::from_min_size(
         egui::pos2(line1.left(), line1.bottom()),
         egui::vec2(line1.width(), NOTICE_LINE),
     );
     let mut left = line.left() + 2.0;
-    if let Some(brand) = input.brand_icon {
-        // Brand glyphs carry their own colors; a white tint leaves them as-is.
+    if let Some(brand) = face.brand_icon {
         appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
             ui,
             rect: egui::Rect::from_min_size(
@@ -334,16 +415,15 @@ fn paint_notice_line(ui: &egui::Ui, input: &AttentionCard<'_>, line1: egui::Rect
             ),
             icon: brand,
             size: BRAND_SIZE,
-            tint: Color32::WHITE,
+            tint: face.brand_tint,
         });
         left += BRAND_SIZE + 4.0;
     }
-    let right = appearance::paint_usage_chips(ui, line, line.right(), input.usage);
-    let text = notice_preview(&input.notice.summary);
+    let right = appearance::paint_usage_chips(ui, line, line.right(), face.usage);
     let weak = ui.visuals().weak_text_color();
     let galley = one_line(
         ui,
-        &[(&text, appearance::FONT_CAPTION, weak)],
+        &[(&face.text, appearance::FONT_CAPTION, weak)],
         right - 4.0 - left,
     );
     ui.painter().galley(
@@ -354,8 +434,8 @@ fn paint_notice_line(ui: &egui::Ui, input: &AttentionCard<'_>, line1: egui::Rect
 }
 
 /// The card tooltip: where the session runs, and each folded notice.
-fn card_hover(card: egui::Response, input: &AttentionCard<'_>) -> egui::Response {
-    let label = match (input.brand_icon, input.brand_label) {
+fn card_hover(card: egui::Response, face: &CardFace<'_>) -> egui::Response {
+    let label = match (face.brand_icon, face.brand_label) {
         (Some(_), Some(label)) => label,
         (Some(_), None) => "Agent",
         _ => "",
@@ -365,22 +445,19 @@ fn card_hover(card: egui::Response, input: &AttentionCard<'_>) -> egui::Response
         if !label.is_empty() {
             ui.weak(label);
         }
-        if let Some(session) = input.session {
+        if let Some(session) = face.session {
             ui.weak(crate::remote_ui::location_label(session));
         }
-        ui.label(notice_preview(&input.notice.summary));
-        for extra in input.group_extra.iter().take(8) {
+        ui.label(&face.text);
+        for extra in face.extra.iter().take(8) {
             ui.label(format!(
                 "{}: {}",
                 extra.state.label(),
                 notice_preview(&extra.summary)
             ));
         }
-        if input.group_extra.len() > 8 {
-            ui.weak(format!(
-                "…and {} more",
-                input.group_extra.len().saturating_sub(8)
-            ));
+        if face.extra.len() > 8 {
+            ui.weak(format!("…and {} more", face.extra.len().saturating_sub(8)));
         }
     })
 }

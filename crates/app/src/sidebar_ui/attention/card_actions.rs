@@ -138,6 +138,8 @@ fn snooze_menu(response: &egui::Response) -> AttentionAction {
 pub(super) struct ActionsInput<'a> {
     pub card: egui::Id,
     pub rect: egui::Rect,
+    /// Prefix of the test-support targets: `agent` or `terminal`.
+    pub target: &'a str,
     pub session_id: &'a str,
     pub buttons: Vec<CardButton>,
     /// Paint the buttons; hidden ones still take a click or the keyboard.
@@ -150,6 +152,7 @@ pub(super) fn attention_actions(ui: &egui::Ui, input: ActionsInput<'_>) -> Atten
     let ActionsInput {
         card,
         rect,
+        target,
         session_id,
         buttons,
         show,
@@ -186,11 +189,11 @@ pub(super) fn attention_actions(ui: &egui::Ui, input: ActionsInput<'_>) -> Atten
         #[cfg(feature = "test-support")]
         diagnostics::record(
             ui.ctx(),
-            &format!("agent-{name}:{session_id}"),
+            &format!("{target}-{name}:{session_id}"),
             response.rect,
         );
         #[cfg(not(feature = "test-support"))]
-        let _ = (name, session_id);
+        let _ = (target, session_id);
         if name == "snooze" && next == AttentionAction::None {
             let picked = snooze_menu(&response);
             if picked != AttentionAction::None {
