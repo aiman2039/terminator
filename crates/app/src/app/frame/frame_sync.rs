@@ -50,11 +50,13 @@ impl App {
     /// [`KEEP_HIDDEN_BACKENDS`] most recently painted ones. Re-attaching
     /// spawns a helper process and replays the screen; more than a few
     /// would keep parsing output nobody sees.
-    fn prune_hidden_backends(&mut self) {
+    pub(crate) fn prune_hidden_backends(&mut self) {
+        // Broadcast input reaches attached terminals only: keep its tab's.
+        let broadcast = self.broadcast_targets();
         let hidden: Vec<(Option<Instant>, String)> = self
             .backends
             .iter()
-            .filter(|(sid, _)| !self.visible_sessions.contains(*sid))
+            .filter(|(sid, _)| !self.visible_sessions.contains(*sid) && !broadcast.contains(*sid))
             .map(|(sid, backend)| (backend.last_painted(), sid.clone()))
             .collect();
         for sid in hidden_backends_to_drop(hidden, KEEP_HIDDEN_BACKENDS) {

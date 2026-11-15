@@ -345,19 +345,8 @@ impl Viewer<'_> {
             ui.ctx().request_repaint_after(wait);
             return None;
         }
-        let was_dirty = find.dirty();
-        find.outcome = backend.find(&find.query, find.case_insensitive);
-        find.searched_query.clone_from(&find.query);
-        find.searched_case = find.case_insensitive;
-        find.last_search = Some(now);
-        find.content_stale = false;
-        find.current = if was_dirty {
-            0
-        } else {
-            find.current
-                .min(find.outcome.matches.len().saturating_sub(1))
-        };
-        find.outcome.matches.get(find.current).map(|hit| hit.line)
+        let outcome = backend.find(&find.query, find.case_insensitive);
+        find.apply_search(outcome, now)
     }
 
     pub(super) fn find_bar_nav(

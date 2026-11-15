@@ -73,7 +73,7 @@ impl App {
             on: Some((project, tab)),
             ..Broadcast::default()
         };
-        let count = self.broadcast_targets().len();
+        let count = self.broadcast_receivers().len();
         self.info = Some(format!(
             "Broadcast input on: keys go to {count} terminals in this tab. Press Esc twice to stop."
         ));
@@ -113,6 +113,15 @@ impl App {
             })
             .cloned()
             .collect()
+    }
+
+    /// The targets with an attached terminal: only these receive input, so
+    /// only these are counted. Broadcast keeps them attached while hidden
+    /// (see `prune_hidden_backends`).
+    pub(crate) fn broadcast_receivers(&self) -> Vec<String> {
+        let mut targets = self.broadcast_targets();
+        targets.retain(|sid| self.backends.contains_key(sid));
+        targets
     }
 
     /// Whether `sid` takes part in broadcast input now.
@@ -215,7 +224,7 @@ impl App {
         let Some(pending) = self.broadcast.pending.clone().filter(|p| p.from == sid) else {
             return;
         };
-        let count = self.broadcast_targets().len();
+        let count = self.broadcast_receivers().len();
         let mut answer = None;
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(

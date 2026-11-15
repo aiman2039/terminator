@@ -65,6 +65,52 @@ mod tests {
         assert_eq!(find.rescan_in(later), Some(std::time::Duration::ZERO));
     }
 
+    fn hits(lines: &[i32]) -> egui_term::FindOutcome {
+        egui_term::FindOutcome {
+            matches: lines
+                .iter()
+                .map(|&line| egui_term::FoundMatch {
+                    line,
+                    start_col: 0,
+                    end_col: 2,
+                })
+                .collect(),
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn output_rescan_does_not_scroll_back_to_the_same_hit() {
+        let now = std::time::Instant::now();
+        let mut find = TerminalFind {
+            query: "foo".into(),
+            ..TerminalFind::default()
+        };
+        // A new query reveals its first hit.
+        assert_eq!(find.apply_search(hits(&[-10, -2]), now), Some(-10));
+        find.step(1);
+        // New output shifts the lines; the selected hit stays the same.
+        find.content_stale = true;
+        assert_eq!(find.apply_search(hits(&[-12, -4, 0]), now), None);
+        assert_eq!(find.current, 1);
+        // The selected hit left the history: the new selection is revealed.
+        find.content_stale = true;
+        assert_eq!(find.apply_search(hits(&[-1]), now), Some(-1));
+        assert_eq!(find.current, 0);
+    }
+
+    #[test]
+    fn first_hit_after_output_is_revealed_once() {
+        let now = std::time::Instant::now();
+        let mut find = TerminalFind {
+            query: "foo".into(),
+            ..TerminalFind::default()
+        };
+        assert_eq!(find.apply_search(hits(&[]), now), None);
+        assert_eq!(find.apply_search(hits(&[-1]), now), Some(-1));
+        assert_eq!(find.apply_search(hits(&[-2]), now), None);
+    }
+
     #[test]
     fn stepping_without_matches_stays_at_zero() {
         let mut find = TerminalFind::default();

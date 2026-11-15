@@ -226,6 +226,8 @@ impl Viewer<'_> {
         // Hints and copy mode take every key first: none reaches the PTY.
         self.app.key_mode_input(ui.ctx(), sid);
         self.terminal_find_bar(ui, sid);
+        self.app
+            .key_mode_pointer(ui.ctx(), sid, ui.available_rect_before_wrap());
         let input_enabled = self.terminal_input_for(sid);
         let find_open = self.app.terminal_find.contains_key(sid);
         if !find_open && self.terminal_copy_for(sid) {

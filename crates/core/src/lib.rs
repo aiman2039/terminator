@@ -66,6 +66,18 @@ pub const PROTOCOL_VERSION: u32 = 1;
 const SOCKET_PATH_LIMIT: usize = 100;
 pub const NVIM_REVIEW_CAPABILITY: &str = "nvim-review-v1";
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
+/// Largest terminal the daemon accepts. Attach refuses a larger size;
+/// a resize is clamped to it.
+pub const MAX_TERMINAL_ROWS: u16 = 500;
+pub const MAX_TERMINAL_COLS: u16 = 1000;
+
+/// `(rows, cols)` inside `1..=MAX_TERMINAL_ROWS` and `1..=MAX_TERMINAL_COLS`.
+pub fn clamp_terminal_size(rows: u16, cols: u16) -> (u16, u16) {
+    (
+        rows.clamp(1, MAX_TERMINAL_ROWS),
+        cols.clamp(1, MAX_TERMINAL_COLS),
+    )
+}
 /// Retained agent/notification records are aggregated into every snapshot, so
 /// they are bounded independently per generation. Pending attention is never
 /// dropped by these caps.

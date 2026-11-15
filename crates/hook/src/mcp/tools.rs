@@ -111,7 +111,11 @@ const TOOLS: &[Tool] = &[
         about: "Type literal text into a session. Enter is pressed only when `enter` is true.",
         args: &[
             SESSION,
-            req("text", Positional, "Text to type (at most 1 MiB)"),
+            req(
+                "text",
+                Positional,
+                "Text to type: no line breaks or control characters, at most 1 MiB",
+            ),
             opt("enter", Flag("--enter"), "Press Enter after the text"),
         ],
     },

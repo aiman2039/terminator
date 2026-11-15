@@ -1,7 +1,9 @@
 //! Hints and copy mode in the app: start and leave, the keys, the overlay,
 //! and opening a picked hint with the hover file menu.
 use super::super::super::*;
-use super::key_modes::{HintStep, Hints, KeyMode, ModeKey, PendingHint, take_mode_keys};
+use super::key_modes::{
+    HintStep, Hints, KeyMode, ModeKey, PendingHint, drop_pty_pointer_events, take_mode_keys,
+};
 use egui_term::{CopyCommand, SelectionType, ViMotion};
 
 impl App {
@@ -71,6 +73,23 @@ impl App {
             }
             self.key_mode_key(ctx, sid, key);
         }
+    }
+
+    /// While a mode is on, a wheel or click over its pane (`pane`) must not
+    /// reach the PTY as a mouse report or arrow keys either.
+    pub(crate) fn key_mode_pointer(&self, ctx: &egui::Context, sid: &str, pane: egui::Rect) {
+        if self.key_modes.on(sid).is_none()
+            || !ctx
+                .pointer_hover_pos()
+                .is_some_and(|pos| pane.contains(pos))
+        {
+            return;
+        }
+        let Some(backend) = self.backends.get(sid) else {
+            return;
+        };
+        let mode = backend.term_mode();
+        ctx.input_mut(|input| drop_pty_pointer_events(&mut input.events, mode));
     }
 
     fn key_mode_key(&mut self, ctx: &egui::Context, sid: &str, key: ModeKey) {
