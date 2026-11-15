@@ -3,6 +3,8 @@ const DEVELOPMENT_UPDATES: &str =
 const MISSING_UPDATES: &str =
     "The update component is missing. Reinstall Terminator from its release download.";
 const FAILED_UPDATES: &str = "The update component could not be initialized.";
+/// Sparkle's `SUNoUpdateError`: the check worked and found no newer version.
+const SU_NO_UPDATE_ERROR: isize = 1001;
 
 use eframe::egui;
 use objc2::{
@@ -39,7 +41,17 @@ define_class!(
         }
         #[unsafe(method(updater:didFinishUpdateCycleForUpdateCheck:error:))]
         fn finished(&self, _: &AnyObject, _: isize, error: Option<&AnyObject>) {
-            self.ivars().schedule.borrow_mut().finished(error.is_some());
+            let mut schedule = self.ivars().schedule.borrow_mut();
+            if let Some(error) = error {
+                // SAFETY: Sparkle passes an NSError here; `code` returns its NSInteger.
+                let code: isize = unsafe { msg_send![error, code] };
+                // "No update" ends a good check; any other error counts
+                // toward the backoff.
+                if code != SU_NO_UPDATE_ERROR {
+                    schedule.unreachable();
+                }
+            }
+            schedule.finished(error.is_some());
         }
         #[unsafe(method(checkForUpdates:))]
         fn check_for_updates(&self, _: Option<&AnyObject>) {
