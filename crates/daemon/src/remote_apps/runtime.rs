@@ -37,6 +37,28 @@ pub(crate) type Input = (ClientMessage, Vec<u8>);
 /// A failure the GUI shows.
 pub(crate) type Failure = (ErrorKind, String);
 
+/// Messages that may wait for a stalled bridge: memory stays bounded.
+pub(crate) const INPUT_QUEUE: usize = 256;
+
+/// Queues `inputs` for the bridge without blocking. When the queue is
+/// full, pointer moves are dropped (a later move supersedes them) and any
+/// other message fails the request, so nothing collects without bound.
+pub(crate) fn enqueue(input: &mpsc::SyncSender<Input>, inputs: Vec<Input>) -> anyhow::Result<()> {
+    for item in inputs {
+        match input.try_send(item) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full((ClientMessage::PointerMotion { .. }, _))) => {}
+            Err(mpsc::TrySendError::Full(_)) => {
+                anyhow::bail!("Remote apps are not responding; input was not sent")
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                anyhow::bail!("Remote apps are not connected")
+            }
+        }
+    }
+    Ok(())
+}
+
 const FILE_PREFIX: &str = "remote-app-";
 const FILE_SUFFIX: &str = ".fb";
 
@@ -44,7 +66,7 @@ pub(crate) enum Phase {
     /// A bridge runs (or is starting). `ready`: it sent the whole window
     /// list. `input` is `None` until its stdin is attached.
     Running {
-        input: Option<mpsc::Sender<Input>>,
+        input: Option<mpsc::SyncSender<Input>>,
         ready: bool,
         attempt: u32,
     },
@@ -117,7 +139,7 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn input(&self) -> Option<&mpsc::Sender<Input>> {
+    pub(crate) fn input(&self) -> Option<&mpsc::SyncSender<Input>> {
         match &self.phase {
             Phase::Running { input, .. } => input.as_ref(),
             _ => None,
@@ -131,7 +153,7 @@ impl Runtime {
 
     /// A new bridge runs; `tx` feeds its stdin. `false` when a stop came
     /// first (the caller closes the bridge's stdin at once).
-    pub(crate) fn bridge_started(&mut self, tx: mpsc::Sender<Input>) -> bool {
+    pub(crate) fn bridge_started(&mut self, tx: mpsc::SyncSender<Input>) -> bool {
         if self.stop_requested {
             return false;
         }

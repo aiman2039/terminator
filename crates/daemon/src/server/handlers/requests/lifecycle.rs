@@ -45,12 +45,23 @@ impl Shared {
             !has_live_sessions(&relock(&self.state)),
             "Stop running sessions before stopping daemon"
         );
+        // A stopped daemon would end them halfway: an upload would leave
+        // its `.partial` file on the host.
+        ensure!(
+            !relock(&self.remote_transfers).any_active(),
+            "Wait for SSH file transfers to finish before stopping daemon"
+        );
+        ensure!(
+            !self.remote_apps_live(),
+            "Disconnect remote apps before stopping daemon"
+        );
         self.flush_history()?;
         self.persist()?;
         self.shutdown.store(true, Ordering::Release);
         notifications::wake();
         if let Some(root) = &self.catalog_paths {
-            generations::Catalog::open(root)?.retire(&relock(&self.state).generation)?;
+            let generation = relock(&self.state).generation.clone();
+            generations::Catalog::open(root)?.retire(&generation)?;
         }
         Ok(Outcome::Reply(Response::Ok))
     }

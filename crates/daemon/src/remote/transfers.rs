@@ -20,6 +20,10 @@ impl Transfers {
             .filter(|(p, s)| p == project && !s.done)
             .count()
     }
+    /// Whether any project still has a running transfer.
+    pub(crate) fn any_active(&self) -> bool {
+        self.records.values().any(|(_, s)| !s.done)
+    }
     fn insert(&mut self, project: &str, status: TransferStatus) -> Result<()> {
         ensure!(
             self.active(project) < MAX_ACTIVE,
@@ -262,6 +266,15 @@ mod tests {
             error: None,
             ssh: None,
         }
+    }
+    #[test]
+    fn a_running_transfer_keeps_the_daemon_from_stopping() {
+        let mut transfers = Transfers::default();
+        assert!(!transfers.any_active());
+        transfers.insert("p", status("t")).unwrap();
+        assert!(transfers.any_active());
+        transfers.update("t", |s| s.done = true);
+        assert!(!transfers.any_active());
     }
     #[test]
     fn uploads_publish_beside_the_resolved_directory_with_the_source_name() {

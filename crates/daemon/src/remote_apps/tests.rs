@@ -95,7 +95,7 @@ fn hello_alone_is_connecting_and_ready_connects() {
 fn newer_host_protocol_stops_the_bridge_and_fails_for_good() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = runtime(dir.path());
-    let (tx, _rx) = std::sync::mpsc::channel();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(1);
     assert!(r.bridge_started(tx));
     apply(&mut r, hello(PROTOCOL_VERSION + 1));
     assert!(r.input().is_none());
@@ -385,7 +385,7 @@ fn retry_keeps_the_error_and_only_ready_clears_it_and_the_backoff() {
 fn stop_request_wakes_a_waiting_retry_and_ends_disconnected() {
     let dir = tempfile::tempdir().unwrap();
     let handle = Arc::new(Handle::new(runtime(dir.path())));
-    let (tx, _rx) = std::sync::mpsc::channel();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(1);
     assert!(handle.update(|r| r.bridge_started(tx)));
     assert!(!handle.wait_stop(Duration::from_millis(10)));
     let stopper = Arc::clone(&handle);
@@ -396,7 +396,7 @@ fn stop_request_wakes_a_waiting_retry_and_ends_disconnected() {
     assert!(handle.wait_stop(Duration::from_secs(5)));
     assert!(handle.read(|r| r.input().is_none()));
     stop.join().unwrap();
-    let (tx, _rx) = std::sync::mpsc::channel();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(1);
     assert!(!handle.update(|r| r.bridge_started(tx)));
     assert!(matches!(handle.update(exited), Next::Stop));
     assert_eq!(handle.snapshot().status, RemoteAppsStatus::Disconnected);
@@ -425,4 +425,61 @@ fn detach_timeout_of_never_keeps_the_session() {
     // The watcher ends with the session.
     handle.update(|r| r.end(None));
     watcher.join().unwrap();
+}
+
+#[test]
+fn a_stalled_bridge_drops_pointer_moves_and_refuses_other_input() {
+    use terminator_core::remote_apps::ClientMessage;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let key = || {
+        (
+            ClientMessage::Key {
+                id: WindowId(1),
+                keycode: 30,
+                pressed: true,
+            },
+            Vec::new(),
+        )
+    };
+    let motion = || {
+        (
+            ClientMessage::PointerMotion {
+                id: WindowId(1),
+                x: 1.0,
+                y: 2.0,
+            },
+            Vec::new(),
+        )
+    };
+    super::runtime::enqueue(&tx, vec![key()]).unwrap();
+    super::runtime::enqueue(&tx, vec![motion(), motion()]).unwrap();
+    assert!(super::runtime::enqueue(&tx, vec![key()]).is_err());
+    assert!(rx.try_recv().is_ok());
+    assert!(
+        rx.try_recv().is_err(),
+        "the queue never grew past its bound"
+    );
+    drop(rx);
+    assert!(super::runtime::enqueue(&tx, vec![key()]).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_bridge_that_ignores_stop_is_killed_after_the_grace_time() {
+    use std::sync::{Mutex, atomic::AtomicBool};
+    let dir = tempfile::tempdir().unwrap();
+    let handle = Handle::new(runtime(dir.path()));
+    let child = Mutex::new(
+        std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap(),
+    );
+    let done = AtomicBool::new(false);
+    handle.request_stop();
+    let started = std::time::Instant::now();
+    super::worker::kill_after_stop(&handle, &child, &done, Duration::from_millis(100));
+    let status = child.lock().unwrap().wait().unwrap();
+    assert!(!status.success());
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
