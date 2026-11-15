@@ -230,7 +230,10 @@ impl App {
             egui::CornerRadius::ZERO,
             ui.visuals().selection.bg_fill,
         );
-        ui.ctx().request_repaint();
+        // About 30 frames a second is enough for the line; a load that
+        // never finishes stops after `browser::LOAD_TIMEOUT`.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(33));
     }
 
     /// Downloads are disabled in the embedded view; say so instead of

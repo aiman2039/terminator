@@ -176,6 +176,7 @@ fn page_load_handler(load: PageLoad) -> impl Fn(PageLoadEvent, String) + 'static
         let loading = matches!(event, PageLoadEvent::Started);
         states.update(&key, |state| {
             state.loading = loading;
+            state.loading_since = loading.then(std::time::Instant::now);
             state.stale = true;
             if loading {
                 state.blocked_download = None;

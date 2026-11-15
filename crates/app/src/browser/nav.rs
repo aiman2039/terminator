@@ -8,6 +8,9 @@ use wry::WebView;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NavState {
     pub loading: bool,
+    /// When the current load started. A load that never finishes (it
+    /// failed after commit) stops showing as loading after [`LOAD_TIMEOUT`].
+    pub loading_since: Option<std::time::Instant>,
     pub title: Option<String>,
     pub back: bool,
     pub forward: bool,
@@ -18,6 +21,10 @@ pub(crate) struct NavState {
     /// URL of a download the view refused; downloads are disabled.
     pub blocked_download: Option<String>,
 }
+
+/// A load with no Finished event after this long no longer shows as
+/// loading, so its progress line stops repainting.
+pub(crate) const LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Shared with webview callbacks, which run outside the egui frame. A change
 /// requests a repaint so the toolbar shows it without waiting for input.
@@ -33,11 +40,19 @@ impl NavStates {
     }
 
     pub fn get(&self, key: &str) -> NavState {
-        self.states
+        let mut state = self
+            .states
             .lock()
             .ok()
             .and_then(|states| states.get(key).cloned())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if state
+            .loading_since
+            .is_some_and(|since| since.elapsed() >= LOAD_TIMEOUT)
+        {
+            state.loading = false;
+        }
+        state
     }
 
     pub fn update(&self, key: &str, change: impl FnOnce(&mut NavState)) {
@@ -166,5 +181,20 @@ mod tests {
         );
         assert_eq!(split_host("file:///tmp/a.html"), None);
         assert_eq!(split_host("not a url"), None);
+    }
+
+    #[test]
+    fn a_load_that_never_finishes_stops_showing_as_loading() {
+        let states = super::NavStates::default();
+        let now = std::time::Instant::now();
+        states.update("a", |state| {
+            state.loading = true;
+            state.loading_since = Some(now);
+        });
+        assert!(states.get("a").loading);
+        states.update("a", |state| {
+            state.loading_since = now.checked_sub(super::LOAD_TIMEOUT);
+        });
+        assert!(!states.get("a").loading);
     }
 }
