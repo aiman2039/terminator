@@ -13,7 +13,10 @@ pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
             "rootUri": root.as_str(),
             "capabilities": {
                 "general": { "positionEncodings": ["utf-16"] },
-                "workspace": { "workspaceEdit": { "documentChanges": true } },
+                "workspace": {
+                    "workspaceEdit": { "documentChanges": true },
+                    "inlayHint": { "refreshSupport": true },
+                },
                 "textDocument": {
                     "synchronization": { "didSave": true },
                     "hover": { "contentFormat": ["markdown", "plaintext"] },

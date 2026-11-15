@@ -24,8 +24,9 @@ pub struct SourceOptions {
     pub show_line_numbers: bool,
     pub show_status: bool,
     /// Gutter marks, sorted by row; binary-searched per painted row, so
-    /// an empty vec costs nothing on large files.
-    pub diagnostics: Vec<DiagnosticMark>,
+    /// an empty list costs nothing on large files. Shared, so a host can
+    /// reuse one list across frames.
+    pub diagnostics: std::sync::Arc<[DiagnosticMark]>,
     /// Underlined diagnostic ranges, sorted (see [`super::squiggles`]); also
     /// drive the scrollbar error stripe and F8 navigation.
     pub squiggles: std::sync::Arc<Vec<Squiggle>>,
@@ -147,7 +148,7 @@ impl Default for SourceOptions {
             read_clipboard: None,
             hover_popup: false,
             yield_copy: false,
-            diagnostics: Vec::new(),
+            diagnostics: std::sync::Arc::from([]),
             squiggles: std::sync::Arc::new(Vec::new()),
             find_matches: std::sync::Arc::new(Vec::new()),
             find_current: None,

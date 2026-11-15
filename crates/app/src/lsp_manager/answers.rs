@@ -43,19 +43,33 @@ impl LspManager {
 
     pub(super) fn on_inlay_hints(&mut self, path: PathBuf, revision: u64, answer: Answer) {
         // A failed answer ("content modified" while indexing) keeps
-        // the previous hints; it and an empty answer are asked
-        // again after a pause.
+        // the previous hints and is asked again after a pause. An empty
+        // answer holds for its revision: a server that indexes later
+        // sends `workspace/inlayHint/refresh`.
         let Answer { result, error } = answer;
-        let hints = error
-            .is_none()
-            .then(|| L::parse_inlay_hints(&result.unwrap_or(serde_json::Value::Null)));
-        if hints.as_ref().is_none_or(Vec::is_empty) {
-            self.inlay_retry.insert(path.clone(), Instant::now());
-        } else {
-            self.inlay_retry.remove(&path);
+        if error.is_some() {
+            self.inlay_retry.insert(path, Instant::now());
+            return;
         }
-        if let Some(hints) = hints {
-            self.inlay.insert(path, (revision, hints.into()));
+        let hints = L::parse_inlay_hints(&result.unwrap_or(serde_json::Value::Null));
+        self.inlay_retry.remove(&path);
+        self.inlay.insert(path, (revision, hints.into()));
+    }
+
+    /// `workspace/inlayHint/refresh`: ask again for every buffer `key`
+    /// serves, keeping the shown hints until the new answer arrives.
+    pub(super) fn refresh_inlay_hints(&mut self, key: &ServerKey) {
+        let due = Instant::now()
+            .checked_sub(SYMBOLS_RETRY)
+            .unwrap_or_else(Instant::now);
+        let paths: Vec<PathBuf> = self
+            .docs
+            .iter()
+            .filter(|(_, doc)| doc.server == *key)
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in paths {
+            self.inlay_retry.insert(path, due);
         }
     }
 

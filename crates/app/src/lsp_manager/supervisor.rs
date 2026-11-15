@@ -95,6 +95,7 @@ impl LspManager {
         match spawn_server_direct(key, &path, self.pump_tx.clone()) {
             Ok(server) => {
                 self.servers.insert(key.clone(), server);
+                self.init_started.insert(key.clone(), Instant::now());
                 self.servers.get_mut(key)
             }
             Err(note) => {
@@ -228,7 +229,38 @@ impl LspManager {
             return None;
         }
         server.init_id = Some(init);
+        self.init_started.insert(key.clone(), Instant::now());
         self.servers.get_mut(key)
+    }
+
+    /// Stop servers that left `initialize` unanswered past
+    /// [`INIT_TIMEOUT`] and show why, like a failed `initialize`.
+    pub(super) fn expire_silent_starts(&mut self) {
+        let servers = &self.servers;
+        self.init_started.retain(|key, _| {
+            servers
+                .get(key)
+                .is_some_and(|server| server.init_id.is_some())
+        });
+        let silent: Vec<ServerKey> = self
+            .init_started
+            .iter()
+            .filter(|(_, at)| at.elapsed() >= INIT_TIMEOUT)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in silent {
+            self.init_started.remove(&key);
+            self.shutdown_server(&key);
+            self.note_failure(key.language);
+            self.unavailable.insert(
+                key.language,
+                format!(
+                    "Language server failed to start: {} did not answer within {} s. Restart it to try again.",
+                    key.language,
+                    INIT_TIMEOUT.as_secs()
+                ),
+            );
+        }
     }
 
     /// A supervised spawn that failed inside the actor: same outcome as a
@@ -253,9 +285,10 @@ impl LspManager {
     pub(super) fn on_server_down(&mut self, key: &ServerKey) {
         // Stray exits (a supervised actor reaped just after a deliberate
         // shutdown removed the entry) are not crashes.
-        if self.servers.remove(key).is_none() {
+        let Some(server) = self.servers.remove(key) else {
             return;
-        }
+        };
+        self.fail_pending(key, server.pending);
         self.workspace_symbols.remove(key);
         self.search_revision = self.search_revision.wrapping_add(1);
         self.note_failure(key.language);
@@ -277,6 +310,7 @@ impl LspManager {
             if let Some(cancel) = server.cancel {
                 cancel.cancel();
             }
+            self.fail_pending(key, server.pending);
         }
         self.workspace_symbols.remove(key);
         self.search_revision = self.search_revision.wrapping_add(1);
@@ -311,15 +345,19 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
         pump,
         cancel,
     } = input;
-    let mut child = match tokio::process::Command::new(&binary)
+    let mut command = tokio::process::Command::new(&binary);
+    command
         .args(L::family_args(key.language))
         .current_dir(&root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    // Its own process group, so its children (`cargo check`, `rustc`)
+    // end with it instead of holding the build lock.
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             let _ = pump.send(PumpEvent::SpawnFailed {
@@ -329,6 +367,7 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
             return Ok(());
         }
     };
+    let group = child.id();
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let writer = tokio::spawn(ServerPipes::write_stdin(stdin, incoming));
@@ -352,17 +391,40 @@ async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
             true
         }
         () = cancel.cancelled() => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
+            // `shutdown` and `exit` were queued before the cancel: give
+            // the server a moment to read them and exit cleanly.
+            if tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await.is_err() {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+            }
             false
         }
     };
+    end_process_group(group);
     writer.abort();
     reader.abort();
     if exited && !cancel.is_cancelled() {
         let _ = pump.send(PumpEvent::Down { key });
     }
     Ok(())
+}
+
+/// How long a server may take to read `shutdown`/`exit` before SIGKILL.
+pub(super) const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// Kill what is left of a server's process group (its build children).
+/// The group outlives its leader while a member runs, so its id is not
+/// reused yet; an empty group answers ESRCH, which is ignored.
+fn end_process_group(group: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(group) = group {
+        let _ = terminator_core::signals::signal_group(
+            group,
+            terminator_core::signals::ProcSignal::Kill,
+        );
+    }
+    #[cfg(not(unix))]
+    let _ = group;
 }
 
 /// The two stdio pumps between a server process and the manager.

@@ -87,7 +87,10 @@ impl LspManager {
             // Answer server-to-client requests with null (progress and
             // registration prompts), like the probe verified: unanswered
             // requests can stall analysis.
-            L::LspMessage::Request { id, .. } => {
+            L::LspMessage::Request { id, method, .. } => {
+                if method == "workspace/inlayHint/refresh" {
+                    self.refresh_inlay_hints(key);
+                }
                 let reply = match &id {
                     L::RequestId::Number(number) => {
                         serde_json::json!({"jsonrpc":"2.0","id":number,"result":null})
@@ -181,6 +184,23 @@ impl LspManager {
         self.failures.remove(key.language);
     }
 
+    /// Answer every request a stopped server still owed with an error,
+    /// so the views waiting on them (rename, hierarchy, hover) settle.
+    pub(super) fn fail_pending(&mut self, key: &ServerKey, pending: HashMap<i64, Pending>) {
+        let mut pending: Vec<_> = pending.into_iter().collect();
+        pending.sort_unstable_by_key(|(id, _)| *id);
+        for (_, request) in pending {
+            let answer = Answer {
+                result: None,
+                error: Some(L::ResponseError {
+                    code: 0,
+                    message: format!("The {} language server stopped", key.language),
+                }),
+            };
+            self.on_answer(key, request, answer);
+        }
+    }
+
     fn on_answer(&mut self, key: &ServerKey, pending: Pending, answer: Answer) {
         match pending {
             Pending::Hover(spot) => self.on_hover(spot, answer),
@@ -189,7 +209,22 @@ impl LspManager {
             Pending::WorkspaceSymbols { generation } => {
                 self.on_workspace_symbols(key, generation, answer.value());
             }
-            Pending::Definition { path } => self.on_definition(path, answer.value()),
+            Pending::Definition {
+                path,
+                generation,
+                revision,
+            } => {
+                // Drop a late answer: a newer goto was asked, or the text
+                // changed, so the jump would surprise the user.
+                let current = generation == self.goto_generation
+                    && self
+                        .docs
+                        .get(&path)
+                        .is_some_and(|doc| doc.observed == revision);
+                if current {
+                    self.on_definition(path, answer.value());
+                }
+            }
             // The editor matches answers to its popup by generation.
             Pending::Completion { path, generation } => {
                 let list = L::parse_completion_list(&answer.value());
