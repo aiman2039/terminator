@@ -368,8 +368,8 @@ pub struct App {
     /// Buffer revision the resolved action must still match.
     pub(crate) resolve_revision: u64,
     /// On-disk part of a code action touching files that are not open.
-    pub(crate) action_apply:
-        Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<PathBuf>, String>>>,
+    /// Its open-buffer edits wait until the disk part succeeds.
+    pub(crate) action_apply: Option<crate::native_editor::ActionApply>,
     /// `HEAD` text and repository root per open file for gutter markers,
     /// tagged with the Git refresh generation they were read at.
     pub(crate) git_bases: crate::native_editor::GitBases,

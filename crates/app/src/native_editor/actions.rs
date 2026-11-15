@@ -76,6 +76,20 @@ fn edit_ranges<'a>(
         .collect()
 }
 
+/// Edits for one open buffer, computed at `revision`.
+pub(crate) struct OpenEdit {
+    path: PathBuf,
+    revision: u64,
+    edits: Vec<native_lsp::RenameTextEdit>,
+}
+
+/// A code action whose disk part runs on a worker; `open` applies only
+/// when that part succeeds.
+pub(crate) struct ActionApply {
+    rx: tokio::sync::mpsc::UnboundedReceiver<Result<Vec<PathBuf>, String>>,
+    open: Vec<OpenEdit>,
+}
+
 impl App {
     /// Apply a workspace edit's text edits to the files open in native
     /// editors; edits to files that are not open are reported, not lost
@@ -90,20 +104,27 @@ impl App {
             return;
         }
         let mut closed = Vec::new();
+        let mut open = Vec::new();
         for file in files {
-            let open = native_lsp::uri_to_path(&file.uri)
-                .and_then(|path| self.native_docs.get_mut(&path))
-                .and_then(|doc| doc.doc.as_mut());
-            match open {
-                Some(buffer) => {
-                    apply_text_edits(buffer, &file.edits);
-                }
+            let buffer = native_lsp::uri_to_path(&file.uri).and_then(|path| {
+                let revision = self.native_docs.get(&path)?.buffer()?.revision();
+                Some((path, revision))
+            });
+            match buffer {
+                Some((path, revision)) => open.push(OpenEdit {
+                    path,
+                    revision,
+                    edits: file.edits,
+                }),
                 None => closed.push(file),
             }
         }
         if closed.is_empty() {
+            self.apply_open_edits(open);
             return;
         }
+        // Open buffers change only after the disk part succeeds, so a
+        // refused action leaves every file as it was.
         // Files that are not open are edited on disk, with the same
         // checks and rollback as a rename (inside the project only).
         let Some(root) = self.selected_project().map(|project| project.path.clone()) else {
@@ -134,10 +155,34 @@ impl App {
             },
         );
         match submitted {
-            Ok(_) => self.action_apply = Some(rx),
+            Ok(_) => self.action_apply = Some(ActionApply { rx, open }),
             Err(error) => self
                 .error
                 .set(format!("Could not apply the action: {error}")),
+        }
+    }
+
+    /// Apply open-buffer edits; a buffer that changed since the action was
+    /// computed is left alone and named.
+    fn apply_open_edits(&mut self, open: Vec<OpenEdit>) {
+        let mut skipped = Vec::new();
+        for edit in open {
+            match self
+                .native_docs
+                .get_mut(&edit.path)
+                .and_then(|doc| doc.doc.as_mut())
+            {
+                Some(buffer) if buffer.revision() == edit.revision => {
+                    apply_text_edits(buffer, &edit.edits);
+                }
+                _ => skipped.push(edit.path.display().to_string()),
+            }
+        }
+        if !skipped.is_empty() {
+            self.error.set(format!(
+                "Code action not applied to {} (changed meanwhile)",
+                skipped.join(", ")
+            ));
         }
     }
 
@@ -205,12 +250,17 @@ impl App {
 
     /// Formatting, action lists, and resolved actions that arrived.
     pub(crate) fn drain_edit_answers(&mut self) {
-        if let Some(rx) = self.action_apply.as_mut()
-            && let Ok(result) = rx.try_recv()
+        if let Some(apply) = self.action_apply.as_mut()
+            && let Ok(result) = apply.rx.try_recv()
         {
-            self.action_apply = None;
+            let open = self
+                .action_apply
+                .take()
+                .map(|apply| apply.open)
+                .unwrap_or_default();
             match result {
                 Ok(paths) => {
+                    self.apply_open_edits(open);
                     self.info = Some(format!(
                         "The action also updated {} file{} on disk",
                         paths.len(),
@@ -364,6 +414,68 @@ mod tests {
         };
         assert!(apply_text_edits(&mut buffer, &[at("A"), at("B")]));
         assert_eq!(buffer.text(), "ABx");
+    }
+
+    fn rename_a_to_b(path: &Path) -> native_lsp::RenameFileEdit {
+        native_lsp::RenameFileEdit {
+            uri: native_lsp::file_uri(path).unwrap().to_string(),
+            version: None,
+            edits: vec![edit(EditInput {
+                line: 0,
+                from: 4,
+                to: 5,
+                text: "b",
+            })],
+        }
+    }
+
+    #[test]
+    fn a_refused_disk_part_leaves_open_buffers_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let open = dir.path().join("a.rs");
+        let closed = dir.path().join("b.rs");
+        std::fs::write(&closed, "let a = 1;\n").unwrap();
+        let mut native = NativeDoc::new(open.clone(), false);
+        native.doc = Some(Doc::new("let a = 1;\n"));
+        app.native_docs.insert(open.clone(), native);
+        // No project: the disk part is refused before any worker runs.
+        app.apply_workspace_edit(vec![rename_a_to_b(&open), rename_a_to_b(&closed)]);
+        assert_eq!(
+            app.native_docs[&open].buffer().unwrap().text(),
+            "let a = 1;\n"
+        );
+        // A worker refusal also leaves the open buffer as it was.
+        let revision = app.native_docs[&open].buffer().unwrap().revision();
+        let pending = |app: &mut App| {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            app.action_apply = Some(ActionApply {
+                rx,
+                open: vec![OpenEdit {
+                    path: open.clone(),
+                    revision,
+                    edits: rename_a_to_b(&open).edits,
+                }],
+            });
+            tx
+        };
+        let tx = pending(&mut app);
+        tx.send(Err("refused".into())).unwrap();
+        app.drain_edit_answers();
+        assert!(app.action_apply.is_none());
+        assert_eq!(
+            app.native_docs[&open].buffer().unwrap().text(),
+            "let a = 1;\n"
+        );
+        // Success applies the open part.
+        let tx = pending(&mut app);
+        tx.send(Ok(vec![closed.clone()])).unwrap();
+        app.drain_edit_answers();
+        assert_eq!(
+            app.native_docs[&open].buffer().unwrap().text(),
+            "let b = 1;\n"
+        );
     }
 
     #[test]
