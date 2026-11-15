@@ -13,7 +13,6 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -44,9 +43,7 @@ pub enum AsyncProcessError {
 }
 type Result<T, E = AsyncProcessError> = std::result::Result<T, E>;
 
-/// How long a long user command may clean up after Ctrl-C before its
-/// process group is killed.
-const INTERRUPT_GRACE: Duration = Duration::from_secs(5);
+use crate::process::{EXIT_DRAIN, INTERRUPT_GRACE};
 
 struct Request {
     command: Command,
@@ -204,13 +201,17 @@ impl Processes {
 }
 /// Read a pipe to its end. Past `limit` bytes a quick call fails; a long
 /// one (`tail`) keeps the last `limit` bytes, where a failure shows.
-async fn drain(mut reader: impl AsyncRead + Unpin, limit: usize, tail: bool) -> Result<Vec<u8>> {
-    let mut bytes = VecDeque::new();
+async fn drain(
+    mut reader: impl AsyncRead + Unpin,
+    limit: usize,
+    tail: bool,
+    bytes: &mut VecDeque<u8>,
+) -> Result<()> {
     let mut buffer = [0; 8192];
     loop {
         let n = reader.read(&mut buffer).await?;
         if n == 0 {
-            return Ok(bytes.into());
+            return Ok(());
         }
         if bytes.len().saturating_add(n) > limit && !tail {
             return Err(AsyncProcessError::OutputTooLarge { limit });
@@ -291,25 +292,53 @@ async fn collect(
     options: &CommandOptions,
     tail: bool,
 ) -> Result<Output> {
-    let (stdout, stderr, (), status) = tokio::try_join!(
-        drain(stdout, options.stdout_limit, tail),
-        drain(stderr, options.stderr_limit, tail),
-        async {
-            if let Some(mut input) = input {
-                match input
-                    .write_all(options.input.as_deref().unwrap_or_default())
-                    .await
-                {
-                    Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
-                        return Err(e.into());
+    let mut out = VecDeque::new();
+    let mut err = VecDeque::new();
+    let status = {
+        let pipes = async {
+            tokio::try_join!(
+                drain(stdout, options.stdout_limit, tail, &mut out),
+                drain(stderr, options.stderr_limit, tail, &mut err),
+                async {
+                    if let Some(mut input) = input {
+                        match input
+                            .write_all(options.input.as_deref().unwrap_or_default())
+                            .await
+                        {
+                            Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+                                return Err(e.into());
+                            }
+                            _ => {}
+                        }
                     }
-                    _ => {}
-                }
+                    Ok(())
+                },
+            )
+            .map(|_| ())
+        };
+        tokio::pin!(pipes);
+        let exited = tokio::select! {
+            result = &mut pipes => {
+                result?;
+                None
             }
-            Ok(())
-        },
-        async { Ok(child.wait().await?) }
-    )?;
+            status = child.wait() => Some(status?),
+        };
+        match exited {
+            Some(status) => {
+                // The child exited; a background process it started (a Git
+                // hook's) may hold the pipes open. Read what is left for a
+                // short time, then finish.
+                if let Ok(result) = tokio::time::timeout(EXIT_DRAIN, &mut pipes).await {
+                    result?;
+                }
+                status
+            }
+            None => child.wait().await?,
+        }
+    };
+    let stdout: Vec<u8> = out.into();
+    let stderr: Vec<u8> = err.into();
     if let Some(accepted) = &options.accepted_exit_codes
         && !status.code().is_some_and(|c| accepted.contains(&c))
     {

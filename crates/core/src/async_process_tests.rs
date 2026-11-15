@@ -20,7 +20,7 @@ async fn stalled_children_inherited_pipes_and_overflow_are_reaped() {
     let stop = CancellationToken::new();
     let (processes, actor) = Processes::new(stop.clone());
     let owner = tokio::spawn(actor);
-    for script in ["sleep 10", "sleep 10 & exit 0", "yes x", "yes x >&2"] {
+    for script in ["sleep 10", "yes x", "yes x >&2"] {
         let started = Instant::now();
         assert!(
             processes
@@ -40,6 +40,31 @@ async fn stalled_children_inherited_pipes_and_overflow_are_reaped() {
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(processes.children(), 0);
     }
+    stop.cancel();
+    owner.await.unwrap().unwrap();
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn finished_command_succeeds_while_a_background_process_holds_its_pipes() {
+    let stop = CancellationToken::new();
+    let (processes, actor) = Processes::new(stop.clone());
+    let owner = tokio::spawn(actor);
+    let started = Instant::now();
+    let options = CommandOptions {
+        timeout: Duration::from_secs(20),
+        ..Default::default()
+    };
+    let output = processes
+        .run_cancellable(
+            shell("echo landed; sleep 10 & exit 0"),
+            options,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.stdout, b"landed\n");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(processes.children(), 0);
     stop.cancel();
     owner.await.unwrap().unwrap();
 }
