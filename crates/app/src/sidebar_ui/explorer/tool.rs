@@ -259,9 +259,12 @@ impl App {
 
     /// The Git (or Perforce) panel for the selected terminal's context.
     fn git_tool(&mut self, ui: &mut egui::Ui) {
-        if self.folder_session().is_some_and(|s| !s.cwd_confirmed) {
-            ui.label(RichText::new("Last known directory").small().weak());
-        }
+        let unconfirmed = self.folder_session().is_some_and(|s| !s.cwd_confirmed);
+        let folder = self
+            .context
+            .as_ref()
+            .map(|context| context.root.as_deref().unwrap_or(&context.cwd).to_owned());
+        super::super::git_panel::repository_line(ui, folder.as_deref(), unconfirmed);
         ui.separator();
         if self.watch_fallback {
             ui.weak("Filesystem watch unavailable; refreshing every 3 seconds");

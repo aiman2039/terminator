@@ -138,7 +138,10 @@ impl GitPanelPass<'_, '_> {
         }
         let lock = self.input.commit_lock.index;
         let link = appearance::enabled_unless(ui, lock, |ui| {
-            ui.link(RichText::new(format!("Stage all ({stageable})")).small())
+            appearance::link(
+                ui,
+                RichText::new(format!("Stage all ({stageable})")).small(),
+            )
         });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-stage-all-link", link.rect);
@@ -151,8 +154,7 @@ impl GitPanelPass<'_, '_> {
         match link {
             PrLink::Hidden => {}
             PrLink::Known(number, url) => {
-                let open = ui
-                    .link(RichText::new(format!("PR #{number}")).small())
+                let open = appearance::link(ui, RichText::new(format!("PR #{number}")).small())
                     .on_hover_text(&url);
                 if open.clicked() {
                     self.outcome.open_url = Some(url);
@@ -165,7 +167,7 @@ impl GitPanelPass<'_, '_> {
                     .is_some()
                     .then_some(crate::workspace_ops::COMMIT_WAIT);
                 let create = appearance::enabled_unless(ui, why, |ui| {
-                    ui.link(RichText::new("Create PR").small())
+                    appearance::link(ui, RichText::new("Create PR").small())
                 })
                 .on_hover_text(
                     "Create a pull request (gh) or merge request (glab) for the pushed branch",
