@@ -6,7 +6,11 @@ mod scan;
 use std::{
     collections::{BTreeSet, HashMap},
     path::PathBuf,
-    sync::{Weak, atomic::Ordering, mpsc},
+    sync::{
+        Weak,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -20,6 +24,22 @@ pub(crate) enum LocalHistoryJob {
     Label { root: PathBuf, label: String },
     /// A change the file watcher reported.
     Changed(Vec<PathBuf>),
+}
+
+/// A full queue dropped a job since the recorder last reported it.
+static DROPPED: AtomicBool = AtomicBool::new(false);
+const DROPPED_NOTE: &str = "Local History: the change queue was full; some edits have no snapshot";
+
+/// Never blocks: a full queue drops the job and records that it did.
+pub(crate) fn queue_local_history(tx: &mpsc::SyncSender<LocalHistoryJob>, job: LocalHistoryJob) {
+    if matches!(tx.try_send(job), Err(mpsc::TrySendError::Full(_))) {
+        DROPPED.store(true, Ordering::Release);
+    }
+}
+
+fn report_dropped(shared: &Shared) {
+    crate::console::Console::err(format_args!("{DROPPED_NOTE}"));
+    shared.degraded(DROPPED_NOTE);
 }
 
 /// Events wait this long without a newer change before a snapshot.
@@ -94,9 +114,21 @@ impl LocalHistoryWorker {
                 if let Ok(job) = job {
                     worker.apply(job);
                 }
+                // Drain before `tick`: it runs Git, and one job per pass
+                // lets a burst of file events fill the queue.
+                worker.drain(&rx);
+                if DROPPED.swap(false, Ordering::AcqRel) {
+                    report_dropped(&shared);
+                }
                 worker.tick(&shared);
             }
         });
+    }
+
+    fn drain(&mut self, rx: &mpsc::Receiver<LocalHistoryJob>) {
+        while let Ok(job) = rx.try_recv() {
+            self.apply(job);
+        }
     }
 
     fn apply(&mut self, job: LocalHistoryJob) {
@@ -188,7 +220,7 @@ impl LocalHistoryWorker {
                     if let Ok(event) = event
                         && scan::content_event(&event.kind)
                     {
-                        let _ = tx.try_send(LocalHistoryJob::Changed(event.paths));
+                        queue_local_history(&tx, LocalHistoryJob::Changed(event.paths));
                     }
                 })
                 .ok();
@@ -234,5 +266,45 @@ impl LocalHistoryWorker {
         }
         self.recorded = true;
         scan::record_batch(&self.store, &self.watched, ready);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_queue_is_reported_and_a_burst_is_drained_in_one_pass() {
+        let data = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::sync_channel(2);
+        DROPPED.store(false, Ordering::Release);
+        for i in 0..3 {
+            queue_local_history(
+                &tx,
+                LocalHistoryJob::Changed(vec![PathBuf::from(format!("/p/{i}.rs"))]),
+            );
+        }
+        assert!(
+            DROPPED.swap(false, Ordering::AcqRel),
+            "the third job was dropped"
+        );
+        let mut worker = LocalHistoryWorker {
+            store: local_history::Store::in_data(data.path()),
+            tx: tx.clone(),
+            watcher: None,
+            watched: BTreeSet::new(),
+            days: 1,
+            limits: (
+                local_history::DEFAULT_MIB,
+                local_history::DEFAULT_FILE_ENTRIES,
+            ),
+            pending: HashMap::new(),
+            roots_checked: None,
+            pruned: None,
+            recorded: false,
+        };
+        worker.drain(&rx);
+        assert_eq!(worker.pending.len(), 2);
+        assert!(rx.try_recv().is_err());
     }
 }

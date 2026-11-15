@@ -137,11 +137,12 @@ impl Shared {
         )))))
     }
 
-    /// Never blocks: a full queue drops the label.
+    /// Never blocks: a full queue drops the label and the recorder reports it.
     pub(crate) fn queue_local_history_label(&self, root: PathBuf, label: String) {
-        let _ = self
-            .local_history
-            .try_send(LocalHistoryJob::Label { root, label });
+        crate::workers::queue_local_history(
+            &self.local_history,
+            LocalHistoryJob::Label { root, label },
+        );
     }
 
     /// Marks "Before agent run" in the project's timeline when a hook moves

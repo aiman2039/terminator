@@ -129,7 +129,7 @@ pub(super) fn record_batch(
 }
 
 fn record_one(store: &local_history::Store, path: &Path, base: Option<&Vec<u8>>) {
-    let Ok(bytes) = std::fs::read(path) else {
+    let Some(bytes) = read_regular(path) else {
         return;
     };
     if !local_history::recordable(&bytes) {
@@ -167,9 +167,33 @@ fn build_output(root: &Path, path: &Path) -> bool {
     })
 }
 
+/// The bytes of `path` when it is a regular file, never through a
+/// symbolic link: a link can point outside the project. The opened file
+/// must be the one checked, so a link swapped in meanwhile is refused.
+fn read_regular(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let checked = std::fs::symlink_metadata(path).ok()?;
+    if !checked.file_type().is_file() {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata().ok()?;
+        if (opened.dev(), opened.ino()) != (checked.dev(), checked.ino()) {
+            return None;
+        }
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// A regular file (not a symbolic link) small enough to record.
 fn small_file(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| {
-        meta.is_file()
+    std::fs::symlink_metadata(path).is_ok_and(|meta| {
+        meta.file_type().is_file()
             && usize::try_from(meta.len()).is_ok_and(|len| len <= local_history::MAX_BYTES)
     })
 }
@@ -395,6 +419,26 @@ mod tests {
         record_batch(&store, &roots, vec![text.clone()]);
         assert_eq!(store.list(&text).unwrap().len(), 1);
         assert!(!store.has_history(&large));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_to_a_file_outside_the_project_is_not_recorded() {
+        let data = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "TOKEN=1").unwrap();
+        let link = project.path().join("link.txt");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        let source = project.path().join("main.rs");
+        std::fs::write(&source, "fn main() {}").unwrap();
+        let store = local_history::Store::in_data(data.path());
+        let roots = BTreeSet::from([project.path().to_path_buf()]);
+        record_batch(&store, &roots, vec![link.clone(), source.clone()]);
+        assert!(!store.has_history(&link));
+        assert!(store.has_history(&source));
+        assert_eq!(read_regular(&link), None);
     }
 
     #[test]
