@@ -33,13 +33,19 @@ pub(crate) fn find_in(
     for line in first..=last.min(buffer.line_count().saturating_sub(1)) {
         let text = buffer.line_text(line);
         let base = buffer.char_at_line_col(line, 0);
+        // Running (byte, char) position, so each match counts only the
+        // chars after the previous one (a long line stays linear).
+        let (mut byte_at, mut char_at) = (0usize, 0usize);
         for found in pattern.find_iter(&text) {
             if found.start() == found.end() {
                 continue;
             }
-            let start = text
-                .get(..found.start())
-                .map_or(0, |head| head.chars().count());
+            char_at = char_at.saturating_add(
+                text.get(byte_at..found.start())
+                    .map_or(0, |gap| gap.chars().count()),
+            );
+            byte_at = found.start();
+            let start = char_at;
             let end = start.saturating_add(found.as_str().chars().count());
             if let Some((from, to)) = scope
                 && (base.saturating_add(start) < from || base.saturating_add(end) > to)
