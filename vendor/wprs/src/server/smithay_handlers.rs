@@ -101,6 +101,8 @@ use crate::channel_utils::DiscardingSender;
 use crate::compositor_utils;
 use crate::prelude::*;
 use crate::serialization;
+use crate::serialization::Request;
+use crate::serialization::SendType;
 use crate::serialization::tuple::Tuple2;
 use crate::serialization::wayland::BufferAssignment;
 use crate::serialization::wayland::ClientSurface;
@@ -130,8 +132,6 @@ use crate::serialization::xdg_shell::XdgPopupState;
 use crate::serialization::xdg_shell::XdgPositioner;
 use crate::serialization::xdg_shell::XdgSurfaceState;
 use crate::serialization::xdg_shell::XdgToplevelState;
-use crate::serialization::Request;
-use crate::serialization::SendType;
 use crate::server::LockedSurfaceState;
 use crate::server::WprsServerState;
 

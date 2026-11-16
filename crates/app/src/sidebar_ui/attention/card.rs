@@ -213,12 +213,7 @@ where
         keys,
         menu,
     } = verbs;
-    let keyboard_inside = ui.memory(|memory| memory.focused()).is_some_and(|id| {
-        id == card_id
-            || buttons
-                .iter()
-                .any(|(_, _, name, _)| card_id.with(*name) == id)
-    });
+    let keyboard_inside = focus_inside(ui, card_id, &buttons);
     // Read before the card takes input, so Space peeks instead of clicking.
     let key_action = if keyboard_inside {
         keys(ui)
@@ -233,21 +228,7 @@ where
     let inner = rect.shrink2(PAD);
     let line1 =
         egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), ATTENTION_ACTION_SIZE));
-    let glyph = ui
-        .scope_builder(
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                line1.min,
-                egui::Vec2::splat(ATTENTION_ACTION_SIZE),
-            )),
-            |ui| status_glyph(ui, face.glyph),
-        )
-        .inner;
-    #[cfg(feature = "test-support")]
-    diagnostics::record(
-        ui.ctx(),
-        &format!("{}-status:{}", face.target, face.session_id),
-        glyph.rect,
-    );
+    let glyph = paint_glyph(ui, face, line1);
     let action = paint_title_row(
         ui,
         TitleRow {
@@ -274,6 +255,36 @@ where
             AttentionAction::None
         });
     (action, rect)
+}
+
+/// Whether keyboard focus is on the card or one of its buttons.
+fn focus_inside(ui: &egui::Ui, card_id: egui::Id, buttons: &[CardButton]) -> bool {
+    ui.memory(|memory| memory.focused()).is_some_and(|id| {
+        id == card_id
+            || buttons
+                .iter()
+                .any(|(_, _, name, _)| card_id.with(*name) == id)
+    })
+}
+
+/// Paints the status glyph at the start of the title line.
+fn paint_glyph(ui: &mut egui::Ui, face: &CardFace<'_>, line1: egui::Rect) -> egui::Response {
+    let glyph = ui
+        .scope_builder(
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                line1.min,
+                egui::Vec2::splat(ATTENTION_ACTION_SIZE),
+            )),
+            |ui| status_glyph(ui, face.glyph),
+        )
+        .inner;
+    #[cfg(feature = "test-support")]
+    diagnostics::record(
+        ui.ctx(),
+        &format!("{}-status:{}", face.target, face.session_id),
+        glyph.rect,
+    );
+    glyph
 }
 
 struct TitleRow<'a> {

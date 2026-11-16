@@ -43,7 +43,16 @@ pub fn blame_with(
     let bytes = git
         .git(&root, &args, options)
         .map_err(|e| format!("git blame: {e}"))?;
-    let text = String::from_utf8_lossy(&bytes);
+    let entries = parse_blame(&String::from_utf8_lossy(&bytes));
+    Ok(BlameData {
+        entries,
+        error: None,
+        commit_web: commit_web_base(&root),
+    })
+}
+
+/// Entries of `git blame --line-porcelain` output, one per line.
+fn parse_blame(text: &str) -> Vec<BlameEntry> {
     let mut entries = Vec::new();
     let mut current_hash = String::new();
     let mut current_author = String::new();
@@ -94,11 +103,7 @@ pub fn blame_with(
             hash.clone_into(&mut current_hash);
         }
     }
-    Ok(BlameData {
-        entries,
-        error: None,
-        commit_web: commit_web_base(&root),
-    })
+    entries
 }
 
 /// One commit in a file's history.

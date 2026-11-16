@@ -43,6 +43,7 @@ mod hover;
 pub(crate) use hover::HoverKey;
 mod navigation;
 mod problems;
+mod process;
 mod symbols;
 use docs::Slot;
 pub(crate) use docs::SubmitTextInput;
@@ -407,65 +408,6 @@ impl LspManager {
         }
     }
 
-    /// Apply Settings → Languages server paths. Saving restarts
-    /// only the servers whose path changed, so the new binary is used
-    /// without restarting the app. Unchanged settings do nothing.
-    pub fn set_server_overrides(&mut self, overrides: &std::collections::BTreeMap<String, String>) {
-        // User-defined servers share the map (`custom:` keys); a change
-        // there restarts the servers they replace or add.
-        let normalized: std::collections::BTreeMap<String, String> = overrides
-            .iter()
-            .map(|(language, value)| (language.clone(), value.trim().to_owned()))
-            .filter(|(_, value)| !value.is_empty())
-            .collect();
-        if normalized == self.overrides {
-            return;
-        }
-        let before_custom = L::custom_families();
-        L::set_custom_servers(&L::parse_custom_servers(&normalized));
-        let after_custom = L::custom_families();
-        let mut changed: Vec<&'static str> = Vec::new();
-        for language in L::SERVER_FAMILIES.iter().map(|family| family.id) {
-            let before = self.overrides.get(language);
-            let after = normalized.get(language);
-            if before != after {
-                changed.push(language);
-            }
-        }
-        if before_custom != after_custom {
-            // A user server can take a built-in family's files: restart
-            // every language server so documents re-key on the next sync.
-            changed.extend(self.servers.keys().map(|key| key.language));
-            changed.extend(before_custom.iter().map(|family| family.id));
-        }
-        changed.sort_unstable();
-        changed.dedup();
-        self.overrides = normalized;
-        for &language in &changed {
-            self.unavailable.remove(language);
-            self.failures.remove(language);
-            self.cooled.remove(language);
-            let keys: Vec<ServerKey> = self
-                .servers
-                .keys()
-                .filter(|key| key.language == language)
-                .cloned()
-                .collect();
-            for key in keys {
-                self.shutdown_server(&key);
-            }
-        }
-        if !changed.is_empty() {
-            self.symbols.clear();
-            self.symbols_rev.clear();
-            self.symbols_retry.clear();
-            self.inlay.clear();
-            self.inlay_retry.clear();
-            self.hover = hover::HoverCache::default();
-            self.search_revision = self.search_revision.wrapping_add(1);
-        }
-    }
-
     /// Attach the GUI service supervisor. After this, server startup and
     /// stdio run as supervised actors; the calling thread only passes
     /// channels, so sync from the GUI thread needs no Tokio runtime.
@@ -491,6 +433,8 @@ impl LspManager {
 
 #[cfg(test)]
 mod hover_tests;
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod save_tests;
 #[cfg(test)]

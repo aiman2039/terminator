@@ -107,6 +107,29 @@ fn drain(pipe: &mut impl Read, bytes: &mut Vec<u8>, limit: usize) -> Result<bool
     }
     Ok(false)
 }
+/// Writes what the pipe takes of `bytes` past `written`, closing `input`
+/// once all is written.
+#[cfg(unix)]
+fn pump_input(
+    input: &mut Option<std::process::ChildStdin>,
+    bytes: &[u8],
+    written: &mut usize,
+) -> Result<()> {
+    let Some(stdin) = input else {
+        return Ok(());
+    };
+    let rest = bytes.get(*written..).unwrap_or_default();
+    match stdin.write(rest) {
+        Ok(n) => *written = written.saturating_add(n),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => *written = bytes.len(),
+        Err(e) => return Err(e.into()),
+    }
+    if *written == bytes.len() {
+        *input = None;
+    }
+    Ok(())
+}
 #[cfg(unix)]
 pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> {
     cmd.process_group(0)
@@ -142,22 +165,8 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
         loop {
             let out_done = drain(&mut out, &mut stdout, options.stdout_limit)?;
             let err_done = drain(&mut err, &mut stderr, options.stderr_limit)?;
-            if let Some(stdin) = &mut input {
-                let bytes = options.input.as_deref().unwrap_or(&[]);
-                let Some(rest) = bytes.get(written..) else {
-                    input = None;
-                    continue;
-                };
-                match stdin.write(rest) {
-                    Ok(n) => written = written.saturating_add(n),
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => written = bytes.len(),
-                    Err(e) => return Err(e.into()),
-                }
-                if written == bytes.len() {
-                    input = None;
-                }
-            }
+            let bytes = options.input.as_deref().unwrap_or(&[]);
+            pump_input(&mut input, bytes, &mut written)?;
             if status.is_none() {
                 status = child.try_wait()?;
                 if status.is_some() {
