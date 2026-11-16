@@ -44,14 +44,14 @@ use smithay::reexports::wayland_protocols_misc::server_decoration::server::org_k
 use smithay::wayland::viewporter::ViewporterState;
 
 use crate::prelude::*;
-use crate::serialization::wayland::SurfaceRequest;
-use crate::serialization::wayland::SurfaceRequestPayload;
-use crate::serialization::wayland::SurfaceState;
-use crate::serialization::wayland::WlSurfaceId;
 use crate::serialization::Event;
 use crate::serialization::Request;
 use crate::serialization::SendType;
 use crate::serialization::Serializer;
+use crate::serialization::wayland::SurfaceRequest;
+use crate::serialization::wayland::SurfaceRequestPayload;
+use crate::serialization::wayland::SurfaceState;
+use crate::serialization::wayland::WlSurfaceId;
 use crate::sharding_compression::ShardingCompressor;
 use crate::utils::SerialMap;
 

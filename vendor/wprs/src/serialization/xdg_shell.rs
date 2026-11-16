@@ -38,11 +38,11 @@ use smithay_client_toolkit::shell::xdg::window::WindowConfigure;
 
 use crate::prelude::*;
 use crate::serialization;
+use crate::serialization::ClientId;
 use crate::serialization::geometry::Point;
 use crate::serialization::geometry::Rectangle;
 use crate::serialization::geometry::Size;
 use crate::serialization::wayland::WlSurfaceId;
-use crate::serialization::ClientId;
 
 #[derive(Archive, Deserialize, Serialize, Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub struct XdgSurfaceId(pub u64);

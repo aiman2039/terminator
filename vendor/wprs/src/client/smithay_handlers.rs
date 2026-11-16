@@ -75,12 +75,14 @@ use smithay_client_toolkit::shm::ShmHandler;
 use tracing::Span;
 
 use crate::args;
-use crate::client::subsurface;
 use crate::client::ObjectBimapExt;
 use crate::client::Role;
 use crate::client::SeatObject;
 use crate::client::WprsClientState;
+use crate::client::subsurface;
 use crate::prelude::*;
+use crate::serialization::Event;
+use crate::serialization::SendType;
 use crate::serialization::wayland;
 use crate::serialization::wayland::DataDestinationEvent;
 use crate::serialization::wayland::DataEvent;
@@ -100,8 +102,6 @@ use crate::serialization::xdg_shell::PopupEvent;
 use crate::serialization::xdg_shell::ToplevelClose;
 use crate::serialization::xdg_shell::ToplevelConfigure;
 use crate::serialization::xdg_shell::ToplevelEvent;
-use crate::serialization::Event;
-use crate::serialization::SendType;
 
 impl WprsClientState {
     fn send_surface_outputs(&self, surface: &WlSurface) {

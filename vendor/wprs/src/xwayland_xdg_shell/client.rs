@@ -128,14 +128,14 @@ use crate::serialization;
 use crate::serialization::geometry::Point;
 use crate::serialization::wayland::BufferMetadata;
 use crate::serialization::wayland::KeyState;
+use crate::xwayland_xdg_shell::WprsState;
+use crate::xwayland_xdg_shell::XWaylandSurface;
 use crate::xwayland_xdg_shell::compositor::DecorationBehavior;
 use crate::xwayland_xdg_shell::compositor::X11Parent;
 use crate::xwayland_xdg_shell::compositor::X11ParentForPopup;
 use crate::xwayland_xdg_shell::compositor::X11ParentForSubsurface;
 use crate::xwayland_xdg_shell::decoration::handle_window_frame_pointer_event;
 use crate::xwayland_xdg_shell::xsurface_from_client_surface;
-use crate::xwayland_xdg_shell::WprsState;
-use crate::xwayland_xdg_shell::XWaylandSurface;
 
 const DEFAULT_WINDOW_SIZE: (i32, i32) = (512, 256);
 
