@@ -61,43 +61,55 @@ pub(super) fn waiter_should_end(
         || presented_at.is_some_and(|started| now.saturating_duration_since(started) >= ALERT_WAIT)
 }
 
-/// Which delivered banners to remove. Marker hits win, so a banner that still
-/// carries this waiter's marker is the only one cleared. The title fallback
-/// runs only when Notification Center kept the sentence and dropped the marker:
-/// a banner that still carries any marker belongs to another waiter (or
-/// another daemon with the same bundle id) and is never cleared.
+/// The start time stored for `generation`'s waiter. A time stored for any
+/// other generation is not used, so a waiter that ended (or one that just
+/// started) between two reads can never time out the wrong alert.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn started_for(
+    presented: Option<(u64, std::time::Instant)>,
+    generation: u64,
+) -> Option<std::time::Instant> {
+    presented
+        .filter(|&(stored, _)| generation != 0 && stored == generation)
+        .map(|(_, at)| at)
+}
+
+/// Fewest marker characters a banner must keep to be taken as ours when
+/// Notification Center stripped some. Live banners kept 59 to 63 of 65. At 57
+/// another random 64-bit marker matches by chance at most about once in 2^31.
+pub(super) const MIN_MARKER_CHARS: usize = 57;
+
+/// Which delivered banners are this waiter's. A banner is ours when it
+/// carries the whole marker, or when it has this waiter's title and the
+/// lead sentence followed by at least [`MIN_MARKER_CHARS`] characters that
+/// are, in order, part of this marker. A banner with no marker left, or with
+/// another daemon's or generation's marker, is never ours.
 #[cfg(any(target_os = "macos", test))]
 pub(super) fn banners_to_remove(banners: &[Banner<'_>], marker: &str, summary: &str) -> Vec<usize> {
-    let marked = banners
-        .iter()
-        .enumerate()
-        .filter(|(_, banner)| banner.text.contains(marker))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    if !marked.is_empty() {
-        return marked;
-    }
-    if summary.is_empty() {
-        return Vec::new();
-    }
     banners
         .iter()
         .enumerate()
-        .filter(|(_, banner)| banner.title == summary && lead_with_broken_marker(banner.text))
+        .filter(|(_, banner)| {
+            banner.text.contains(marker)
+                || (!summary.is_empty()
+                    && banner.title == summary
+                    && banner
+                        .text
+                        .strip_prefix(BODY_LEAD)
+                        .is_some_and(|rest| partial_marker(rest, marker)))
+        })
         .map(|(index, _)| index)
         .collect()
 }
 
-/// `BODY_LEAD` followed by nothing or by part of a marker. Notification
-/// Center can drop some of the zero-width characters, and then no waiter's
-/// marker matches. A complete marker belongs to another waiter.
-fn lead_with_broken_marker(text: &str) -> bool {
-    text.strip_prefix(BODY_LEAD).is_some_and(|rest| {
-        rest.chars().count() < 65
-            && rest
-                .chars()
-                .all(|c| matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}'))
-    })
+/// `rest` is what survived of `marker`: only marker characters, enough of
+/// them, and each in the order the marker has them.
+fn partial_marker(rest: &str, marker: &str) -> bool {
+    if rest.chars().count() < MIN_MARKER_CHARS {
+        return false;
+    }
+    let mut remaining = marker.chars();
+    rest.chars().all(|c| remaining.any(|m| m == c))
 }
 
 #[cfg(any(target_os = "macos", test))]

@@ -6,10 +6,12 @@ use std::sync::Weak;
 
 use crate::server::Shared;
 
-/// Saves what is still in memory. Each step is bounded (history flush
+/// Removes this daemon's waiting banner and saves what is still in memory.
+/// Each step is bounded (history flush
 /// waits at most 3 s) and best effort: the process ends regardless.
 #[cfg(unix)]
 fn save_before_exit(shared: &Shared) {
+    crate::notifications::clear_on_exit();
     let _ = shared.flush_history();
     let _ = shared.persist();
 }

@@ -89,6 +89,9 @@ fn main() -> Result<()> {
 }
 
 fn shutdown(shared: &Arc<Shared>, active: &Arc<AtomicUsize>) -> Result<()> {
+    // A banner still waiting would stay in Notification Center for good once
+    // the process is gone.
+    notifications::clear_on_exit();
     // Shutdown is set by a connection handler before it writes the reply.
     // Keep the process alive until accepted requests finish, or a fast main
     // loop can exit while the shutdown client is still reading its frame.
