@@ -141,12 +141,6 @@ pub fn timed_out(error: &anyhow::Error) -> bool {
 /// not per byte. An invalid marker counts as complete: the decoder then
 /// reports the error.
 fn msgpack_complete(bytes: &[u8]) -> bool {
-    let be = |at: usize, len: usize| -> Option<usize> {
-        let field = bytes.get(at..at.checked_add(len)?)?;
-        Some(field.iter().fold(0usize, |value, byte| {
-            value.checked_shl(8).unwrap_or(usize::MAX) | usize::from(*byte)
-        }))
-    };
     let mut at = 0usize;
     // Values still to read (array items, map keys and values).
     let mut left = 1usize;
@@ -155,62 +149,15 @@ fn msgpack_complete(bytes: &[u8]) -> bool {
             return false;
         };
         left = left.saturating_sub(1);
-        let next = at.checked_add(1);
-        // (header bytes after the marker, payload bytes, child values)
-        let (header, payload, children) = match marker {
-            0x00..=0x7f | 0xc0 | 0xc2 | 0xc3 | 0xe0..=0xff => (0, Some(0), 0),
-            0x80..=0x8f => (0, Some(0), usize::from(marker & 0x0f).saturating_mul(2)),
-            0x90..=0x9f => (0, Some(0), usize::from(marker & 0x0f)),
-            0xa0..=0xbf => (0, Some(usize::from(marker & 0x1f)), 0),
-            0xc4 | 0xd9 => (1, next.and_then(|at| be(at, 1)), 0),
-            0xc5 | 0xda => (2, next.and_then(|at| be(at, 2)), 0),
-            0xc6 | 0xdb => (4, next.and_then(|at| be(at, 4)), 0),
-            // ext: length, then one type byte
-            0xc7 => (2, next.and_then(|at| be(at, 1)), 0),
-            0xc8 => (3, next.and_then(|at| be(at, 2)), 0),
-            0xc9 => (5, next.and_then(|at| be(at, 4)), 0),
-            0xcc | 0xd0 => (0, Some(1), 0),
-            0xcd | 0xd1 => (0, Some(2), 0),
-            0xca | 0xce | 0xd2 => (0, Some(4), 0),
-            0xcb | 0xcf | 0xd3 => (0, Some(8), 0),
-            0xd4 => (1, Some(1), 0),
-            0xd5 => (1, Some(2), 0),
-            0xd6 => (1, Some(4), 0),
-            0xd7 => (1, Some(8), 0),
-            0xd8 => (1, Some(16), 0),
-            0xdc | 0xde => {
-                let count = next.and_then(|at| be(at, 2));
-                let Some(count) = count else {
-                    return false;
-                };
-                (
-                    2,
-                    Some(0),
-                    if marker == 0xde {
-                        count.saturating_mul(2)
-                    } else {
-                        count
-                    },
-                )
-            }
-            0xdd | 0xdf => {
-                let count = next.and_then(|at| be(at, 4));
-                let Some(count) = count else {
-                    return false;
-                };
-                (
-                    4,
-                    Some(0),
-                    if marker == 0xdf {
-                        count.saturating_mul(2)
-                    } else {
-                        count
-                    },
-                )
-            }
-            // 0xc1 is never used.
-            _ => return true,
-        };
+        // 0xc1 is never used: let the decoder report it.
+        if marker == 0xc1 {
+            return true;
+        }
+        let Layout {
+            header,
+            payload,
+            children,
+        } = msgpack_layout(bytes, at.checked_add(1), marker);
         let Some(payload) = payload else {
             return false;
         };
@@ -224,6 +171,67 @@ fn msgpack_complete(bytes: &[u8]) -> bool {
         left = left.saturating_add(children);
     }
     true
+}
+
+/// The big-endian `len`-byte field of `bytes` at `at`, if all there.
+fn msgpack_be(bytes: &[u8], at: usize, len: usize) -> Option<usize> {
+    let field = bytes.get(at..at.checked_add(len)?)?;
+    Some(field.iter().fold(0usize, |value, byte| {
+        value.checked_shl(8).unwrap_or(usize::MAX) | usize::from(*byte)
+    }))
+}
+
+/// The extent of one msgpack value after its marker byte.
+struct Layout {
+    /// Header bytes after the marker (lengths, counts, ext type).
+    header: usize,
+    /// Payload bytes, or `None` while the length field is not all here.
+    payload: Option<usize>,
+    /// Nested values that follow (array items, map keys and values).
+    children: usize,
+}
+
+/// One value's [`Layout`], `next` being the offset after its marker.
+/// The caller rejects the unused marker 0xc1 first.
+fn msgpack_layout(bytes: &[u8], next: Option<usize>, marker: u8) -> Layout {
+    let be = |len: usize| next.and_then(|at| msgpack_be(bytes, at, len));
+    let (header, payload, children) = match marker {
+        // 0xc1 never reaches here.
+        0x00..=0x7f | 0xc0..=0xc3 | 0xe0..=0xff => (0, Some(0), 0),
+        0x80..=0x8f => (0, Some(0), usize::from(marker & 0x0f).saturating_mul(2)),
+        0x90..=0x9f => (0, Some(0), usize::from(marker & 0x0f)),
+        0xa0..=0xbf => (0, Some(usize::from(marker & 0x1f)), 0),
+        0xc4 | 0xd9 => (1, be(1), 0),
+        0xc5 | 0xda => (2, be(2), 0),
+        0xc6 | 0xdb => (4, be(4), 0),
+        // ext: length, then one type byte
+        0xc7 => (2, be(1), 0),
+        0xc8 => (3, be(2), 0),
+        0xc9 => (5, be(4), 0),
+        0xcc | 0xd0 => (0, Some(1), 0),
+        0xcd | 0xd1 => (0, Some(2), 0),
+        0xca | 0xce | 0xd2 => (0, Some(4), 0),
+        0xcb | 0xcf | 0xd3 => (0, Some(8), 0),
+        0xd4 => (1, Some(1), 0),
+        0xd5 => (1, Some(2), 0),
+        0xd6 => (1, Some(4), 0),
+        0xd7 => (1, Some(8), 0),
+        0xd8 => (1, Some(16), 0),
+        0xdc..=0xdf => {
+            // 0xdc/0xde: 16-bit count; 0xdd/0xdf: 32-bit count.
+            let width = if marker & 1 == 0 { 2 } else { 4 };
+            match be(width) {
+                None => (width, None, 0),
+                Some(count) if marker >= 0xde => (width, Some(0), count.saturating_mul(2)),
+                Some(count) => (width, Some(0), count),
+            }
+        }
+    };
+    Layout {
+        header,
+        payload,
+        children,
+    }
 }
 
 pub struct AsyncConnection {

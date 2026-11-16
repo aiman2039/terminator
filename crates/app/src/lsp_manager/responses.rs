@@ -213,27 +213,9 @@ impl LspManager {
                 path,
                 generation,
                 revision,
-            } => {
-                // Drop a late answer: a newer goto was asked, or the text
-                // changed, so the jump would surprise the user.
-                let current = generation == self.goto_generation
-                    && self
-                        .docs
-                        .get(&path)
-                        .is_some_and(|doc| doc.observed == revision);
-                if current {
-                    self.on_definition(path, answer.value());
-                }
-            }
-            // The editor matches answers to its popup by generation.
+            } => self.on_definition_answer((path, generation, revision), answer),
             Pending::Completion { path, generation } => {
-                let list = L::parse_completion_list(&answer.value());
-                self.completion = Some(CompletionResults {
-                    path,
-                    generation,
-                    items: list.items,
-                    incomplete: list.incomplete,
-                });
+                self.on_completion_answer(path, generation, answer);
             }
             Pending::CompletionResolve(path, target) => {
                 self.on_completion_resolve(path, target, answer);
@@ -253,14 +235,7 @@ impl LspManager {
                 path,
                 generation,
                 spell,
-            } => {
-                let items = if spell {
-                    L::parse_spell_actions(&answer.value())
-                } else {
-                    L::parse_code_actions(&answer.value())
-                };
-                self.on_code_actions((path, generation), spell, items);
-            }
+            } => self.on_code_actions_answer((path, generation), spell, answer),
             Pending::Command => {}
             Pending::Resolve { path } => {
                 if let Some(action) = answer.result {
@@ -290,5 +265,42 @@ impl LspManager {
                 answer,
             }),
         }
+    }
+
+    /// Jump for a definition answer unless it came late: a newer goto
+    /// was asked, or the text changed, so the jump would surprise the
+    /// user. `request` is `(path, generation, observed revision)`.
+    fn on_definition_answer(&mut self, request: (PathBuf, u64, u64), answer: Answer) {
+        let (path, generation, revision) = request;
+        let current = generation == self.goto_generation
+            && self
+                .docs
+                .get(&path)
+                .is_some_and(|doc| doc.observed == revision);
+        if current {
+            self.on_definition(path, answer.value());
+        }
+    }
+
+    /// Store a completion list; the editor matches answers to its popup
+    /// by generation.
+    fn on_completion_answer(&mut self, path: PathBuf, generation: u64, answer: Answer) {
+        let list = L::parse_completion_list(&answer.value());
+        self.completion = Some(CompletionResults {
+            path,
+            generation,
+            items: list.items,
+            incomplete: list.incomplete,
+        });
+    }
+
+    /// Parse code actions (or spelling fixes) and hand them on.
+    fn on_code_actions_answer(&mut self, request: (PathBuf, u64), spell: bool, answer: Answer) {
+        let items = if spell {
+            L::parse_spell_actions(&answer.value())
+        } else {
+            L::parse_code_actions(&answer.value())
+        };
+        self.on_code_actions(request, spell, items);
     }
 }
