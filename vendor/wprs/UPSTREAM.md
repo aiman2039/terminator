@@ -8,6 +8,8 @@ retained.
 ## Local changes
 
 - `Cargo.lock`: crates with security advisories are updated to fixed versions.
+- `Cargo.toml`: `zstd` 0.13.3 → 0.14.3, the version `crates/remote-apps`
+  uses, so the workspace has one `zstd`.
 - `serialization::Request::ReplayDone` (last variant, so the other
   variants keep their tags): wprsd sends it in `handle_connect` after the
   surfaces that already exist, so Terminator's bridge knows the window list

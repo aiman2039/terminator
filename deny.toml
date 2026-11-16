@@ -99,6 +99,9 @@ skip = [
     { crate = "rand_core", reason = "0.9 via tungstenite vs 0.10 via chacha20" },
     # Third-party pins below our direct base64 0.23 (alacritty, hyper-util, usvg).
     { crate = "base64", reason = "0.22 via alacritty/hyper-util/usvg vs 0.23 direct" },
+    # notify-rust 4.19 moved to zbus 6 while accesskit_unix 0.24 and ksni 0.3 stay on zbus 5.
+    { crate = "zbus", reason = "5 via accesskit_unix/ksni vs 6 via notify-rust" },
+    { crate = "zbus_macros", reason = "5 via zbus 5 vs 6 via zbus 6" },
     # rodio 0.22 pins rtrb 0.3 while the app uses rtrb 0.4 directly: unify on rodio upgrade.
     { crate = "rtrb", reason = "0.3 via rodio vs 0.4 direct" },
 ]
