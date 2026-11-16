@@ -252,6 +252,92 @@ fn dismissal_does_not_resume_agent() {
 }
 
 #[test]
+fn focus_under_on_focus_still_dismisses_and_marks_read() {
+    let mut s = setup();
+    s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
+    s.focus("s");
+    let n = &s.notifications[0];
+    assert!(n.dismissed && n.read && !n.resolved);
+}
+
+#[test]
+fn focus_under_on_resolve_leaves_the_notice_pending() {
+    let mut s = setup();
+    s.settings.dismissal = Dismissal::OnResolve;
+    s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
+    s.focus("s");
+    let n = &s.notifications[0];
+    assert!(!n.dismissed && !n.read && !n.resolved);
+}
+
+fn invocation(n: u64, invocation: &str, state: AgentState) -> HookEvent {
+    let mut e = event(n, state);
+    e.agent_invocation_id = invocation.into();
+    e
+}
+
+#[test]
+fn newer_invocation_resolves_orphaned_notices() {
+    for start in [AgentState::Running, AgentState::Unknown] {
+        let mut s = setup();
+        s.settings.dismissal = Dismissal::OnResolve;
+        s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
+        s.apply_hook(invocation(2, "b", start)).unwrap();
+        let n = &s.notifications[0];
+        assert!(n.resolved && n.dismissed, "{start:?}");
+        // Lifecycle of the old record is not changed by notice resolution.
+        assert_eq!(s.agents[0].state, AgentState::WaitingInput);
+    }
+}
+
+#[test]
+fn late_event_from_an_unseen_invocation_keeps_pending_notices() {
+    let mut s = setup();
+    s.settings.dismissal = Dismissal::OnResolve;
+    s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
+    s.apply_hook(invocation(2, "old", AgentState::Completed))
+        .unwrap();
+    let waiting = s.notifications.iter().find(|n| n.invocation_id == "a");
+    assert!(waiting.is_some_and(|n| !n.resolved && !n.dismissed));
+}
+
+#[test]
+fn newer_invocation_in_another_session_keeps_notices() {
+    let mut s = setup();
+    let mut other = s.sessions[0].clone();
+    other.id = "t".into();
+    s.sessions.push(other);
+    s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
+    let mut e = invocation(2, "b", AgentState::Running);
+    e.terminal_session_id = "t".into();
+    s.apply_hook(e).unwrap();
+    assert!(!s.notifications[0].resolved);
+}
+
+#[test]
+fn session_exit_resolves_open_notices() {
+    let mut s = setup();
+    s.settings.dismissal = Dismissal::OnResolve;
+    s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
+    let revision = s.revision;
+    s.resolve_session_notifications("s");
+    assert!(s.notifications[0].resolved && s.notifications[0].dismissed);
+    assert!(s.revision > revision);
+    let revision = s.revision;
+    s.resolve_session_notifications("s");
+    assert_eq!(s.revision, revision, "nothing left to resolve");
+}
+
+#[test]
+fn session_exit_under_manual_resolves_without_dismissing() {
+    let mut s = setup();
+    s.settings.dismissal = Dismissal::Manual;
+    s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
+    s.resolve_session_notifications("s");
+    assert!(s.notifications[0].resolved && !s.notifications[0].dismissed);
+}
+
+#[test]
 fn stale_events_and_other_invocations() {
     let mut s = setup();
     s.apply_hook(event(3, AgentState::Running)).unwrap();

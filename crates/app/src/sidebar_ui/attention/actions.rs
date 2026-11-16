@@ -3,7 +3,7 @@
 //! writes to a terminal.
 use super::{AttentionAction, NoticeGroup, TriageUndo};
 use crate::App;
-use terminator_core::Request;
+use terminator_core::{Dismissal, Request};
 
 impl App {
     /// One row acts as one unit: navigation, pin and peek need a single
@@ -52,6 +52,11 @@ impl App {
     fn go_notice(&mut self, id: String) {
         if let Some(session) = self.notice_session(&id) {
             self.go_session(&session);
+        }
+        // Under OnFocus the focus itself dismisses. Otherwise Go only marks
+        // the notice read: read state, never dismissal or lifecycle.
+        if self.state.settings.dismissal != Dismissal::OnFocus && self.triage_available() {
+            self.set_notice_read(id.clone(), true);
         }
         self.unread_selected = Some(id);
         self.detail = None;

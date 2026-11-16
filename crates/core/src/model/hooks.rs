@@ -38,6 +38,9 @@ impl State {
             self.cap_agents();
         }
         self.record_agent_usage(&e);
+        if existing.is_none() && matches!(e.state, AgentState::Unknown | AgentState::Running) {
+            self.resolve_superseded_notifications(&e);
+        }
         self.resolve_hook_notifications(&e);
         self.revision = self.revision.saturating_add(1);
         if repeated_state || !e.state.actionable() || !self.settings.events.contains(&e.state) {
@@ -277,18 +280,42 @@ impl State {
             e.state,
             AgentState::Running | AgentState::Completed | AgentState::Failed | AgentState::Stopped
         ) {
-            for n in &mut self.notifications {
-                if n.invocation_id == e.agent_invocation_id
-                    && n.session_id == e.terminal_session_id
-                    && !n.resolved
-                {
-                    n.resolved = true;
-                    if self.settings.dismissal == Dismissal::OnResolve {
-                        n.dismissed = true;
-                    }
+            self.resolve_notifications_where(|n| {
+                n.invocation_id == e.agent_invocation_id && n.session_id == e.terminal_session_id
+            });
+        }
+    }
+
+    /// A new hook-reported invocation that starts in a terminal supersedes
+    /// earlier ones there: their open notices resolve even when the old run
+    /// ended without a Stopped hook (crash, kill).
+    fn resolve_superseded_notifications(&mut self, e: &HookEvent) {
+        self.resolve_notifications_where(|n| {
+            n.session_id == e.terminal_session_id && n.invocation_id != e.agent_invocation_id
+        });
+    }
+
+    /// The session's process ended: no agent in it can still answer, so its
+    /// open notices resolve. Session lifecycle only, never terminal text.
+    pub fn resolve_session_notifications(&mut self, session: &str) {
+        if self.resolve_notifications_where(|n| n.session_id == session) {
+            self.revision = self.revision.saturating_add(1);
+        }
+    }
+
+    fn resolve_notifications_where(&mut self, matches: impl Fn(&Notification) -> bool) -> bool {
+        let dismiss = self.settings.dismissal == Dismissal::OnResolve;
+        let mut changed = false;
+        for n in &mut self.notifications {
+            if !n.resolved && matches(n) {
+                n.resolved = true;
+                if dismiss {
+                    n.dismissed = true;
                 }
+                changed = true;
             }
         }
+        changed
     }
 
     fn push_hook_notification(&mut self, e: HookEvent) -> Option<String> {
