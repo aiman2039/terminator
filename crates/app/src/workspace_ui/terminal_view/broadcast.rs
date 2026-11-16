@@ -184,7 +184,7 @@ impl App {
     }
 
     /// The pending multi-line paste, if any.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn pending_broadcast_paste(&self) -> Option<&PendingPaste> {
         self.broadcast.pending.as_ref()
     }
