@@ -121,8 +121,19 @@ fn release_keeps_other_banners_when_the_marker_is_intact() {
     );
 }
 
+/// `marker` with the characters at `positions` dropped, as Notification
+/// Center does to some of them.
+fn stripped(marker: &str, positions: &[usize]) -> String {
+    marker
+        .chars()
+        .enumerate()
+        .filter(|(index, _)| !positions.contains(index))
+        .map(|(_, c)| c)
+        .collect()
+}
+
 #[test]
-fn release_falls_back_to_the_title_when_the_marker_was_stripped() {
+fn a_banner_with_no_marker_left_is_never_removed() {
     let banners = [
         Banner {
             title: "Agent: Waiting",
@@ -133,19 +144,16 @@ fn release_falls_back_to_the_title_when_the_marker_was_stripped() {
             text: "Open the notification to view the session context.",
         },
     ];
-    assert_eq!(
-        banners_to_remove(&banners, "MARKER-1", "Agent: Waiting"),
-        vec![0]
-    );
     assert!(
-        banners_to_remove(&banners, "MARKER-1", "").is_empty(),
-        "an empty title does not match every banner"
+        banners_to_remove(&banners, &marker_for(8), "Agent: Waiting").is_empty(),
+        "a same-title banner with no marker may be another daemon's or an orphan"
     );
 }
 
 #[test]
-fn release_falls_back_to_the_title_when_part_of_the_marker_was_stripped() {
-    let partial: String = marker_for(8).chars().filter(|&c| c != '\u{200B}').collect();
+fn our_banner_is_removed_when_part_of_the_marker_was_stripped() {
+    // Live banners kept 59 to 63 of the 65 characters.
+    let partial = stripped(&marker_for(8), &[0, 9, 20, 33, 47, 64]);
     let text = format!("{BODY_LEAD}{partial}");
     let banners = [Banner {
         title: "Agent: Waiting",
@@ -155,6 +163,76 @@ fn release_falls_back_to_the_title_when_part_of_the_marker_was_stripped() {
         banners_to_remove(&banners, &marker_for(8), "Agent: Waiting"),
         vec![0]
     );
+    assert!(
+        banners_to_remove(&banners, &marker_for(8), "").is_empty(),
+        "a partial marker also needs this waiter's title"
+    );
+}
+
+#[test]
+fn a_partly_stripped_banner_of_another_daemon_is_never_removed() {
+    let ours = format!("{BODY_LEAD}{}", stripped(&marker_for(8), &[3, 30, 60]));
+    let other_daemon = format!(
+        "{BODY_LEAD}{}",
+        stripped(&marker_from_key(0x0123_4567_89AB_CDEF), &[3, 30, 60])
+    );
+    let other_generation = format!("{BODY_LEAD}{}", stripped(&marker_for(7), &[1, 2]));
+    let banners = [
+        Banner {
+            title: "Agent: Waiting",
+            text: &other_daemon,
+        },
+        Banner {
+            title: "Agent: Waiting",
+            text: &other_generation,
+        },
+        Banner {
+            title: "Agent: Waiting",
+            text: &ours,
+        },
+    ];
+    assert_eq!(
+        banners_to_remove(&banners, &marker_for(8), "Agent: Waiting"),
+        vec![2],
+        "only this waiter's banner is removed"
+    );
+    assert!(
+        banners_to_remove(&banners[..2], &marker_for(8), "Agent: Waiting").is_empty(),
+        "with our banner not delivered yet nothing counts as removed"
+    );
+}
+
+#[test]
+fn a_banner_stripped_below_the_threshold_is_kept() {
+    let positions = (0..=(65 - MIN_MARKER_CHARS)).collect::<Vec<_>>();
+    let text = format!("{BODY_LEAD}{}", stripped(&marker_for(8), &positions));
+    let banners = [Banner {
+        title: "Agent: Waiting",
+        text: &text,
+    }];
+    assert!(banners_to_remove(&banners, &marker_for(8), "Agent: Waiting").is_empty());
+}
+
+#[test]
+fn an_ended_waiters_start_time_never_times_out_the_next_alert() {
+    let old = Instant::now();
+    let later = old + ALERT_WAIT;
+    assert_eq!(
+        started_for(Some((1, old)), 2),
+        None,
+        "generation 1's time is not used for generation 2"
+    );
+    assert!(
+        !waiter_should_end(false, started_for(Some((1, old)), 2), later),
+        "the new alert is not removed at once"
+    );
+    assert_eq!(started_for(Some((2, old)), 2), Some(old));
+    assert!(waiter_should_end(
+        false,
+        started_for(Some((2, old)), 2),
+        later
+    ));
+    assert_eq!(started_for(Some((0, old)), 0), None, "no waiter");
 }
 
 #[test]
@@ -175,6 +253,15 @@ fn marker_is_hidden_and_unique_per_generation() {
     let first = marker_for(1);
     let second = marker_for(2);
     assert_ne!(first, second);
+    let differing = first
+        .chars()
+        .zip(second.chars())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing >= 8,
+        "neighbouring generations differ in many bits, not only the low ones"
+    );
     assert_eq!(first.chars().count(), 65);
     assert!(
         first
@@ -343,6 +430,47 @@ fn newer_alert_supersedes_the_waiting_one() {
         1,
         "only one waiter at a time"
     );
+}
+
+#[test]
+fn unfound_banner_still_ends_the_waiter() {
+    let presented = Instant::now();
+    assert!(
+        !give_up_after_misses(Some(presented), presented + Duration::from_secs(2)),
+        "a newer alert that misses early pauses and tries again at the wait"
+    );
+    assert!(
+        give_up_after_misses(Some(presented), presented + ALERT_WAIT),
+        "misses at the wait give the waiter up"
+    );
+    assert!(
+        !give_up_after_misses(None, presented + ALERT_WAIT),
+        "another generation's time never gives this waiter up"
+    );
+
+    // A wait that never ends by itself, like `wait_for_action` on a banner
+    // that stays in Notification Center.
+    const GENERATION: u64 = 9_000_001;
+    let (hold_tx, hold_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        wait_or_abandon(GENERATION, move || {
+            let _ = hold_rx.recv();
+        });
+        let _ = done_tx.send(());
+    });
+    wait_until(
+        || abandon(GENERATION),
+        "the wait was never registered for abandon",
+    );
+    assert!(
+        !abandon(GENERATION + 1),
+        "another generation is not touched"
+    );
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the worker is released while the banner stays");
+    drop(hold_tx);
 }
 
 #[cfg(unix)]

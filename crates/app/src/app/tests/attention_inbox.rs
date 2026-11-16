@@ -1128,6 +1128,44 @@ fn go_click_focuses_the_agent() {
     );
 }
 
+#[cfg(feature = "test-support")]
+fn go_with_dismissal(dismissal: Dismissal, triage: bool) -> (App, Vec<String>) {
+    let (mut app, _ctx, _dir, received) = waiting_inbox();
+    app.state.settings.dismissal = dismissal;
+    if triage {
+        app.state
+            .capabilities
+            .push(terminator_core::agent_workflow::TRIAGE_CAPABILITY.into());
+    }
+    app.apply_notice_action("wait".into(), AttentionAction::Go);
+    let actions = control_actions(&received);
+    (app, actions)
+}
+
+#[test]
+#[cfg(feature = "test-support")]
+fn go_marks_notice_read_without_dismissing_under_on_resolve() {
+    for dismissal in [Dismissal::OnResolve, Dismissal::Manual] {
+        let (app, actions) = go_with_dismissal(dismissal, true);
+        let notice = &app.state.notifications[0];
+        assert!(notice.read && !notice.dismissed && !notice.resolved);
+        assert!(actions.iter().any(|a| a == "read"));
+        assert!(!actions.iter().any(|a| a == "dismiss"));
+        assert_eq!(app.active_session.as_deref(), Some("live-shell"));
+    }
+}
+
+#[test]
+#[cfg(feature = "test-support")]
+fn go_under_on_focus_or_older_daemon_sends_no_read_request() {
+    for (dismissal, triage) in [(Dismissal::OnFocus, true), (Dismissal::OnResolve, false)] {
+        let (app, actions) = go_with_dismissal(dismissal, triage);
+        assert!(!actions.iter().any(|a| a == "read"));
+        assert!(actions.iter().any(|a| a == "focus"));
+        assert!(!app.state.notifications[0].read);
+    }
+}
+
 fn waiting_notice(app: &mut App, lifecycle: Lifecycle) {
     let mut session = session_fixture("agent", SessionKind::Shell);
     session.lifecycle = lifecycle;

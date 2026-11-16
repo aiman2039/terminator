@@ -90,6 +90,7 @@ impl Shared {
                 a.state = AgentState::Stopped;
             }
         }
+        s.resolve_session_notifications(sid);
         s.revision = s.revision.saturating_add(1);
         // Sessions without an agent resume command (plain shells,
         // file editors) are not worth keeping: reopening them

@@ -66,15 +66,20 @@ const ALERT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// remove can fall back to this sentence plus the alert title.
 const BODY_LEAD: &str = "Open the notification to view the session context.";
 
-/// When the current waiter started blocking, so [`pump`] can end it at
-/// [`ALERT_WAIT`] even if nothing newer is queued.
+/// The waiter the worker is blocked on: its generation, when it started (so
+/// [`pump`] can end it at [`ALERT_WAIT`] even if nothing newer is queued),
+/// and its title (checked when part of the marker was stripped). The
+/// generation is stored with the time so a timeout is applied only to the
+/// alert it was measured for.
 #[cfg(target_os = "macos")]
-static PRESENTED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static PRESENTED: Mutex<Option<Presented>> = Mutex::new(None);
 
-/// Title of the alert the worker is waiting on. Used only when the invisible
-/// marker is no longer in the delivered text.
 #[cfg(target_os = "macos")]
-static PRESENTING_SUMMARY: Mutex<String> = Mutex::new(String::new());
+struct Presented {
+    generation: u64,
+    at: std::time::Instant,
+    summary: String,
+}
 
 /// Monotonic submission order. Every [`send`] claims the next value.
 static SUBMITTED: AtomicU64 = AtomicU64::new(0);
@@ -83,7 +88,6 @@ static SUBMITTED: AtomicU64 = AtomicU64::new(0);
 static PRESENTING: AtomicU64 = AtomicU64::new(0);
 
 static WAKER: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
-static NONCE: OnceLock<u64> = OnceLock::new();
 
 pub struct DesktopAlert {
     pub paths: Paths,
@@ -181,10 +185,15 @@ fn present(Queued { generation, alert }: Queued) {
     PRESENTING.store(generation, Ordering::Relaxed);
     // Dropped after the wait so a panic still clears the deadline. The guard
     // outlives `ACTIVE` going back to zero, which stops [`pump`] first.
-    let _waiter = Waiter::start(&alert.summary);
+    let _waiter = Waiter::start(generation, &alert.summary);
     // Wake the daemon's event loop so it starts pumping the Cocoa run loop
     // that delivers this notification's action.
     wake();
+    // On macOS the wait can be given up when the banner cannot be found, so
+    // a stripped banner cannot keep the worker and the dismiss poll busy.
+    #[cfg(target_os = "macos")]
+    wait_or_abandon(generation, move || show_and_wait(alert, generation));
+    #[cfg(not(target_os = "macos"))]
     show_and_wait(alert, generation);
     PRESENTING.store(0, Ordering::Relaxed);
     ACTIVE.fetch_sub(1, Ordering::Relaxed);
@@ -196,21 +205,19 @@ fn present(Queued { generation, alert }: Queued) {
 struct Waiter;
 
 impl Waiter {
-    fn start(summary: &str) -> Self {
+    fn start(generation: u64, summary: &str) -> Self {
         #[cfg(target_os = "macos")]
         {
-            *PRESENTED_AT
+            *PRESENTED
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                Some(std::time::Instant::now());
-            summary.clone_into(
-                &mut PRESENTING_SUMMARY
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Presented {
+                generation,
+                at: std::time::Instant::now(),
+                summary: summary.to_owned(),
+            });
         }
         #[cfg(not(target_os = "macos"))]
-        let _ = summary;
+        let _ = (generation, summary);
         Self
     }
 }
@@ -219,15 +226,22 @@ impl Drop for Waiter {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
         {
-            *PRESENTED_AT
+            *PRESENTED
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-            PRESENTING_SUMMARY
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clear();
         }
     }
+}
+
+/// Start time and title of `generation`'s waiter, or `None` when the stored
+/// waiter is another generation (one that ended, or one that just started).
+#[cfg(target_os = "macos")]
+fn presented_for(generation: u64) -> Option<(std::time::Instant, String)> {
+    let presented = PRESENTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let at = started_for(presented.as_ref().map(|p| (p.generation, p.at)), generation)?;
+    Some((at, presented.as_ref()?.summary.clone()))
 }
 
 fn show_and_wait(
@@ -287,93 +301,19 @@ mod linux_wait;
 /// Whether a submitted alert is waiting behind the one currently presented.
 /// The main loop preempts the active notification in that case so the newest
 /// alert is shown immediately instead of after the previous waiter ends.
-#[cfg(any(unix, test))]
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
 fn superseded() -> bool {
-    let presenting = PRESENTING.load(Ordering::Relaxed);
-    presenting != 0 && SUBMITTED.load(Ordering::Relaxed) > presenting
+    superseded_for(PRESENTING.load(Ordering::Relaxed))
 }
 
-/// A unique, invisible suffix for one waiter. Zero-width joiners, spaces, and
-/// non-joiners encode a per-process nonce mixed with the generation, so
-/// another Terminator generation can never collide with this marker.
-fn marker_for(generation: u64) -> String {
-    let key = process_nonce() ^ generation;
-    let mut marker = String::with_capacity(65);
-    marker.push('\u{200D}');
-    for bit in (0..64).rev() {
-        marker.push(if (key >> bit) & 1 == 1 {
-            '\u{200C}'
-        } else {
-            '\u{200B}'
-        });
-    }
-    marker
+/// Whether an alert newer than `generation` was submitted.
+#[cfg(any(unix, test))]
+fn superseded_for(generation: u64) -> bool {
+    generation != 0 && SUBMITTED.load(Ordering::Relaxed) > generation
 }
 
-fn process_nonce() -> u64 {
-    *NONCE.get_or_init(|| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
-        (u64::from(std::process::id())).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ now
-    })
-}
-
-/// Remove only the waiting notification from Notification Center. Its
-/// disappearance makes the `ObjC` dismiss poll resolve an auto-dismiss, releasing
-/// the waiter so the worker can present the alert that superseded it. Returns
-/// whether a matching delivered notification was found and removed.
-#[cfg(target_os = "macos")]
-#[expect(
-    deprecated,
-    reason = "NSUserNotificationCenter is the only API for removing delivered notifications here"
-)]
-fn remove_active_notification() -> bool {
-    let generation = PRESENTING.load(Ordering::Relaxed);
-    if generation == 0 {
-        return false;
-    }
-    let marker = marker_for(generation);
-    let summary = PRESENTING_SUMMARY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    use objc2_foundation::NSUserNotificationCenter;
-    let center = NSUserNotificationCenter::defaultUserNotificationCenter();
-    // One fetch. Marker hits are preferred so a match cannot also clear
-    // another generation's banner via the title fallback.
-    let delivered = center.deliveredNotifications();
-    let snapshots = delivered
-        .iter()
-        .map(|notification| {
-            (
-                notification
-                    .title()
-                    .map(|title| title.to_string())
-                    .unwrap_or_default(),
-                notification
-                    .informativeText()
-                    .map(|text| text.to_string())
-                    .unwrap_or_default(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let banners = snapshots
-        .iter()
-        .map(|(title, text)| Banner { title, text })
-        .collect::<Vec<_>>();
-    let indexes = banners_to_remove(&banners, &marker, &summary);
-    if indexes.is_empty() {
-        return false;
-    }
-    for (index, notification) in delivered.iter().enumerate() {
-        if indexes.contains(&index) {
-            center.removeDeliveredNotification(&notification);
-        }
-    }
-    true
-}
+mod marker;
+use marker::*;
 
 fn launch_gui(paths: &Paths) {
     let Ok(exe) = std::env::var_os("TERMINATOR_GUI_EXECUTABLE")
@@ -453,33 +393,71 @@ pub fn waiting() -> bool {
 mod macos_helpers;
 #[cfg(any(target_os = "macos", test))]
 use macos_helpers::*;
+#[cfg(any(target_os = "macos", test))]
+mod abandon;
+#[cfg(any(target_os = "macos", test))]
+use abandon::*;
 pub fn pump() {
     #[cfg(target_os = "macos")]
     {
         use core_foundation::{base::TCFType, runloop::CFRunLoop, string::CFString};
         if ACTIVE.load(Ordering::Relaxed) > 0 {
-            let presented_at = *PRESENTED_AT
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Generation first: the start time and title must belong to it,
+            // so a waiter that ends between the reads cannot time out the
+            // next one.
+            let generation = PRESENTING.load(Ordering::Relaxed);
+            let presented = presented_for(generation);
             let now = std::time::Instant::now();
-            if waiter_should_end(superseded(), presented_at, now) {
-                let generation = PRESENTING.load(Ordering::Relaxed);
-                let mut latch = DISMISSED
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if !dismiss_paused(*latch, generation, now) && dismiss_poll_due() {
-                    // `deliveredNotifications` autoreleases the decoded list.
-                    // Drain it here so a miss does not retain that list for
-                    // the life of the process.
-                    let removed = objc2::rc::autoreleasepool(|_| remove_active_notification());
-                    if record_dismiss_attempt(generation, removed) {
-                        *latch = Some((generation, now));
-                    }
-                }
+            let presented_at = presented.as_ref().map(|(at, _)| *at);
+            if waiter_should_end(superseded_for(generation), presented_at, now) {
+                let summary = presented.map(|(_, summary)| summary).unwrap_or_default();
+                dismiss(generation, &summary, presented_at, now);
             }
             let mode = CFString::new("kCFRunLoopDefaultMode");
             let _ = CFRunLoop::run_in_mode(mode.as_concrete_TypeRef(), PUMP_INTERVAL, true);
         }
+    }
+}
+
+/// One throttled try to remove `generation`'s banner, ending its waiter.
+#[cfg(target_os = "macos")]
+fn dismiss(
+    generation: u64,
+    summary: &str,
+    presented_at: Option<std::time::Instant>,
+    now: std::time::Instant,
+) {
+    let mut latch = DISMISSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if dismiss_paused(*latch, generation, now) || !dismiss_poll_due() {
+        return;
+    }
+    // `deliveredNotifications` autoreleases the decoded list. Drain it here
+    // so a miss does not retain that list for the life of the process.
+    let removed = objc2::rc::autoreleasepool(|_| remove_active_notification(generation, summary));
+    if !record_dismiss_attempt(generation, removed) {
+        return;
+    }
+    // Not found after the misses and past the wait: stop waiting and leave
+    // the stray banner. Else pause and try once more at the wait.
+    if !removed && give_up_after_misses(presented_at, now) {
+        abandon(generation);
+    }
+    *latch = Some((generation, now));
+}
+
+/// Remove this daemon's waiting banner before the process exits, so a
+/// shutdown during the wait does not leave it in Notification Center. One
+/// `deliveredNotifications` call; it does not wait for the waiter to end.
+pub fn clear_on_exit() {
+    #[cfg(target_os = "macos")]
+    if ACTIVE.load(Ordering::Relaxed) > 0 {
+        let generation = PRESENTING.load(Ordering::Relaxed);
+        let summary = presented_for(generation)
+            .map(|(_, summary)| summary)
+            .unwrap_or_default();
+        let _ = objc2::rc::autoreleasepool(|_| remove_active_notification(generation, &summary));
     }
 }
 
