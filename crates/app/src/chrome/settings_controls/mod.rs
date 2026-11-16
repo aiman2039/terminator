@@ -12,63 +12,10 @@ pub fn matches_search(query: &str, haystacks: &[&str]) -> bool {
         .all(|word| text.contains(word))
 }
 
-const LABEL_COL: f32 = 220.0;
-
-pub struct SettingsRowInput<'a, F: FnOnce(&mut egui::Ui)> {
-    pub ui: &'a mut egui::Ui,
-    pub label: &'a str,
-    pub description: &'a str,
-    pub add_control: F,
-}
-
-/// One setting: the label and its control on the first line, then the
-/// description across the full width in small secondary text. A narrow
-/// card puts the control under the label.
-pub fn settings_row(input: SettingsRowInput<'_, impl FnOnce(&mut egui::Ui)>) {
-    let SettingsRowInput {
-        ui,
-        label,
-        description,
-        add_control,
-    } = input;
-    if ui.available_width() < 460.0 {
-        ui.label(label);
-        add_control(ui);
-    } else {
-        ui.horizontal_top(|ui| {
-            let line = egui::vec2(LABEL_COL, ui.spacing().interact_size.y);
-            ui.allocate_ui_with_layout(
-                line,
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.set_min_width(LABEL_COL);
-                    ui.add(egui::Label::new(label).truncate());
-                },
-            );
-            ui.add_space(16.0);
-            ui.vertical(|ui| {
-                ui.set_min_width(ui.available_width().clamp(180.0, 360.0));
-                add_control(ui);
-            });
-        });
-    }
-    if !description.is_empty() {
-        description_line(ui, description);
-    }
-    ui.add_space(10.0);
-}
-
-/// A row description: small secondary text across the full width.
-pub fn description_line(ui: &mut egui::Ui, text: &str) {
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(text)
-                .size(appearance::FONT_SMALL)
-                .color(ui.visuals().weak_text_color()),
-        )
-        .wrap(),
-    );
-}
+mod row;
+pub use row::{
+    FIELD_WIDTH, SettingsRowInput, button_width, control_column, description_line, settings_row,
+};
 
 /// The one reason a control that needs a newer session service is off.
 pub const NEEDS_SERVICE: &str = "Needs the updated session service.";
@@ -97,7 +44,7 @@ pub fn needs_service_caption(ui: &mut egui::Ui) -> bool {
 
 /// A group title inside a section, with a rule under it.
 pub fn sub_heading(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     ui.label(
         egui::RichText::new(text)
             .strong()
@@ -417,40 +364,5 @@ mod tests {
         paint(vec![]);
         paint(click(rect("Detected")));
         assert_eq!(paint(vec![]), (false, "/bin/sh".into()));
-    }
-
-    fn paint_rows(ctx: &egui::Context) -> (f32, f32) {
-        let mut xs = (0.0, 0.0);
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(720.0, 400.0),
-            )),
-            ..Default::default()
-        };
-        let mut output = ctx.run_ui(input, |ui| {
-            settings_row(SettingsRowInput { ui, label: "Days", description: "short", add_control: |ui| {
-                xs.0 = ui.next_widget_position().x;
-                ui.label("control-a");
-            } });
-            settings_row(SettingsRowInput { ui, label: "A much longer label", description: "a longer description that should wrap without shifting the control column", add_control: |ui| {
-                    xs.1 = ui.next_widget_position().x;
-                    ui.label("control-b");
-                } });
-        });
-        output.textures_delta.clear();
-        xs
-    }
-
-    #[test]
-    fn settings_controls_share_a_left_edge() {
-        let ctx = egui::Context::default();
-        let _ = paint_rows(&ctx);
-        let (first, second) = paint_rows(&ctx);
-        assert!(
-            (first - second).abs() < 1.0,
-            "first={first} second={second}"
-        );
-        assert!(first > LABEL_COL, "control column starts after the label");
     }
 }

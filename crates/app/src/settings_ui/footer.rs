@@ -97,7 +97,16 @@ impl App {
             self.paint_settings_tabs(ui);
             ui.separator();
         }
-        let footer_h = 44.0;
+        // Paint the footer first, bottom up at the card's bottom edge, and
+        // give the body what is left, so the footer is never cut off.
+        let mut footer = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("settings-footer")
+                .max_rect(ui.available_rect_before_wrap())
+                .layout(egui::Layout::bottom_up(egui::Align::Min)),
+        );
+        self.paint_settings_footer(&mut footer, frame);
+        let footer_h = footer.min_rect().height() + ui.spacing().item_spacing.y;
         let body_h = (ui.available_height() - footer_h).max(80.0);
         if narrow {
             self.paint_settings_body(ui, body_h, frame);
@@ -114,15 +123,25 @@ impl App {
                 self.paint_settings_body(ui, body_h, frame);
             });
         }
-        ui.separator();
-        self.paint_settings_footer(ui, frame);
     }
 
+    /// Paints bottom up: the button row, the validation error above it,
+    /// then the separator above both.
     fn paint_settings_footer(&mut self, ui: &mut egui::Ui, frame: &mut SettingsFrame) {
         let validation = self.settings_validation();
+        self.paint_settings_footer_row(ui, frame, validation.as_ref().err());
         if let Err(error) = &validation {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
         }
+        ui.separator();
+    }
+
+    fn paint_settings_footer_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut SettingsFrame,
+        error: Option<&String>,
+    ) {
         let count = self.settings_change_count();
         let none = (count == 0).then_some("No changes to apply");
         // Right to left: Apply at the far right, Discard changes left of
@@ -131,7 +150,7 @@ impl App {
             let why = if self.theme_conflict {
                 Some("Appearance changed externally. Reload it in Appearance before applying.")
             } else {
-                validation.as_ref().err().map(String::as_str).or(none)
+                error.map(String::as_str).or(none)
             };
             let response =
                 appearance::enabled_unless(ui, why, |ui| appearance::primary_button(ui, "Apply"));
