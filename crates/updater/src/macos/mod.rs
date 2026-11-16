@@ -167,6 +167,7 @@ impl Updater {
             return;
         };
         if install_menu(mtm, delegate) {
+            crate::edit_menu::install(mtm);
             self.menu_installed.set(true);
         }
     }

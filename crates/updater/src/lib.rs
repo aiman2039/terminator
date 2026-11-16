@@ -1,8 +1,9 @@
 //! Sparkle is loaded only from a configured app bundle. Development launches
 //! never consult the production feed. `NSApplication`'s delegate remains winit's.
 //! The application menu always has Check for Updates…; Sparkle is not required
-//! for that item to exist. The macOS menu-bar status item lives in this crate
-//! too, because the app crate forbids unsafe. On Linux the same API drives a
+//! for that item to exist. The macOS menu-bar status item and the Edit menu
+//! that WKWebView needs for copy and paste live in this crate too, because
+//! the app crate forbids unsafe. On Linux the same API drives a
 //! StatusNotifierItem tray icon (`linux_tray`).
 //!
 //! `AppKit` method swizzling keeps `unsafe` in this crate. Other Terminator crates forbid it.
@@ -55,6 +56,9 @@ mod status_item;
 pub use status_item::{
     sync_status_item, sync_status_menu, take_status_click, take_status_selection,
 };
+
+#[cfg(target_os = "macos")]
+mod edit_menu;
 
 /// The badge already shows the count on macOS.
 #[cfg(target_os = "macos")]
