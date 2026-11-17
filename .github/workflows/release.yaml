@@ -284,7 +284,7 @@ jobs:
   assemble-macos:
     needs: [prepare, build-macos]
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 150
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -351,7 +351,9 @@ jobs:
               raise SystemExit('Build number must exceed the previous published build')
           CHECK
       - name: Sign and notarize macOS app
-        timeout-minutes: 30
+        # Apple's notary queue occasionally takes well over 20 minutes; two
+        # submissions (app + DMG) each get up to an hour below.
+        timeout-minutes: 130
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -374,7 +376,7 @@ jobs:
           printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
           security list-keychains -d user > "$RUNNER_TEMP/terminator-keychain-search-list.txt"
           security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 3600 "$keychain"
+          security set-keychain-settings -lut 9000 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           python3 - "$RUNNER_TEMP/terminator-keychain-search-list.txt" "$keychain" <<'PY'
           import pathlib, shlex, subprocess, sys
@@ -420,20 +422,45 @@ jobs:
                 status=$?
               fi
               # CloudKit ticket lookup can fail after notarization is accepted.
-              if [[ "$status" -ne 68 || "$attempt" -eq 7 ]]; then
+              if [[ "$status" -ne 68 || "$attempt" -eq 5 ]]; then
                 return "$status"
               fi
               echo "::warning::Stapler $action ticket lookup failed (68); retry $attempt/4 in $((attempt * 15)) seconds"
               sleep "$((attempt * 15))"
             done
           }
+          notary_auth=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
+          # Submit once, then keep waiting on the same submission so a slow
+          # notary queue does not fail the release (notarytool exits 124 on
+          # --timeout but the submission keeps processing server-side).
+          notarize() {
+            local label="$1" target="$2" out="$RUNNER_TEMP/terminator-notary-$1.json" id status attempt
+            xcrun notarytool submit "$target" "${notary_auth[@]}" --output-format json > "$out"
+            id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$out")"
+            echo "$label notarization submitted: $id"
+            for attempt in 1 2 3 4; do
+              if xcrun notarytool wait "$id" "${notary_auth[@]}" --timeout 15m --output-format json > "$out"; then
+                break
+              else
+                status=$?
+              fi
+              if [[ "$status" -ne 124 || "$attempt" -eq 4 ]]; then
+                cat "$out" || true
+                return "$status"
+              fi
+              echo "::warning::$label notarization $id still in progress; waiting again ($attempt/3)"
+            done
+            xcrun notarytool info "$id" "${notary_auth[@]}" --output-format json > "$out"
+            status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status"))' "$out")"
+            echo "$label notarization: $id $status"
+            if [[ "$status" != "Accepted" ]]; then
+              xcrun notarytool log "$id" "${notary_auth[@]}" || true
+              return 1
+            fi
+          }
           submission="$RUNNER_TEMP/terminator-notarization.zip"
-          result="$RUNNER_TEMP/terminator-notarization.json"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$submission"
-          xcrun notarytool submit "$submission" \
-            --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" --wait --timeout 20m --output-format json > "$result"
-          python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("Notarization:", r.get("id"), r.get("status")); sys.exit(0 if r.get("status") == "Accepted" else 1)' "$result"
+          notarize app "$submission"
           stapler_with_retry staple "$app"
           stapler_with_retry validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
@@ -442,10 +469,7 @@ jobs:
           "$RUNNER_TEMP/assembly-tools/xtask" dmg --app "$app" --output "$dmg"
           codesign --force --sign "$identity" --keychain "$keychain" --timestamp "$dmg"
           codesign --verify --strict "$dmg"
-          xcrun notarytool submit "$dmg" \
-            --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" --wait --timeout 20m --output-format json > "$result"
-          python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("DMG notarization:", r.get("id"), r.get("status")); sys.exit(0 if r.get("status") == "Accepted" else 1)' "$result"
+          notarize dmg "$dmg"
           stapler_with_retry staple "$dmg"
           stapler_with_retry validate "$dmg"
       - name: Remove temporary macOS signing credentials
