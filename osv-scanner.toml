@@ -58,3 +58,14 @@ reason = "cgmath via smithay 0.7; unmaintained, no fixed version"
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0197"
 reason = "cgmath via smithay 0.7; unsound swap_columns is not called by smithay or this repo, no fixed version"
+
+# picomatch ReDoS, no fixed release yet (all versions <=4.0.7). Build-time
+# only: vite/tinyglobby in landing-page (dev) and sass -> chokidar in
+# vendor/excalidraw. Neither shipped bundle (dist/) contains picomatch, and
+# the globs it matches are our own build patterns, not untrusted input.
+# Drop this once a patched picomatch is published and the lockfiles bump.
+# https://osv.dev/GHSA-fc5q-39xc-vjpf
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2027-02-17
+reason = "picomatch via vite (landing-page, dev) and sass/chokidar (vendor/excalidraw build); not in shipped bundles, no fixed version"
