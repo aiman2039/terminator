@@ -234,6 +234,9 @@ pub struct App {
     /// Status-bar error with its kind and dismiss state.
     pub(crate) error: StatusLine,
     pub(crate) info: Option<String>,
+    /// The session service health note the user dismissed (GUI memory
+    /// only). See [`Self::degraded_note`].
+    pub(crate) dismissed_degraded: Option<String>,
     /// The info text on screen and when it appeared: it clears after a while.
     pub(crate) info_since: Option<(String, std::time::Instant)>,
     /// The page in the main pane; written only by `show_center`.

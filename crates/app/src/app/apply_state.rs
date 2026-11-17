@@ -102,6 +102,10 @@ impl App {
             .get_mut()
             .retain(|id, _| state.projects.iter().any(|p| &p.id == id));
         self.rebase_settings_draft(&state.settings);
+        if state.degraded.is_none() {
+            // A cleared health note that comes back later is news again.
+            self.dismissed_degraded = None;
+        }
         self.state = state;
         self.prune_terminal_folders();
         self.prune_task_bases();

@@ -92,8 +92,11 @@ impl App {
             ui.horizontal(|ui| self.status_error_chip(ui));
         } else if unavailable_tabs > 0 {
             ui.horizontal(|ui| self.unavailable_tabs_banner(ui, unavailable_tabs));
-        } else if let Some(message) = self.state.degraded.clone() {
+        } else if let Some(message) = self.degraded_note() {
             ui.horizontal(|ui| {
+                if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
+                    self.dismissed_degraded = Some(message.clone());
+                }
                 one_line(
                     ui,
                     RichText::new(message).color(appearance::color(&self.theme.status_waiting)),
@@ -114,6 +117,17 @@ impl App {
         } else {
             ui.horizontal(|ui| self.running_sessions_label(ui));
         }
+    }
+
+    /// The session service's health note, unless the user dismissed this
+    /// text. The service keeps some notes until it restarts, so Dismiss
+    /// hides the note in this GUI only; a different note shows again.
+    pub(crate) fn degraded_note(&self) -> Option<String> {
+        self.state
+            .degraded
+            .as_ref()
+            .filter(|note| self.dismissed_degraded.as_ref() != Some(*note))
+            .cloned()
     }
 
     /// The info note with its Dismiss button; nothing when there is none.

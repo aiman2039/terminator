@@ -747,3 +747,23 @@ fn an_info_note_clears_after_a_while_and_a_new_one_restarts_the_time() {
     app.expire_info(&ctx);
     assert_eq!(app.info, None);
 }
+
+#[test]
+fn a_dismissed_service_note_stays_hidden_until_the_note_changes() {
+    let (mut app, _, _dir) = fixture();
+    app.state.degraded = Some("queue full".into());
+    assert_eq!(app.degraded_note().as_deref(), Some("queue full"));
+    app.dismissed_degraded = Some("queue full".into());
+    assert_eq!(app.degraded_note(), None);
+    app.state.degraded = Some("disk full".into());
+    assert_eq!(app.degraded_note().as_deref(), Some("disk full"));
+    // The service cleared the note: the same text is news when it returns.
+    app.dismissed_degraded = Some("disk full".into());
+    let mut cleared = app.state.clone();
+    cleared.degraded = None;
+    cleared.revision = cleared.revision.saturating_add(1);
+    app.apply_state(cleared);
+    assert_eq!(app.degraded_note(), None);
+    app.state.degraded = Some("disk full".into());
+    assert_eq!(app.degraded_note().as_deref(), Some("disk full"));
+}

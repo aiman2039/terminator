@@ -238,6 +238,7 @@ impl App {
             context_path: None,
             error: StatusLine::new(preference_error.or(upgrade_error)),
             info: None,
+            dismissed_degraded: None,
             info_since: None,
             center: crate::CenterPage::Workspace,
             settings_session: false,
