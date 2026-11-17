@@ -3,6 +3,17 @@ Vendored egui-winit from https://github.com/emilk/egui at
 The package version is 0.37.0 so it matches eframe 0.37. MIT and Apache-2.0
 licenses retained. Cargo.toml is the published crate manifest.
 
+## Viewport window handles (2026-11-17)
+
+New `viewport_window.rs`: `State::take_egui_input` records the raw window
+handle of its viewport in a main-thread registry, and dropping the `State`
+removes it. `viewport_window(ViewportId)` returns a `ViewportWindow` that
+implements `HasWindowHandle`. Terminator uses it to mount a Browser tab's
+native webview in a floating pane window; eframe does not expose the windows
+of child viewports. The one `unsafe` block (`WindowHandle::borrow_raw`) is
+there; the app crate stays `forbid(unsafe_code)`. No behavior change for
+input or rendering.
+
 ## Alt chords are not clipboard commands (2026-11-12)
 
 `is_cut_command`, `is_copy_command` and `is_paste_command` no longer match

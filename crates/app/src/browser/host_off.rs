@@ -15,14 +15,14 @@ pub(crate) struct VisibleBrowser {
         reason = "set by the pane view; only the webview host reads it"
     )]
     pub zoom: f32,
+    pub viewport: egui::ViewportId,
 }
 
 pub(crate) struct SyncInput<'a> {
     pub ctx: &'a egui::Context,
     pub frame: &'a eframe::Frame,
     pub visible: &'a [VisibleBrowser],
-    pub occluded: bool,
-    pub covers: &'a [egui::Rect],
+    pub covers: &'a [(egui::ViewportId, egui::Rect)],
     pub data_dir: &'a Path,
 }
 
@@ -96,6 +96,8 @@ impl BrowserHost {
     pub fn shutdown(&mut self) {
         self.errors.clear();
     }
+
+    pub fn retain_windows(&mut self, _open: impl Fn(egui::ViewportId) -> bool) {}
 
     pub fn sync(&mut self, input: SyncInput<'_>) {
         for pane in input.visible {

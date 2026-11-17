@@ -2,7 +2,7 @@
 use crate::browser::{
     self, BrowserTarget, LocalScope,
     nav::{self, NavState, NavStates},
-    view::{self, Committed, Current, wry_error},
+    view::{Committed, Current, wry_error},
 };
 use anyhow::Result;
 use eframe::egui;
@@ -17,15 +17,17 @@ use std::{
 struct MountVisibleInput<'a> {
     frame: &'a eframe::Frame,
     visible: &'a [VisibleBrowser],
-    covers: &'a [egui::Rect],
+    covers: &'a [(egui::ViewportId, egui::Rect)],
     data_dir: &'a Path,
 }
 
 use wry::{
     Rect, WebContext, WebView,
     dpi::{LogicalPosition, LogicalSize},
-    raw_window_handle::{HasWindowHandle, RawWindowHandle},
 };
+
+#[path = "host_mount.rs"]
+mod mount;
 
 const MAX_VIEWS: usize = 4;
 /// How often a shown view re-reads back/forward availability and its URL.
@@ -37,10 +39,14 @@ pub(crate) struct VisibleBrowser {
     pub rect: egui::Rect,
     /// egui zoom (Interface size): native views take OS points.
     pub zoom: f32,
+    /// The OS window that shows the pane: the main one or a floating one.
+    pub viewport: egui::ViewportId,
 }
 
 struct Hosted {
     view: WebView,
+    /// The window the native view is a child of.
+    viewport: egui::ViewportId,
     target: BrowserTarget,
     used: Instant,
     history_at: Instant,
@@ -91,10 +97,10 @@ pub(crate) struct SyncInput<'a> {
     pub ctx: &'a egui::Context,
     pub frame: &'a eframe::Frame,
     pub visible: &'a [VisibleBrowser],
-    pub occluded: bool,
-    /// Screen rects of open egui popups and menus. Native views draw above
-    /// egui, so a pane under one of these hides until the popup closes.
-    pub covers: &'a [egui::Rect],
+    /// Rects of open egui popups and menus, each with its window. Native
+    /// views draw above egui, so a pane under one of these hides until the
+    /// popup closes. A dialog or center page covers all of its window.
+    pub covers: &'a [(egui::ViewportId, egui::Rect)],
     pub data_dir: &'a Path,
 }
 
@@ -272,21 +278,23 @@ impl BrowserHost {
         self.nav.retain(|_| false);
     }
 
+    /// Drops the views of floating windows that `open` does not accept.
+    /// Call it while a closed window still exists (the frame it closes).
+    pub fn retain_windows(&mut self, open: impl Fn(egui::ViewportId) -> bool) {
+        self.views
+            .retain(|_, hosted| hosted.viewport == egui::ViewportId::ROOT || open(hosted.viewport));
+    }
+
     pub fn sync(&mut self, input: SyncInput<'_>) {
         let SyncInput {
             ctx,
             frame,
             visible,
-            occluded,
             covers,
             data_dir,
         } = input;
         self.nav.set_context(ctx);
         self.dark = ctx.global_style().visuals.dark_mode;
-        if occluded {
-            self.hide_all();
-            return;
-        }
         if let Err(reason) = Self::platform_ok(frame) {
             self.hide_all();
             for pane in visible {
@@ -323,7 +331,7 @@ impl BrowserHost {
             data_dir,
         } = input;
         for pane in visible {
-            if pane.rect.width() < 32.0 || pane.rect.height() < 32.0 || covered(pane.rect, covers) {
+            if pane.rect.width() < 32.0 || pane.rect.height() < 32.0 || covered(pane, covers) {
                 if let Some(hosted) = self.views.get_mut(&pane.key) {
                     let _ = hosted.show(false);
                 }
@@ -346,6 +354,14 @@ impl BrowserHost {
     ) -> Result<(), String> {
         let page = (pane.key.as_str(), &pane.target);
         let href = browser::draw::pane_href(&self.scenes, page, (self.dark, data_dir))?;
+        // A pane that moved to another window gets a new view there.
+        if self
+            .views
+            .get(&pane.key)
+            .is_some_and(|hosted| hosted.viewport != pane.viewport)
+        {
+            self.views.remove(&pane.key);
+        }
         if let Some(hosted) = self.views.get_mut(&pane.key) {
             if hosted.target != pane.target {
                 hosted.view.load_url(&href).map_err(wry_error)?;
@@ -364,48 +380,7 @@ impl BrowserHost {
             }
             return Ok(());
         }
-        let scope = LocalScope::of(&pane.target);
-        let current: Current = Arc::new(Mutex::new(href.clone()));
-        let committed = Committed::default();
-        let profile = browser::ensure_profile(data_dir).map_err(|error| error.to_string())?;
-        let context = self
-            .context
-            .get_or_insert_with(|| WebContext::new(Some(profile)));
-        let view = view::build(view::BuildInput {
-            frame,
-            context,
-            key: &pane.key,
-            href: &href,
-            scope: &scope,
-            current: &current,
-            committed: &committed,
-            bounds: bounds(pane.rect, pane.zoom),
-            data_dir,
-            nav: &self.nav,
-            navigations: &self.navigations,
-            opens: &self.opens,
-            devtools: self.devtools,
-            scenes: &self.scenes,
-        })?;
-        if let Some(level) = self.zoom.get(&pane.key) {
-            let _ = view.zoom(*level);
-        }
-        self.views.insert(
-            pane.key.clone(),
-            Hosted {
-                view,
-                target: pane.target.clone(),
-                used: Instant::now(),
-                history_at: Instant::now(),
-                url_at: Instant::now(),
-                scope,
-                current,
-                committed,
-                bounds: Some(pane.rect),
-                shown: true,
-            },
-        );
-        Ok(())
+        self.mount(frame, pane, (href, data_dir))
     }
 
     fn hide_unlisted(&mut self, visible: &[VisibleBrowser]) {
@@ -432,49 +407,14 @@ impl BrowserHost {
             self.views.remove(&key);
         }
     }
-
-    fn platform_ok(frame: &eframe::Frame) -> Result<(), String> {
-        let handle = frame
-            .window_handle()
-            .map_err(|error| format!("Embedded browser is not available: {error}"))?;
-        match handle.as_raw() {
-            RawWindowHandle::AppKit(_)
-            | RawWindowHandle::Xlib(_)
-            | RawWindowHandle::Xcb(_) => Ok(()),
-            RawWindowHandle::Wayland(_) => Err(
-                "Embedded browser needs X11 on Linux; Wayland is not supported yet. Use Open in browser."
-                    .into(),
-            ),
-            _ => Err("Embedded browser is not available in this window. Use Open in browser.".into()),
-        }
-    }
-
-    fn ensure_linux(&self) -> Result<(), String> {
-        #[cfg(target_os = "linux")]
-        {
-            if gtk::init().is_err() && !gtk::is_initialized() {
-                return Err("Embedded browser could not start GTK. Use Open in browser.".into());
-            }
-        }
-        let _ = self;
-        Ok(())
-    }
-
-    fn pump_linux(&self) {
-        #[cfg(target_os = "linux")]
-        {
-            while gtk::events_pending() {
-                let _ = gtk::main_iteration_do(false);
-            }
-        }
-        let _ = self;
-    }
 }
 
-/// Whether any popup rect overlaps the pane. Hidden panes stay listed, so
-/// they keep their page and are not evicted.
-fn covered(pane: egui::Rect, covers: &[egui::Rect]) -> bool {
-    covers.iter().any(|cover| cover.intersects(pane))
+/// Whether any popup rect of the pane's window overlaps the pane. Hidden
+/// panes stay listed, so they keep their page and are not evicted.
+fn covered(pane: &VisibleBrowser, covers: &[(egui::ViewportId, egui::Rect)]) -> bool {
+    covers
+        .iter()
+        .any(|(viewport, cover)| *viewport == pane.viewport && cover.intersects(pane.rect))
 }
 
 fn eviction_victim<'a>(

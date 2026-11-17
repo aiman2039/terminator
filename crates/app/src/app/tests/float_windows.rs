@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn floatable_excludes_browser_and_player() {
+fn floatable_excludes_only_player() {
     assert!(App::floatable(&Tab::Terminal("one".into())));
     assert!(App::floatable(&Tab::NativeEditor {
         path: "/a/note.md".into()
@@ -12,7 +12,7 @@ fn floatable_excludes_browser_and_player() {
         path: "/a/note.md".into(),
         staged: false,
     }));
-    assert!(!App::floatable(&Tab::browser_file("/a/page.html".into())));
+    assert!(App::floatable(&Tab::browser_file("/a/page.html".into())));
     assert!(!App::floatable(&Tab::Player));
 }
 
@@ -679,6 +679,33 @@ fn floated_panes_seed_visibility_before_prune() {
     assert!(app.markdown.entries.contains_key("doc"));
     // Docked-but-unrendered sessions stay unmarked.
     assert!(!app.visible_sessions.contains("two"));
+}
+
+#[test]
+fn floated_browser_keeps_state_and_follows_navigation() {
+    let (mut app, _, _dir) = fixture();
+    let tab = Tab::Browser {
+        id: "float-page".into(),
+        target: BrowserTarget::Url("https://example.com/".into()),
+    };
+    let key = tab.key();
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-browser",
+        project: "a",
+        home: "home",
+        tabs: vec![tab],
+    }));
+    app.browser_urls.insert(key.clone(), "draft".into());
+    // The tab is in no workspace layout; the float keeps it open.
+    app.reconcile_gui_resources();
+    assert!(app.browser_urls.contains_key(&key));
+    let next = BrowserTarget::Url("https://example.com/next".into());
+    app.apply_browser_navigation(&key, next.clone());
+    let dock = app.floating[0].dock.as_ref().expect("window kept");
+    assert!(
+        dock.iter_all_tabs()
+            .any(|(_, tab)| matches!(tab, Tab::Browser { target, .. } if *target == next))
+    );
 }
 
 #[cfg(feature = "test-support")]

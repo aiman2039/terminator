@@ -1,5 +1,26 @@
 # Validation evidence — 2026-09-08
 
+## Float window for Browser tabs — 2026-11-17
+
+- Browser tabs (Excalidraw drawings included) now have Float window. The
+  vendored `egui-winit` records each viewport's window handle
+  (`viewport_window`), and the browser host makes the native view a child of
+  the window that shows the pane. A pane that moves between windows gets a
+  new view, so its page loads again. Popup covers are kept per window; a
+  center page or dialog hides only main-window views. Views of a closed
+  floating window are dropped in the same frame.
+- Tests: `floatable_excludes_only_player`,
+  `floated_browser_keeps_state_and_follows_navigation`,
+  `popup_in_another_window_does_not_hide_the_pane`.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-features --locked` (GUI 2056 passed, 5
+  ignored) and `sh scripts/check.sh sarah` passed.
+
+Not verified: no native run. Not tested: the WKWebView in a real second OS
+window, dock-back of a live page, and WebKitGTK on X11. Cmd+F and the zoom
+keys read the main window's focused pane; in a floating window use the
+toolbar menu.
+
 ## Carbon appearance and compact tool bars — 2026-11-10
 
 - Carbon is the default for new appearance configurations and a selectable

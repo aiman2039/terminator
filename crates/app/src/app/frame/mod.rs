@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::*;
 
+mod browser_sync;
 mod crumbs;
 mod frame_sync;
 mod input;
@@ -283,7 +284,7 @@ impl App {
         }
     }
 
-    /// Modals and tool windows, browser overlays, then the floating panes.
+    /// Modals and tool windows, the floating panes, then browser overlays.
     fn paint_windows(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.show_palette(ctx);
         self.modals(ctx, frame);
@@ -295,9 +296,10 @@ impl App {
         self.show_git_dialog(ctx);
         self.apply_browser_submit();
         self.reconcile_gui_resources();
-        self.sync_browsers(ctx, frame);
         // Floating panes render in their own OS windows after every dock
         // is checked back in, so a closed window can dock straight back.
         self.paint_floating(ctx);
+        // Last: a native browser view can be in any of the windows.
+        self.sync_browsers(ctx, frame);
     }
 }

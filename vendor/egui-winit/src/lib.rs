@@ -23,8 +23,10 @@ pub use winit;
 pub mod clipboard;
 mod dropped_file;
 mod safe_area;
+mod viewport_window;
 mod window_settings;
 
+pub use viewport_window::{ViewportWindow, viewport_window};
 pub use window_settings::{WindowGeometry, WindowSettings};
 
 use raw_window_handle::HasDisplayHandle;
@@ -135,6 +137,12 @@ pub struct State {
     /// for details.
     #[cfg(target_os = "windows")]
     pressed_processed_physical_keys: HashSet<winit::keyboard::PhysicalKey>,
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        viewport_window::forget(self.viewport_id);
+    }
 }
 
 impl State {
@@ -282,6 +290,7 @@ impl State {
     pub fn take_egui_input(&mut self, window: &Window) -> egui::RawInput {
         profiling::function_scope!();
 
+        viewport_window::record(self.viewport_id, window);
         self.egui_input.time = Some(self.start_time.elapsed().as_secs_f64());
 
         // On Windows, a minimized window will have 0 width and height.

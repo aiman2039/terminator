@@ -101,6 +101,7 @@ impl App {
                 target: target.clone(),
                 rect,
                 zoom: ui.ctx().zoom_factor(),
+                viewport: ui.ctx().viewport_id(),
             });
     }
 

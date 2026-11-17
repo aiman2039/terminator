@@ -82,6 +82,7 @@ impl App {
             index,
             count,
             pinned,
+            floatable,
         } = spec;
         if let Some(sid) = sid {
             self.rename_action(ui, sid, RenameSurface::Workspace);
@@ -111,6 +112,10 @@ impl App {
         ui.separator();
         let add_left = click_menu_item(ui, "Add tab to the left", "Plus");
         let add_right = click_menu_item(ui, "Add tab to the right", "Plus");
+        let float = floatable && {
+            ui.separator();
+            click_menu_item(ui, "Float window", "ExternalLink")
+        };
         WorkspaceTabMenu {
             toggle_pin,
             close,
@@ -120,6 +125,7 @@ impl App {
             close_right,
             add_left,
             add_right,
+            float,
         }
     }
     pub(super) fn new_terminal_menu(&mut self, input: NewTerminalMenuInput<'_>) {

@@ -412,6 +412,11 @@ impl App {
             response,
             ..
         } = paint;
+        let mut panes = group.layout.iter_all_tabs().map(|(_, pane)| pane);
+        let lone = match (panes.next(), panes.next()) {
+            (Some(pane), None) if App::floatable(pane) => Some(pane),
+            _ => None,
+        };
         appearance::context_menu(response, |ui| {
             let action = self.workspace_tab_menu(
                 ui,
@@ -420,8 +425,17 @@ impl App {
                     index: *index,
                     count: *count,
                     pinned: group.pinned,
+                    floatable: lone.is_some(),
                 },
             );
+            if action.float
+                && let Some(pane) = lone
+            {
+                self.queue_dock_op(DockOp::Float {
+                    pane: pane.clone(),
+                    source: None,
+                });
+            }
             if action.toggle_pin {
                 actions.toggle_pin = Some(group.id.clone());
             }

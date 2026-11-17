@@ -8,6 +8,7 @@ pub(super) struct WorkspaceTabMenu {
     pub(super) close_right: bool,
     pub(super) add_left: bool,
     pub(super) add_right: bool,
+    pub(super) float: bool,
 }
 
 pub(super) struct WorkspaceTabMenuSpec<'a> {
@@ -15,6 +16,9 @@ pub(super) struct WorkspaceTabMenuSpec<'a> {
     pub(super) index: usize,
     pub(super) count: usize,
     pub(super) pinned: bool,
+    /// The tab holds one pane that can float. Such a pane has no caption
+    /// for the pane menu (a Browser tab, for example).
+    pub(super) floatable: bool,
 }
 
 pub(super) fn split_action(direction: Option<&str>) -> Action {

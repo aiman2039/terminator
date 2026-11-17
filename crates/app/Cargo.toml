@@ -88,7 +88,7 @@ global-hotkey = "0.10"
 default = ["wgpu", "webview"]
 wgpu = ["eframe/wgpu"]
 # OS webview Browser tabs (WKWebView / WebKitGTK). Off for the portable Linux build.
-webview = ["dep:wry", "dep:gtk", "dep:include_dir"]
+webview = ["dep:wry", "dep:gtk", "dep:include_dir", "dep:egui-winit"]
 test-support = ["dep:egui-winit", "egui-winit/test-support", "terminator-updater/test-support"]
 
 [dependencies.image]

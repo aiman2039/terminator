@@ -6,11 +6,38 @@ use super::DockOp;
 use crate::*;
 
 impl App {
-    /// Panes allowed outside the app window. The browser mounts a native
-    /// webview in the main window and the player is a global singleton
-    /// view; everything else renders in any viewport.
+    /// Panes allowed outside the app window. The player is a global
+    /// singleton view; everything else renders in any viewport. A Browser
+    /// tab gets a new native view in the window it moves to, so its page
+    /// loads again there.
     pub(crate) fn floatable(tab: &Tab) -> bool {
-        !matches!(tab, Tab::Browser { .. } | Tab::Player)
+        !matches!(tab, Tab::Player)
+    }
+
+    /// Every tab of the floating windows, each with its home project.
+    pub(crate) fn floating_tabs(&self) -> impl Iterator<Item = (&String, &Tab)> {
+        self.floating.iter().flat_map(|window| {
+            window
+                .dock
+                .iter()
+                .flat_map(|dock| dock.iter_all_tabs())
+                .map(|(_, tab)| (&window.home.0, tab))
+        })
+    }
+
+    /// Every open tab with its project: the workspace layouts, then the
+    /// floating windows.
+    pub(crate) fn open_tabs(&self) -> impl Iterator<Item = (&String, &Tab)> {
+        self.layouts
+            .iter()
+            .flat_map(|(project, workspace)| {
+                workspace
+                    .tabs
+                    .iter()
+                    .flat_map(|group| group.layout.iter_all_tabs())
+                    .map(move |(_, tab)| (project, tab))
+            })
+            .chain(self.floating_tabs())
     }
 
     /// Float the queued pane into its own OS window with a dock holding
@@ -137,7 +164,8 @@ impl App {
                 }
             }
             Tab::RemoteApp { title, .. } => crate::remote_apps_ui::tab_title(title),
-            Tab::Browser { .. } | Tab::Player => "Terminator".into(),
+            Tab::Browser { id, target } => self.browser_title(id, target),
+            Tab::Player => "Terminator".into(),
         }
     }
 
@@ -221,6 +249,7 @@ impl App {
                         project: &project,
                         dock: &mut dock,
                     });
+                    self.note_browser_covers(ui.ctx());
                 },
             );
             let (all, panes) = Self::take_dock_back(returns, &mut dock);

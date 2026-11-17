@@ -14,7 +14,8 @@ pub(crate) type Current = Arc<Mutex<String>>;
 pub(crate) type Committed = Arc<AtomicBool>;
 
 pub(crate) struct BuildInput<'a> {
-    pub frame: &'a eframe::Frame,
+    /// The OS window that gets the view: the main or a floating one.
+    pub window: &'a dyn wry::raw_window_handle::HasWindowHandle,
     pub context: &'a mut WebContext,
     pub key: &'a str,
     pub href: &'a str,
@@ -34,7 +35,7 @@ pub(crate) struct BuildInput<'a> {
 
 pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
     let BuildInput {
-        frame,
+        window,
         context,
         key,
         href,
@@ -105,7 +106,7 @@ pub(crate) fn build(input: BuildInput<'_>) -> Result<WebView, String> {
         });
     let builder = serve_drawings(builder, register.then_some(scenes));
     let builder = browser::apply_store(builder, data_dir)?;
-    builder.build_as_child(frame).map_err(wry_error)
+    builder.build_as_child(&window).map_err(wry_error)
 }
 
 struct Policy {

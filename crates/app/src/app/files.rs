@@ -316,60 +316,6 @@ impl App {
             .update_tx
             .send(Update::OpenBrowser(project.into(), target, after));
     }
-    pub(crate) fn browser_covered(&self) -> bool {
-        self.center_covers_workspace()
-            || self.command_dialog_open()
-            || self.picker.busy()
-            || self.close_session.is_some()
-            || self.close_workspace.is_some()
-            || self.notice_detail_modal_open()
-            || self.rename_blocks_input()
-    }
-
-    pub(crate) fn sync_browsers(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
-        // Floating windows and dialogs (middle layer) and menus, context
-        // menus, and combo boxes (foreground layer), and tooltips would
-        // otherwise be drawn over by the native view.
-        let covers: Vec<egui::Rect> = ctx.memory(|memory| {
-            memory
-                .areas()
-                .visible_layer_ids()
-                .into_iter()
-                .filter(|layer| crate::browser::covers_webview(layer.order))
-                .filter_map(|layer| memory.area_rect(layer.id))
-                .collect()
-        });
-        self.browser_host
-            .set_devtools(self.preferences.browser.devtools);
-        self.browser_host.sync(browser_host::SyncInput {
-            ctx,
-            frame,
-            visible: &self.visible_browsers,
-            occluded: self.browser_covered(),
-            covers: &covers,
-            data_dir: &self.paths.data,
-        });
-        for (key, url) in self.browser_host.take_opens() {
-            let project = self
-                .layouts
-                .iter()
-                .find(|(_, workspace)| {
-                    workspace.tabs.iter().any(|group| {
-                        group
-                            .layout
-                            .iter_all_tabs()
-                            .any(|(_, tab)| tab.key() == key)
-                    })
-                })
-                .map(|(project, _)| project.clone());
-            if let Some(project) = project
-                && let Err(error) = self.open_browser_url(&project, &url, None)
-            {
-                self.error.set(format!("Could not open {url}: {error:#}"));
-            }
-        }
-    }
-
     pub(crate) fn open_browser_url(
         &mut self,
         project: &str,
@@ -443,21 +389,28 @@ impl App {
     }
 
     pub(crate) fn apply_browser_navigation(&mut self, key: &str, target: BrowserTarget) {
-        for workspace in self.layouts.values_mut() {
-            for group in &mut workspace.tabs {
-                for tab in group
+        let docked = self
+            .layouts
+            .values_mut()
+            .flat_map(|workspace| &mut workspace.tabs)
+            .flat_map(|group| {
+                group
                     .primary
                     .iter_mut()
                     .chain(group.layout.iter_all_tabs_mut().map(|(_, tab)| tab))
-                {
-                    if tab.key() == key
-                        && let Tab::Browser {
-                            target: current, ..
-                        } = tab
-                    {
-                        *current = target.clone();
-                    }
-                }
+            });
+        let floated = self
+            .floating
+            .iter_mut()
+            .filter_map(|window| window.dock.as_mut())
+            .flat_map(|dock| dock.iter_all_tabs_mut().map(|(_, tab)| tab));
+        for tab in docked.chain(floated) {
+            if tab.key() == key
+                && let Tab::Browser {
+                    target: current, ..
+                } = tab
+            {
+                *current = target.clone();
             }
         }
         self.browser_urls.insert(
@@ -470,14 +423,11 @@ impl App {
     pub(crate) fn reconcile_gui_resources(&mut self) {
         let mut browsers = HashSet::new();
         let mut open = std::collections::HashMap::new();
-        for (project, workspace) in &self.layouts {
-            for group in &workspace.tabs {
-                for (_, tab) in group.layout.iter_all_tabs() {
-                    if let Tab::Browser { target, .. } = tab {
-                        browsers.insert(tab.key());
-                        open.insert(tab.key(), (project.clone(), target.clone()));
-                    }
-                }
+        // A floated Browser tab is open too: keep its view and its state.
+        for (project, tab) in self.open_tabs() {
+            if let Tab::Browser { target, .. } = tab {
+                browsers.insert(tab.key());
+                open.insert(tab.key(), (project.clone(), target.clone()));
             }
         }
         self.browser_extras.closed.track(open);

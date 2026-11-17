@@ -123,6 +123,9 @@ pub struct App {
     pub(crate) images: HashMap<PathBuf, image_preview::Preview>,
     pub(crate) browser_host: browser_host::BrowserHost,
     pub(crate) visible_browsers: Vec<browser_host::VisibleBrowser>,
+    /// This frame's popup and menu rects that hide a native browser view,
+    /// each with its window. See [`Self::note_browser_covers`].
+    pub(crate) browser_covers: Vec<(egui::ViewportId, egui::Rect)>,
     pub(crate) browser_urls: HashMap<String, String>,
     /// Browser tab icons by icon URL; never evicted (one entry per site).
     pub(crate) favicons: HashMap<String, crate::browser::favicon::Favicon>,
