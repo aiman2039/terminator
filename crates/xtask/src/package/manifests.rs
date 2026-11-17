@@ -27,7 +27,9 @@ pub(super) fn checksums(text: &str) -> BTreeMap<String, String> {
     text.lines()
         .filter_map(|line| {
             let (sum, name) = line.split_once(char::is_whitespace)?;
-            let name = name.trim().trim_start_matches('*');
+            // The release workflow runs `sha256sum ./*.dmg ...`, so names
+            // carry a `./` prefix.
+            let name = name.trim().trim_start_matches('*').trim_start_matches("./");
             (sum.len() == 64 && sum.bytes().all(|b| b.is_ascii_hexdigit()))
                 .then(|| (name.to_owned(), sum.to_ascii_lowercase()))
         })
@@ -137,6 +139,14 @@ mod tests {
         let pkgbuild = fill(&std::fs::read_to_string(pkgbuild).unwrap(), &values).unwrap();
         assert!(pkgbuild.contains(&format!("sha256sums_aarch64=('{}')", "2".repeat(64))));
         assert!(pkgbuild.contains("pkgname=terminator-workspace-bin"));
+    }
+
+    #[test]
+    fn checksums_accept_the_release_workflow_prefix() {
+        let sum = "a".repeat(64);
+        let parsed = checksums(&format!("{sum}  ./x.dmg\n{sum} *y.zip"));
+        assert_eq!(parsed.get("x.dmg"), Some(&sum));
+        assert_eq!(parsed.get("y.zip"), Some(&sum));
     }
 
     #[test]

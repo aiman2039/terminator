@@ -153,8 +153,32 @@ there. The packages are unsigned and not uploaded by the release workflow.
 `cargo xtask package-manifests --version VERSION --sums SHA256SUMS.txt`
 fills version, URLs and checksums from a release's `SHA256SUMS.txt` into
 `target/package/manifests/`. It refuses a missing checksum or a placeholder
-left unfilled. Nothing is tapped, pushed or published: submitting the cask or
-the AUR package is a separate, manual step.
+left unfilled. It writes local files only.
+
+### Homebrew tap
+
+After `publish`, the `homebrew` job fills the cask from the published
+`SHA256SUMS.txt` and pushes `Casks/terminator-workspace.rb` to the tap repo
+(users run `brew install --cask aiman2039/tap/terminator-workspace`). The job
+mirrors the cask half of `package-manifests` in Python so it needs no Rust
+build; keep the two in step. Prereleases are skipped. It is off until both
+exist:
+
+- `vars.HOMEBREW_TAP`: the tap repository, `aiman2039/homebrew-tap` (the
+  `homebrew-` prefix is required by `brew tap`).
+- `secrets.HOMEBREW_TAP_TOKEN`: a fine-grained token with **Contents: read and
+  write** on the tap repository only.
+
+To bump the tap by hand (or for the first release):
+
+```sh
+gh release download vVERSION -p SHA256SUMS.txt
+cargo xtask package-manifests --version VERSION --sums SHA256SUMS.txt
+cp target/package/manifests/terminator-workspace.rb ../homebrew-tap/Casks/
+brew audit --cask aiman2039/tap/terminator-workspace
+```
+
+Submitting the AUR package remains a separate, manual step.
 
 The workflow checks native target identity, archive contents, executable bits,
 macOS code signatures, and Linux executable library resolution. These checks do

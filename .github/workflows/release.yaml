@@ -550,3 +550,80 @@ jobs:
     steps:
       - name: Publish complete validated draft
         run: gh release edit "$TAG" --draft=false
+
+  homebrew:
+    # Bumps the cask in the tap only after the release is public, so the cask
+    # never points at a draft. Opt-in: set vars.HOMEBREW_TAP (owner/homebrew-x)
+    # and secrets.HOMEBREW_TAP_TOKEN (contents: write on that repo only).
+    # Prereleases are skipped; the cask tracks stable releases.
+    needs: [prepare, publish]
+    if: vars.HOMEBREW_TAP != '' && !contains(needs.prepare.outputs.tag, '-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: packaging/homebrew
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ vars.HOMEBREW_TAP }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Fill the cask from the published checksums
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern SHA256SUMS.txt --dir "$RUNNER_TEMP"
+          mkdir -p tap/Casks
+          # Mirrors crates/xtask/src/package/manifests.rs (cask placeholders
+          # only), without building xtask on this runner.
+          python3 - packaging/homebrew/terminator-workspace.rb.in \
+            "$RUNNER_TEMP/SHA256SUMS.txt" tap/Casks/terminator-workspace.rb <<'FILL'
+          import os, re, sys
+          template, sums_path, target = sys.argv[1:]
+          version = os.environ['TAG'].removeprefix('v')
+          repo = os.environ['GH_REPO']
+          asset = f'terminator-v{version}-macos.dmg'
+          sums = {}
+          for line in open(sums_path):
+              parts = line.split()
+              if len(parts) == 2 and re.fullmatch(r'[0-9a-fA-F]{64}', parts[0]):
+                  sums[parts[1].lstrip('*').removeprefix('./')] = parts[0].lower()
+          if asset not in sums:
+              raise SystemExit(f'SHA256SUMS lacks {asset}')
+          values = {
+              'PACKAGE': 'terminator-workspace',
+              'VERSION': version,
+              'HOMEPAGE': f'https://github.com/{repo}',
+              'MACOS_URL': f'https://github.com/{repo}/releases/download/v{version}/{asset}',
+              'MACOS_SHA256': sums[asset],
+          }
+          text = open(template).read()
+          for key, value in values.items():
+              text = text.replace(f'@{key}@', value)
+          left = re.search(r'@[A-Z0-9_]+@', text)
+          if left:
+              raise SystemExit(f'Template placeholder {left.group(0)} has no value')
+          open(target, 'w').write(text)
+          FILL
+          ruby -c tap/Casks/terminator-workspace.rb
+      - name: Push the cask bump
+        working-directory: tap
+        run: |
+          set -euo pipefail
+          git add Casks/terminator-workspace.rb
+          if git diff --cached --quiet; then
+            echo "Cask already at $TAG."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "terminator-workspace ${TAG#v}"
+          git push

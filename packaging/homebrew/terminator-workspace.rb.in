@@ -1,5 +1,6 @@
-# Homebrew cask TEMPLATE. `cargo xtask package-manifests` fills its
-# placeholders for one release. Nothing here is published or tapped.
+# Generated from packaging/homebrew/terminator-workspace.rb.in in
+# @HOMEPAGE@ by the release workflow (or
+# `cargo xtask package-manifests`). Edit the template, not this file.
 cask "@PACKAGE@" do
   version "@VERSION@"
   sha256 "@MACOS_SHA256@"
