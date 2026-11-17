@@ -90,7 +90,12 @@ pub const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_h
 /// Refreshes the modify time of an existing runtime file. A missing file
 /// stays missing: a lock file must not get a new inode under its holder.
 pub fn touch(path: &Path) -> std::io::Result<()> {
-    std::fs::File::open(path)?.set_modified(std::time::SystemTime::now())
+    // Windows refuses to set the time through a read-only handle. Opening
+    // for write without `create` still leaves a missing file missing.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_modified(std::time::SystemTime::now())
 }
 
 /// Writes `token` to a missing auth file, else refreshes its modify time.
