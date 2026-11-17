@@ -42,10 +42,11 @@ Right-click an icon to pin or unpin it. All tool shortcuts remain available.
 
 ## Install
 
-> **Templates until a release ships them.** The package-manager channels below
-> are prepared in `packaging/` and by `cargo xtask package`, but no cask, AUR
-> package, `.deb` or `.rpm` is published yet. Today, download a release
-> archive or build from source.
+> **Homebrew is live once its tap is set up; the rest are templates.** The
+> release workflow pushes the cask to the `aiman2039/homebrew-tap` tap. The AUR
+> package, `.deb` and `.rpm` are prepared in `packaging/` and by
+> `cargo xtask package` but not published yet; download a release archive or
+> build from source instead.
 
 Linux distributions already ship an unrelated terminal emulator named
 `terminator`, so the packages, launcher and cask use the name
@@ -53,14 +54,14 @@ Linux distributions already ship an unrelated terminal emulator named
 
 | Channel | Command |
 | --- | --- |
-| macOS, Homebrew cask (template) | `brew install --cask terminator-workspace` |
+| macOS (Apple Silicon), Homebrew cask | `brew install --cask aiman2039/tap/terminator-workspace` |
 | Debian, Ubuntu `.deb` (template) | `sudo apt install ./terminator-workspace_VERSION_amd64.deb` |
 | Fedora, RHEL, openSUSE `.rpm` (template) | `sudo dnf install ./terminator-workspace-VERSION-1.x86_64.rpm` |
 | Arch Linux, AUR (template) | `yay -S terminator-workspace-bin` |
 | Any Linux, release archive | `tar xzf terminator-vVERSION-x86_64-unknown-linux-gnu.tar.gz && ./terminator/terminator` |
 | From source | the [build guide](docs/REFERENCE.md#build-and-run) |
 
-The macOS app updates itself (Sparkle). A `.deb`, `.rpm` or AUR install
+The macOS app updates itself (Sparkle), including Homebrew installs; `brew upgrade` skips it unless run with `--greedy`. A `.deb`, `.rpm` or AUR install
 updates only through its package manager, and the **Update** chip says so. A
 release archive shows the chip with a download link.
 
