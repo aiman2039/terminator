@@ -43,6 +43,10 @@ pub struct StepRun {
     /// (`flow report done --note`), which the steps that need it get.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// What the runner waits for before it continues a running step, for
+    /// example the agent's first hook report. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waits_for: Option<String>,
 }
 
 /// Where a run is.

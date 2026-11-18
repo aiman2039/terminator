@@ -77,8 +77,10 @@ pub(super) fn rules_dialog(ui: &mut egui::Ui, editor: &mut FlowEditor) {
     );
 }
 
-/// The plan as Markdown, read-only, with the copy and export buttons.
-pub(super) fn preview_dialog(ui: &mut egui::Ui, editor: &FlowEditor) -> Option<Click> {
+/// The plan in the app's Markdown view, with the copy and export buttons.
+/// The saved plan file opens in a Markdown tab, where the Mermaid block
+/// shows as a diagram.
+pub(super) fn preview_dialog(ui: &mut egui::Ui, editor: &mut FlowEditor) -> Option<Click> {
     let draft = editor.draft();
     if let Err(error) = draft.clone().check() {
         ui.colored_label(
@@ -90,11 +92,10 @@ pub(super) fn preview_dialog(ui: &mut egui::Ui, editor: &FlowEditor) -> Option<C
     egui::ScrollArea::vertical()
         .max_height(360.0)
         .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut plan.as_str())
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(f32::INFINITY),
-            );
+            ui.set_min_width(ui.available_width());
+            egui_commonmark::CommonMarkViewer::new()
+                .explicit_image_uri_scheme(true)
+                .show(ui, &mut editor.preview_cache, &plan);
         });
     ui.add_space(6.0);
     ui.horizontal(|ui| {

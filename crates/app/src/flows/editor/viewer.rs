@@ -116,8 +116,9 @@ impl<'a> Viewer<'a> {
                 self.go = Some(session.clone());
             }
         });
-        if let Some(note) = &step.note {
-            ui.label(egui::RichText::new(preview(note)).small().weak());
+        // What the runner waits for, then the result or failure note.
+        for text in [&step.waits_for, &step.note].into_iter().flatten() {
+            ui.label(egui::RichText::new(preview(text)).small().weak());
         }
     }
 

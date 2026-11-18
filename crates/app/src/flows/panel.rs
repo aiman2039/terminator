@@ -252,8 +252,9 @@ impl App {
                 }
             });
         }
-        if let Some(note) = &step.note {
-            ui.weak(note);
+        // What the runner waits for, then the result or failure note.
+        for text in [&step.waits_for, &step.note].into_iter().flatten() {
+            ui.weak(text);
         }
     }
 

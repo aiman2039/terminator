@@ -31,6 +31,9 @@ const START_LIMIT: Duration = Duration::from_mins(2);
 /// Seconds between the agent's first hook report and the prompt, so the
 /// agent's input line is there.
 const SETTLE_SECS: u64 = 2;
+/// Shown in the Flows views while the prompt waits for the agent to start.
+const WAITS_FOR_HOOK: &str = "Waits for the agent's first hook report (2 minutes at most). \
+     The agent's hooks must be installed for this Terminator.";
 
 /// How a running step ended, or `None` while it runs.
 type End = Option<Result<(), String>>;
@@ -184,7 +187,19 @@ impl Runner {
             }
             None => Phase::Working { since: None },
         };
+        if matches!(phase, Phase::Starting { .. }) {
+            self.set_waits(&step.id, Some(WAITS_FOR_HOOK));
+        }
         Ok(phase)
+    }
+
+    /// What the step waits for, in the state file: the Flows views show it.
+    fn set_waits(&mut self, id: &str, text: Option<&str>) {
+        if let Some(run) = self.state.steps.get_mut(id) {
+            run.waits_for = text.map(str::to_owned);
+        }
+        // A failed write only loses this display text.
+        let _ = self.save();
     }
 
     /// Types one line, then presses Enter in a second write (as `ctl send
@@ -305,6 +320,7 @@ impl Runner {
                 }
                 self.phases
                     .insert(id.to_owned(), (Phase::Working { since }, Instant::now()));
+                self.set_waits(id, None);
                 None
             }
             Progress::Pending if started.elapsed() > START_LIMIT => Some(Err(
@@ -341,5 +357,8 @@ impl Runner {
             }
         }
         self.phases.remove(id);
+        if let Some(run) = self.state.steps.get_mut(id) {
+            run.waits_for = None;
+        }
     }
 }

@@ -532,6 +532,7 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     let mut state = RunState::new(&flow, "p");
     state.steps.get_mut("one").unwrap().status = StepStatus::Done;
     state.steps.get_mut("one").unwrap().session = Some("s1".into());
+    state.steps.get_mut("one").unwrap().waits_for = Some("Waits for the hook report".into());
     state.steps.get_mut("ok").unwrap().status = StepStatus::Running;
     app.flows.runs = vec![crate::flows::Run {
         dir: project.path().join("run"),
@@ -542,6 +543,7 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     let text = settle(&mut app, &ctx, &path);
     for label in [
         "Done",
+        "Waits for the hook report",
         "Show terminal",
         "Waits for your approval",
         "Approve",

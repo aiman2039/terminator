@@ -47,6 +47,8 @@ pub(crate) struct FlowEditor {
     dialog: Option<Dialog>,
     /// The "closed with changes" note was shown.
     warned: bool,
+    /// Render state of the plan preview's Markdown view.
+    preview_cache: egui_commonmark::CommonMarkCache,
 }
 
 /// The dialog of an editor: one at a time.
@@ -125,6 +127,7 @@ impl FlowEditor {
             fit: true,
             dialog: None,
             warned: false,
+            preview_cache: egui_commonmark::CommonMarkCache::default(),
         }
     }
 
