@@ -57,8 +57,8 @@ impl Node {
 }
 
 /// Distance between the columns and the rows of an automatic layout.
-const COLUMN: i32 = 460;
-const ROW: i32 = 300;
+const COLUMN: i32 = 380;
+const ROW: i32 = 260;
 
 /// The pin of a node's `needs` side and of its "then" side.
 pub(crate) fn input(node: NodeId) -> InPinId {

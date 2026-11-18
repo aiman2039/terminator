@@ -79,7 +79,10 @@
   wires are `needs`, a new flow writes nothing until Save and replaces no
   file, a wrong graph shows the error and writes nothing, Close asks
   before it discards, a wrong file opens as text, page paint, first view
-  shows all nodes) and `flow::tests` (draft to TOML and back, save rules).
+  shows all nodes, a right-click shows the canvas menu and the node menu,
+  an After chip removes a wire and "+" adds one, with synthetic pointer
+  events in a headless frame) and `flow::tests` (draft to TOML and back,
+  save rules).
   Native GUI, macOS, test-support build with
   `TERMINATOR_FIXTURE_FLOW_EDITOR`: the page showed the bar and the
   plan, approve and build nodes in one row with wires (window

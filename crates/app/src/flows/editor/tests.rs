@@ -67,7 +67,7 @@ fn graph_and_file_give_the_same_flow_both_ways() {
     // A saved place is kept; a step with none gets a column by its depth.
     assert_eq!(back.step("build").unwrap().at, Some([900, 40]));
     assert_eq!(back.step("plan").unwrap().at, Some([0, 0]));
-    assert_eq!(back.step("approve").unwrap().at, Some([460, 0]));
+    assert_eq!(back.step("approve").unwrap().at, Some([380, 0]));
 }
 
 #[test]
@@ -232,17 +232,23 @@ fn editor_page_shows_the_steps_the_gate_and_the_bar() {
         "Add gate",
         "Save",
         "Close",
-        "Step",
-        "Gate",
+        "STEP",
+        "GATE",
         "plan",
         "approve",
         "build",
         "claude",
         "Is the plan correct?",
-        "after",
-        "then",
+        "After",
+        "the start",
+        "plan ×",
+        "approve ×",
     ] {
         assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    // No menu shows before a click or a dropped wire.
+    for label in ["New step here", "Duplicate", "Remove"] {
+        assert!(!text.iter().any(|line| line == label), "{label}: {text:?}");
     }
 }
 
@@ -292,13 +298,149 @@ fn new_flow_nodes_show_in_one_row_from_left_to_right() {
     assert!(plan.x > 0.0 && build.x < 1300.0, "{plan:?} {build:?}");
 }
 
+/// One frame of the editor page with pointer `events`; gives the painted
+/// text with its place.
+fn frame_with(
+    app: &mut App,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> Vec<(egui::Pos2, String)> {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1600.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| app.flow_editor_center(ui),
+    );
+    output.textures_delta.clear();
+    crate::app::tests::support::painted_text(&output.shapes)
+}
+
+fn secondary_click(app: &mut App, ctx: &egui::Context, pos: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame_with(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+    frame_with(app, ctx, vec![button(true)]);
+    frame_with(app, ctx, vec![button(false)]);
+}
+
+#[test]
+fn right_click_shows_the_canvas_menu_and_the_node_menu() {
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    app.new_flow_editor(project.path().into(), "feature");
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        frame_with(&mut app, &ctx, Vec::new());
+    }
+    let text = frame_with(&mut app, &ctx, Vec::new());
+    let approve = text.iter().find(|(_, line)| line == "approve").unwrap().0;
+    let count = |text: &[(egui::Pos2, String)], label: &str| {
+        text.iter().filter(|(_, line)| line == label).count()
+    };
+    assert_eq!(count(&text, "Add step"), 1, "only the bar");
+
+    // Empty canvas above the nodes.
+    secondary_click(&mut app, &ctx, approve - egui::vec2(0.0, 200.0));
+    let text = frame_with(&mut app, &ctx, Vec::new());
+    assert_eq!(count(&text, "Add step"), 2, "{text:?}");
+    frame_with(
+        &mut app,
+        &ctx,
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+
+    // The type label of a node header.
+    let gate = text.iter().find(|(_, line)| line == "GATE").unwrap().0;
+    secondary_click(&mut app, &ctx, gate + egui::vec2(4.0, 4.0));
+    let text = frame_with(&mut app, &ctx, Vec::new());
+    for label in ["Duplicate", "Remove wires", "Remove"] {
+        assert_eq!(count(&text, label), 1, "{label}: {text:?}");
+    }
+}
+
+fn primary_click(app: &mut App, ctx: &egui::Context, pos: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame_with(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+    frame_with(app, ctx, vec![button(true)]);
+    frame_with(app, ctx, vec![button(false)]);
+}
+
+#[test]
+fn after_chip_removes_a_wire_and_plus_adds_one() {
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    app.new_flow_editor(project.path().into(), "feature");
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        frame_with(&mut app, &ctx, Vec::new());
+    }
+    let needs = |app: &App, id: &str| {
+        let draft = app.flows.editor.as_ref().unwrap().draft();
+        draft
+            .steps
+            .iter()
+            .find(|step| step.id == id)
+            .unwrap()
+            .needs
+            .clone()
+    };
+    let at = |text: &[(egui::Pos2, String)], label: &str| {
+        text.iter()
+            .find(|(_, line)| line == label)
+            .unwrap_or_else(|| panic!("{label}: {text:?}"))
+            .0
+            + egui::vec2(3.0, 3.0)
+    };
+    let text = frame_with(&mut app, &ctx, Vec::new());
+    assert_eq!(needs(&app, "build"), ["approve"]);
+    primary_click(&mut app, &ctx, at(&text, "approve ×"));
+    assert!(needs(&app, "build").is_empty());
+
+    // The gate's "+" is the one next to its "plan ×" chip. Its menu has
+    // the step that the gate does not need yet, "build", below the "+".
+    let nearest = |text: &[(egui::Pos2, String)], label: &str, to: egui::Pos2| {
+        text.iter()
+            .filter(|(_, line)| line == label)
+            .map(|(pos, _)| *pos)
+            .min_by(|a, b| a.distance(to).total_cmp(&b.distance(to)))
+            .unwrap_or_else(|| panic!("{label}: {text:?}"))
+    };
+    let text = frame_with(&mut app, &ctx, Vec::new());
+    let plus = nearest(&text, "+", at(&text, "plan ×"));
+    primary_click(&mut app, &ctx, plus + egui::vec2(3.0, 3.0));
+    let text = frame_with(&mut app, &ctx, Vec::new());
+    let build = nearest(&text, "build", plus);
+    primary_click(&mut app, &ctx, build + egui::vec2(3.0, 3.0));
+    assert_eq!(needs(&app, "approve"), ["build", "plan"]);
+}
+
 #[test]
 fn first_view_shows_all_nodes_in_a_small_canvas() {
     let canvas = egui::Rect::from_min_size(egui::pos2(300.0, 200.0), egui::vec2(600.0, 500.0));
     let view = viewer::fit_view(&starter(), canvas).unwrap();
     assert!(view.scaling < 1.0);
     for (position, _) in starter().nodes_pos() {
-        let node = egui::Rect::from_min_size(position, egui::vec2(400.0, 280.0));
+        let node = egui::Rect::from_min_size(position, egui::vec2(310.0, 230.0));
         assert!(canvas.contains_rect(view * node), "{node:?}");
     }
     assert!(viewer::fit_view(&Snarl::new(), canvas).is_none());

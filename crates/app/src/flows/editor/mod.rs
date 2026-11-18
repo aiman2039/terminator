@@ -252,7 +252,13 @@ impl App {
     pub(crate) fn flow_editor_center(&mut self, ui: &mut egui::Ui) {
         self.poll_flow_editor(ui.ctx());
         let style = appearance::CenterCardStyle::new(&self.theme);
-        let gate = appearance::color(&self.theme.accent);
+        let colors = viewer::Colors {
+            canvas: appearance::color(&self.theme.window),
+            node: appearance::color(&self.theme.surface),
+            border: appearance::color(&self.theme.border),
+            step: appearance::color(&self.theme.status_running),
+            gate: appearance::color(&self.theme.status_waiting),
+        };
         let mut click = None;
         let ((), dismissed) = appearance::center_card(ui, style, |ui| {
             ui.set_min_size(ui.available_size());
@@ -265,16 +271,15 @@ impl App {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
             ui.weak(
-                "Drag from \"then\" of a step to \"after\" of the next step. \
-                 Right-click the canvas to add, and a step to remove.",
+                "Drag from the right dot of a step to the left dot of the next step, \
+                 or use + in After. Right-click the canvas, a step or a wire for more.",
             );
             ui.add_space(4.0);
             let fit = std::mem::take(&mut editor.fit).then(|| ui.available_rect_before_wrap());
-            SnarlWidget::new().id_salt("flow-editor").show(
-                &mut editor.snarl,
-                &mut viewer::Viewer { gate, fit },
-                ui,
-            );
+            SnarlWidget::new()
+                .id_salt("flow-editor")
+                .style(viewer::style(colors))
+                .show(&mut editor.snarl, &mut viewer::Viewer { colors, fit }, ui);
         });
         match click {
             Some(Click::Save) => self.save_flow_editor(),
@@ -351,7 +356,7 @@ fn next_place(snarl: &Snarl<Node>) -> egui::Pos2 {
         .map(|(position, _)| position.y)
         .fold(f32::NEG_INFINITY, f32::max);
     if lowest.is_finite() {
-        egui::pos2(0.0, lowest + 300.0)
+        egui::pos2(0.0, lowest + 260.0)
     } else {
         egui::Pos2::ZERO
     }
