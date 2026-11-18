@@ -38,8 +38,13 @@
   field and Send.
 - Not verified: a click on the window's buttons (Approve, Reject, Send,
   Cancel run) and the Run flow… window in a running GUI (unit-tested
-  only), the MCP `flow_*` tools against a real MCP client, and the
-  2-second delay before the prompt with a real agent.
+  only), and the 2-second delay before the prompt with a real agent.
+- MCP, real PTY, isolated daemon: JSON-RPC lines on the stdin of
+  `terminator-hook mcp` (legacy `initialize`, then `tools/call`).
+  `flow_context` gave the run and step, `flow_approve` was an unknown
+  tool, `flow_ask` waited and returned the text of `flow answer`, and
+  `flow_report` ended the step and the run as done. No MCP client program
+  (Claude Code, Codex) was used.
 - `cargo xtask integration` (all groups) did not end in two runs on this
   machine: every group passed, but the existing `stalled_attachment`
   regression stayed in its socket read (`regressions/daemon.rs:96`). It
