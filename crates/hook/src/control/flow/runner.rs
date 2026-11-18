@@ -31,8 +31,6 @@ const START_LIMIT: Duration = Duration::from_mins(2);
 /// Seconds between the agent's first hook report and the prompt, so the
 /// agent's input line is there.
 const SETTLE_SECS: u64 = 2;
-/// Time between a typed line and its Enter (see `type_line`).
-const ENTER_GAP: Duration = Duration::from_millis(300);
 
 /// How a running step ended, or `None` while it runs.
 type End = Option<Result<(), String>>;
@@ -189,15 +187,11 @@ impl Runner {
         Ok(phase)
     }
 
-    /// Types one line, then presses Enter in a second write. An agent's
-    /// input box (Claude Code) takes text and Enter in one write as a
-    /// paste, and that Enter becomes a line break, not a submit.
+    /// Types one line, then presses Enter in a second write (as `ctl send
+    /// --enter` does).
     fn type_line(&self, session: &str, line: &str) -> Result<()> {
         // The session can be newer than an older snapshot.
-        let ctl = Ctl::connect(&self.paths)?;
-        ctl.attach_and_input(session.to_owned(), line.as_bytes().to_vec())?;
-        std::thread::sleep(ENTER_GAP);
-        ctl.attach_and_input(session.to_owned(), b"\r".to_vec())
+        Ctl::connect(&self.paths)?.type_and_enter(session, line.as_bytes().to_vec())
     }
 
     fn announce_gate(&self, step: &Step, message: &str) {

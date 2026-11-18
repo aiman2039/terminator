@@ -56,6 +56,14 @@
   - A final run had both: a Claude step with `prompt`, then a Codex step
     with the prompt in its command. Both ended as done, and both wrote
     their files.
+- `terminator-hook ctl send TEXT --enter` (also the MCP `send` tool with
+  `enter` and the `inbox` reply, which use it) had the same one-write
+  defect. It now sends Enter in a second write, through the function the
+  flow runner uses (`send_with_enter_never_puts_text_and_enter_in_one_write`).
+  Live check: one `ctl send PROMPT --enter` to real Claude Code 2.1.327
+  submitted the prompt, the hook state reached completed, and the file was
+  written. The GUI's Paste and send was read, not changed or run: it sends
+  Enter as its own write after a bracketed paste.
 - Not verified: a click on the window's buttons (Approve, Reject, Send,
   Cancel run) and the Run flow… window in a running GUI (unit-tested
   only), and real agents with the installed hooks and the live daemon.
