@@ -3,7 +3,7 @@
 use super::dialogs::{node_dialog, preview_dialog, rules_dialog};
 use super::model::Node;
 use super::viewer::{self, Colors, Viewer};
-use super::{Dialog, FlowEditor, Slot};
+use super::{Dialog, FlowEditor, Slot, Stay};
 use crate::app::{OpenFileInput, OpenFileModeInput};
 use crate::document_view::DocumentKind;
 use crate::flows::panel::run_status;
@@ -207,7 +207,10 @@ impl App {
                         root: editor.root.clone(),
                         files: Vec::new(),
                     };
-                    self.run_flow(&loaded, &editor.file);
+                    if self.run_flow(&loaded, &editor.file) {
+                        // The editor shows the run, so the app stays on it.
+                        self.flows.stay = Some(Stay::after_run(path, &self.flows.runs));
+                    }
                 }
             }
             Some(Click::AddStep) => drop(viewer::add_node(&mut editor.snarl, place, false)),

@@ -57,6 +57,8 @@ pub(crate) struct FlowsState {
     pub(crate) editors: HashMap<PathBuf, editor::Slot>,
     /// The editors that a pane painted this frame.
     visible: std::collections::HashSet<PathBuf>,
+    /// The editor whose Run keeps the app on its tab.
+    stay: Option<editor::Stay>,
     /// The runs of the last read, newest first.
     runs: Vec<Run>,
     reading: Option<Receiver<Vec<Run>>>,
@@ -187,26 +189,27 @@ impl App {
 
     /// Run one flow on an explicit Run click: a new terminal with the
     /// runner command and Enter. Without the trust answer nothing is typed.
-    /// The Flows tool window then shows, so the run is in view.
-    pub(crate) fn run_flow(&mut self, loaded: &LoadedFlows, file: &str) {
+    /// The Flows tool window then shows, so the run is in view. False when
+    /// the run did not start.
+    pub(crate) fn run_flow(&mut self, loaded: &LoadedFlows, file: &str) -> bool {
         match self.lsp.trust_answer(&loaded.root) {
             Some(true) => {}
             Some(false) => {
                 self.info = Some("This project is not trusted; its flows stay off.".into());
-                return;
+                return false;
             }
             None => {
                 self.info = Some("Trust the project before running its flows.".into());
-                return;
+                return false;
             }
         }
         if !files::plain_name(file) || !self.project_available(&loaded.project) {
             self.info = Some("The flow's project is not open.".into());
-            return;
+            return false;
         }
         let Ok(program) = std::env::current_exe() else {
             self.info = Some("Could not find the terminator-hook helper.".into());
-            return;
+            return false;
         };
         let helper = terminator_core::sibling_exe(&program, "terminator-hook");
         if self.selected.as_deref() != Some(loaded.project.as_str()) {
@@ -218,5 +221,6 @@ impl App {
         };
         self.create_workspace_tab_with(None, Some(loaded.root.clone()), Some(post));
         self.open_flows_tool();
+        true
     }
 }

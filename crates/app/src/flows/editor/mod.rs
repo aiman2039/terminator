@@ -68,6 +68,40 @@ pub(crate) enum Slot {
     Failed(String),
 }
 
+/// An editor that keeps the app on its tab during the run that its Run
+/// button started.
+pub(crate) struct Stay {
+    path: PathBuf,
+    /// The runner's terminal did not take the focus yet.
+    pending: bool,
+    /// Step terminals of all runs at the last time the editor took the
+    /// focus back.
+    sessions: usize,
+    /// When another tab took the focus with no new step terminal.
+    away: Option<Instant>,
+}
+
+const STAY_GRACE: Duration = Duration::from_secs(3);
+
+/// The number of step terminals in `runs`.
+fn step_sessions(runs: &[super::Run]) -> usize {
+    runs.iter()
+        .flat_map(|run| run.state.steps.values())
+        .filter(|step| step.session.is_some())
+        .count()
+}
+
+impl Stay {
+    fn after_run(path: &Path, runs: &[super::Run]) -> Self {
+        Self {
+            path: path.into(),
+            pending: true,
+            sessions: step_sessions(runs),
+            away: None,
+        }
+    }
+}
+
 /// The project folder and the flow name of a flow file path.
 fn place_of(path: &Path) -> Option<(PathBuf, String)> {
     let file = path.file_stem()?.to_str()?.to_owned();
@@ -311,10 +345,68 @@ impl App {
         true
     }
 
+    /// Makes the workspace tab with the editor of `path` the active one.
+    /// False when the selected project has no such tab.
+    fn show_flow_tab(&mut self, path: &Path) -> bool {
+        let Some(workspace) = self
+            .selected
+            .clone()
+            .and_then(|project| self.layouts.get_mut(&project))
+        else {
+            return false;
+        };
+        let editor = |tab: &Tab| matches!(tab, Tab::Document { path: at, kind: DocumentKind::Flow } if at == path);
+        let Some(id) = workspace
+            .tabs
+            .iter()
+            .find(|group| group.layout.iter_all_tabs().any(|(_, tab)| editor(tab)))
+            .map(|group| group.id.clone())
+        else {
+            return false;
+        };
+        workspace.active = id;
+        workspace.record_active();
+        self.hide_center_overlay();
+        self.focus_non_terminal();
+        true
+    }
+
+    /// After Run in an editor: the app stays on that editor's tab. The
+    /// runner's terminal and each step's terminal take the focus when they
+    /// start; this gives it back to the editor, which shows the run. When
+    /// the user goes to another tab, the editor does not take it back.
+    fn flow_stay_on_editor(&mut self) {
+        let Some(stay) = &mut self.flows.stay else {
+            return;
+        };
+        if self.flows.visible.contains(&stay.path) {
+            stay.away = None;
+            return;
+        }
+        let sessions = step_sessions(&self.flows.runs);
+        if stay.pending || sessions > stay.sessions {
+            stay.pending = false;
+            stay.sessions = sessions;
+            stay.away = None;
+            let path = stay.path.clone();
+            if !self.show_flow_tab(&path) {
+                self.flows.stay = None;
+            }
+            return;
+        }
+        // The read of a new step's session can come a moment after its
+        // terminal took the focus.
+        let away = *stay.away.get_or_insert_with(Instant::now);
+        if away.elapsed() > STAY_GRACE {
+            self.flows.stay = None;
+        }
+    }
+
     /// After the panes of a frame: takes save results of editors that no
     /// pane painted, and drops editors with no changes and no pane. An
     /// editor with changes stays; one note says so when its tab is gone.
     pub(crate) fn flow_editors_end_frame(&mut self) {
+        self.flow_stay_on_editor();
         if self.flows.editors.is_empty() {
             return;
         }

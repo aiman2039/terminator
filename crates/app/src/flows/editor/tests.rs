@@ -553,6 +553,46 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
 }
 
 #[test]
+fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let path = flow_path(project.path(), "build");
+    let stay = |app: &App| {
+        app.flows
+            .stay
+            .as_ref()
+            .map(|stay| (stay.pending, stay.sessions))
+    };
+
+    // The editor is in view: nothing to do, the wait for the runner stays.
+    app.flows.stay = Some(Stay::after_run(&path, &[]));
+    app.flows.begin_frame();
+    app.flows.mark_visible(&path);
+    app.flow_editors_end_frame();
+    assert_eq!(stay(&app), Some((true, 0)));
+
+    // Another tab took the focus with no new step terminal (the user went
+    // there): the editor waits a moment for a late read, and takes nothing.
+    app.flows.stay.as_mut().unwrap().pending = false;
+    app.flows.begin_frame();
+    app.flow_editors_end_frame();
+    assert_eq!(stay(&app), Some((false, 0)));
+    assert!(app.flows.stay.as_ref().unwrap().away.is_some());
+    app.flows.stay.as_mut().unwrap().away =
+        Instant::now().checked_sub(STAY_GRACE.saturating_mul(2));
+    app.flows.begin_frame();
+    app.flow_editors_end_frame();
+    assert_eq!(stay(&app), None);
+
+    // The runner's terminal took the focus: the editor's tab comes back.
+    // Here the editor has no tab, so the wait ends.
+    app.flows.stay = Some(Stay::after_run(&path, &[]));
+    app.flows.begin_frame();
+    app.flow_editors_end_frame();
+    assert_eq!(stay(&app), None);
+}
+
+#[test]
 fn export_writes_the_plan_beside_the_flow_file() {
     let project = project_with_flows();
     let mut editor = FlowEditor::new(project.path().into(), "feature");
