@@ -137,8 +137,48 @@ impl App {
         self.flows.open = true;
     }
 
+    /// Shows the Flows tool window in the right sidebar. Projects there
+    /// take precedence over the tool, so clear them.
+    pub(crate) fn open_flows_tool(&mut self) {
+        self.preferences.right_projects = false;
+        self.preferences.tool = SidebarTool::Flows;
+        self.preferences.visible = true;
+    }
+
+    /// The Flows rows of the workspace new-tab menu: Run flow… and the
+    /// Flows tool window.
+    pub(crate) fn flow_menu_items(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.weak("Flows");
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: Action::RunFlow.label(),
+            icon: Action::RunFlow.icon(),
+            shortcut: &self.shortcut_label(Action::RunFlow),
+        })
+        .on_hover_text("Start a flow of this project's .terminator/flows folder")
+        .clicked()
+        {
+            self.open_flow_picker();
+            ui.close();
+        }
+        if appearance::menu_item(appearance::MenuItemInput {
+            ui,
+            label: "Show flows",
+            icon: "PanelRight",
+            shortcut: "",
+        })
+        .on_hover_text("Open the Flows tool window: runs, gates and questions")
+        .clicked()
+        {
+            self.open_flows_tool();
+            ui.close();
+        }
+    }
+
     /// Run one flow on an explicit Run click: a new terminal with the
     /// runner command and Enter. Without the trust answer nothing is typed.
+    /// The Flows tool window then shows, so the run is in view.
     pub(crate) fn run_flow(&mut self, loaded: &LoadedFlows, file: &str) {
         match self.lsp.trust_answer(&loaded.root) {
             Some(true) => {}
@@ -168,6 +208,7 @@ impl App {
             enter: true,
         };
         self.create_workspace_tab_with(None, Some(loaded.root.clone()), Some(post));
+        self.open_flows_tool();
     }
 
     /// The Run flow window.

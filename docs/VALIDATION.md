@@ -64,6 +64,15 @@
   submitted the prompt, the hook state reached completed, and the file was
   written. The GUI's Paste and send was read, not changed or run: it sends
   Enter as its own write after a bracketed paste.
+- The new-tab menu has a Flows section: Run flow… and Show flows. A run
+  from Run flow… also shows the Flows tool window. Paint and action tests:
+  `new_tab_menu_has_the_flow_rows`,
+  `flows_tool_window_shows_after_a_run_and_from_the_menu_action`,
+  `flows_panel_shows_a_gate_with_approve_and_a_question_with_send`. The
+  native build ran in an isolated GUI and its Flows window showed a run
+  with a gate; the menu itself was not opened there (no reliable
+  synthetic click). A window that is behind other windows gives an old
+  frame to `screencapture`; `ctl window focus` first gives a new one.
 - Not verified: a click on the window's buttons (Approve, Reject, Send,
   Cancel run) and the Run flow… window in a running GUI (unit-tested
   only), and real agents with the installed hooks and the live daemon.

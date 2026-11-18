@@ -99,6 +99,87 @@ fn run_flow_types_nothing_before_trust() {
 }
 
 #[test]
+fn flows_tool_window_shows_after_a_run_and_from_the_menu_action() {
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let loaded = load_flows("p".into(), project.path().into());
+    app.preferences.tool = SidebarTool::Explorer;
+    app.preferences.visible = false;
+
+    // A refused run changes nothing in the layout.
+    app.run_flow(&loaded, "build");
+    assert_eq!(app.preferences.tool, SidebarTool::Explorer);
+    assert!(!app.preferences.visible);
+
+    app.answer_task_trust(project.path(), true);
+    app.run_flow(&loaded, "build");
+    assert_eq!(app.preferences.tool, SidebarTool::Flows);
+    assert!(app.preferences.visible, "the run is in view");
+
+    // Show flows: also when the right sidebar holds the project list.
+    app.preferences.tool = SidebarTool::Git;
+    app.preferences.right_projects = true;
+    app.open_flows_tool();
+    assert_eq!(app.preferences.tool, SidebarTool::Flows);
+    assert!(!app.preferences.right_projects);
+}
+
+/// Every text that one frame of `paint` draws.
+fn painted(ctx: &egui::Context, paint: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 600.0),
+            )),
+            ..Default::default()
+        },
+        paint,
+    );
+    output.textures_delta.clear();
+    crate::app::tests::support::painted_strings(&output.shapes)
+}
+
+#[test]
+fn new_tab_menu_has_the_flow_rows() {
+    let project = project_with_flows();
+    let (mut app, received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flow_menu_items(ui));
+    for label in ["Flows", "Run flow…", "Show flows"] {
+        assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    assert!(crate::icons::is_ui_icon("PanelRight"));
+    // Painting the menu starts nothing.
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn flows_panel_shows_a_gate_with_approve_and_a_question_with_send() {
+    let project = project_with_flows();
+    let (mut app, _received, data) = app_with_project(project.path());
+    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    state.set("one", StepStatus::Running);
+    state.steps.get_mut("one").expect("step").question = Some("A or B?".into());
+    state.set("ok", StepStatus::Running);
+    app.flows.runs = vec![Run {
+        dir: data.path().join("flows").join("build-1"),
+        state,
+    }];
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    for label in [
+        "Flows", "Build", "running", "one", "A or B?", "Send", "ok", "Good?", "Approve", "Reject",
+    ] {
+        assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    // A run of another project does not show.
+    app.selected = Some("other".into());
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    assert!(!text.iter().any(|line| line == "Approve"), "{text:?}");
+}
+
+#[test]
 fn step_icon_shows_what_waits_for_the_user() {
     let step = |status, gate: Option<&str>, question: Option<&str>| StepRun {
         status,

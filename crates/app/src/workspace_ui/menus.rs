@@ -52,6 +52,7 @@ impl App {
             ui.close();
         }
         self.agent_launcher_menu_items(ui);
+        self.flow_menu_items(ui);
         let profiles = self.state.vnc_profiles.clone();
         if !profiles.is_empty() {
             ui.separator();
