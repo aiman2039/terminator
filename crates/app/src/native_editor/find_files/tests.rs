@@ -1,6 +1,6 @@
 use super::cursor::{Row, keep_visible};
 use super::preview::{JobColors, line_job, preview_lines};
-use super::search::{Finish, file_hits, run};
+use super::search::{Finish, file_hits, line_fingerprint, run};
 use super::view::summary;
 use super::*;
 
@@ -80,6 +80,7 @@ fn file_with_hits(path: &str, lines: &[u32]) -> FileHits {
                 character: 0,
                 preview: format!("hit {line}"),
                 matches: vec![(0, 3)],
+                fingerprint: line_fingerprint(&format!("hit {line}")),
             })
             .collect(),
         lines: lines
@@ -108,6 +109,7 @@ fn results_group_by_file_with_utf16_columns_previews_and_match_ranges() {
             character: 10,
             preview: "let é = needle;".into(),
             matches: vec![(8, 14)],
+            fingerprint: line_fingerprint("  let é = needle;"),
         }]
     );
     // The preview keeps the untrimmed lines around the hit.

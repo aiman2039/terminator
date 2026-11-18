@@ -1,4 +1,4 @@
-use super::super::search::run;
+use super::super::search::{MAX_PREVIEW_CHARS, line_fingerprint, run};
 use super::edits::Stale;
 use super::*;
 use crate::native_editor::rename::apply_rename;
@@ -76,6 +76,7 @@ fn hits(path: &str, lines: &[u32]) -> FileHits {
                 character: 0,
                 preview: format!("foo {line}"),
                 matches: vec![(0, 3)],
+                fingerprint: line_fingerprint(&format!("foo {line}")),
             })
             .collect(),
         lines: lines
@@ -106,7 +107,7 @@ fn planned(find: &FindInFiles, selected_only: bool) -> Vec<(String, Vec<u32>)> {
     plan.files
         .iter()
         .map(|file| {
-            let lines = file.lines.iter().map(|(line, _)| *line).collect();
+            let lines = file.lines.iter().map(|(line, ..)| *line).collect();
             (file.path.display().to_string(), lines)
         })
         .collect()
@@ -216,7 +217,10 @@ fn unchecked_files_and_lines_stay_out_of_the_plan() {
     find.select(3);
     assert_eq!(planned(&find, true), [entry("/p/b.rs", &[2, 7])]);
     let plan = find.replace_plan(true).unwrap();
-    assert_eq!(plan.files[0].lines[0], (2, "foo 2".to_owned()));
+    assert_eq!(
+        plan.files[0].lines[0],
+        (2, "foo 2".to_owned(), line_fingerprint("foo 2"))
+    );
     // A new search counts every line again.
     find.query = "foo bar".into();
     let (_, _, generation) = find.next_search().unwrap();
@@ -286,6 +290,25 @@ fn a_file_changed_since_the_search_stops_the_replace_before_any_write() {
     assert!(error.to_string().contains("b.txt changed since the search"));
     assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\n");
     assert_eq!(std::fs::read_to_string(&b).unwrap(), "foo\nx\n");
+}
+
+#[test]
+fn a_match_added_past_the_cut_preview_stops_the_replace_before_any_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "a.txt", "foo\n");
+    let long = format!("foo {}", "x".repeat(MAX_PREVIEW_CHARS));
+    let b = write(dir.path(), "b.txt", &format!("{long}\n"));
+    let mut find = searched(dir.path(), "foo", false);
+    find.replace.text = "bar".into();
+    let plan = find.replace_plan(false).unwrap();
+    // The same word now sits past the preview: nobody reviewed it.
+    let changed = format!("{long} foo\n");
+    std::fs::write(&b, &changed).unwrap();
+    let error = prepare_replace(&plan).err().unwrap();
+    assert!(error.downcast_ref::<Stale>().is_some(), "{error:#}");
+    assert!(error.to_string().contains("b.txt changed since the search"));
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\n");
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), changed);
 }
 
 #[test]
