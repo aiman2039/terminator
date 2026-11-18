@@ -9,6 +9,11 @@
 //! Hover and link opening ignore these links (see [`is_mark_uri`]).
 //!
 //! The marks describe shell commands only. They never feed agent state.
+//!
+//! The reader also takes OSC 7 (`ESC ] 7 ; file://host/path`) out of the
+//! stream and keeps the newest payload ([`CommandLog::reported_cwd`]). It
+//! is a display hint for the app (the Explorer of an SSH terminal); alacritty
+//! ignores the sequence, so nothing in the grid changes.
 use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Grid};
 use alacritty_terminal::index::{Column, Line, Point};
@@ -26,11 +31,13 @@ pub const MARK_SCHEME: &str = "terminator-mark:";
 /// Longest mark sequence kept back while it arrives in parts. A longer OSC
 /// passes through unchanged.
 const MAX_MARK: usize = 64;
+/// Longest OSC 7 payload kept back. A longer one passes through unchanged.
+const MAX_CWD: usize = 4096;
 /// Raw bytes per read are at most this fraction of the caller's buffer, so
 /// the rewritten bytes always fit (see [`MarkedPty::read`]).
 const GROWTH: usize = 12;
 /// Room for the bytes kept back from an earlier read.
-const RESERVE: usize = MAX_MARK + 64;
+const RESERVE: usize = MAX_CWD + 64;
 /// Finished commands kept until the app reads them.
 const MAX_ENDED: usize = 32;
 
@@ -53,9 +60,22 @@ pub struct CommandLog {
     ended: Arc<Mutex<VecDeque<CommandEnded>>>,
     /// The shell sent a prompt or command mark at least once.
     seen: Arc<AtomicBool>,
+    /// Newest OSC 7 payload after `7;`, for example `file://host/home/me`.
+    cwd: Arc<Mutex<Option<String>>>,
 }
 
 impl CommandLog {
+    /// The newest OSC 7 payload (`file://host/path`, not decoded), or `None`
+    /// while the shell has not sent one. Untrusted terminal text.
+    pub fn reported_cwd(&self) -> Option<String> {
+        self.cwd.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn report_cwd(&self, payload: &[u8]) {
+        let text = String::from_utf8_lossy(payload).into_owned();
+        *self.cwd.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
+    }
+
     /// False until the PTY stream carried a mark: then the grid has none and
     /// a full-grid scan for them can be skipped.
     pub fn marks_seen(&self) -> bool {
@@ -147,7 +167,8 @@ impl MarkRewriter {
         }
     }
 
-    /// Called after a command ended (the app repaints to read it).
+    /// Called after a command ended or the shell reported its folder (the
+    /// app repaints to read it).
     pub fn on_end(mut self, wake: impl Fn() + Send + 'static) -> Self {
         self.on_end = Some(Box::new(wake));
         self
@@ -207,12 +228,15 @@ impl MarkRewriter {
     /// The held payload can still become a mark.
     fn could_be_mark(&self) -> bool {
         let held = self.held.as_slice();
+        if held.starts_with(b"7;") {
+            return held.len() <= MAX_CWD;
+        }
         if held.len() > MAX_MARK {
             return false;
         }
         let prefix = held.len().min(4);
         let head = held.get(..prefix).unwrap_or_default();
-        b"133;".starts_with(head) || b"633;".starts_with(head)
+        b"133;".starts_with(head) || b"633;".starts_with(head) || b"7;".starts_with(head)
     }
 
     /// Pass the held bytes through unchanged; the OSC continues as is.
@@ -224,6 +248,14 @@ impl MarkRewriter {
 
     fn finish(&mut self, out: &mut Vec<u8>, terminator: &[u8]) {
         self.state = State::Ground;
+        if let Some(payload) = self.held.strip_prefix(b"7;") {
+            self.log.report_cwd(payload);
+            self.held.clear();
+            if let Some(wake) = &self.on_end {
+                wake();
+            }
+            return;
+        }
         match parse_mark(&self.held) {
             Some(mark) => {
                 self.held.clear();

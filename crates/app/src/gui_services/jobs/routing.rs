@@ -64,6 +64,16 @@ impl JobRouting {
             context.deadline =
                 std::time::Instant::now().checked_add(std::time::Duration::from_secs(45));
         }
+        if let Job::SshSignIn(_, step) = job {
+            // A person types each answer; the daemon stops at 5 minutes.
+            let seconds = if matches!(step, crate::onboard::SignInStep::Run) {
+                320
+            } else {
+                10
+            };
+            context.deadline =
+                std::time::Instant::now().checked_add(std::time::Duration::from_secs(seconds));
+        }
         if matches!(
             job,
             Job::Workspace(
@@ -234,6 +244,15 @@ impl JobRouting {
                 },
             ),
             Job::SshConfigHosts(_) => ("ssh-config", "hosts".into(), Policy::ReplaceableRead),
+            Job::SshSignIn(ssh, step) => (
+                "ssh-sign-in",
+                format!("{}:{}", step.kind(), ssh.authority()),
+                if matches!(step, crate::onboard::SignInStep::Poll) {
+                    Policy::ReplaceableRead
+                } else {
+                    Policy::OrderedMutation
+                },
+            ),
             Job::SshControlStatus(_) => ("ssh-control", "status".into(), Policy::ReplaceableRead),
             Job::Forwards(request) => match crate::forwards_ui::forward_key(request) {
                 Some((project, port)) => (

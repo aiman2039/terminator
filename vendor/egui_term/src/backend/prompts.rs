@@ -43,6 +43,12 @@ impl TerminalBackend {
         self.command_log.take()
     }
 
+    /// The newest OSC 7 payload the shell sent (`file://host/path`, not
+    /// decoded). Untrusted terminal text: a display hint only.
+    pub fn reported_cwd(&self) -> Option<String> {
+        self.command_log.reported_cwd()
+    }
+
     /// Every prompt in the grid, oldest first. Cached; rescanned at most
     /// every 250 ms while output arrives. Grid lines, not viewport rows.
     /// Empty without a scan while the shell has never sent a mark.

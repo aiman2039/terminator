@@ -127,8 +127,15 @@ impl App {
             Update::RemoteReply(project, operation, result) => {
                 self.apply_remote_reply(project, operation, result);
             }
-            Update::HostKeyScanned(ssh, result) => self.apply_host_key_scan(&ssh, result),
-            Update::HostKeyTrusted(ssh, result) => self.apply_host_key_trust(&ssh, result),
+            Update::HostKeyScanned(ssh, result) => {
+                self.onboard_host_key_scan(&ssh, &result);
+                self.apply_host_key_scan(&ssh, result);
+            }
+            Update::HostKeyTrusted(ssh, result) => {
+                self.onboard_host_key_trusted(&ssh, &result);
+                self.apply_host_key_trust(&ssh, result);
+            }
+            Update::SshSignIn(ssh, update) => self.apply_sign_in(&ssh, update),
             Update::SshConfigHosts(generation, hosts) => {
                 self.handle_ssh_config_hosts(generation, hosts);
             }

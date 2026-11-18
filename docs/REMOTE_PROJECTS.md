@@ -74,6 +74,19 @@ without a second login. Other calls stay noninteractive (`BatchMode=yes`).
 When one fails authentication with no live master, the view says so and offers
 "Open SSH terminal" to sign in there.
 
+With `ssh-askpass-v1`, the add-hosts flow signs in without a terminal
+(`SshSignIn`). The daemon runs one OpenSSH client with the shared control
+socket and without `BatchMode` (host keys stay strict), command `true`, so it
+becomes the master and stays after `true` exits. `SSH_ASKPASS` is
+`terminator-hook` with `SSH_ASKPASS_REQUIRE=force`; `TERMINATOR_ASKPASS_SOCKET`
+names a private socket (0600, runtime folder, one per sign-in). Each prompt
+goes from the hook to that socket; the GUI polls it (`SshSignInStatus`) and
+shows OpenSSH's prompt text with a hidden field. The answer goes back
+(`AnswerSshPrompt`, a redacted `Secret`), the hook prints it for OpenSSH, and
+nothing is saved, logged or put on a command line. Cancel or a closed page
+answers none, so OpenSSH stops. One sign-in per master; it ends after five
+minutes. A live master answers at once.
+
 When a project probe, Explorer, Git or transfer call meets an unknown host key,
 the daemon scans the host (`ssh -G`, `ssh-keyscan`) and the GUI shows the
 SHA256 fingerprints for confirmation. "Trust and connect" rescans and appends
@@ -102,6 +115,18 @@ Explorer lists files through SFTP, with a 1000-entry limit. Preview reads are
 limited to regular files of 2 MiB or less. SFTP paths are canonicalized and
 must remain inside the configured project root. Interactive SSH shells retain
 the SSH account's normal permissions; the project root is not a shell sandbox.
+
+The Explorer follows the focused SSH terminal's folder when the remote shell
+reports it with OSC 7 (`ESC ] 7 ; file://host/path`). The GUI PTY reader takes
+the sequence out of the stream and keeps the newest one per terminal. The
+Explorer moves only when the focused terminal or its report changes, so a
+folder clicked in between stays. A report from another host than the
+terminal's first one (a nested `ssh`) or outside the project root is not
+followed, and the header says why. The pin button keeps the root fixed. The
+report is display only: it never feeds lifecycle, presence or a write. Mosh
+does not pass OSC 7. Without a report, "Follow the focused terminal…" shows
+the lines for zsh, bash, fish and tmux to copy; Terminator never writes them
+to the host.
 
 Images, HTML, audio and Markdown previews use explicitly downloaded read-only
 snapshots in the app's private data directory. Markdown snapshots are read-only;
@@ -152,11 +177,28 @@ Opening the Hosts tool (or "Show all hosts" in its header) shows the SSH page
 in the main pane, like the VNC page: an address bar, group chips, Import…, a
 List/Grid switch, and saved hosts as cards with a "New host" card. Typing
 filters the cards. Enter or Connect on a typed `host`, `user@host`, `host:port`
-or `user@host:port` opens a terminal on the matching saved host, or opens New
-host with the address filled in. Double-click or Enter on a card opens a
+or `user@host:port` opens a terminal on the matching saved host, or opens Add
+SSH hosts with the address filled in. Double-click or Enter on a card opens a
 terminal; its menu holds Open terminal, Properties, Duplicate and Remove.
 
-New, Properties and Duplicate open SSH host Properties on the SSH page (like
+New host and Import… open Add SSH hosts on the SSH page, in three steps:
+
+1. Choose: one Host field and the `~/.ssh/config` aliases with no saved
+   project as cards to tick. Advanced holds name, user, port and key file
+   (one host only), and group, command timeout and terminal command (every
+   chosen host).
+2. Connect: a checklist per host, one host at a time. Read SSH config, Host
+   key (an unknown key shows its fingerprints with Trust and continue; a
+   changed key is refused with the `ssh-keygen -R` command), Sign in (keys
+   and agent first; then the prompts above with `ssh-askpass-v1`, else the
+   reason), Check the host. Skip this host and Back are always there.
+3. Ready: the login shell and git, nvim and mosh-server found by the probe
+   (`Reply::Probe.tools`, a read-only `command -v` check; older daemons omit
+   it), Use Mosh only when mosh-server is there, the project folder (blank is
+   the login directory; a changed one is probed first), and the OSC 7 lines.
+   Add host or Add and open terminal.
+
+Properties and Duplicate open SSH host Properties on the SSH page (like
 VNC Properties): host (any name, with an optional menu of `~/.ssh/config`
 aliases), port and user, name, group, remote path ("Login directory" probes
 it), and folded key files (`~/` expands to the home directory). Adding a new
@@ -172,12 +214,6 @@ old OpenSSH master unless something else shares it. Layout, forwards and the
 last-connection time are kept. Duplicate copies a project without id, layout or
 forwards; saving a copy with the same host and root is refused. The daemon
 records `last_connected` when an SSH shell starts (`ssh-edit-v1`).
-
-Import… on the SSH page opens an import page that lists
-`~/.ssh/config` aliases with no saved project. Chosen hosts are added one at a
-time, either at their login directory (one batch connection each, so hosts
-needing a password or 2FA fail and are listed) or at one path for all (no
-connection), with an optional group.
 
 Grouping and removal need a daemon advertising `ssh-hosts-v1`. Removal is refused while the project has live terminals, VNC sessions or running transfers, and it stops the project's OpenSSH master unless another project or live session uses the same socket.
 

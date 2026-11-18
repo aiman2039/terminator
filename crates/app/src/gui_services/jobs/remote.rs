@@ -55,8 +55,8 @@ impl Services {
             }
         };
         let result = match client.rpc(request).await {
-            Ok(Response::RemoteProject(terminator_core::remote::Reply::Probe { root })) => {
-                Ok(crate::remote_ui::FormResult::Probe(root))
+            Ok(Response::RemoteProject(terminator_core::remote::Reply::Probe { root, tools })) => {
+                Ok(crate::remote_ui::FormResult::Probe(root, tools))
             }
             Ok(Response::Ok) => match client.rpc(Request::Snapshot).await {
                 Ok(Response::State(state)) => Ok(crate::remote_ui::FormResult::Added(state)),
@@ -189,6 +189,48 @@ impl Services {
             updates.push(Update::HostKeyScanned(ssh, result));
         }
         Ok(())
+    }
+
+    /// One step of a sign-in with prompts in the GUI (`ssh-askpass-v1`).
+    pub(in crate::gui_services) async fn ssh_sign_in(
+        &self,
+        ssh: terminator_core::ssh::SshOptions,
+        step: crate::onboard::SignInStep,
+    ) -> Update {
+        use crate::onboard::{SignInStep, SignInUpdate};
+        let client = self.client();
+        let update = match step {
+            SignInStep::Run => SignInUpdate::Done(
+                match client.rpc(Request::SshSignIn { ssh: ssh.clone() }).await {
+                    Ok(Response::Ok) => Ok(()),
+                    Ok(_) => Err(String::from("Unexpected sign-in response").into()),
+                    Err(e) => Err(crate::remote_ui::Failure::from_error(&e)),
+                },
+            ),
+            SignInStep::Poll => SignInUpdate::Prompt(
+                match client
+                    .rpc(Request::SshSignInStatus { ssh: ssh.clone() })
+                    .await
+                {
+                    Ok(Response::SshPrompt(prompt)) => prompt,
+                    _ => None,
+                },
+            ),
+            SignInStep::Answer { id, answer } => SignInUpdate::Answered(
+                match client
+                    .rpc(Request::AnswerSshPrompt {
+                        ssh: ssh.clone(),
+                        id,
+                        answer,
+                    })
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(format!("{}", terminator_core::ErrorChain(&e))),
+                },
+            ),
+        };
+        Update::SshSignIn(ssh, update)
     }
 
     /// `ssh -G` runs once per alias, so this stays off the GUI thread.

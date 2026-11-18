@@ -161,6 +161,7 @@ pub fn read_only(request: &Request) -> bool {
         request,
         Request::ProbeRemoteProject { .. }
             | Request::ScanHostKey { .. }
+            | Request::SshSignInStatus { .. }
             | Request::ForwardStatus
             | Request::Snapshot
             | Request::History { .. }

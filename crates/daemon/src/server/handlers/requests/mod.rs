@@ -217,6 +217,17 @@ impl Shared {
             Request::ProbeRemoteProject { project } => self.on_probe_remote_project(&project),
             Request::ScanHostKey { ssh } => self.on_scan_host_key(&ssh),
             Request::TrustHostKey { ssh, keys } => self.on_trust_host_key(&ssh, &keys),
+            Request::SshSignIn { ssh } => {
+                self.ssh_sign_in(&ssh)?;
+                Ok(Outcome::Reply(Response::Ok))
+            }
+            Request::SshSignInStatus { ssh } => Ok(Outcome::Reply(Response::SshPrompt(
+                self.ssh_sign_in_prompt(&ssh),
+            ))),
+            Request::AnswerSshPrompt { ssh, id, answer } => {
+                self.answer_ssh_prompt(&ssh, id, answer)?;
+                Ok(Outcome::Reply(Response::Ok))
+            }
             Request::RemoteProject { project, operation } => {
                 self.on_remote_project(&project, operation)
             }

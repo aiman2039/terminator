@@ -22,7 +22,6 @@ impl App {
     pub(crate) fn show_ssh_page(&mut self) {
         if !self.remote_ui.draft_changed() {
             self.remote_ui.close();
-            self.remote_ui.import = None;
         }
         self.show_center(crate::CenterPage::Ssh);
     }
@@ -61,8 +60,8 @@ impl App {
             close |= self.ssh_discard_bar(ui);
             if self.remote_ui.open {
                 self.ssh_properties_body(ui);
-            } else if self.remote_ui.import.is_some() {
-                self.ssh_import_body(ui);
+            } else if self.remote_ui.onboard.is_some() {
+                self.onboard_body(ui);
             } else if self.remote_supported() {
                 self.ssh_address_book(ui);
             } else {
@@ -81,7 +80,7 @@ impl App {
         }
         if close {
             self.remote_ui.close();
-            self.remote_ui.import = None;
+            self.close_onboard();
             self.hide_center_overlay();
             self.selection_generation = self.selection_generation.wrapping_add(1);
         }
@@ -176,12 +175,7 @@ impl App {
             self.open_host_terminal(id);
             return;
         }
-        let draft = RemoteProject {
-            name: ssh.authority(),
-            ssh,
-            ..crate::remote_ui::blank_project()
-        };
-        self.open_ssh_properties(draft);
+        self.open_add_hosts(typed);
     }
 
     fn ssh_confirm_remove_bar(&mut self, ui: &mut egui::Ui) {
@@ -289,7 +283,7 @@ impl App {
             });
         });
         if import {
-            self.open_ssh_import();
+            self.new_ssh_host();
         }
     }
 

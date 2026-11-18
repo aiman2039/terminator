@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod askpass;
 mod attach;
 mod browser;
 mod control;
@@ -13,6 +14,9 @@ use anyhow::{Context, Result};
 use terminator_core::*;
 fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(result) = askpass::from_env(&args) {
+        return result;
+    }
     if args.first().map(String::as_str) != Some("--health-check")
         && let Ok(paths) = Paths::discover()
     {
