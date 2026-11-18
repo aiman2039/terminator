@@ -19,6 +19,7 @@ mod viewer;
 
 use crate::document_view::DocumentKind;
 use crate::*;
+pub(crate) use banner::Starting;
 use egui_snarl::{NodeId, Snarl};
 use model::Node;
 #[cfg(test)]
@@ -330,6 +331,7 @@ impl App {
             && let Ok(path) = files::path_of(&loaded.root, file)
         {
             self.flows.stay = Some(Stay::after_run(&path, runner, &self.flows.runs));
+            self.flows.starting = Some(Starting::now(&path));
         }
         self.info = Some(format!(
             "Started the flow {file}. Its tab shows each step; a step opens its own terminal."

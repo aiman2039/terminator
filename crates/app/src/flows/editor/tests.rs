@@ -519,6 +519,58 @@ fn click_on_a_prompt_opens_the_card_dialog_with_large_fields() {
 }
 
 #[test]
+fn banner_says_starting_after_run_and_an_ended_run_banner_can_be_hidden() {
+    use terminator_core::flow::RunState;
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let path = flow_path(project.path(), "build");
+    settle(&mut app, &ctx, &path);
+    let flow = flow::files::load(project.path(), "build").unwrap();
+    let run = |name: &str, ended: bool| {
+        let mut state = RunState::new(&flow, "p");
+        state.ended = ended;
+        crate::flows::Run {
+            dir: project.path().join(name),
+            state,
+        }
+    };
+    let show = |app: &mut App, runs: Vec<crate::flows::Run>| {
+        app.flows.runs = runs;
+        // No read of the run folders replaces these runs in the next frames.
+        app.flows.read_at = Some(Instant::now());
+        settle(app, &ctx, &path)
+    };
+
+    // After a Run click, an older run of the flow is not shown as the news.
+    app.flows.starting = Some(Starting::now(&path));
+    let text = show(&mut app, vec![run("Build-100", true)]);
+    assert_eq!(count(&text, "Starting the run…"), 1, "{text:?}");
+    assert_eq!(count(&text, "Run stopped"), 0, "{text:?}");
+
+    // The run of that click shows: its folder name ends with a later second.
+    let text = show(&mut app, vec![run("Build-99999999999", false)]);
+    assert_eq!(count(&text, "Starting the run…"), 0, "{text:?}");
+    assert_eq!(count(&text, "Run running"), 1, "{text:?}");
+    assert!(app.flows.starting.is_none());
+
+    // An ended run's banner goes away when the user closes it; a newer run
+    // has its own banner.
+    let text = show(&mut app, vec![run("Build-100", true)]);
+    assert_eq!(count(&text, "Run stopped"), 1, "{text:?}");
+    app.flows
+        .banner_hidden
+        .insert(project.path().join("Build-100"));
+    let text = show(&mut app, vec![run("Build-100", true)]);
+    assert_eq!(count(&text, "Run stopped"), 0, "{text:?}");
+    let text = show(
+        &mut app,
+        vec![run("Build-200", true), run("Build-100", true)],
+    );
+    assert_eq!(count(&text, "Run stopped"), 1, "{text:?}");
+}
+
+#[test]
 fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     use terminator_core::flow::{RunState, StepStatus};
     let project = project_with_flows();

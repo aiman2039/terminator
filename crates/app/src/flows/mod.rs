@@ -60,6 +60,11 @@ pub(crate) struct FlowsState {
     visible: std::collections::HashSet<PathBuf>,
     /// The editor whose Run keeps the app on its tab.
     stay: Option<editor::Stay>,
+    /// The editor whose Run was clicked a moment ago: its banner says
+    /// "Starting" until the new run shows.
+    starting: Option<editor::Starting>,
+    /// Ended runs whose banner the user closed, by run folder.
+    banner_hidden: std::collections::HashSet<PathBuf>,
     /// The runs of the last read, newest first.
     runs: Vec<Run>,
     reading: Option<Receiver<Vec<Run>>>,

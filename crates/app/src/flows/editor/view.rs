@@ -179,14 +179,25 @@ impl App {
         if editor.saving.is_some() || editor.exporting.is_some() {
             ui.ctx().request_repaint();
         }
-        let run = self.flow_run_of(ui.ctx(), editor);
+        let mut run = self.flow_run_of(ui.ctx(), editor);
+        // After a Run click, an older run of this flow is not the news.
+        let starting = super::banner::still_starting(&mut self.flows.starting, path, run.as_ref());
+        if starting {
+            run = None;
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
         let state = run.as_ref().map(|run| run_status(&run.state));
         let mut click = toolbar(ui, editor, state);
         if let Some(error) = &editor.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if let Some(run) = &run {
-            super::banner::run_banner(ui, run, self.flow_colors());
+        if starting {
+            super::banner::starting_banner(ui, self.flow_colors());
+        } else if let Some(run) = &run
+            && !self.flows.banner_hidden.contains(&run.dir)
+            && super::banner::run_banner(ui, run, self.flow_colors())
+        {
+            self.flows.banner_hidden.insert(run.dir.clone());
         }
         self.flow_graph(ui, path, (editor, run.as_ref()));
         click = click.or(self.flow_editor_dialog(ui.ctx(), editor));
@@ -213,6 +224,7 @@ impl App {
                     if let Some(runner) = self.run_flow(&loaded, &editor.file) {
                         // The editor shows the run, so the app stays on it.
                         self.flows.stay = Some(Stay::after_run(path, runner, &self.flows.runs));
+                        self.flows.starting = Some(super::Starting::now(path));
                     }
                 }
             }
