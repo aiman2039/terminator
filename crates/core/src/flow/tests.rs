@@ -217,6 +217,22 @@ fn cancel_keeps_ended_steps_and_ends_the_run() {
 }
 
 #[test]
+fn a_cancelled_step_waits_for_nothing() {
+    let mut state = RunState::new(&flow(), "p");
+    state.set("plan", StepStatus::Running);
+    let waits = Some("The agent's first hook report".to_owned());
+    state.steps.get_mut("plan").unwrap().waits_for = waits.clone();
+    state.set("approve", StepStatus::Done);
+    state.steps.get_mut("approve").unwrap().waits_for = waits.clone();
+    state.cancel();
+    assert_eq!(state.steps["plan"].waits_for, None);
+    assert_eq!(
+        state.steps["approve"].waits_for, waits,
+        "an ended step keeps it"
+    );
+}
+
+#[test]
 fn run_state_round_trips_as_json_and_keeps_the_session() {
     let flow = flow();
     let mut state = RunState::new(&flow, "p");
@@ -270,6 +286,98 @@ fn cancel_and_answers_are_refused_for_an_ended_run() {
         Err(control::RunError::Ended)
     ));
     assert!(!ended.join(control::CANCEL).exists());
+}
+
+#[test]
+fn recent_runs_reads_only_the_newest_folders() {
+    let data = tempfile::tempdir().unwrap();
+    let state = RunState::new(&flow(), "p");
+    let old = save_run(data.path(), "a-1", &state);
+    let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+    std::fs::File::options()
+        .write(true)
+        .open(old.join(STATE_FILE))
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+    let new = save_run(data.path(), "a-2", &state);
+    let recent = control::recent_runs(data.path(), 1);
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].0, new);
+    assert_eq!(control::runs(data.path()).len(), 2);
+}
+
+#[test]
+fn remove_deletes_only_an_ended_run_folder() {
+    let data = tempfile::tempdir().unwrap();
+    let mut state = RunState::new(&flow(), "p");
+    let running = save_run(data.path(), "a-1", &state);
+    assert!(matches!(
+        control::remove(data.path(), &running),
+        Err(control::RunError::NotEnded)
+    ));
+    assert!(running.join(STATE_FILE).is_file(), "a running run stays");
+    state.ended = true;
+    let ended = save_run(data.path(), "a-2", &state);
+    std::fs::create_dir_all(ended.join(control::ANSWERS)).unwrap();
+    control::remove(data.path(), &ended).unwrap();
+    assert!(!ended.exists());
+    assert_eq!(control::runs(data.path()).len(), 1);
+}
+
+#[test]
+fn remove_refuses_folders_outside_the_run_folder() {
+    let data = tempfile::tempdir().unwrap();
+    let mut state = RunState::new(&flow(), "p");
+    state.ended = true;
+    save_run(data.path(), "a-1", &state);
+    let not_run = |dir: &std::path::Path| {
+        matches!(
+            control::remove(data.path(), dir),
+            Err(control::RunError::NotRun | control::RunError::Io(_))
+        )
+    };
+    // A run folder of another data folder.
+    let other = tempfile::tempdir().unwrap();
+    let elsewhere = save_run(other.path(), "a-1", &state);
+    assert!(not_run(&elsewhere));
+    assert!(elsewhere.is_dir());
+    // Path tricks: a parent step, a nested folder, the run folder itself.
+    assert!(not_run(&data.path().join(RUN_DIR).join("a-1/..")));
+    assert!(not_run(&data.path().join(RUN_DIR).join("..").join("x")));
+    let nested = save_run(&data.path().join(RUN_DIR).join("a-1"), "b-1", &state);
+    assert!(not_run(&nested));
+    assert!(not_run(&data.path().join(RUN_DIR)));
+    // A folder without a readable state file.
+    let empty = data.path().join(RUN_DIR).join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert!(control::remove(data.path(), &empty).is_err());
+    assert!(empty.is_dir());
+    assert!(data.path().join(RUN_DIR).join("a-1").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_never_follows_a_link_out_of_the_run_folder() {
+    let data = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let mut state = RunState::new(&flow(), "p");
+    state.ended = true;
+    let target = save_run(outside.path(), "t-1", &state);
+    std::fs::create_dir_all(data.path().join(RUN_DIR)).unwrap();
+    let link = data.path().join(RUN_DIR).join("t-1");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert!(matches!(
+        control::remove(data.path(), &link),
+        Err(control::RunError::NotRun)
+    ));
+    assert!(target.join(STATE_FILE).is_file());
+    // A link inside an ended run is deleted, not its target.
+    let dir = save_run(data.path(), "a-1", &state);
+    std::os::unix::fs::symlink(&target, dir.join("inside")).unwrap();
+    control::remove(data.path(), &dir).unwrap();
+    assert!(!dir.exists());
+    assert!(target.join(STATE_FILE).is_file());
 }
 
 #[test]

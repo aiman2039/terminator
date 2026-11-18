@@ -121,11 +121,13 @@ impl RunState {
         step.note = Some(note.into());
     }
 
-    /// Mark every step that did not end as cancelled.
+    /// Mark every step that did not end as cancelled. A cancelled step
+    /// waits for nothing.
     pub fn cancel(&mut self) {
         for step in self.steps.values_mut() {
             if matches!(step.status, StepStatus::Waiting | StepStatus::Running) {
                 step.status = StepStatus::Cancelled;
+                step.waits_for = None;
             }
         }
     }

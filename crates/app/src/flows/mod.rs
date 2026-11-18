@@ -12,6 +12,7 @@
 mod editor;
 mod panel;
 mod picker;
+mod runs_view;
 #[cfg(test)]
 mod tests;
 
@@ -69,6 +70,10 @@ pub(crate) struct FlowsState {
     drafts: HashMap<(PathBuf, String), String>,
     /// The run whose Cancel waits for confirmation.
     confirm_cancel: Option<PathBuf>,
+    /// Clear ended runs waits for confirmation.
+    confirm_clear: bool,
+    /// Runs whose steps the user showed (true) or hid, by run folder.
+    expanded: HashMap<PathBuf, bool>,
 }
 
 impl FlowsState {

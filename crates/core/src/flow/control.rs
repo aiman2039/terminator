@@ -34,6 +34,12 @@ pub enum RunError {
     NoQuestion,
     #[error("The text is empty or longer than 16 KiB")]
     Text,
+    #[error(
+        "This run has not ended, so it stays in the list. Cancel it and wait until its runner ends it"
+    )]
+    NotEnded,
+    #[error("This folder is not a run folder")]
+    NotRun,
     #[error(transparent)]
     Write(#[from] crate::AtomicWriteError),
 }
@@ -54,6 +60,13 @@ pub fn read_state(dir: &Path) -> Result<RunState, RunError> {
 /// Every readable run in the data folder, newest first, with its folder.
 /// Blocking: call it off the GUI thread.
 pub fn runs(data: &Path) -> Vec<(PathBuf, RunState)> {
+    recent_runs(data, usize::MAX)
+}
+
+/// The readable runs among the `limit` run folders whose state file
+/// changed last, newest first. Only those state files are read.
+/// Blocking: call it off the GUI thread.
+pub fn recent_runs(data: &Path, limit: usize) -> Vec<(PathBuf, RunState)> {
     let mut found: Vec<_> = std::fs::read_dir(data.join(RUN_DIR))
         .into_iter()
         .flatten()
@@ -61,13 +74,14 @@ pub fn runs(data: &Path) -> Vec<(PathBuf, RunState)> {
         .filter_map(|entry| {
             let dir = entry.path();
             let changed = dir.join(STATE_FILE).metadata().ok()?.modified().ok()?;
-            Some((changed, dir.clone(), read_state(&dir).ok()?))
+            Some((changed, dir))
         })
         .collect();
     found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
     found
         .into_iter()
-        .map(|(_, dir, state)| (dir, state))
+        .take(limit)
+        .filter_map(|(_, dir)| Some((dir.clone(), read_state(&dir).ok()?)))
         .collect()
 }
 
@@ -119,4 +133,28 @@ pub fn answer_question(dir: &Path, step: &str, text: &str) -> Result<(), RunErro
 pub fn cancel(dir: &Path) -> Result<(), RunError> {
     open(dir)?;
     Ok(std::fs::write(dir.join(CANCEL), b"")?)
+}
+
+/// Delete the folder of an ended run. `dir` must be a real folder (not a
+/// link) directly in the run folder of `data`, with a plain name and a
+/// readable state file. Its sessions are not touched. Blocking: call it
+/// off the GUI thread.
+pub fn remove(data: &Path, dir: &Path) -> Result<(), RunError> {
+    let plain = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(super::files::plain_name);
+    if !plain || !std::fs::symlink_metadata(dir)?.is_dir() {
+        return Err(RunError::NotRun);
+    }
+    let runs = std::fs::canonicalize(data.join(RUN_DIR))?;
+    let parent = std::fs::canonicalize(dir)?.parent().map(Path::to_path_buf);
+    if parent.as_deref() != Some(runs.as_path()) {
+        return Err(RunError::NotRun);
+    }
+    if !read_state(dir)?.ended {
+        return Err(RunError::NotEnded);
+    }
+    // `remove_dir_all` deletes links inside the folder, never their targets.
+    Ok(std::fs::remove_dir_all(dir)?)
 }

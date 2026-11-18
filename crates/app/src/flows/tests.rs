@@ -213,7 +213,16 @@ fn flows_panel_shows_a_gate_with_approve_and_a_question_with_send() {
     let ctx = egui::Context::default();
     let text = painted(&ctx, |ui| app.flows_panel(ui));
     for label in [
-        "Flows", "Build", "running", "one", "A or B?", "Send", "ok", "Good?", "Approve", "Reject",
+        "Flows",
+        "Build",
+        "running · 0 of 2 steps done",
+        "one",
+        "A or B?",
+        "Send",
+        "ok",
+        "Good?",
+        "Approve",
+        "Reject",
     ] {
         assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
     }
@@ -328,4 +337,153 @@ fn panel_buttons_write_only_the_users_answers() {
     // No button makes a terminal or types into one.
     assert!(received.try_recv().is_err());
     assert!(app.post_create.by_tab.is_empty());
+}
+
+/// A run of FLOW in folder `name`: running, or ended with `done` steps done.
+fn run_of(data: &Path, name: &str, ended: Option<usize>) -> Run {
+    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    if let Some(done) = ended {
+        for id in ["one", "ok"].into_iter().take(done) {
+            state.set(id, StepStatus::Done);
+        }
+        state.ended = true;
+    }
+    Run {
+        dir: data.join("flows").join(name),
+        state,
+    }
+}
+
+fn count(text: &[String], label: &str) -> usize {
+    text.iter().filter(|line| *line == label).count()
+}
+
+#[test]
+fn only_the_newest_and_running_runs_show_their_steps() {
+    let project = project_with_flows();
+    let (mut app, received, data) = app_with_project(project.path());
+    app.flows.runs = vec![
+        run_of(data.path(), "build-3", Some(2)),
+        run_of(data.path(), "build-2", Some(0)),
+        run_of(data.path(), "build-1", None),
+    ];
+    // No folder read replaces these runs during the test.
+    app.flows.read_at = Some(Instant::now());
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    // The newest (done) and the running run show their steps; the older
+    // stopped run is one line with its summary.
+    assert_eq!(count(&text, "one"), 2, "{text:?}");
+    for label in [
+        "done · 2 of 2 steps done",
+        "stopped · 0 of 2 steps done",
+        "running · 0 of 2 steps done",
+    ] {
+        assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    // A click opens the stopped run, a second one closes it again.
+    let stopped = data.path().join("flows/build-2");
+    app.apply_flow_act(panel::Act::Toggle(stopped.clone(), true));
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    assert_eq!(count(&text, "one"), 3, "{text:?}");
+    app.apply_flow_act(panel::Act::Toggle(stopped, false));
+    app.apply_flow_act(panel::Act::Toggle(data.path().join("flows/build-1"), false));
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    assert_eq!(count(&text, "one"), 1, "{text:?}");
+    // Opening and closing writes nothing and starts nothing.
+    assert!(received.try_recv().is_err());
+    assert!(!data.path().join("flows").exists());
+    for icon in ["Trash", "ChevronRight", "ChevronDown", "EllipsisVertical"] {
+        assert!(crate::icons::is_ui_icon(icon), "{icon}");
+    }
+}
+
+#[test]
+fn a_long_step_note_is_clipped_to_two_rows() {
+    let ctx = egui::Context::default();
+    let note = "The agent did not report. ".repeat(20);
+    let mut shown = None;
+    painted(&ctx, |ui| {
+        shown = Some(runs_view::note_galley(ui, &note, 300.0));
+    });
+    let galley = shown.expect("galley");
+    assert_eq!(galley.rows.len(), 2);
+    assert!(galley.elided, "the full text is on hover");
+    let short = painted(&ctx, |_| {});
+    assert!(short.is_empty());
+}
+
+/// Saves `run` as its state file.
+fn save(run: &Run) {
+    std::fs::create_dir_all(&run.dir).expect("dir");
+    std::fs::write(
+        run.dir.join("state.json"),
+        serde_json::to_vec(&run.state).expect("json"),
+    )
+    .expect("state");
+}
+
+/// Reads the panel's answers until no worker writes.
+fn settle(app: &mut App) {
+    let ctx = egui::Context::default();
+    let started = Instant::now();
+    while !app.flows.acting.is_empty() {
+        app.poll_flow_runs(&ctx);
+        assert!(started.elapsed() < Duration::from_secs(10), "worker hangs");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn remove_and_clear_delete_only_ended_runs_after_a_click() {
+    let project = project_with_flows();
+    let (mut app, received, data) = app_with_project(project.path());
+    let running = run_of(data.path(), "build-1", None);
+    let stopped = run_of(data.path(), "build-2", Some(1));
+    let done = run_of(data.path(), "build-3", Some(2));
+    let other = Run {
+        state: RunState {
+            project: "other".into(),
+            ..done.state.clone()
+        },
+        dir: data.path().join("flows/build-4"),
+    };
+    for run in [&running, &stopped, &done, &other] {
+        save(run);
+    }
+    // Remove of a running run is refused and deletes nothing.
+    app.apply_flow_act(panel::Act::Remove(running.dir.clone()));
+    settle(&mut app);
+    assert!(running.dir.join("state.json").is_file());
+    assert!(
+        app.error
+            .text()
+            .is_some_and(|text| text.contains("has not ended")),
+        "{:?}",
+        app.error.text()
+    );
+    app.apply_flow_act(panel::Act::Remove(done.dir.clone()));
+    settle(&mut app);
+    assert!(!done.dir.exists());
+
+    // Clear ended runs: nothing goes before the confirmation.
+    app.flows.runs = vec![running, stopped, other];
+    let ctx = egui::Context::default();
+    app.apply_flow_act(panel::Act::AskClear);
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    assert!(
+        text.iter()
+            .any(|line| line == "Remove 1 ended run from the list? Their terminals stay open."),
+        "{text:?}"
+    );
+    app.apply_flow_act(panel::Act::KeepRuns);
+    assert!(!app.flows.confirm_clear);
+    let stopped_dir = data.path().join("flows/build-2");
+    assert!(stopped_dir.is_dir());
+    app.apply_flow_act(panel::Act::Clear(vec![stopped_dir.clone()]));
+    settle(&mut app);
+    assert!(!stopped_dir.exists());
+    assert!(data.path().join("flows/build-1/state.json").is_file());
+    assert!(data.path().join("flows/build-4/state.json").is_file());
+    assert!(received.try_recv().is_err(), "no terminal");
 }
