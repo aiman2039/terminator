@@ -54,6 +54,15 @@
   run failed in the `run` group with a broken pipe while another cargo
   build ran, and `--only regressions` and `--only flows` pass. Not
   checked on `master`.
+- Cause and correction of that stop: the daemon sends a heartbeat frame
+  every 2 seconds, so the test's 5-second read timeout never fired. On a
+  loaded machine the shell made its output late, the test read all of it
+  before the daemon's 3-second write deadline, the daemon kept the
+  attachment, and the read loop had no end. The test now waits for the
+  saved output before the stall, and its read loop has a 30-second limit.
+  The same stopped case is in a leftover folder of 2026-11-15, before the
+  flow work. After the correction the full set passed three times in
+  sequence (load average 28 at the start).
 - `panel_buttons_write_only_the_users_answers` covers the tool window's
   Approve, Send and Cancel run actions (the files they write, and that
   they make no terminal).
