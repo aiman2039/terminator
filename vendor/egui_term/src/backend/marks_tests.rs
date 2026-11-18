@@ -113,6 +113,40 @@ fn shell_without_marks_never_reports_a_mark_seen() {
     assert!(log.marks_seen());
 }
 
+#[test]
+fn osc7_folder_reports_are_kept_and_removed_from_the_stream() {
+    let log = CommandLog::default();
+    let mut rewriter = MarkRewriter::new(log.clone());
+    let mut out = Vec::new();
+    assert_eq!(log.reported_cwd(), None);
+    for byte in b"a\x1b]7;file://box/home/me\x1b\\b" {
+        rewriter.feed(std::slice::from_ref(byte), &mut out);
+    }
+    assert_eq!(text(&out), "ab");
+    assert_eq!(log.reported_cwd().as_deref(), Some("file://box/home/me"));
+    rewriter.feed(b"\x1b]7;file://box/srv/app%20x\x07", &mut out);
+    assert_eq!(
+        log.reported_cwd().as_deref(),
+        Some("file://box/srv/app%20x")
+    );
+    assert!(!log.marks_seen());
+}
+
+#[test]
+fn other_osc_numbers_starting_with_7_and_oversized_reports_pass_through() {
+    for stream in [b"\x1b]77;x\x07".as_slice(), b"\x1b]7\x07"] {
+        assert_eq!(rewrite_all(stream), stream);
+    }
+    let mut oversized = b"\x1b]7;file://h/".to_vec();
+    oversized.extend(std::iter::repeat_n(b'a', 8 * 1024));
+    oversized.push(0x07);
+    let log = CommandLog::default();
+    let mut out = Vec::new();
+    MarkRewriter::new(log.clone()).feed(&oversized, &mut out);
+    assert_eq!(out, oversized);
+    assert_eq!(log.reported_cwd(), None);
+}
+
 fn term_with(stream: &[u8], lines: usize) -> Term<VoidListener> {
     let mut term = Term::new(Config::default(), &TermSize::new(20, lines), VoidListener);
     Processor::<alacritty_terminal::vte::ansi::StdSyncHandler>::new()

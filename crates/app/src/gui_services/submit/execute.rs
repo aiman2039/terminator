@@ -104,6 +104,7 @@ impl Services {
             | Job::RemoteRead { .. }
             | Job::HostKey { .. }
             | Job::SshConfigHosts(..)
+            | Job::SshSignIn(..)
             | Job::Forwards(..)
             | Job::SshControlStatus(..)
             | Job::RemoteAsset { .. }

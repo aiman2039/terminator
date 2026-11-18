@@ -44,7 +44,7 @@ pub(crate) use install::windows_updates;
 pub(crate) use lifecycle::diagnostics;
 pub(crate) use lifecycle::{exit, notify_test, resource_sample, retry_budget};
 pub(crate) use markdown::images as markdown_images;
-pub(crate) use remote::{forwards_ui, hosts_ui, remote_ui, transfers_ui};
+pub(crate) use remote::{forwards_ui, hosts_ui, onboard, remote_ui, transfers_ui};
 pub mod console;
 use daemon_connection::{can_restart_service, can_retire_daemon};
 mod updater {

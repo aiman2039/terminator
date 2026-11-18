@@ -1,9 +1,12 @@
 //! Remote project controls and data. Local refresh/watch services are never used.
 mod fields;
+mod follow;
 mod host_key;
 mod properties;
 mod sidebar;
-pub(crate) use fields::{blank_project, config_host_summary};
+pub(crate) use fields::{
+    SharedFields, blank_project, config_host_summary, shared_fields, sign_in_fields,
+};
 
 use crate::{App, Job, appearance};
 use eframe::egui;
@@ -28,7 +31,12 @@ use terminator_core::{
 };
 
 pub(crate) enum FormResult {
-    Probe(String),
+    /// The probed root, and the host's shell and tools when the daemon
+    /// reports them.
+    Probe(
+        String,
+        Option<terminator_core::remote::host_check::HostTools>,
+    ),
     Added(Box<terminator_core::State>),
 }
 /// A remote operation's error text plus its SSH classification, when the
@@ -111,8 +119,11 @@ pub(crate) struct RemoteUi {
     /// Allocates config-load generations for the dialog and Hosts sidebar.
     pub config_seq: u64,
     pub hosts: crate::hosts_ui::HostsState,
-    /// The import page, while open.
-    pub import: Option<crate::hosts_ui::import::HostImport>,
+    /// The add-hosts flow, while open.
+    pub onboard: Option<crate::onboard::Onboard>,
+    /// Per SSH terminal, the host its first OSC 7 report named. A later
+    /// report from another host (a nested `ssh`) is not followed.
+    pub follow_hosts: HashMap<String, String>,
 }
 #[derive(Default)]
 pub(crate) struct View {
@@ -133,6 +144,8 @@ pub(crate) struct View {
     pub git_polled: Option<Instant>,
     /// Uploads and downloads (`ssh-transfer-v1`).
     pub transfers: crate::transfers_ui::Transfers,
+    /// Following the focused SSH terminal's folder (OSC 7).
+    pub follow: follow::Follow,
 }
 impl RemoteUi {
     /// Returns the generation to load SSH config hosts for.

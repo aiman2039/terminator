@@ -6414,3 +6414,33 @@ visible (MarkEdit collapses them).
 
 Not verified on screen: the native app was not launched; checks are unit
 and headless egui fixture tests.
+
+## SSH onboarding, in-app sign-in, Explorer follows terminal (2026-11-18)
+
+- Live sshd (`cargo xtask ssh --require`, Docker fixture, OpenSSH client on
+  macOS): steps a–f unchanged; (b) the probe now reports host tools and a
+  login shell. New (g): the password-only account `pw` failed a batch probe
+  with `AuthFailed`; `SshSignIn` started one OpenSSH client with
+  `SSH_ASKPASS=terminator-hook`; `SshSignInStatus` returned OpenSSH's prompt
+  `pw@127.0.0.1's password: `; `AnswerSshPrompt` sent the answer; the sign-in
+  replied `Ok`, and a batch probe then resolved `/workspace/project` through
+  the new master.
+- Unit: OSC 7 is taken out of the PTY stream and kept, split at every byte;
+  other OSC numbers starting with 7 and oversized payloads pass through
+  (`osc7_folder_reports_are_kept_and_removed_from_the_stream`,
+  `other_osc_numbers_starting_with_7_and_oversized_reports_pass_through`).
+  Explorer follows only on a changed report, never another host or a folder
+  outside the root, and not while pinned (`follow::tests`).
+- Unit: secrets are redacted in debug output; the sign-in client has no
+  `BatchMode` but keeps strict host keys and the shared master; a waiting
+  prompt takes one answer and a missing answer cancels at the deadline.
+- Headless egui: Add SSH hosts plans one run per typed host and ticked alias,
+  trusts an unknown key in the checklist (no modal), shows a prompt and sends
+  the answer once, fails a password host with its reason without
+  `ssh-askpass-v1`, probes a changed folder before adding, and draws the host
+  field and config cards (`remote::onboard::tests`).
+- `cargo test --workspace --all-features --locked`, clippy `-D warnings`,
+  `cargo fmt --check` and `sh scripts/check.sh sarah` pass.
+
+Not verified on screen: the native app was not launched, and OSC 7 was not
+checked with a real remote zsh/bash in a live GUI terminal.

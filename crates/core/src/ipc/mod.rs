@@ -233,6 +233,24 @@ pub enum Request {
         ssh: crate::ssh::SshOptions,
         keys: Vec<crate::ssh::HostKey>,
     },
+    /// Signs in to `ssh.host` and leaves its multiplexing master running.
+    /// Prompts wait for `AnswerSshPrompt`. Replies `Ok` once signed in.
+    /// Requires `ssh-askpass-v1`.
+    SshSignIn {
+        ssh: crate::ssh::SshOptions,
+    },
+    /// The prompt the sign-in for `ssh` waits on. Replies
+    /// `Response::SshPrompt`. Requires `ssh-askpass-v1`.
+    SshSignInStatus {
+        ssh: crate::ssh::SshOptions,
+    },
+    /// Answers prompt `id` of the sign-in for `ssh`; `None` cancels the
+    /// sign-in. Requires `ssh-askpass-v1`.
+    AnswerSshPrompt {
+        ssh: crate::ssh::SshOptions,
+        id: u64,
+        answer: Option<crate::ssh::sign_in::Secret>,
+    },
     AddProject {
         path: PathBuf,
     },
@@ -417,6 +435,8 @@ pub enum Response {
     /// Sent only to clients whose envelope sets `ssh_errors`.
     SshError(crate::ssh::SshError),
     HostKeys(crate::ssh::HostKeyScan),
+    /// `None` while no prompt is waiting (`ssh-askpass-v1`).
+    SshPrompt(Option<crate::ssh::sign_in::SignInPrompt>),
     Forwards(crate::remote::ForwardStatus),
     Created(Session),
     Text(String),

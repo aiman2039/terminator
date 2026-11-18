@@ -46,6 +46,9 @@ fn remote(job: &Job) -> Option<Reply> {
             vec![Update::SshConfigHosts(g, Vec::new())]
         }),
         Job::SshControlStatus(_) => reply((), |(), _| vec![Update::SshControlStatus(Vec::new())]),
+        Job::SshSignIn(ssh, step) => reply((ssh.clone(), step.clone()), |(s, step), e| {
+            vec![Update::SshSignIn(s, step.failed(e))]
+        }),
         Job::Forwards(request) => reply(crate::forwards_ui::forward_key(request), |k, e| {
             vec![Update::Forwards(k, Err(e.into()))]
         }),

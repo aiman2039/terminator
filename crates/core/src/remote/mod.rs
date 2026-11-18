@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 mod commands;
 mod forward;
+pub mod host_check;
 pub mod mosh;
 mod paths;
 pub mod reconnect;
@@ -301,6 +302,9 @@ pub struct Change {
 pub enum Reply {
     Probe {
         root: String,
+        /// Shell and tools on the host. Older daemons omit it.
+        #[serde(default)]
+        tools: Option<host_check::HostTools>,
     },
     Directory {
         path: String,

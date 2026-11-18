@@ -7,6 +7,7 @@ use std::{
 
 mod config;
 mod failure;
+pub mod sign_in;
 mod tuning;
 pub use config::{ConfigHost, ConfigSource, config_hosts, parse_config_aliases, parse_config_host};
 pub use failure::{SshError, SshFailure, classify};

@@ -479,7 +479,7 @@ It does not use your configured server or workspace.
 | --- | --- |
 | Start/stop/remove the Docker SSH fixture | `bash scripts/ssh-project-fixture.sh start\|status\|stop\|down` |
 | Rotate a fixture host key (`ChangedHostKey`) | `bash scripts/ssh-project-fixture.sh rekey [ssh-project\|ssh-project-pw]` |
-| Live SSH checks: host keys, master reuse, forwards, 50 MiB transfers | `cargo xtask ssh` (`--require` fails instead of skipping without Docker) |
+| Live SSH checks: host keys, master reuse, forwards, 50 MiB transfers, password sign-in in the app | `cargo xtask ssh` (`--require` fails instead of skipping without Docker) |
 | Host-key trust dialog capture | `cargo xtask gui ssh-hostkey` (after the test-support build) |
 | VNC against TigerVNC in Docker: frame and cursor, Detached, reattach, disconnect | `cargo xtask gui vnc` (after the test-support build; skips without Docker) |
 
