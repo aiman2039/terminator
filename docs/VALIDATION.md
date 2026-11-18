@@ -45,10 +45,18 @@
   tool, `flow_ask` waited and returned the text of `flow answer`, and
   `flow_report` ended the step and the run as done. No MCP client program
   (Claude Code, Codex) was used.
-- `cargo xtask integration` (all groups) did not end in two runs on this
-  machine: every group passed, but the existing `stalled_attachment`
-  regression stayed in its socket read (`regressions/daemon.rs:96`). It
-  passes with `--only regressions`. Not checked on `master`.
+- `cargo xtask integration` (all groups) did not end in three runs of five
+  on this machine: the existing `stalled_attachment` regression stayed in
+  its socket read (`regressions/daemon.rs:96`, seen in a process sample).
+  One of those runs was a trial with the flow group after the other
+  groups, and it stopped before the flow group started, so the flow group
+  is not the cause. One run without the flow group ended correctly, one
+  run failed in the `run` group with a broken pipe while another cargo
+  build ran, and `--only regressions` and `--only flows` pass. Not
+  checked on `master`.
+- `panel_buttons_write_only_the_users_answers` covers the tool window's
+  Approve, Send and Cancel run actions (the files they write, and that
+  they make no terminal).
 
 ## Radio playback after a pre-roll (103FM) — 2026-11-18
 

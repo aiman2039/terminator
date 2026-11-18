@@ -18,7 +18,7 @@ const SHOWN_RUNS: usize = 10;
 const ROW_HEIGHT: f32 = 26.0;
 
 /// One click in the panel.
-enum Act {
+pub(super) enum Act {
     RunFlow,
     Go(String),
     Gate(PathBuf, String, bool),
@@ -247,7 +247,7 @@ impl App {
         }
     }
 
-    fn apply_flow_act(&mut self, act: Act) {
+    pub(super) fn apply_flow_act(&mut self, act: Act) {
         match act {
             Act::RunFlow => self.open_flow_picker(),
             Act::Go(session) => self.go_session(&session),

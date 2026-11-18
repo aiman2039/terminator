@@ -146,3 +146,61 @@ fn run_status_is_done_only_when_every_step_is_done() {
     state.set("ok", StepStatus::Done);
     assert_eq!(panel::run_status(&state), "done");
 }
+
+/// Waits for a file that a worker thread writes, and gives its text.
+fn written(file: &Path) -> String {
+    let started = Instant::now();
+    loop {
+        if let Ok(text) = std::fs::read_to_string(file) {
+            return text;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{} was not written",
+            file.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn panel_buttons_write_only_the_users_answers() {
+    let project = project_with_flows();
+    let (mut app, received, data) = app_with_project(project.path());
+    let dir = data.path().join("flows").join("build-1");
+    std::fs::create_dir_all(dir.join("questions")).expect("dir");
+    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    state.set("one", StepStatus::Running);
+    state.set("ok", StepStatus::Running);
+    std::fs::write(
+        dir.join("state.json"),
+        serde_json::to_vec(&state).expect("json"),
+    )
+    .expect("state");
+
+    // Approve: the gate's answer file.
+    app.apply_flow_act(panel::Act::Gate(dir.clone(), "ok".into(), true));
+    assert_eq!(written(&dir.join("answers/ok")), "approve");
+
+    // Send: the typed answer to the step's open question.
+    std::fs::write(dir.join("questions/one"), "A or B?").expect("question");
+    app.flows
+        .drafts
+        .insert((dir.clone(), "one".into()), " Use A ".into());
+    app.apply_flow_act(panel::Act::Answer(dir.clone(), "one".into()));
+    assert_eq!(written(&dir.join("replies/one")), "Use A");
+    assert!(app.flows.drafts.is_empty(), "the sent draft is cleared");
+
+    // Cancel run: nothing is written before the confirmation.
+    app.apply_flow_act(panel::Act::AskCancel(dir.clone()));
+    assert!(!dir.join("cancel").exists());
+    app.apply_flow_act(panel::Act::KeepRun);
+    assert!(!dir.join("cancel").exists());
+    app.apply_flow_act(panel::Act::AskCancel(dir.clone()));
+    app.apply_flow_act(panel::Act::Cancel(dir.clone()));
+    written(&dir.join("cancel"));
+
+    // No button makes a terminal or types into one.
+    assert!(received.try_recv().is_err());
+    assert!(app.post_create.by_tab.is_empty());
+}
