@@ -210,9 +210,9 @@ impl App {
                         root: editor.root.clone(),
                         files: Vec::new(),
                     };
-                    if self.run_flow(&loaded, &editor.file) {
+                    if let Some(runner) = self.run_flow(&loaded, &editor.file) {
                         // The editor shows the run, so the app stays on it.
-                        self.flows.stay = Some(Stay::after_run(path, &self.flows.runs));
+                        self.flows.stay = Some(Stay::after_run(path, runner, &self.flows.runs));
                     }
                 }
             }

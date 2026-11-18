@@ -11,6 +11,7 @@ mod banner;
 mod canvas;
 mod dialogs;
 mod model;
+mod stay;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -20,6 +21,9 @@ use crate::document_view::DocumentKind;
 use crate::*;
 use egui_snarl::{NodeId, Snarl};
 use model::Node;
+#[cfg(test)]
+use stay::STAY_GRACE;
+pub(crate) use stay::Stay;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use terminator_core::flow::{Draft, Flow, files};
@@ -69,45 +73,6 @@ pub(crate) enum Slot {
     Ready(Box<FlowEditor>),
     /// The file is not a correct flow.
     Failed(String),
-}
-
-/// An editor that keeps the app on its tab during the run that its Run
-/// button started.
-pub(crate) struct Stay {
-    path: PathBuf,
-    /// The runner's terminal did not take the focus yet.
-    pending: bool,
-    /// When Run was clicked: `pending` counts only a short time.
-    since: Instant,
-    /// Step terminals of all runs at the last time the editor took the
-    /// focus back.
-    sessions: usize,
-    /// When another tab took the focus with no new step terminal.
-    away: Option<Instant>,
-}
-
-const STAY_GRACE: Duration = Duration::from_secs(3);
-/// How long the wait for the runner's terminal lasts after Run.
-const STAY_PENDING: Duration = Duration::from_secs(10);
-
-/// The number of step terminals in `runs`.
-fn step_sessions(runs: &[super::Run]) -> usize {
-    runs.iter()
-        .flat_map(|run| run.state.steps.values())
-        .filter(|step| step.session.is_some())
-        .count()
-}
-
-impl Stay {
-    fn after_run(path: &Path, runs: &[super::Run]) -> Self {
-        Self {
-            path: path.into(),
-            pending: true,
-            since: Instant::now(),
-            sessions: step_sessions(runs),
-            away: None,
-        }
-    }
 }
 
 /// The project folder and the flow name of a flow file path.
@@ -358,81 +323,18 @@ impl App {
     /// run and stays on that tab, because its cards show the run. False
     /// when the run did not start.
     pub(crate) fn run_flow_in_editor(&mut self, loaded: &super::LoadedFlows, file: &str) -> bool {
-        if !self.run_flow(loaded, file) {
+        let Some(runner) = self.run_flow(loaded, file) else {
             return false;
-        }
+        };
         if self.open_flow_tab(&loaded.project, &loaded.root, file)
             && let Ok(path) = files::path_of(&loaded.root, file)
         {
-            self.flows.stay = Some(Stay::after_run(&path, &self.flows.runs));
+            self.flows.stay = Some(Stay::after_run(&path, runner, &self.flows.runs));
         }
         self.info = Some(format!(
             "Started the flow {file}. Its tab shows each step; a step opens its own terminal."
         ));
         true
-    }
-
-    /// Makes the workspace tab with the editor of `path` the active one.
-    /// False when the selected project has no such tab.
-    fn show_flow_tab(&mut self, path: &Path) -> bool {
-        let Some(workspace) = self
-            .selected
-            .clone()
-            .and_then(|project| self.layouts.get_mut(&project))
-        else {
-            return false;
-        };
-        let editor = |tab: &Tab| matches!(tab, Tab::Document { path: at, kind: DocumentKind::Flow } if at == path);
-        let Some(id) = workspace
-            .tabs
-            .iter()
-            .find(|group| group.layout.iter_all_tabs().any(|(_, tab)| editor(tab)))
-            .map(|group| group.id.clone())
-        else {
-            return false;
-        };
-        workspace.active = id;
-        workspace.record_active();
-        self.hide_center_overlay();
-        self.focus_non_terminal();
-        true
-    }
-
-    /// After Run in an editor: the app stays on that editor's tab. The
-    /// runner's terminal and each step's terminal take the focus when they
-    /// start; this gives it back to the editor, which shows the run. When
-    /// the user goes to another tab, the editor does not take it back.
-    fn flow_stay_on_editor(&mut self) {
-        let Some(stay) = &mut self.flows.stay else {
-            return;
-        };
-        if self.flows.visible.contains(&stay.path) {
-            stay.away = None;
-            return;
-        }
-        let sessions = step_sessions(&self.flows.runs);
-        let pending = stay.pending && stay.since.elapsed() < STAY_PENDING;
-        if pending || sessions > stay.sessions {
-            let path = stay.path.clone();
-            if self.show_flow_tab(&path) {
-                if let Some(stay) = &mut self.flows.stay {
-                    stay.pending = false;
-                    stay.sessions = sessions;
-                    stay.away = None;
-                }
-                return;
-            }
-            // The editor's tab is not there yet (it opens with the run).
-        }
-        let Some(stay) = &mut self.flows.stay else {
-            return;
-        };
-        // The read of a new step's session can come a moment after its
-        // terminal took the focus.
-        let away = *stay.away.get_or_insert_with(Instant::now);
-        if away.elapsed() > STAY_GRACE {
-            self.flows.stay = None;
-        }
     }
 
     /// After the panes of a frame: takes save results of editors that no

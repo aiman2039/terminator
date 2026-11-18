@@ -194,38 +194,52 @@ impl App {
 
     /// Run one flow on an explicit Run click: a new terminal with the
     /// runner command and Enter. Without the trust answer nothing is typed.
-    /// The Flows tool window then shows, so the run is in view. False when
-    /// the run did not start.
-    pub(crate) fn run_flow(&mut self, loaded: &LoadedFlows, file: &str) -> bool {
+    /// The Flows tool window then shows, so the run is in view. Gives the
+    /// runner line that the new terminal types, or `None` when the run did
+    /// not start.
+    pub(crate) fn run_flow(&mut self, loaded: &LoadedFlows, file: &str) -> Option<String> {
         match self.lsp.trust_answer(&loaded.root) {
             Some(true) => {}
             Some(false) => {
                 self.info = Some("This project is not trusted; its flows stay off.".into());
-                return false;
+                return None;
             }
             None => {
                 self.info = Some("Trust the project before running its flows.".into());
-                return false;
+                return None;
             }
         }
         if !files::plain_name(file) || !self.project_available(&loaded.project) {
             self.info = Some("The flow's project is not open.".into());
-            return false;
+            return None;
         }
         let Ok(program) = std::env::current_exe() else {
             self.info = Some("Could not find the terminator-hook helper.".into());
-            return false;
+            return None;
         };
         let helper = terminator_core::sibling_exe(&program, "terminator-hook");
         if self.selected.as_deref() != Some(loaded.project.as_str()) {
             self.select_project(loaded.project.clone());
         }
+        let line = run_command(&helper, &loaded.project, file);
         let post = PostCreate {
-            input: run_command(&helper, &loaded.project, file),
+            input: line.clone(),
             enter: true,
         };
         self.create_workspace_tab_with(None, Some(loaded.root.clone()), Some(post));
         self.open_flows_tool();
-        true
+        Some(line)
+    }
+
+    /// The runner line `line` waits in a new terminal: its tab is not
+    /// there yet, or its shell has not shown a prompt. The line is typed
+    /// only while its pane paints, so nothing may hide that tab before.
+    pub(crate) fn runner_line_queued(&self, line: &str) -> bool {
+        let queue = &self.post_create;
+        queue
+            .by_tab
+            .values()
+            .chain(queue.by_session.values())
+            .any(|post| post.input == line)
     }
 }

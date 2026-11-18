@@ -570,7 +570,7 @@ fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
     };
 
     // The editor is in view: nothing to do, the wait for the runner stays.
-    app.flows.stay = Some(Stay::after_run(&path, &[]));
+    app.flows.stay = Some(Stay::after_run(&path, "runner".into(), &[]));
     app.flows.begin_frame();
     app.flows.mark_visible(&path);
     app.flow_editors_end_frame();
@@ -592,7 +592,7 @@ fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
     // The runner's terminal took the focus: the editor's tab comes back.
     // Here the editor has no tab yet (it opens with the run), so the wait
     // continues a moment, then ends.
-    app.flows.stay = Some(Stay::after_run(&path, &[]));
+    app.flows.stay = Some(Stay::after_run(&path, "runner".into(), &[]));
     app.flows.begin_frame();
     app.flow_editors_end_frame();
     assert_eq!(stay(&app), Some((true, 0)));
@@ -601,6 +601,57 @@ fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
     app.flows.begin_frame();
     app.flow_editors_end_frame();
     assert_eq!(stay(&app), None);
+}
+
+#[test]
+fn run_stays_on_the_runner_tab_until_the_runner_line_is_typed() {
+    use crate::app::tests::support::{drain_updates, session_fixture};
+    let project = project_with_flows();
+    let (mut app, received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let path = flow_path(project.path(), "build");
+    let active = |app: &App| app.layouts.get("p").map(|dock| dock.active.clone());
+    let end_frame = |app: &mut App| {
+        app.flows.begin_frame();
+        app.flow_editors_end_frame();
+    };
+    app.answer_task_trust(project.path(), true);
+    let loaded = crate::flows::load_flows("p".into(), project.path().into());
+    assert!(app.run_flow_in_editor(&loaded, "build"));
+    let Ok(Job::Control(_, After::Workspace(runner, _))) = received.try_recv() else {
+        panic!("expected the runner's terminal");
+    };
+    // The editor's tab opens first and is in view.
+    drain_updates(&mut app, &ctx);
+    let editor = active(&app).expect("the editor's tab");
+    app.flows.begin_frame();
+    app.flows.mark_visible(&path);
+    app.flow_editors_end_frame();
+
+    // The runner's terminal comes and takes the focus.
+    let mut session = session_fixture("s1", SessionKind::Shell);
+    session.project_id = "p".into();
+    app.update_tx
+        .send(Update::WorkspaceCreated(
+            session,
+            runner.clone(),
+            Vec::new(),
+        ))
+        .unwrap();
+    drain_updates(&mut app, &ctx);
+    assert_eq!(active(&app).as_ref(), Some(&runner));
+
+    // Its pane paints, but its shell shows no prompt yet: the line waits,
+    // so the editor must not hide the runner's tab.
+    end_frame(&mut app);
+    end_frame(&mut app);
+    assert!(app.post_create.by_session.contains_key("s1"));
+    assert_eq!(active(&app).as_ref(), Some(&runner), "the run never starts");
+
+    // The line is typed: the editor's tab comes back.
+    app.post_create.by_session.remove("s1");
+    end_frame(&mut app);
+    assert_eq!(active(&app), Some(editor));
 }
 
 #[test]
