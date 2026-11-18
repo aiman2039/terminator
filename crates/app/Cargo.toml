@@ -27,6 +27,8 @@ eframe = { version = "0.37", default-features = false, features = ["clipboard", 
 egui = { version = "0.37", default-features = false, features = ["experimental"] }
 egui-winit = { version = "0.37", default-features = false, optional = true }
 egui_dock = { version = "0.21", features = ["serde"] }
+# Node graph canvas of the native flow editor (vendor/egui-snarl, egui 0.37).
+egui-snarl = "0.12"
 egui_term = { path = "../../vendor/egui_term" }
 open = "5"
 rfd = "0.17"

@@ -45,9 +45,6 @@ enum Command {
     List { project: String },
     /// Validate a flow file. Starts nothing.
     Check { project: String, name: String },
-    /// Make the drawing NAME.excalidraw of a new flow from the template.
-    /// It replaces no file and starts nothing.
-    New { project: String, name: String },
     /// Run a flow: one new terminal per step, Enter on each command and
     /// prompt. The project must be trusted in Terminator.
     Run { project: String, name: String },
@@ -146,11 +143,6 @@ fn execute(cli: Cli) -> Result<Value> {
             let flow = load(&project_of(&paths, &project)?, &name)?;
             json!({"flow": flow.name, "steps": flow.steps.len(), "valid": true})
         }
-        Command::New { project, name } => {
-            let project = project_of(&paths, &project)?;
-            let file = flow::files::new_drawing(&project.path, &name)?;
-            json!({"file": file, "open": "Open the file in Terminator to draw the flow"})
-        }
         Command::Status { run } => serde_json::to_value(read_state(&run_dir(&paths, &run)?)?)?,
         Command::Approve { run, step } => {
             control::answer_gate(&run_dir(&paths, &run)?, &step, true)?;
@@ -210,7 +202,7 @@ fn plain_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-/// The flow `name` of the project: a TOML file or a drawing.
+/// The flow `name` of the project.
 fn load(project: &Project, name: &str) -> Result<Flow> {
     Ok(flow::files::load(&project.path, name)?)
 }

@@ -299,7 +299,7 @@ fn question_answer_needs_an_open_question_and_bounded_text() {
 }
 
 #[test]
-fn flow_is_found_as_a_toml_file_or_a_drawing_but_not_both() {
+fn flow_files_are_found_by_a_plain_name() {
     let project = tempfile::tempdir().unwrap();
     let folder = project.path().join(FLOW_DIR);
     std::fs::create_dir_all(&folder).unwrap();
@@ -309,41 +309,73 @@ fn flow_is_found_as_a_toml_file_or_a_drawing_but_not_both() {
         Err(files::LoadError::Missing(_))
     ));
     std::fs::write(folder.join("plan.toml"), PLAN_AND_BUILD).unwrap();
-    std::fs::write(folder.join("drawn.excalidraw"), drawing::template()).unwrap();
     std::fs::write(folder.join("notes.md"), "no flow").unwrap();
-    assert_eq!(files::names(project.path()), ["drawn", "plan"]);
+    assert_eq!(files::names(project.path()), ["plan"]);
     assert_eq!(files::load(project.path(), "plan").unwrap(), flow());
-    assert_eq!(files::load(project.path(), "drawn").unwrap().steps.len(), 3);
     // A name is never a path.
     assert!(matches!(
         files::load(project.path(), "../plan"),
         Err(files::LoadError::Name)
     ));
-    // The same name in both forms: neither runs.
-    std::fs::write(folder.join("plan.excalidraw"), drawing::template()).unwrap();
-    assert_eq!(files::names(project.path()), ["drawn", "plan"]);
-    assert!(matches!(
-        files::load(project.path(), "plan"),
-        Err(files::LoadError::Twice(_))
-    ));
 }
 
 #[test]
-fn new_drawing_never_replaces_a_flow() {
-    let project = tempfile::tempdir().unwrap();
-    let folder = project.path().join(FLOW_DIR);
-    std::fs::create_dir_all(&folder).unwrap();
-    assert_eq!(
-        files::new_drawing_path(project.path(), "feature").unwrap(),
-        folder.join("feature.excalidraw")
-    );
-    std::fs::write(folder.join("feature.toml"), PLAN_AND_BUILD).unwrap();
+fn draft_writes_a_file_that_reads_as_the_same_flow() {
+    let flow = flow();
+    let draft = Draft::from(&flow);
+    let text = draft.to_toml().unwrap();
+    assert_eq!(parse(&text).unwrap(), flow);
+    // A multi-line prompt and the editor position survive.
+    let mut draft = draft;
+    draft.steps[0].prompt = Some("Line 1.\nLine \"2\".".into());
+    draft.steps[0].at = Some([320, -40]);
+    let back = parse(&draft.to_toml().unwrap()).unwrap();
+    assert_eq!(back.steps[0].at, Some([320, -40]));
+    assert_eq!(Draft::from(&back), draft);
+}
+
+#[test]
+fn draft_that_is_not_a_correct_flow_gives_no_file_text() {
+    let mut draft = Draft::from(&flow());
+    draft.steps[1].needs = vec!["missing".into()];
     assert!(matches!(
-        files::new_drawing_path(project.path(), "feature"),
+        draft.to_toml(),
+        Err(FlowError::UnknownNeed { .. })
+    ));
+    assert_eq!(Draft::new("n", Vec::new()).to_toml(), Err(FlowError::Empty));
+    let step = DraftStep {
+        id: "a".into(),
+        ..DraftStep::default()
+    };
+    assert_eq!(
+        Draft::new("n", vec![step]).to_toml(),
+        Err(FlowError::Kind("a".into()))
+    );
+}
+
+#[test]
+fn save_writes_only_a_correct_flow_and_replaces_only_when_told() {
+    let project = tempfile::tempdir().unwrap();
+    let draft = Draft::from(&flow());
+    let path = files::save(project.path(), "plan", &draft, false).unwrap();
+    assert_eq!(path, project.path().join(FLOW_DIR).join("plan.toml"));
+    assert_eq!(files::load(project.path(), "plan").unwrap(), flow());
+    // A new flow never replaces a file.
+    assert!(matches!(
+        files::save(project.path(), "plan", &draft, false),
         Err(files::LoadError::Exists(_))
     ));
+    // Save of an open flow replaces its own file.
+    let mut changed = draft.clone();
+    changed.name = "Changed".into();
+    files::save(project.path(), "plan", &changed, true).unwrap();
+    assert_eq!(files::load(project.path(), "plan").unwrap().name, "Changed");
+    // A wrong draft or a bad name writes nothing.
+    changed.steps.clear();
+    assert!(files::save(project.path(), "plan", &changed, true).is_err());
+    assert_eq!(files::load(project.path(), "plan").unwrap().name, "Changed");
     assert!(matches!(
-        files::new_drawing_path(project.path(), "a b"),
+        files::save(project.path(), "../x", &draft, false),
         Err(files::LoadError::Name)
     ));
 }

@@ -16,11 +16,11 @@
 //! id = "approve"
 //! gate = "Is the plan correct?" # waits for Approve in the Agents inbox
 //! needs = ["plan"]
+//! at = [320, 40]                # optional, the step's place in the editor
 //! ```
 //!
-//! A flow can also be a drawing, `NAME.excalidraw` in the same folder: a
-//! box is a step, a diamond is a gate and an arrow is `needs` (see
-//! `drawing`). Both forms give the same checked [`Flow`].
+//! [`Draft`] is the same file as plain data. The native flow editor makes
+//! one, and [`Draft::to_toml`] writes the file after [`Draft::check`].
 //!
 //! `prompt` is sent after the agent's first hook report (Claude Code
 //! reports at its start). An agent that reports only after its first
@@ -32,14 +32,13 @@
 //! nothing. The runner (`terminator-hook flow run`) starts a flow only on
 //! an explicit Run.
 use petgraph::{algo::toposort, graph::DiGraph};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Component, Path},
 };
 
 pub mod control;
-pub mod drawing;
 pub mod files;
 mod run;
 pub use run::{Outcome, RUN_DIR, RunState, STATE_FILE, StepRun, StepStatus};
@@ -85,9 +84,6 @@ pub enum FlowError {
     UnknownNeed { step: String, needs: String },
     #[error("Step \"{0}\" is part of a cycle")]
     Cycle(String),
-    /// A drawing that is not a correct flow (see `drawing`).
-    #[error("{0}")]
-    Drawing(String),
 }
 
 /// What a step does.
@@ -114,6 +110,8 @@ pub struct Step {
     /// IDs of the steps that must be done first; each one exists.
     pub needs: Vec<String>,
     pub kind: StepKind,
+    /// The step's place in the flow editor. Display only.
+    pub at: Option<[i32; 2]>,
 }
 
 /// A validated flow: unique IDs, known `needs`, no cycle.
@@ -124,60 +122,117 @@ pub struct Flow {
     pub steps: Vec<Step>,
 }
 
-#[derive(Deserialize)]
+/// A flow file as plain data, not checked: what the file says, and what
+/// the flow editor makes. [`Draft::check`] gives the checked [`Flow`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawFlow {
-    version: u32,
-    name: String,
-    #[serde(default)]
-    step: Vec<RawStep>,
+pub struct Draft {
+    pub version: u32,
+    pub name: String,
+    #[serde(default, rename = "step")]
+    pub steps: Vec<DraftStep>,
 }
 
-#[derive(Deserialize)]
+/// One step of a [`Draft`]. A step has `command` or `gate`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawStep {
-    id: String,
-    #[serde(default)]
-    needs: Vec<String>,
-    command: Option<String>,
-    prompt: Option<String>,
-    gate: Option<String>,
-    cwd: Option<String>,
-    worktree: Option<String>,
+pub struct DraftStep {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[i32; 2]>,
 }
 
 /// Read and validate one flow file's text.
 pub fn parse(text: &str) -> Result<Flow, FlowError> {
-    let raw: RawFlow =
+    let draft: Draft =
         toml_edit::de::from_str(text).map_err(|error| FlowError::Syntax(error.to_string()))?;
-    if raw.version != VERSION {
-        return Err(FlowError::Version(raw.version));
-    }
-    build(&raw.name, raw.step)
+    draft.check()
 }
 
-/// The checks that a TOML file and a drawing share.
-fn build(name: &str, steps: Vec<RawStep>) -> Result<Flow, FlowError> {
-    let name = name.trim();
-    if !text_ok(name, false) {
-        return Err(FlowError::Name);
+impl Draft {
+    /// A draft of this file version.
+    pub fn new(name: &str, steps: Vec<DraftStep>) -> Self {
+        Self {
+            version: VERSION,
+            name: name.to_owned(),
+            steps,
+        }
     }
-    if steps.is_empty() {
-        return Err(FlowError::Empty);
+
+    /// The checked flow of this draft.
+    pub fn check(self) -> Result<Flow, FlowError> {
+        if self.version != VERSION {
+            return Err(FlowError::Version(self.version));
+        }
+        let name = self.name.trim();
+        if !text_ok(name, false) {
+            return Err(FlowError::Name);
+        }
+        if self.steps.is_empty() {
+            return Err(FlowError::Empty);
+        }
+        if self.steps.len() > MAX_STEPS {
+            return Err(FlowError::TooManySteps);
+        }
+        let steps = self.steps.into_iter().map(step).collect::<Result<_, _>>()?;
+        let flow = Flow {
+            name: name.to_owned(),
+            steps,
+        };
+        flow.check_graph()?;
+        Ok(flow)
     }
-    if steps.len() > MAX_STEPS {
-        return Err(FlowError::TooManySteps);
+
+    /// The file text of a correct draft. A draft that is not a correct
+    /// flow gives its error and no text.
+    pub fn to_toml(&self) -> Result<String, FlowError> {
+        self.clone().check()?;
+        toml_edit::ser::to_string_pretty(self).map_err(|error| FlowError::Syntax(error.to_string()))
     }
-    let steps = steps.into_iter().map(step).collect::<Result<_, _>>()?;
-    let flow = Flow {
-        name: name.to_owned(),
-        steps,
-    };
-    flow.check_graph()?;
-    Ok(flow)
 }
 
-fn step(raw: RawStep) -> Result<Step, FlowError> {
+impl From<&Flow> for Draft {
+    fn from(flow: &Flow) -> Self {
+        let steps = flow.steps.iter().map(|step| {
+            let mut draft = DraftStep {
+                id: step.id.clone(),
+                needs: step.needs.clone(),
+                at: step.at,
+                ..DraftStep::default()
+            };
+            match &step.kind {
+                StepKind::Command {
+                    command,
+                    prompt,
+                    cwd,
+                    worktree,
+                } => {
+                    draft.command = Some(command.clone());
+                    draft.prompt.clone_from(prompt);
+                    draft.cwd.clone_from(cwd);
+                    draft.worktree.clone_from(worktree);
+                }
+                StepKind::Gate { message } => draft.gate = Some(message.clone()),
+            }
+            draft
+        });
+        Self::new(&flow.name, steps.collect())
+    }
+}
+
+fn step(raw: DraftStep) -> Result<Step, FlowError> {
     let id = raw.id;
     if !id_ok(&id) {
         return Err(FlowError::BadId(id));
@@ -209,6 +264,7 @@ fn step(raw: RawStep) -> Result<Step, FlowError> {
         id,
         needs: raw.needs,
         kind,
+        at: raw.at,
     })
 }
 

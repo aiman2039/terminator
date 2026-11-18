@@ -73,18 +73,20 @@
   with a gate; the menu itself was not opened there (no reliable
   synthetic click). A window that is behind other windows gives an old
   frame to `screencapture`; `ctl window focus` first gives a new one.
-- Drawn flows (`NAME.excalidraw`): unit tests in `flow::drawing::tests`
-  (template, arrows as `needs`, option lines, a free arrow end, notes,
-  the shared checks) and `flow::tests` (one name in both forms is
-  refused; New flow replaces no file). Real PTY, isolated daemon:
-  `terminator-hook flow new` made the drawing, `flow list` read it as 3
-  steps, and a drawing with shell steps ran box, diamond gate (`flow
-  approve`), box to done. Native GUI, macOS: the template opened in the
-  embedded Excalidraw tab with the box, the diamond, the arrows and the
-  legend (window screenshot), and the Flows tool window showed that run
-  as done. The Flows window's New flow and Edit buttons have paint and
-  action tests; they were not clicked in a running GUI, and no drawing
-  was changed by hand in the tab and then run.
+- Native flow editor (center page, `egui-snarl` node graph; replaces the
+  Excalidraw drawn flows, which are removed): unit tests in
+  `flows::editor::tests` (graph and file give the same flow both ways,
+  wires are `needs`, a new flow writes nothing until Save and replaces no
+  file, a wrong graph shows the error and writes nothing, Close asks
+  before it discards, a wrong file opens as text, page paint, first view
+  shows all nodes) and `flow::tests` (draft to TOML and back, save rules).
+  Native GUI, macOS, test-support build with
+  `TERMINATOR_FIXTURE_FLOW_EDITOR`: the page showed the bar and the
+  plan, approve and build nodes in one row with wires (window
+  screenshot). Not verified in a running GUI: clicks, drags of nodes and
+  wires, the menus, and Save from the page (no reliable synthetic input).
+  `vendor/egui-snarl` and `vendor/egui-scale` are patched to egui 0.37
+  (see each `UPSTREAM.md`).
 - Not verified: a click on the window's buttons (Approve, Reject, Send,
   Cancel run) and the Run flow… window in a running GUI (unit-tested
   only), and real agents with the installed hooks and the live daemon.

@@ -1,6 +1,5 @@
 //! Flows: steps for agents, with an order and human gates
-//! (`.terminator/flows/NAME.toml` or the drawing `NAME.excalidraw`, see
-//! `terminator_core::flow`).
+//! (`.terminator/flows/NAME.toml`, see `terminator_core::flow`).
 //!
 //! The GUI never runs a step itself. Run flow… opens a new terminal and
 //! types `terminator-hook flow run` with Enter, only on an explicit Run
@@ -8,8 +7,9 @@
 //! work and continues when the GUI closes. The Flows tool window shows the
 //! runs from their state files and writes the user's answers (approve,
 //! reject, answer, cancel) with the same code as the CLI. New flow and
-//! Edit open the flow's drawing in an Excalidraw tab; the app only reads
-//! that file. Files are read and written on worker threads.
+//! Edit open the native flow editor (`editor`). Files are read and written
+//! on worker threads.
+mod editor;
 mod panel;
 mod picker;
 #[cfg(test)]
@@ -25,10 +25,8 @@ use terminator_core::flow::{RunState, files};
 /// refused.
 #[derive(Clone, Debug)]
 pub(crate) struct FlowFile {
-    /// The file name without its extension.
+    /// The file name without `.toml`.
     pub(crate) file: String,
-    /// The file that Edit opens; none when the name has two files.
-    pub(crate) path: Option<PathBuf>,
     pub(crate) flow: Result<(String, usize), String>,
 }
 
@@ -54,8 +52,10 @@ pub(crate) struct FlowsState {
     loaded: Option<LoadedFlows>,
     /// The typed name of a new flow.
     new_name: String,
-    /// A new flow file that a worker thread writes now: project and result.
-    creating: Option<(String, Receiver<Result<PathBuf, String>>)>,
+    /// The flow that is open in the editor, also while its page hides.
+    pub(crate) editor: Option<editor::FlowEditor>,
+    /// A flow file that a worker thread reads now for the editor.
+    opening: Option<editor::OpeningFlow>,
     /// The runs of the last read, newest first.
     runs: Vec<Run>,
     reading: Option<Receiver<Vec<Run>>>,
@@ -74,7 +74,6 @@ pub(crate) fn load_flows(project: String, root: PathBuf) -> LoadedFlows {
     let files = files::names(&root)
         .into_iter()
         .map(|file| FlowFile {
-            path: files::path_of(&root, &file).ok(),
             flow: files::load(&root, &file)
                 .map(|flow| (flow.name, flow.steps.len()))
                 .map_err(|error| error.to_string()),
@@ -154,7 +153,7 @@ impl App {
             icon: "Pencil",
             shortcut: "",
         })
-        .on_hover_text("Name a new flow, then draw it: boxes, diamonds and arrows")
+        .on_hover_text("Name a new flow, then make it in the flow editor")
         .clicked()
         {
             self.open_flow_picker();
