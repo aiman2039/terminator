@@ -6,7 +6,7 @@ use terminator_core::flow::{self, FLOW_DIR, StepKind};
 const FLOW: &str = r#"
 version = 1
 name = "Plan and build"
-prompt_prefix = "Obey AGENTS.md."
+rules = "Obey AGENTS.md."
 
 [[step]]
 id = "plan"
@@ -174,7 +174,7 @@ fn wires_are_needs_and_empty_optional_fields_stay_out_of_the_file() {
     assert_eq!(draft.steps[0].cwd, None);
     assert_eq!(draft.steps[2].needs, ["ok", "one"]);
     let text = draft.to_toml().unwrap();
-    for absent in ["cwd", "worktree", "prompt_prefix"] {
+    for absent in ["cwd", "worktree", "rules"] {
         assert!(!text.contains(absent), "{absent}: {text}");
     }
     // A removed wire is a removed need.
@@ -198,7 +198,7 @@ fn plan_text_lists_the_steps_in_run_order_with_the_rules() {
     let flow = flow::parse(FLOW).unwrap();
     let mut draft = Draft::from(&flow);
     draft.steps.reverse();
-    let plan = plan_text(&draft);
+    let plan = plan_text(&draft, "feature");
     let order: Vec<usize> = [
         "# Plan and build",
         "Obey AGENTS.md.",
@@ -210,7 +210,14 @@ fn plan_text_lists_the_steps_in_run_order_with_the_rules() {
     .map(|part| plan.find(part).unwrap_or_else(|| panic!("{part}: {plan}")))
     .collect();
     assert!(order.is_sorted(), "{plan}");
+    // The flow file's place and the order as a Mermaid flowchart: a box
+    // is a step, a diamond is a gate.
     for part in [
+        "Flow file: `.terminator/flows/feature.toml`",
+        "```mermaid\nflowchart LR\n",
+        "    n0[\"plan\"]\n    n1{\"approve\"}\n    n2[\"build\"]\n",
+        "    n0 --> n1\n    n1 --> n2\n```",
+        "## Rules for every step",
         "- After: approve",
         "- Command: `claude`",
         "- You approve: Is the plan correct?",
@@ -244,7 +251,7 @@ fn new_flow_writes_nothing_until_save_and_never_replaces_a_file() {
     assert!(!path.exists(), "nothing is written before Save");
     assert!(ready(&mut app, &path).dirty());
 
-    ready(&mut app, &path).prefix = " Obey AGENTS.md. ".into();
+    ready(&mut app, &path).rules = " Obey AGENTS.md. ".into();
     ready(&mut app, &path).save();
     saved(&mut app, &ctx, &path);
     let editor = ready(&mut app, &path);
@@ -252,7 +259,7 @@ fn new_flow_writes_nothing_until_save_and_never_replaces_a_file() {
     assert!(!editor.dirty());
     let flow = flow::files::load(project.path(), "feature").unwrap();
     assert_eq!(flow.steps.len(), 3);
-    assert_eq!(flow.prompt_prefix.as_deref(), Some("Obey AGENTS.md."));
+    assert_eq!(flow.rules.as_deref(), Some("Obey AGENTS.md."));
 
     // A new flow with the name of a flow that is there: Save refuses.
     let build = project.path().join(FLOW_DIR).join("build.toml");
@@ -367,7 +374,7 @@ fn editor_tab_shows_the_toolbar_the_steps_and_the_gate() {
         assert!(count(&text, label) > 0, "{label}: {text:?}");
     }
     // No menu and no dialog shows before a click.
-    for label in ["New step here", "Duplicate", "Remove", "Prompt rules"] {
+    for label in ["New step here", "Duplicate", "Remove", "Flow rules"] {
         assert_eq!(count(&text, label), 0, "{label}: {text:?}");
     }
 }
@@ -498,7 +505,7 @@ fn click_on_a_prompt_opens_the_card_dialog_with_large_fields() {
         frame(&mut app, &ctx, &path, Vec::new());
     }
     let text = frame(&mut app, &ctx, &path, Vec::new());
-    for label in ["Prompt rules", "Before each prompt", "After each prompt"] {
+    for label in ["Flow rules", "Rules for every step"] {
         assert!(count(&text, label) > 0, "{label}: {text:?}");
     }
     ready(&mut app, &path).dialog = Some(Dialog::Preview);
@@ -506,8 +513,42 @@ fn click_on_a_prompt_opens_the_card_dialog_with_large_fields() {
         frame(&mut app, &ctx, &path, Vec::new());
     }
     let text = frame(&mut app, &ctx, &path, Vec::new());
-    for label in ["Flow preview", "Copy plan", "Save as feature.md"] {
+    for label in ["Flow plan", "Copy plan", "Save as feature.md"] {
         assert!(count(&text, label) > 0, "{label}: {text:?}");
+    }
+}
+
+#[test]
+fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
+    use terminator_core::flow::{RunState, StepStatus};
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let path = flow_path(project.path(), "build");
+    let text = settle(&mut app, &ctx, &path);
+    assert_eq!(count(&text, "Approve"), 0, "no run: {text:?}");
+
+    let flow = flow::files::load(project.path(), "build").unwrap();
+    let mut state = RunState::new(&flow, "p");
+    state.steps.get_mut("one").unwrap().status = StepStatus::Done;
+    state.steps.get_mut("one").unwrap().session = Some("s1".into());
+    state.steps.get_mut("ok").unwrap().status = StepStatus::Running;
+    app.flows.runs = vec![crate::flows::Run {
+        dir: project.path().join("run"),
+        state,
+    }];
+    // No read of the run folders replaces this run in the next frames.
+    app.flows.read_at = Some(Instant::now());
+    let text = settle(&mut app, &ctx, &path);
+    for label in [
+        "Done",
+        "Show terminal",
+        "Waits for your approval",
+        "Approve",
+        "Reject",
+        "2 steps · Saved · Run: running",
+    ] {
+        assert_eq!(count(&text, label), 1, "{label}: {text:?}");
     }
 }
 

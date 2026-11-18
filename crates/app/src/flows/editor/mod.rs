@@ -7,6 +7,8 @@
 //!
 //! A flow with changes that are not saved stays in GUI memory when its
 //! tab closes: the same flow opens again with those changes.
+mod canvas;
+mod dialogs;
 mod model;
 #[cfg(test)]
 mod tests;
@@ -28,9 +30,8 @@ pub(crate) struct FlowEditor {
     file: String,
     /// The flow's display name.
     title: String,
-    /// Rules text before and after each step's prompt.
-    prefix: String,
-    suffix: String,
+    /// The flow's rules: one text that every step gets before its prompt.
+    rules: String,
     /// False for a new flow that has no file yet.
     on_disk: bool,
     snarl: Snarl<Node>,
@@ -53,7 +54,7 @@ pub(crate) struct FlowEditor {
 enum Dialog {
     /// All fields of one node, with large text fields.
     Node(NodeId),
-    /// The rules text before and after each prompt.
+    /// The flow's rules text.
     Rules,
     /// The plan as Markdown and the flow file text.
     Preview,
@@ -81,8 +82,7 @@ impl FlowEditor {
             root,
             file: file.to_owned(),
             title: file.to_owned(),
-            prefix: String::new(),
-            suffix: String::new(),
+            rules: String::new(),
             on_disk: false,
             snarl,
             error: None,
@@ -101,20 +101,22 @@ impl FlowEditor {
     fn of_flow(root: PathBuf, file: &str, flow: &Flow) -> Self {
         let mut editor = Self::with(root, file, model::graph_of(flow));
         editor.title.clone_from(&flow.name);
-        editor.prefix = flow.prompt_prefix.clone().unwrap_or_default();
-        editor.suffix = flow.prompt_suffix.clone().unwrap_or_default();
+        editor.rules = flow.rules.clone().unwrap_or_default();
         editor.on_disk = true;
         editor.saved = editor.draft();
         editor
     }
 
     fn draft(&self) -> Draft {
-        let rule = |text: &str| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
         Draft {
-            prompt_prefix: rule(&self.prefix),
-            prompt_suffix: rule(&self.suffix),
+            rules: Some(self.rules.trim().to_owned()).filter(|text| !text.is_empty()),
             ..model::draft_of(&self.title, &self.snarl)
         }
+    }
+
+    /// The flow as a plan in Markdown.
+    fn plan(&self) -> String {
+        model::plan_text(&self.draft(), &self.file)
     }
 
     /// A new flow, or a flow with a change since the last save.
@@ -156,7 +158,7 @@ impl FlowEditor {
         if self.exporting.is_some() {
             return;
         }
-        let text = model::plan_text(&self.draft());
+        let text = self.plan();
         let Ok(flow) = files::path_of(&self.root, &self.file) else {
             return;
         };

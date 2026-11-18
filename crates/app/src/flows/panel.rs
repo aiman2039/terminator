@@ -56,7 +56,7 @@ pub(super) fn step_icon(step: &StepRun) -> (&'static str, &'static str) {
 
 impl App {
     /// Takes finished reads and answers, and starts the next read.
-    fn poll_flow_runs(&mut self, ctx: &egui::Context) {
+    pub(super) fn poll_flow_runs(&mut self, ctx: &egui::Context) {
         if let Some(receiver) = &self.flows.reading
             && let Ok(runs) = receiver.try_recv()
         {
@@ -102,7 +102,10 @@ impl App {
     }
 
     /// Writes one answer off the GUI thread and reads the runs again soon.
-    fn flow_act(&mut self, work: impl FnOnce() -> Result<(), RunError> + Send + 'static) {
+    pub(super) fn flow_act(
+        &mut self,
+        work: impl FnOnce() -> Result<(), RunError> + Send + 'static,
+    ) {
         let (sender, receiver) = channel();
         let spawned = std::thread::Builder::new()
             .name("flow-answer".into())
@@ -194,10 +197,17 @@ impl App {
         act: &mut Option<Act>,
     ) {
         let (icon, tip) = step_icon(step);
-        let needs = if step.needs.is_empty() {
-            String::new()
+        // A step that waits shows what it waits for; the others their state.
+        let state = match step.status {
+            StepStatus::Waiting if !step.needs.is_empty() => {
+                format!("after {}", step.needs.join(", "))
+            }
+            _ => tip.to_lowercase(),
+        };
+        let hover = if step.session.is_some() {
+            format!("{tip}. Click to show the terminal of this step.")
         } else {
-            format!("needs {}", step.needs.join(", "))
+            tip.to_owned()
         };
         let row = appearance::row(appearance::RowInput {
             ui,
@@ -205,10 +215,10 @@ impl App {
             icon,
             selected: false,
             height: ROW_HEIGHT,
-            trailing: &needs,
+            trailing: &state,
             tint: appearance::color(&self.theme.text),
         })
-        .on_hover_text(tip);
+        .on_hover_text(hover);
         if row.clicked()
             && let Some(session) = &step.session
         {

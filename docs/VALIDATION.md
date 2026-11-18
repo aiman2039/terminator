@@ -83,15 +83,19 @@
   error and Open as text, tab paint, first view shows all nodes, a
   right-click shows the canvas menu and the card menu, an After chip
   removes a wire and "+" adds one, a click on a prompt opens the card
-  dialog, the rules and preview dialogs paint, export writes `NAME.md`;
-  with synthetic pointer events in a headless frame) and `flow::tests`
-  (draft to TOML and back, save rules, prompt rules).
+  dialog, the rules and preview dialogs paint, export writes `NAME.md`,
+  the plan has the flow file and a Mermaid flowchart, the cards show the
+  newest run with Approve on a gate that waits; with synthetic pointer
+  events in a headless frame) and `flow::tests` (draft to TOML and back,
+  save rules, flow rules).
   Native GUI, macOS, test-support build with
   `TERMINATOR_FIXTURE_FLOW_EDITOR`: the tab showed the toolbar, the three
   cards and a canvas menu in the app menu style (window screenshot). Not
   verified in a running GUI: clicks, drags of cards and wires, the
   dialogs, Float window, Export and Save from the tab (no reliable
-  synthetic input). The prompt rules were not run with a real agent.
+  synthetic input), the modal dialogs, the restyled Flows window, and
+  the run state on the cards with a real run. The flow rules were not
+  run with a real agent.
   `vendor/egui-snarl` and `vendor/egui-scale` are patched to egui 0.37
   (see each `UPSTREAM.md`).
 - Not verified: a click on the window's buttons (Approve, Reject, Send,

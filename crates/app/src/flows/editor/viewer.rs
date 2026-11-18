@@ -4,19 +4,20 @@
 //! B means that B needs A. The "After" row of a card shows the same wires
 //! as chips, so a wire can be made and removed without a drag. A click on
 //! the prompt (or the question) opens the card's dialog with large fields.
+pub(super) use super::canvas::{add_node, fit_view, style};
 use super::model::{Node, free_id, input, output};
 use crate::appearance;
+use crate::flows::panel::step_icon;
 use egui_snarl::{
     InPin, NodeId, OutPin, Snarl,
-    ui::{AnyPins, PinInfo, PinPlacement, SnarlPin, SnarlStyle, SnarlViewer, WireLayer},
+    ui::{AnyPins, PinInfo, SnarlPin, SnarlViewer},
 };
+use std::collections::BTreeMap;
+use terminator_core::flow::{StepRun, StepStatus};
 
 /// Width of the fields in a card.
 const FIELD_WIDTH: f32 = 250.0;
 const ID_WIDTH: f32 = 130.0;
-/// The dots are large so that a wire is easy to start and to drop.
-const PIN_SIZE: f32 = 14.0;
-const WIRE_WIDTH: f32 = 2.5;
 /// Lines and characters of a prompt that a card shows.
 const PREVIEW_LINES: usize = 4;
 const PREVIEW_CHARS: usize = 220;
@@ -31,11 +32,20 @@ pub(super) struct Colors {
     pub(super) step: egui::Color32,
     /// The outline and the label of a gate.
     pub(super) gate: egui::Color32,
+    /// A step that failed in the shown run.
+    pub(super) failed: egui::Color32,
 }
 
 /// The viewer of one frame.
-pub(super) struct Viewer {
+pub(super) struct Viewer<'a> {
     pub(super) colors: Colors,
+    /// The steps of the newest run of this flow, by step ID: each card
+    /// shows its step's state.
+    pub(super) run: Option<&'a BTreeMap<String, StepRun>>,
+    /// Out: the session of the step whose terminal the user asked for.
+    pub(super) go: Option<String>,
+    /// Out: the gate that the user approved (true) or rejected.
+    pub(super) answer: Option<(String, bool)>,
     /// The canvas rectangle when the view must move and zoom until all
     /// nodes show: on the first frame of a flow, and on Fit to view.
     pub(super) fit: Option<egui::Rect>,
@@ -43,62 +53,6 @@ pub(super) struct Viewer {
     pub(super) edit: Option<NodeId>,
     /// Out: the user asked for Fit to view.
     pub(super) refit: bool,
-}
-
-/// The graph style: dots on the card edges, thick wires behind the cards,
-/// a quiet grid, no collapse button.
-pub(super) fn style(colors: Colors) -> SnarlStyle {
-    SnarlStyle {
-        collapsible: Some(false),
-        header_drag_space: Some(egui::Vec2::ZERO),
-        pin_placement: Some(PinPlacement::Edge),
-        pin_size: Some(PIN_SIZE),
-        pin_fill: Some(colors.node),
-        pin_stroke: Some(egui::Stroke::new(2.0, colors.step)),
-        wire_width: Some(WIRE_WIDTH),
-        wire_layer: Some(WireLayer::BehindNodes),
-        bg_frame: Some(egui::Frame::new().fill(colors.canvas)),
-        bg_pattern_stroke: Some(egui::Stroke::new(1.0, colors.border)),
-        min_scale: Some(0.3),
-        max_scale: Some(1.5),
-        ..SnarlStyle::new()
-    }
-}
-
-/// The size of a step card, for the first view of a flow.
-const NODE_SIZE: egui::Vec2 = egui::vec2(300.0, 250.0);
-const FIT_MARGIN: f32 = 40.0;
-
-/// The view in which all nodes show in `canvas`, at most at full size.
-pub(super) fn fit_view(
-    snarl: &Snarl<Node>,
-    canvas: egui::Rect,
-) -> Option<egui::emath::TSTransform> {
-    let mut all = egui::Rect::NOTHING;
-    for (position, _) in snarl.nodes_pos() {
-        all = all.union(egui::Rect::from_min_size(position, NODE_SIZE));
-    }
-    if !all.is_finite() || !canvas.is_finite() || canvas.width() < 1.0 || canvas.height() < 1.0 {
-        return None;
-    }
-    let all = all.expand(FIT_MARGIN);
-    let scaling = (canvas.width() / all.width())
-        .min(canvas.height() / all.height())
-        .clamp(0.2, 1.0);
-    let (from, to) = (all.center(), canvas.center());
-    let offset = egui::vec2(to.x - from.x * scaling, to.y - from.y * scaling);
-    Some(egui::emath::TSTransform::new(offset, scaling))
-}
-
-/// Adds a step or a gate at `pos` and gives its node.
-pub(super) fn add_node(snarl: &mut Snarl<Node>, pos: egui::Pos2, gate: bool) -> NodeId {
-    if gate {
-        let id = free_id(snarl, "gate");
-        snarl.insert_node(pos, Node::gate(&id, ""))
-    } else {
-        let id = free_id(snarl, "step");
-        snarl.insert_node(pos, Node::step(&id, "claude", ""))
-    }
 }
 
 /// The small label above a field.
@@ -116,7 +70,57 @@ fn preview(text: &str) -> String {
     shown
 }
 
-impl Viewer {
+impl<'a> Viewer<'a> {
+    /// The state of a card's step in the shown run.
+    fn step_run(&self, node: Option<&Node>) -> Option<&'a StepRun> {
+        self.run?.get(node?.id().trim())
+    }
+
+    /// The color of a step's state in the shown run.
+    fn run_color(&self, step: &StepRun) -> egui::Color32 {
+        match step.status {
+            _ if step.question.is_some() => self.colors.gate,
+            StepStatus::Running if step.gate.is_some() => self.colors.gate,
+            StepStatus::Running | StepStatus::Done => self.colors.step,
+            StepStatus::Failed | StepStatus::Cancelled => self.colors.failed,
+            StepStatus::Waiting => self.colors.border,
+        }
+    }
+
+    /// The run row of a card: the state of its step, Approve and Reject
+    /// for a gate that waits, and the way to the step's terminal.
+    fn run_row(&mut self, ui: &mut egui::Ui, id: &str, step: &StepRun) {
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            ui.set_max_width(FIELD_WIDTH);
+            let (_, state) = step_icon(step);
+            ui.label(
+                egui::RichText::new(state)
+                    .small()
+                    .color(self.run_color(step)),
+            );
+            if step.status == StepStatus::Running && step.gate.is_some() {
+                if ui.small_button("Approve").clicked() {
+                    self.answer = Some((id.to_owned(), true));
+                }
+                if ui.small_button("Reject").clicked() {
+                    self.answer = Some((id.to_owned(), false));
+                }
+            }
+            if let Some(session) = &step.session
+                && ui
+                    .small_button("Show terminal")
+                    .on_hover_text("Go to the terminal of this step")
+                    .clicked()
+            {
+                self.go = Some(session.clone());
+            }
+        });
+        if let Some(note) = &step.note {
+            ui.label(egui::RichText::new(preview(note)).small().weak());
+        }
+    }
+
     /// A long text as a block that opens the card's dialog on a click.
     fn text_block(&self, ui: &mut egui::Ui, text: &str, empty: &str) -> bool {
         let shown = if text.trim().is_empty() {
@@ -241,7 +245,7 @@ fn after_row(ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
     });
 }
 
-impl SnarlViewer<Node> for Viewer {
+impl SnarlViewer<Node> for Viewer<'_> {
     fn current_transform(
         &mut self,
         to_global: &mut egui::emath::TSTransform,
@@ -268,11 +272,16 @@ impl SnarlViewer<Node> for Viewer {
         _outputs: &[OutPin],
         snarl: &Snarl<Node>,
     ) -> egui::Frame {
-        let gate = snarl.get_node(node).is_some_and(Node::is_gate);
-        let (width, color) = if gate {
-            (1.5, self.colors.gate)
-        } else {
-            (1.0, self.colors.border)
+        let value = snarl.get_node(node);
+        let gate = value.is_some_and(Node::is_gate);
+        // In a run, the outline shows the state of the step.
+        let active = self
+            .step_run(value)
+            .filter(|step| step.status != StepStatus::Waiting);
+        let (width, color) = match active {
+            Some(step) => (2.0, self.run_color(step)),
+            None if gate => (1.5, self.colors.gate),
+            None => (1.0, self.colors.border),
         };
         default
             .fill(self.colors.node)
@@ -375,8 +384,12 @@ impl SnarlViewer<Node> for Viewer {
             if self.fields(ui, value) {
                 self.edit = Some(node);
             }
+            let id = value.id().trim().to_owned();
             caption(ui, "After");
             after_row(ui, node, snarl);
+            if let Some(step) = self.run.and_then(|run| run.get(&id)) {
+                self.run_row(ui, &id, step);
+            }
         });
     }
 

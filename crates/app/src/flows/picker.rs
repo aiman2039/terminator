@@ -132,9 +132,11 @@ fn flow_rows(ui: &mut egui::Ui, loaded: &LoadedFlows, answer: Option<bool>) -> O
         return None;
     }
     let mut clicked = None;
+    // One row per flow: the name and the file, then the actions in one
+    // column for all rows.
     egui::Grid::new("run-flow-rows")
-        .num_columns(3)
-        .spacing([12.0, 6.0])
+        .num_columns(2)
+        .spacing([24.0, 10.0])
         .show(ui, |ui| {
             for (index, file) in loaded.files.iter().enumerate() {
                 let allowed = file.flow.is_ok() && answer == Some(true);
@@ -143,23 +145,31 @@ fn flow_rows(ui: &mut egui::Ui, loaded: &LoadedFlows, answer: Option<bool>) -> O
                 } else {
                     "Trust the project first"
                 };
-                let run = ui
-                    .add_enabled(allowed, egui::Button::new("Run"))
-                    .on_disabled_hover_text(why);
-                if run.clicked() {
-                    clicked = Some(Pick::Run(index));
-                }
-                if ui.button("Edit").clicked() {
-                    clicked = Some(Pick::Edit(index));
-                }
-                ui.vertical(|ui| match &file.flow {
-                    Ok((name, steps)) => {
-                        ui.strong(name);
-                        ui.weak(format!("{}.toml, {steps} steps", file.file));
+                ui.vertical(|ui| {
+                    // A long error wraps; it does not make the window wide.
+                    ui.set_max_width(300.0);
+                    match &file.flow {
+                        Ok((name, steps)) => {
+                            ui.strong(name);
+                            ui.weak(format!("{}.toml · {steps} steps", file.file));
+                        }
+                        Err(error) => {
+                            ui.strong(&file.file);
+                            let first = error.lines().next().unwrap_or_default();
+                            ui.colored_label(ui.visuals().error_fg_color, first)
+                                .on_hover_text(error);
+                        }
                     }
-                    Err(error) => {
-                        ui.strong(&file.file);
-                        ui.colored_label(ui.visuals().error_fg_color, error);
+                });
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(allowed, |ui| {
+                        let tip = if allowed { "Run this flow" } else { why };
+                        if tool(ui, ("Play", "Run"), tip) {
+                            clicked = Some(Pick::Run(index));
+                        }
+                    });
+                    if tool(ui, ("Pencil", "Edit"), "Open the flow in the flow editor") {
+                        clicked = Some(Pick::Edit(index));
                     }
                 });
                 ui.end_row();
@@ -168,16 +178,36 @@ fn flow_rows(ui: &mut egui::Ui, loaded: &LoadedFlows, answer: Option<bool>) -> O
     clicked
 }
 
+/// A frameless button with an icon and a text.
+fn tool(ui: &mut egui::Ui, (icon, label): (&str, &str), tip: &str) -> bool {
+    appearance::icon_label_button(appearance::IconLabelButtonInput {
+        ui,
+        icon,
+        label,
+        height: appearance::TOOLBAR_BUTTON,
+    })
+    .on_hover_text(tip)
+    .on_disabled_hover_text(tip)
+    .clicked()
+}
+
 /// The name field and the New flow button.
 fn new_flow_row(ui: &mut egui::Ui, name: &mut String) -> Option<Pick> {
     ui.separator();
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("New flow").small().weak());
     ui.horizontal(|ui| {
-        let made = ui
-            .button("New flow")
-            .on_hover_text("Open the flow editor with a new flow")
-            .clicked();
-        let field = ui.add(egui::TextEdit::singleline(name).hint_text("Name, for example feature"));
+        let field = ui.add(
+            appearance::singleline(name)
+                .desired_width(260.0)
+                .hint_text("Name, for example feature"),
+        );
         let entered = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let made = tool(
+            ui,
+            ("Plus", "Create"),
+            "Open the flow editor with a new flow",
+        );
         ((made || entered) && !name.trim().is_empty()).then_some(Pick::New)
     })
     .inner

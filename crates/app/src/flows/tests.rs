@@ -66,7 +66,7 @@ fn flows_window_has_run_edit_and_new_flow() {
         painted(&ctx, |ui| app.flow_dialog(ui.ctx()));
     }
     let text = painted(&ctx, |ui| app.flow_dialog(ui.ctx()));
-    for label in ["Flows", "Run", "Edit", "Build", "New flow"] {
+    for label in ["Flows", "Run", "Edit", "Build", "New flow", "Create"] {
         assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
     }
     // Painting the window makes no file and no terminal.
