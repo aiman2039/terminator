@@ -2,7 +2,8 @@
 use crate::*;
 
 /// Agent CLIs with their own resume picker, which lists the conversations
-/// of the folder it starts in. Terminator never reads their files.
+/// of the folder it starts in. This path reads no agent files; Agent
+/// sessions (`crate::agent_sessions`) lists them read-only instead.
 /// Agent kind and picker command.
 pub(crate) const RESUME_PICKERS: [(&str, &str); 2] =
     [("claude", "claude --resume"), ("codex", "codex resume")];

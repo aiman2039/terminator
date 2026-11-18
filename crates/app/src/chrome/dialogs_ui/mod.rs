@@ -61,6 +61,7 @@ impl App {
         self.init_command_dialog(ctx);
         self.missing_offer_dialog(ctx);
         self.task_dialog(ctx);
+        self.agent_sessions_dialog(ctx);
         self.launch_dialog(ctx);
     }
 

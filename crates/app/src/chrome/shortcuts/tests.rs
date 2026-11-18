@@ -239,6 +239,7 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
     Action::ReviewLastTurn,
     Action::PromptComposer,
     Action::SearchAllScrollback,
+    Action::AgentSessions,
     // Broadcast, the system-wide quick terminal and launch layouts take
     // no key until the user binds one.
     Action::BroadcastInput,

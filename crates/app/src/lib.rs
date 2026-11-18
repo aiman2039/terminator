@@ -56,6 +56,7 @@ mod sidebar_ui;
 use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
 mod agent_launch;
 mod agent_presence;
+mod agent_sessions;
 mod appearance;
 pub(crate) use browser::{BrowserTarget, rewrite_html_tabs};
 mod icons;
