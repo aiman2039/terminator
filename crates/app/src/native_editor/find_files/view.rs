@@ -280,25 +280,26 @@ fn scope_row(ui: &mut egui::Ui, find: &mut FindInFiles) {
 }
 
 /// The status: progress, the counts, or the refine hint at the limit.
+/// One result is one matching line, so the counts name lines.
 pub(super) fn summary(find: &FindInFiles) -> String {
     if find.query.trim().is_empty() {
         return "Type to search".into();
     }
     if find.truncated {
-        return format!("{}+ results, refine the search", find.total);
+        return format!("{}+ matching lines, refine the search", find.total);
     }
     let files = find.files.len();
     let counts = format!(
-        "{} match{} in {} file{}",
+        "{} matching line{} in {} file{}",
         find.total,
-        if find.total == 1 { "" } else { "es" },
+        if find.total == 1 { "" } else { "s" },
         files,
         if files == 1 { "" } else { "s" },
     );
     match (find.running, find.total) {
         (true, 0) => "Searching…".into(),
         (true, _) => format!("Searching… {counts}"),
-        (false, 0) => "No matches".into(),
+        (false, 0) => "No matching lines".into(),
         (false, _) => counts,
     }
 }

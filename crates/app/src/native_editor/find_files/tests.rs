@@ -380,9 +380,9 @@ fn the_status_counts_streamed_hits_and_asks_to_refine_at_the_limit() {
         generation,
         SearchEvent::File(file_with_hits("/p/a.rs", &[1, 2])),
     );
-    assert_eq!(summary(&find), "Searching… 2 matches in 1 file");
+    assert_eq!(summary(&find), "Searching… 2 matching lines in 1 file");
     find.accept(generation, SearchEvent::Done { truncated: false });
-    assert_eq!(summary(&find), "2 matches in 1 file");
+    assert_eq!(summary(&find), "2 matching lines in 1 file");
     find.query = "many".into();
     let (_, _, generation) = find.next_search().unwrap();
     let lines: Vec<u32> = (0..1000).collect();
@@ -391,7 +391,36 @@ fn the_status_counts_streamed_hits_and_asks_to_refine_at_the_limit() {
         SearchEvent::File(file_with_hits("/p/b.rs", &lines)),
     );
     find.accept(generation, SearchEvent::Done { truncated: true });
-    assert_eq!(summary(&find), "1000+ results, refine the search");
+    assert_eq!(summary(&find), "1000+ matching lines, refine the search");
+}
+
+#[test]
+fn the_status_counts_matching_lines_not_matches() {
+    let mut find = FindInFiles::new(scope("/p"), String::new());
+    find.query = "hit".into();
+    let (_, _, generation) = find.next_search().unwrap();
+    find.accept(generation, SearchEvent::Done { truncated: false });
+    assert_eq!(summary(&find), "No matching lines");
+    find.query = "one".into();
+    let (_, _, generation) = find.next_search().unwrap();
+    find.accept(
+        generation,
+        SearchEvent::File(file_with_hits("/p/a.rs", &[4])),
+    );
+    find.accept(generation, SearchEvent::Done { truncated: false });
+    assert_eq!(summary(&find), "1 matching line in 1 file");
+    find.query = "three".into();
+    let (_, _, generation) = find.next_search().unwrap();
+    find.accept(
+        generation,
+        SearchEvent::File(file_with_hits("/p/a.rs", &[1, 2])),
+    );
+    find.accept(
+        generation,
+        SearchEvent::File(file_with_hits("/p/b.rs", &[7])),
+    );
+    find.accept(generation, SearchEvent::Done { truncated: false });
+    assert_eq!(summary(&find), "3 matching lines in 2 files");
 }
 
 #[test]
