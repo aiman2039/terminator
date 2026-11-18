@@ -378,6 +378,10 @@ pub(super) static UI_SOURCES: SourceTable = &[
         "Radio",
         egui::include_image!("../../assets/icons/radio.svg"),
     ),
+    (
+        "Volume2",
+        egui::include_image!("../../assets/icons/volume-2.svg"),
+    ),
     ("Bell", egui::include_image!("../../assets/icons/bell.svg")),
     ("Eye", egui::include_image!("../../assets/icons/eye.svg")),
     (

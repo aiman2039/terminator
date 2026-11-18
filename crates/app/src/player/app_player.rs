@@ -445,28 +445,6 @@ impl App {
         }
     }
 
-    pub(super) fn player_play_button(&mut self) {
-        let Some(project) = self.player_owner() else {
-            return;
-        };
-        match &self.player.status {
-            Status::Paused { .. } => self.player.resume(),
-            Status::Playing {
-                duration: Some(duration),
-                seekable: true,
-                ..
-            } => {
-                let duration = *duration;
-                self.player.seek_fraction(0.0, duration);
-            }
-            Status::Playing { .. }
-            | Status::Loading { .. }
-            | Status::Buffering { .. }
-            | Status::Reconnecting { .. } => {}
-            Status::Stopped | Status::Error(_) => self.player_start(&project),
-        }
-    }
-
     pub(super) fn player_skip(&mut self, delta: isize) {
         let Some(project) = self.player_owner() else {
             return;

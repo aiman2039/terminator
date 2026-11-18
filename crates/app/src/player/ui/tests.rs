@@ -99,15 +99,49 @@ fn delete_key() -> egui::Event {
 }
 
 #[test]
-fn running_time_counts_only_the_current_playlist() {
+fn playlist_summary_counts_only_the_current_playlist() {
     let (mut app, _ctx, _dir) = fixture();
     with_list(&mut app, "Default", &["/a"]);
     let durations = &mut app.player.durations;
     durations.insert("/a".into(), Duration::from_secs(125));
     durations.insert("/removed".into(), Duration::from_mins(10));
-    assert_eq!(running_time(&app), "0:00/2:05");
+    assert_eq!(playlist_summary(&app), "1 track · 2:05");
     with_list(&mut app, "Work", &[]);
-    assert_eq!(running_time(&app), "0:00/--:--");
+    assert_eq!(playlist_summary(&app), "0 tracks");
+}
+
+fn playing(title: &str) -> Status {
+    Status::Playing {
+        title: title.into(),
+        position: Duration::ZERO,
+        duration: None,
+        seekable: true,
+    }
+}
+
+#[test]
+fn subtitle_names_the_playlist_and_the_track_position() {
+    let (mut app, _ctx, _dir) = fixture();
+    with_list(&mut app, "Work", &["/one", "/two", "/three"]);
+    app.player.current_path = Some("/two".into());
+    app.player.file_index = Some(1);
+    assert_eq!(subtitle(&app, &playing("two")), "Work · Track 2 of 3");
+    assert_eq!(subtitle(&app, &Status::Stopped), "Work · 3 tracks");
+    let loading = Status::Loading {
+        title: "two".into(),
+    };
+    assert_eq!(subtitle(&app, &loading), "Loading…");
+}
+
+#[test]
+fn subtitle_says_radio_for_a_station_and_for_the_stopped_radio_view() {
+    let (mut app, _ctx, _dir) = fixture();
+    with_list(&mut app, "Work", &["/one"]);
+    app.player.current_path = None;
+    app.player.file_index = None;
+    assert_eq!(subtitle(&app, &playing("station")), "Radio");
+    app.player.radio_mode = true;
+    assert_eq!(subtitle(&app, &Status::Stopped), "Radio");
 }
 
 #[test]

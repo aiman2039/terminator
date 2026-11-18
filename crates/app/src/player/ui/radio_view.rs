@@ -5,7 +5,6 @@ const STATION_ROW_H: f32 = 22.0;
 pub(super) fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
     let width = ui.available_width();
     ui.set_max_width(width);
-    ui.strong("Radio");
     ui.add(
         appearance::singleline(&mut app.player.radio_query)
             .hint_text("Search name, category, country…")
