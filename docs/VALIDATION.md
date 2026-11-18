@@ -1,5 +1,28 @@
 # Validation evidence — 2026-09-08
 
+## Radio playback after a pre-roll (103FM) — 2026-11-18
+
+- Cause: 103FM sometimes starts the stream with a pre-roll MP3 file. Its
+  Info header gives a frame count (30 seconds), and gapless trimming in the
+  decoder dropped all audio after that count. Of four fetches, two started
+  with a pre-roll. Streams now decode with gapless trimming off and report
+  no duration.
+- `stream_plays_past_the_frame_count_of_a_leading_info_header` builds the
+  stream from generated silent MP3 frames; it fails with gapless trimming
+  on.
+- Output: a buffer underrun no longer stops playback, and other output
+  errors can be retried (no test; needs a real device change). Pause and
+  underrun silence fill full frames
+  (`pause_and_underrun_keep_stereo_channel_order`). A radio stream with no
+  audio for 15 seconds reconnects
+  (`radio_without_audio_fails_for_a_reconnect`,
+  `paused_radio_and_local_files_have_no_stall_deadline`).
+- The muted live 103FM check played 35 seconds on the default output device
+  on macOS. That connection got no pre-roll, so it is one network/device
+  observation, not proof of the pre-roll fix. The muted local-audio check
+  passed.
+- Not verified by ear: the station was not played in the GUI.
+
 ## Float window for Browser tabs — 2026-11-17
 
 - Browser tabs (Excalidraw drawings included) now have Float window. The

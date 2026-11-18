@@ -42,8 +42,33 @@ mod tests {
                 channel: 0,
                 mix: 0.0,
                 eq: Equalizer::new(1, 8000),
+                silence: 0,
             },
         )
+    }
+
+    #[test]
+    fn pause_and_underrun_keep_stereo_channel_order() {
+        let (mut producer, mut callback) = prepared(8);
+        callback.channels = NonZero::new(2).unwrap();
+        callback.eq = Equalizer::new(2, 8000);
+        // Half a frame is an underrun: one full silent frame.
+        producer.push(0.25).unwrap();
+        assert_eq!(callback.next(), Some(0.0));
+        assert_eq!(callback.next(), Some(0.0));
+        producer.push(0.5).unwrap();
+        assert_eq!(callback.next(), Some(0.25));
+        // A pause in the middle of a frame waits for the frame end.
+        callback.controls.paused.store(true, Ordering::Release);
+        assert_eq!(callback.next(), Some(0.5));
+        producer.push(0.75).unwrap();
+        producer.push(1.0).unwrap();
+        assert_eq!(callback.next(), Some(0.0));
+        callback.controls.paused.store(false, Ordering::Release);
+        // The silent frame ends before the left sample plays.
+        assert_eq!(callback.next(), Some(0.0));
+        assert_eq!(callback.next(), Some(0.75));
+        assert_eq!(callback.next(), Some(1.0));
     }
     #[test]
     fn pending_progress_cannot_undo_local_pause_or_resume() {
@@ -175,14 +200,17 @@ mod tests {
             title: "103FM live fixture".into(),
             url: "https://cdn.cybercdn.live/103FM/Live/icecast.audio".into(),
         });
+        // 103FM starts with an Info header that covers 30 seconds; playback
+        // must continue past it.
         let mut first_pcm = None;
-        while start.elapsed() < Duration::from_secs(20) {
+        while start.elapsed() < Duration::from_mins(1) {
             while owner.supervisor.try_recv().is_some() {}
             for outcome in handle.poll() {
                 match outcome {
-                    Outcome::Status(Status::Playing { position, .. })
-                        if position >= Duration::from_millis(250) =>
-                    {
+                    Outcome::Status(Status::Playing {
+                        position, duration, ..
+                    }) if position >= Duration::from_secs(35) => {
+                        assert_eq!(duration, None, "a live stream has no length");
                         first_pcm = Some(start.elapsed());
                     }
                     Outcome::Status(Status::Error(error)) => {
@@ -210,7 +238,7 @@ mod tests {
         }
         assert!(
             first_pcm.is_some(),
-            "103FM did not produce PCM within 20 seconds"
+            "103FM did not play 35 seconds of PCM within 60 seconds"
         );
         crate::console::Console::out(format_args!(
             "{}",

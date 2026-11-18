@@ -74,6 +74,7 @@ pub(in super::super) fn decode_audio(input: DecodeAudioInput) -> Result<()> {
         channel: 0,
         mix: 0.0,
         eq: Equalizer::new(device.channels.get(), device.rate.get()),
+        silence: 0,
     };
     let title = source.title().to_owned();
     let radio = source.radio();
@@ -143,6 +144,10 @@ fn open_decoder(
                     }),
                 })
                 .with_seekable(false)
+                // A live stream can start with a pre-roll file whose MP3 Info
+                // header gives a frame count (103FM: 30 seconds). Gapless
+                // trimming would drop all audio after that count.
+                .with_gapless(false)
                 .build()
                 .map_err(|_| Permanent("Unsupported or invalid radio audio"))?,
         ),
@@ -300,7 +305,9 @@ impl DecodeLoop<'_> {
     fn run(mut self) -> Result<()> {
         loop {
             if self.output_failed.load(Ordering::Acquire) {
-                return Err(Permanent("Audio output device disconnected").into());
+                // Not permanent: a radio reconnect opens the new default
+                // device, and fails for good only when there is none.
+                anyhow::bail!("Audio output device changed or disconnected");
             }
             if self.cancel.is_cancelled()
                 || self.controls.generation.load(Ordering::Acquire) != self.desired.generation
@@ -406,7 +413,12 @@ impl DecodeLoop<'_> {
 
     fn playback_status(&self, position: Duration) -> Status {
         let title = self.title.clone();
-        let (duration, seekable) = (self.duration, !self.radio);
+        // A live stream has no length, whatever its headers say.
+        let (duration, seekable) = if self.radio {
+            (None, false)
+        } else {
+            (self.duration, true)
+        };
         if self.controls.paused.load(Ordering::Acquire) {
             Status::Paused {
                 title,
@@ -430,6 +442,39 @@ impl DecodeLoop<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One silent MPEG-1 Layer 3 frame: 128 kbit/s, 44.1 kHz, stereo.
+    fn silent_frame() -> Vec<u8> {
+        let mut frame = vec![0_u8; 417];
+        frame[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x00]);
+        frame
+    }
+
+    #[test]
+    fn stream_plays_past_the_frame_count_of_a_leading_info_header() {
+        // Some stations (103FM) start with a pre-roll file whose Info
+        // header gives the frame count of that file only.
+        let mut info = silent_frame();
+        info[36..40].copy_from_slice(b"Info");
+        info[40..44].copy_from_slice(&1_u32.to_be_bytes());
+        info[44..48].copy_from_slice(&1_u32.to_be_bytes());
+        let frames = 40;
+        let mut bytes = info;
+        for _ in 0..frames {
+            bytes.extend(silent_frame());
+        }
+        let (sender, receiver) = mpsc::channel(1);
+        sender.try_send(bytes).unwrap();
+        drop(sender);
+        let source = Playable::Stream {
+            url: String::new(),
+            title: String::new(),
+        };
+        let decoder = open_decoder(&source, receiver, &CancellationToken::new()).unwrap();
+        // 1152 samples for each frame and channel; the decoder can drop
+        // the first frames while it starts.
+        assert!(decoder.count() >= (frames - 4) * 1152 * 2);
+    }
 
     #[test]
     fn paused_full_ring_wakes_rarely() {

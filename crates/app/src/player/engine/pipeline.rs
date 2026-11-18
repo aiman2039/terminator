@@ -65,6 +65,7 @@ pub(super) async fn pipeline(input: PipelineInput<'_>) -> Result<()> {
     let _cancel_on_drop = cancel.clone().drop_guard();
     let (sender, receiver) = mpsc::channel(COMPRESSED_SLOTS);
     let source = desired.source.clone().context("audio source missing")?;
+    let stall = source.radio().then_some(RADIO_STALL);
     let network = feed_network(FeedInput {
         client,
         source,
@@ -73,8 +74,9 @@ pub(super) async fn pipeline(input: PipelineInput<'_>) -> Result<()> {
     });
     let ready = Arc::new(AtomicBool::new(false));
     let counters = Arc::new(PlaybackCounters::default());
-    let startup = StartupMonitor {
+    let monitor = PlaybackMonitor {
         started: Instant::now(),
+        stall,
         ready: Arc::clone(&ready),
         counters: Arc::clone(&counters),
         status: status.clone(),
@@ -103,7 +105,7 @@ pub(super) async fn pipeline(input: PipelineInput<'_>) -> Result<()> {
     });
     tokio::select! {
         result = async { tokio::try_join!(network, decode)?; Ok(()) } => result,
-        result = startup.watch() => result,
+        result = monitor.watch() => result,
     }
 }
 
@@ -138,9 +140,16 @@ async fn feed_network(input: FeedInput<'_>) -> Result<()> {
     .await
 }
 
-/// Fails playback that never starts, and reports buffering once it has.
-struct StartupMonitor {
+/// How long a playing radio stream can give no audio before a reconnect.
+/// A network stall has its own read deadline; this catches a decoder that
+/// reads data but makes no samples.
+const RADIO_STALL: Duration = Duration::from_secs(15);
+
+/// Fails playback that never starts, reports buffering once it has, and
+/// fails a radio stream that stays without audio.
+struct PlaybackMonitor {
     started: Instant,
+    stall: Option<Duration>,
     ready: Arc<AtomicBool>,
     counters: Arc<PlaybackCounters>,
     status: watch::Sender<Event>,
@@ -149,11 +158,20 @@ struct StartupMonitor {
     generation: u64,
 }
 
-impl StartupMonitor {
+impl PlaybackMonitor {
     async fn watch(self) -> Result<()> {
+        let mut silent_since: Option<Instant> = None;
         loop {
             if self.ready.load(Ordering::Acquire) {
-                self.report_buffering();
+                let silent = self.counters.buffering.load(Ordering::Relaxed)
+                    && !self.controls.paused.load(Ordering::Acquire);
+                if silent {
+                    self.report_buffering();
+                }
+                silent_since = silent.then(|| silent_since.unwrap_or_else(Instant::now));
+                if let (Some(since), Some(stall)) = (silent_since, self.stall) {
+                    ensure!(since.elapsed() < stall, "Radio audio stalled");
+                }
             } else {
                 ensure!(
                     self.started.elapsed() < Duration::from_secs(10),
@@ -165,17 +183,13 @@ impl StartupMonitor {
     }
 
     fn report_buffering(&self) {
-        if self.counters.buffering.load(Ordering::Relaxed)
-            && !self.controls.paused.load(Ordering::Acquire)
-        {
-            self.status.send_replace(Event {
-                generation: self.generation,
-                status: Status::Buffering {
-                    title: self.title.clone(),
-                },
-                finished: false,
-            });
-        }
+        self.status.send_replace(Event {
+            generation: self.generation,
+            status: Status::Buffering {
+                title: self.title.clone(),
+            },
+            finished: false,
+        });
     }
 }
 
@@ -253,6 +267,26 @@ pub(super) struct PreparedSource {
     pub(super) channel: u16,
     pub(super) mix: f32,
     pub(super) eq: Equalizer,
+    /// Silent samples left in the current silent frame.
+    pub(super) silence: u16,
+}
+impl PreparedSource {
+    /// At a frame start: true plays the next frame, false gives one silent
+    /// frame (pause or underrun). At the end of the input the last frame
+    /// can be incomplete, and the pop that fails ends playback.
+    fn frame_ready(&mut self) -> bool {
+        if self.controls.paused.load(Ordering::Relaxed) {
+            return false;
+        }
+        if self.pcm.slots() >= usize::from(self.channels.get())
+            || self.counters.finished.load(Ordering::Acquire)
+        {
+            return true;
+        }
+        self.counters.underruns.fetch_add(1, Ordering::Relaxed);
+        self.counters.buffering.store(true, Ordering::Relaxed);
+        false
+    }
 }
 impl Iterator for PreparedSource {
     type Item = f32;
@@ -260,33 +294,32 @@ impl Iterator for PreparedSource {
         if self.controls.generation.load(Ordering::Acquire) != self.generation {
             return None;
         }
-        if self.controls.paused.load(Ordering::Relaxed) {
+        if self.silence != 0 {
+            self.silence = self.silence.saturating_sub(1);
             return Some(0.0);
         }
-        match self.pcm.pop() {
-            Ok(raw) => {
-                let sample = self.eq.process(&self.controls.eq, self.channel, raw);
-                self.counters.buffering.store(false, Ordering::Relaxed);
-                self.counters.consumed.fetch_add(1, Ordering::Relaxed);
-                self.mix += sample;
-                self.channel = self.channel.saturating_add(1);
-                if self.channel == self.channels.get() {
-                    let _ = self.tap.push(self.mix / f32::from(self.channels.get()));
-                    self.channel = 0;
-                    self.mix = 0.0;
-                }
-                Some(sample * f32::from_bits(self.controls.volume.load(Ordering::Relaxed)))
-            }
-            Err(_) if self.counters.finished.load(Ordering::Acquire) => {
-                self.counters.drained.store(true, Ordering::Release);
-                None
-            }
-            Err(_) => {
-                self.counters.underruns.fetch_add(1, Ordering::Relaxed);
-                self.counters.buffering.store(true, Ordering::Relaxed);
-                Some(0.0)
-            }
+        // Silence starts only at a frame start and fills the full frame, so
+        // the left and right channels keep their order.
+        if self.channel == 0 && !self.frame_ready() {
+            self.silence = self.channels.get().saturating_sub(1);
+            return Some(0.0);
         }
+        // `frame_ready` passed, so the ring is empty only at the end.
+        let Ok(raw) = self.pcm.pop() else {
+            self.counters.drained.store(true, Ordering::Release);
+            return None;
+        };
+        let sample = self.eq.process(&self.controls.eq, self.channel, raw);
+        self.counters.buffering.store(false, Ordering::Relaxed);
+        self.counters.consumed.fetch_add(1, Ordering::Relaxed);
+        self.mix += sample;
+        self.channel = self.channel.saturating_add(1);
+        if self.channel == self.channels.get() {
+            let _ = self.tap.push(self.mix / f32::from(self.channels.get()));
+            self.channel = 0;
+            self.mix = 0.0;
+        }
+        Some(sample * f32::from_bits(self.controls.volume.load(Ordering::Relaxed)))
     }
 }
 impl Source for PreparedSource {
@@ -326,8 +359,11 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
                 *sample = T::from_sample(source.next().unwrap_or(0.0));
             }
         },
-        move |_| {
-            failed.store(true, Ordering::Release);
+        move |error| {
+            // An underrun is a glitch; the stream continues.
+            if !matches!(error, cpal::StreamError::BufferUnderrun) {
+                failed.store(true, Ordering::Release);
+            }
         },
         None,
     )?)
@@ -373,4 +409,48 @@ pub(super) fn start_output(input: StartOutputInput<'_>) -> Result<cpal::Stream> 
     };
     stream.play()?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::handle::Handle;
+    use super::*;
+
+    fn silent_monitor(stall: Option<Duration>) -> PlaybackMonitor {
+        let (handle, _, status, _) = Handle::channels();
+        let counters = Arc::new(PlaybackCounters::default());
+        counters.buffering.store(true, Ordering::Relaxed);
+        PlaybackMonitor {
+            started: Instant::now(),
+            stall,
+            ready: Arc::new(AtomicBool::new(true)),
+            counters,
+            status,
+            controls: Arc::clone(&handle.controls),
+            title: String::new(),
+            generation: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn radio_without_audio_fails_for_a_reconnect() {
+        let error = silent_monitor(Some(Duration::from_millis(50)))
+            .watch()
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Radio audio stalled");
+    }
+
+    #[tokio::test]
+    async fn paused_radio_and_local_files_have_no_stall_deadline() {
+        let paused = silent_monitor(Some(Duration::from_millis(50)));
+        paused.controls.paused.store(true, Ordering::Release);
+        let file = silent_monitor(None);
+        let both = async { tokio::join!(paused.watch(), file.watch()) };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), both)
+                .await
+                .is_err()
+        );
+    }
 }
