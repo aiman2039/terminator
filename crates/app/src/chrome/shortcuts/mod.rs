@@ -149,6 +149,9 @@ actions! {
     // `.terminator/layout.toml`: new terminals only, after the trust answer.
     OpenLaunchLayout => "open_launch_layout", "Open launch layout", "PanelsTopLeft";
     SaveLaunchLayout => "save_launch_layout", "Save layout as launch file", "Save";
+    // `.terminator/flows/NAME.toml`: runs only on the Run click, after the
+    // trust answer.
+    RunFlow => "run_flow", "Run flow…", "Split";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

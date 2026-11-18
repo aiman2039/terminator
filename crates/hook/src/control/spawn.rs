@@ -110,7 +110,7 @@ impl Ctl {
     }
 
     /// Adds `terminator/NAME` beside the project and returns its project.
-    fn spawn_worktree(&self, source: &Project, name: &str) -> Result<Project> {
+    pub(super) fn spawn_worktree(&self, source: &Project, name: &str) -> Result<Project> {
         self.capability(WORKTREES_CAPABILITY)?;
         ensure!(
             !source.path.starts_with("/__terminator_remote__"),

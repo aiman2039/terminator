@@ -81,6 +81,7 @@ pub(crate) use anyhow::Result;
 mod clipboard;
 mod composer;
 pub(crate) mod diff;
+mod flows;
 mod gui_services;
 mod onboarding;
 mod perforce;

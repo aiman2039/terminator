@@ -147,6 +147,20 @@ impl Server {
     }
 
     fn run(&self, argv: Vec<String>) -> Result<Value> {
+        if argv.first().is_some_and(|word| word == "flow") {
+            let args: Vec<String> = self
+                .globals
+                .iter()
+                .cloned()
+                .chain(argv.into_iter().skip(1))
+                .collect();
+            let value = crate::control::flow::execute_args(&args)?;
+            return Ok(tool_result(
+                serde_json::to_string_pretty(&value)?,
+                Some(value),
+                false,
+            ));
+        }
         let args: Vec<String> = self.globals.iter().cloned().chain(argv).collect();
         Ok(match crate::control::execute_args(&args)? {
             crate::control::Outcome::Json(value) => {

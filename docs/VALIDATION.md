@@ -1,5 +1,50 @@
 # Validation evidence — 2026-09-08
 
+## Flows (agent orchestration) — 2026-11-18
+
+- Unit tests: the strict file format, the step order and the run state
+  (`terminator-core` `flow::tests`); the runner's step rules, the trust
+  gate, the agent commands and the MCP limits (`terminator-hook`
+  `control::flow`); Run flow… and the tool window's pure parts
+  (`terminator` `flows::tests`, for example
+  `run_flow_types_nothing_before_trust`).
+- Real PTY, isolated daemon (`TERMINATOR_DATA_DIR` under `/tmp`), no GUI:
+  three runs with `terminator-hook flow run`. Two parallel steps, a prompt
+  sent after the first hook report, a gate with `flow approve`, a refused
+  early approve, `flow cancel`, a refused run with no trust answer, a shell
+  step that ended by `flow report done`, a step that read `flow context`,
+  asked with `flow ask` and got the `flow answer` text, and a step that
+  stopped the run with `flow report failed`.
+- The agent in those runs was a fixture: `terminator-hook emit` with
+  normalized hook events. No real agent (Claude Code, Codex) ran.
+- The first real run found that the daemon removes an ended shell with its
+  exit code. An ended terminal thus never ends a step as done; only a hook
+  report or `flow report` does
+  (`ended_terminal_never_ends_a_step_as_done`).
+- `cargo xtask integration --only flows` (new `--only` option) repeats the
+  real-PTY checks: trust gate, shell report, gate, handoff note in
+  `flow context`, ask and answer, and the fixture agent's prompt. Its first
+  runs found a second defect: a step's command could run before the state
+  file had the terminal's session, so `flow context` and `flow ask` did not
+  find their step. The runner now saves the session before it types the
+  command.
+- Native GUI, isolated daemon, macOS: the Flows tool window (opened from
+  the saved `tool` preference) showed a run from `terminator-hook flow
+  run`: the step rows, the gate question with Approve and Reject, and
+  "done" after the approve. Checked on two window screenshots. The approve
+  came from the CLI. A second run in a Git project had a `worktree` step:
+  the step ran in the new `terminator-flowcheck` checkout, and the window
+  showed its result note and the next step's question with the Answer
+  field and Send.
+- Not verified: a click on the window's buttons (Approve, Reject, Send,
+  Cancel run) and the Run flow… window in a running GUI (unit-tested
+  only), the MCP `flow_*` tools against a real MCP client, and the
+  2-second delay before the prompt with a real agent.
+- `cargo xtask integration` (all groups) did not end in two runs on this
+  machine: every group passed, but the existing `stalled_attachment`
+  regression stayed in its socket read (`regressions/daemon.rs:96`). It
+  passes with `--only regressions`. Not checked on `master`.
+
 ## Radio playback after a pre-roll (103FM) — 2026-11-18
 
 - Cause: 103FM sometimes starts the stream with a pre-roll MP3 file. Its

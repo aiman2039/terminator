@@ -2,6 +2,8 @@
 //! arguments become that command line, and `ctl` parses and runs it, so a
 //! tool has exactly the ctl limits: no agent launch, Enter only when
 //! `enter` is true, and every worktree removal refusal of the daemon.
+//! The `flow_*` tools are `terminator-hook flow` command lines for a
+//! step's own agent; no tool runs, approves, rejects or cancels a flow.
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value, json};
 
@@ -220,7 +222,49 @@ const TOOLS: &[Tool] = &[
             "Worktree project ID, path or name",
         )],
     },
+    Tool {
+        name: "flow_context",
+        command: &["flow", "context"],
+        about: "For a flow step's agent: its run, its step and the steps it needs.",
+        args: &[FLOW_SESSION],
+    },
+    Tool {
+        name: "flow_report",
+        command: &["flow", "report"],
+        about: "For a flow step's agent: end its own step as done or failed.",
+        args: &[
+            req("result", Choice(&["done", "failed"]), "The step's result"),
+            opt("note", Kind::Option("--note"), "Why the step failed"),
+            FLOW_SESSION,
+        ],
+    },
+    Tool {
+        name: "flow_ask",
+        command: &["flow", "ask"],
+        about: "For a flow step's agent: ask the user a question and wait for the answer.",
+        args: &[
+            req("question", Positional, "The question"),
+            opt(
+                "timeout",
+                Integer("--timeout"),
+                "Seconds to wait (default 1800)",
+            ),
+            FLOW_SESSION,
+        ],
+    },
+    Tool {
+        name: "flow_status",
+        command: &["flow", "status"],
+        about: "The state of every step of a flow run.",
+        args: &[req("run", Positional, "Run name")],
+    },
 ];
+
+const FLOW_SESSION: Arg = opt(
+    "session",
+    Kind::Option("--session"),
+    "The step's terminal session ID (default: this terminal)",
+);
 
 fn arg_schema(arg: &Arg) -> Value {
     let mut schema = match arg.kind {

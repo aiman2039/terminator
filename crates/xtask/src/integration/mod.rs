@@ -1,5 +1,6 @@
 mod controls;
 mod counts;
+mod flows;
 mod hooks;
 mod load;
 mod muse;
@@ -8,6 +9,7 @@ mod run;
 mod shims;
 pub use controls::controls;
 pub use counts::command_counts;
+pub use flows::flows;
 pub use hooks::hook_controls;
 pub use load::load;
 pub use muse::muse;

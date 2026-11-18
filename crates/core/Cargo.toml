@@ -27,6 +27,8 @@ sha2 = "0.11"
 # Agent quota: Codex session log timestamps and newest-log lookup.
 time = { version = "0.3", features = ["parsing"] }
 walkdir = "2"
+# Flow files (flow/mod.rs): cycle check of the step graph.
+petgraph = { version = "0.8", default-features = false }
 
 [features]
 async-client = ["dep:tokio", "dep:tokio-util", "dep:futures-util"]

@@ -13,6 +13,7 @@ pub mod command_blocks;
 pub mod crash;
 pub mod distribution;
 pub mod editor_prefs;
+pub mod flow;
 pub mod generations;
 pub mod git;
 pub mod idle_close;

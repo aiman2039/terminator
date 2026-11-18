@@ -63,6 +63,7 @@ pub enum SidebarTool {
     Hosts,
     Ports,
     Usage,
+    Flows,
 }
 
 /// A tool this build does not know (written by a newer build) falls back to

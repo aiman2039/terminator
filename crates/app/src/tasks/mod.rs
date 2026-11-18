@@ -96,8 +96,8 @@ impl App {
     }
 
     /// Record a trust answer for a project folder, as the editor's trust
-    /// bar does, so language servers and tasks share it.
-    fn answer_task_trust(&mut self, root: &Path, trusted: bool) {
+    /// bar does, so language servers, tasks and flows share it.
+    pub(crate) fn answer_task_trust(&mut self, root: &Path, trusted: bool) {
         self.lsp.set_trust(root, trusted);
         self.preferences
             .lsp_trust

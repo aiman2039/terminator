@@ -277,6 +277,8 @@ pub struct App {
     pub(crate) installed_agents: Vec<crate::agent_launch::InstalledAgent>,
     /// Run task window and the last task run.
     pub(crate) tasks: crate::tasks::TaskState,
+    /// The Run flow window and the Flows tool window.
+    pub(crate) flows: crate::flows::FlowsState,
     /// Welcome and What's New pages.
     pub(crate) onboarding: crate::onboarding::Onboarding,
     /// Start panel PATH probes (Neovim, Git).

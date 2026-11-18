@@ -228,6 +228,7 @@ impl App {
             Action::NewDrawing => self.open_new_drawing(None),
             Action::RunTask => self.open_task_picker(),
             Action::RerunTask => self.rerun_last_task(),
+            Action::RunFlow => self.open_flow_picker(),
             Action::ShowWelcome => self.open_welcome(),
             Action::ShowWhatsNew => self.show_center(CenterPage::WhatsNew),
             Action::SwitcherNext => self.step_switcher(false),
