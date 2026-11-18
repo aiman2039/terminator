@@ -28,6 +28,12 @@ Run these in your terminal. The same commands are MCP tools of `terminator-hook 
 4. If a decision is the user's, use `flow ask`. Do not guess.
 5. Report the result one time, with `flow report done --note "..."` or `flow report failed --note "..."`. In the note of a done step, write what the next steps must know (for example the file that has the plan). Keep it short and on one line.
 
+## Notes for the person who writes the flow file
+
+- Claude Code reports its start, so a step can have a separate `prompt`.
+- Codex reports only after its first prompt. Put the prompt in the command: `command = "codex 'Write the plan.'"`.
+- A step ends as done when the agent ends its turn (hook), or when the step runs `flow report done`.
+
 ## Rules
 
 - Report `done` only when the task is complete and checked.

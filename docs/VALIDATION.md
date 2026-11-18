@@ -36,9 +36,29 @@
   the step ran in the new `terminator-flowcheck` checkout, and the window
   showed its result note and the next step's question with the Answer
   field and Send.
+- Live providers, real PTY, isolated daemon, macOS: Claude Code 2.1.327
+  and Codex 0.170.0 as flow steps. The hooks came from fixture files
+  (`claude --settings FILE`, `codex -c hooks...`), because the installed
+  hooks name the live data folder; no user agent configuration changed.
+  - Claude Code: in a folder with no Claude trust, its trust question
+    showed and the runner sent nothing (no hook report), as designed. In a
+    trusted folder the start report came, the prompt was typed 2 seconds
+    later, and the Stop hook ended the step as done.
+  - Defect found: the runner sent the prompt and Enter in one write.
+    Claude Code took that as a paste and the Enter became a line break, so
+    the prompt was not submitted. The runner now sends Enter in a second
+    write, 300 ms later. After that, the Claude step ran with no manual
+    help (twice).
+  - Codex reports no hook at its start, only after its first prompt, so a
+    separate `prompt` is never sent. With the prompt in the command
+    (`codex "..."`), the Stop hook ended the step as done with no manual
+    help. The runner's time-out message and the format notes now say this.
+  - A final run had both: a Claude step with `prompt`, then a Codex step
+    with the prompt in its command. Both ended as done, and both wrote
+    their files.
 - Not verified: a click on the window's buttons (Approve, Reject, Send,
   Cancel run) and the Run flow… window in a running GUI (unit-tested
-  only), and the 2-second delay before the prompt with a real agent.
+  only), and real agents with the installed hooks and the live daemon.
 - MCP, real PTY, isolated daemon: JSON-RPC lines on the stdin of
   `terminator-hook mcp` (legacy `initialize`, then `tools/call`).
   `flow_context` gave the run and step, `flow_approve` was an unknown

@@ -31,6 +31,8 @@ const START_LIMIT: Duration = Duration::from_mins(2);
 /// Seconds between the agent's first hook report and the prompt, so the
 /// agent's input line is there.
 const SETTLE_SECS: u64 = 2;
+/// Time between a typed line and its Enter (see `type_line`).
+const ENTER_GAP: Duration = Duration::from_millis(300);
 
 /// How a running step ended, or `None` while it runs.
 type End = Option<Result<(), String>>;
@@ -187,12 +189,15 @@ impl Runner {
         Ok(phase)
     }
 
-    /// Types one line and presses Enter.
+    /// Types one line, then presses Enter in a second write. An agent's
+    /// input box (Claude Code) takes text and Enter in one write as a
+    /// paste, and that Enter becomes a line break, not a submit.
     fn type_line(&self, session: &str, line: &str) -> Result<()> {
-        let mut bytes = line.as_bytes().to_vec();
-        bytes.push(b'\r');
         // The session can be newer than an older snapshot.
-        Ctl::connect(&self.paths)?.attach_and_input(session.to_owned(), bytes)
+        let ctl = Ctl::connect(&self.paths)?;
+        ctl.attach_and_input(session.to_owned(), line.as_bytes().to_vec())?;
+        std::thread::sleep(ENTER_GAP);
+        ctl.attach_and_input(session.to_owned(), b"\r".to_vec())
     }
 
     fn announce_gate(&self, step: &Step, message: &str) {
@@ -309,7 +314,9 @@ impl Runner {
                 None
             }
             Progress::Pending if started.elapsed() > START_LIMIT => Some(Err(
-                "No agent hook report in 120 seconds. Install the agent's hooks in Settings."
+                "No agent hook report in 120 seconds. Install the agent's hooks in Settings. \
+                 An agent that reports only after its first prompt (Codex) needs the prompt \
+                 in its command, not in `prompt`."
                     .to_owned(),
             )),
             Progress::Failed(note) => Some(Err(note.to_owned())),

@@ -18,6 +18,10 @@
 //! needs = ["plan"]
 //! ```
 //!
+//! `prompt` is sent after the agent's first hook report (Claude Code
+//! reports at its start). An agent that reports only after its first
+//! prompt (Codex) needs the prompt in `command`: `codex "Write the plan."`.
+//!
 //! The format is strict: an unknown key, a missing version, a bad ID, an
 //! unknown `needs` name or a cycle is an error, and no step runs. This
 //! module only reads files and computes which steps can start; it starts
