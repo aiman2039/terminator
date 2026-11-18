@@ -13,8 +13,8 @@ impl App {
         generation: u64,
         result: Result<crate::remote_ui::FormResult, crate::remote_ui::Failure>,
     ) {
-        if self.import_owns(&project) {
-            self.apply_import_result(&project, result);
+        if self.onboard_owns(&project) {
+            self.apply_onboard_result(&project, result);
             return;
         }
         if self.remote_ui.active.as_ref() != Some(&project) {
@@ -23,7 +23,7 @@ impl App {
         self.remote_ui.busy = false;
         self.remote_ui.active = None;
         match result {
-            Ok(crate::remote_ui::FormResult::Probe(root)) => self.remote_probed(&project, root),
+            Ok(crate::remote_ui::FormResult::Probe(root, _)) => self.remote_probed(&project, root),
             Ok(crate::remote_ui::FormResult::Added(state)) => {
                 self.remote_added(&project, generation, *state);
             }

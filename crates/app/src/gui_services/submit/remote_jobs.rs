@@ -35,6 +35,10 @@ impl Services {
             Job::SshConfigHosts(generation) => {
                 self.ssh_config_hosts(generation, cancel, updates).await
             }
+            Job::SshSignIn(ssh, step) => {
+                updates.push(self.ssh_sign_in(ssh, step).await);
+                Ok(())
+            }
             Job::Forwards(request) => self.forwards(request, updates).await,
             Job::SshControlStatus(targets) => {
                 updates.push(Update::SshControlStatus(

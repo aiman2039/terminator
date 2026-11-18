@@ -52,7 +52,17 @@ impl App {
         // A changed SSH host form stays for the SSH page to show again.
         if page != CenterPage::Ssh && !self.remote_ui.draft_changed() {
             self.remote_ui.close();
-            self.remote_ui.import = None;
+        }
+        // A host being connected or added stays for the SSH page; an
+        // unstarted add-hosts page closes.
+        if page != CenterPage::Ssh
+            && self
+                .remote_ui
+                .onboard
+                .as_ref()
+                .is_some_and(|o| o.stage == crate::onboard::Stage::Choose)
+        {
+            self.close_onboard();
         }
         if !page.is_worktree() {
             self.worktree_draft = None;

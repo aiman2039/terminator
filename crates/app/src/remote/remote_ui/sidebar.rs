@@ -44,6 +44,9 @@ impl App {
         if refresh {
             self.remote_ui.host_key_declined.remove(&project.id);
         }
+        if !git {
+            self.follow_remote_terminal(&project);
+        }
         let view = self.remote_ui.views.entry(project.id.clone()).or_default();
         let mut pass = SidebarPass {
             view,
@@ -229,8 +232,27 @@ impl SidebarPass<'_> {
                 self.view.path.clear();
                 self.reset_listing();
             }
+            let pinned = self.view.follow.pinned;
+            let tip = if pinned {
+                "Explorer root is pinned. Click to follow the focused terminal again"
+            } else {
+                "Pin the Explorer root (stop following the focused terminal)"
+            };
+            if appearance::selectable_icon(appearance::SelectableIconInput {
+                ui,
+                icon: "Pin",
+                tip,
+                selected: pinned,
+            })
+            .clicked()
+            {
+                self.view.follow.pinned = !pinned;
+                // Unpinning applies the terminal's current folder again.
+                self.view.follow.last = None;
+            }
             ui.label(&self.view.path);
         });
+        self.follow_line(ui);
         let view = &mut *self.view;
         if self.refresh || poll_due(view.files_loading, view.files_polled) {
             view.files_loading = true;
@@ -260,6 +282,28 @@ impl SidebarPass<'_> {
                     self.file_row(ui, &entry);
                 }
             });
+    }
+
+    /// Which terminal the Explorer follows, or why it does not. With no
+    /// folder report yet, a link shows the OSC 7 lines for the shell.
+    fn follow_line(&mut self, ui: &mut egui::Ui) {
+        let follow = &mut self.view.follow;
+        if follow.pinned {
+            ui.weak("Pinned: the Explorer does not follow terminals.");
+        } else if let Some(note) = &follow.note {
+            ui.weak(format!("Not following: {note}."));
+        } else if let Some(source) = &follow.source {
+            ui.weak(format!("Follows the focused terminal · {source}"));
+        } else if ui
+            .link("Follow the focused terminal…")
+            .on_hover_text("Show the lines the remote shell needs (OSC 7)")
+            .clicked()
+        {
+            follow.help = !follow.help;
+        }
+        if follow.help && follow.source.is_none() {
+            crate::onboard::osc7::card(ui, &mut follow.help_shell, None);
+        }
     }
 
     /// Forgets the in-flight listing so the next frame reloads it.

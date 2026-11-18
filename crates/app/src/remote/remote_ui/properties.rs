@@ -63,8 +63,9 @@ impl App {
         let _ = self.jobs.send(Job::SshConfigHosts(generation));
     }
 
+    /// New host and Import both open the add-hosts flow.
     pub(crate) fn new_ssh_host(&mut self) {
-        self.open_ssh_properties(blank_project());
+        self.open_add_hosts(String::new());
     }
 
     /// A copy without id, layout or forwards; the user changes its path.

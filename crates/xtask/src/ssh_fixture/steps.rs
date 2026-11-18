@@ -12,7 +12,10 @@ use std::{
 use terminator_core::{
     Request, Response,
     remote::{Forward, Operation, RemoteProject, Reply},
-    ssh::{SshFailure, SshOptions},
+    ssh::{
+        SshFailure, SshOptions,
+        sign_in::{Secret, SignInPrompt},
+    },
 };
 
 /// The main fixture service's SSH options and its remote project.
@@ -53,7 +56,69 @@ pub(super) fn steps(fixture: &mut Fixture) -> Result<serde_json::Value> {
     changed_host_key(fixture, &main, (&id, &control))?;
     report.insert("f_changed_host_key".into(), true.into());
     rpc(h, Request::RemoveRemoteProject { project: pw_id })?;
+    let prompt = password_sign_in(fixture)?;
+    report.insert("g_password_prompt".into(), prompt.into());
     Ok(report.into())
+}
+
+// (g) `ssh-askpass-v1`: a password-only account signs in through the
+// daemon's sign-in. The prompt arrives through the hook's private socket,
+// the answer goes back, and a batch probe then rides the new master.
+fn password_sign_in(fixture: &Fixture) -> Result<String> {
+    let h = fixture.h();
+    let known = fixture.temp.path().join("known_hosts_pw");
+    let ssh = SshOptions {
+        username: "pw".into(),
+        identity_file: None,
+        ..fixture.ssh(fixture.pw_port, &known)
+    };
+    let project = remote_project("ssh-fixture-password", ssh.clone());
+    let failure = ssh_failure(probe(h, &project))?;
+    ensure!(
+        failure == SshFailure::AuthFailed,
+        "Expected AuthFailed before sign-in, got {failure:?}"
+    );
+    let prompt = thread::scope(|scope| -> Result<String> {
+        let sign_in = scope.spawn(|| rpc(h, Request::SshSignIn { ssh: ssh.clone() }));
+        let prompt = wait_prompt(fixture, &ssh)?;
+        rpc(
+            h,
+            Request::AnswerSshPrompt {
+                ssh: ssh.clone(),
+                id: prompt.id,
+                answer: Some(Secret::new("pw".into())),
+            },
+        )?;
+        let reply = sign_in
+            .join()
+            .map_err(|_| anyhow::anyhow!("sign-in panicked"))??;
+        ensure!(matches!(reply, Response::Ok), "Sign-in replied {reply:?}");
+        Ok(prompt.text)
+    })?;
+    ensure!(
+        prompt.to_lowercase().contains("password"),
+        "Unexpected prompt {prompt:?}"
+    );
+    let Response::RemoteProject(Reply::Probe { root, .. }) = probe(h, &project)? else {
+        bail!("Probe after sign-in did not reply Probe");
+    };
+    println!("g) password prompt {prompt:?} answered in the app; probe resolved {root}");
+    Ok(prompt)
+}
+
+fn wait_prompt(fixture: &Fixture, ssh: &SshOptions) -> Result<SignInPrompt> {
+    let end = Instant::now()
+        .checked_add(Duration::from_secs(30))
+        .context("deadline overflow")?;
+    loop {
+        if let Response::SshPrompt(Some(prompt)) =
+            rpc(fixture.h(), Request::SshSignInStatus { ssh: ssh.clone() })?
+        {
+            return Ok(prompt);
+        }
+        ensure!(Instant::now() < end, "No sign-in prompt within 30 s");
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 // (b) Scan + trust → probe succeeds. Returns the trusted fingerprint.
@@ -61,10 +126,12 @@ fn trusted_probe(fixture: &Fixture, main: &Main<'_>) -> Result<String> {
     let h = fixture.h();
     let Main { ssh, project } = *main;
     let fingerprint = trust(fixture, MAIN, ssh)?;
-    let Response::RemoteProject(Reply::Probe { root }) = probe(h, project)? else {
+    let Response::RemoteProject(Reply::Probe { root, tools }) = probe(h, project)? else {
         bail!("Probe did not reply Probe");
     };
     ensure!(root == ROOT, "Probe resolved {root}");
+    let tools = tools.context("Probe did not report host tools")?;
+    ensure!(!tools.shell.is_empty(), "Probe reported no login shell");
     println!("b) trusted {fingerprint}; probe resolved {root}");
     Ok(fingerprint)
 }

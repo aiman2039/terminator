@@ -435,3 +435,15 @@ Test: `input_tap_copies_key_writes_but_not_mouse_reports`.
 - `CommandLog::marks_seen` records that the PTY stream carried a shell
   mark. `prompt_marks()` skips the full-grid scan until then. Test:
   `shell_without_marks_never_reports_a_mark_seen`.
+
+## OSC 7 folder reports (2026-11-18)
+
+The mark reader also takes OSC 7 (`ESC ] 7 ; file://host/path`) out of the
+stream (alacritty ignores it) and keeps the newest payload, not decoded, in
+`CommandLog`. `TerminalBackend::reported_cwd` returns it; the app uses it as
+a display hint only (the Explorer root of an SSH terminal). A payload is held
+back up to 4096 bytes (`RESERVE` grows to match); a longer one, and other OSC
+numbers that start with `7`, pass through unchanged. A report wakes the app
+like an ended command. Tests:
+`osc7_folder_reports_are_kept_and_removed_from_the_stream`,
+`other_osc_numbers_starting_with_7_and_oversized_reports_pass_through`.

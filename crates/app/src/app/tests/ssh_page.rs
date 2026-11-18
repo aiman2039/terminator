@@ -3,22 +3,20 @@ use super::*;
 use terminator_core::remote::HOME_ROOT;
 
 #[test]
-fn typed_new_address_opens_new_host_on_the_ssh_page() {
+fn typed_new_address_opens_add_hosts_on_the_ssh_page() {
     let (mut app, _, _dir) = fixture();
     app.show_ssh_page();
     app.remote_ui.hosts.address = "me@rno2-host.example.com:2222".into();
     app.ssh_open_address();
     assert!(app.ssh_page_visible());
-    assert!(app.remote_ui.open);
-    let draft = app.remote_ui.draft.clone().unwrap();
-    assert!(draft.id.is_empty());
-    assert_eq!(draft.ssh.host, "rno2-host.example.com");
-    assert_eq!(draft.ssh.username, "me");
-    assert_eq!(draft.ssh.port, Some(2222));
-    assert!(draft.root.is_empty());
+    assert!(!app.remote_ui.open);
+    let onboard = app.remote_ui.onboard.as_ref().unwrap();
+    assert_eq!(onboard.address, "me@rno2-host.example.com:2222");
+    assert_eq!(onboard.stage, crate::onboard::Stage::Choose);
     assert!(app.remote_ui.hosts.address.is_empty());
     app.show_vnc_page();
     assert!(!app.ssh_page_visible());
+    assert!(app.remote_ui.onboard.is_none(), "an unstarted page closes");
 }
 
 #[test]
@@ -52,7 +50,7 @@ fn adding_without_a_path_probes_the_login_directory_then_saves_there() {
         .send(Update::RemoteAdded(
             probing,
             generation,
-            Ok(crate::remote_ui::FormResult::Probe("/home/me".into())),
+            Ok(crate::remote_ui::FormResult::Probe("/home/me".into(), None)),
         ))
         .unwrap();
     drain_updates(&mut app, &ctx);
@@ -130,11 +128,15 @@ fn ssh_page_draws_saved_hosts_and_the_new_host_form() {
 
     app.new_ssh_host();
     let texts = paint_ssh_page(&mut app, &ctx);
+    assert!(texts.iter().any(|t| t == "Add SSH hosts"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Host"), "{texts:?}");
+
+    app.open_ssh_properties(crate::remote_ui::blank_project());
+    let texts = paint_ssh_page(&mut app, &ctx);
     assert!(
         texts.iter().any(|t| t == "Host or config alias"),
         "{texts:?}"
     );
-    assert!(texts.iter().any(|t| t == "Add host"), "{texts:?}");
     assert!(
         texts.iter().any(|t| t == "Command timeout (seconds)"),
         "{texts:?}"
@@ -245,7 +247,7 @@ fn click_ssh_margin(app: &mut App, ctx: &egui::Context) {
 #[test]
 fn margin_click_asks_before_discarding_a_changed_host_form() {
     let (mut app, ctx, _dir) = fixture();
-    app.new_ssh_host();
+    app.open_ssh_properties(crate::remote_ui::blank_project());
     app.remote_ui.draft.as_mut().unwrap().ssh.host = "build.example.com".into();
     click_ssh_margin(&mut app, &ctx);
     assert!(app.remote_ui.open);
@@ -255,7 +257,7 @@ fn margin_click_asks_before_discarding_a_changed_host_form() {
 #[test]
 fn margin_click_closes_an_unchanged_host_form() {
     let (mut app, ctx, _dir) = fixture();
-    app.new_ssh_host();
+    app.open_ssh_properties(crate::remote_ui::blank_project());
     click_ssh_margin(&mut app, &ctx);
     assert!(!app.ssh_page_visible());
 }
@@ -263,7 +265,7 @@ fn margin_click_closes_an_unchanged_host_form() {
 #[test]
 fn switching_pages_keeps_a_changed_host_form_for_the_ssh_page() {
     let (mut app, _, _dir) = fixture();
-    app.new_ssh_host();
+    app.open_ssh_properties(crate::remote_ui::blank_project());
     app.remote_ui.draft.as_mut().unwrap().ssh.host = "build.example.com".into();
     app.show_vnc_page();
     assert!(!app.ssh_page_visible());
@@ -280,7 +282,7 @@ fn switching_pages_keeps_a_changed_host_form_for_the_ssh_page() {
 #[test]
 fn opening_another_host_asks_before_replacing_a_changed_form() {
     let (mut app, _, _dir) = fixture();
-    app.new_ssh_host();
+    app.open_ssh_properties(crate::remote_ui::blank_project());
     app.remote_ui.draft.as_mut().unwrap().ssh.host = "build.example.com".into();
     app.open_player();
     let mut other = crate::remote_ui::blank_project();
@@ -292,14 +294,14 @@ fn opening_another_host_asks_before_replacing_a_changed_form() {
         app.remote_ui.draft.as_ref().unwrap().ssh.host,
         "build.example.com"
     );
-    app.open_ssh_import();
-    assert!(app.remote_ui.import.is_none());
+    app.new_ssh_host();
+    assert!(app.remote_ui.onboard.is_none());
 }
 
 #[test]
 fn switching_pages_closes_an_unchanged_host_form() {
     let (mut app, _, _dir) = fixture();
-    app.new_ssh_host();
+    app.open_ssh_properties(crate::remote_ui::blank_project());
     app.show_vnc_page();
     assert!(!app.remote_ui.open);
     app.show_ssh_page();

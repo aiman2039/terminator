@@ -304,12 +304,37 @@ pub(super) fn group_field(ui: &mut egui::Ui, group: &mut Option<String>, groups:
     *group = (!text.is_empty()).then_some(text);
 }
 
+pub(crate) struct SharedFields<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) draft: &'a mut RemoteProject,
+    pub(crate) groups: &'a [String],
+    /// Settings default, and whether the daemon stores a per-host value.
+    pub(crate) timeout: (u32, bool),
+    /// The daemon honors the terminal command (`ssh-commands-v1`).
+    pub(crate) commands: bool,
+}
+
+/// Group, command timeout and terminal command: the fields that apply to
+/// every host added together.
+pub(crate) fn shared_fields(input: SharedFields<'_>) {
+    let SharedFields {
+        ui,
+        draft,
+        groups,
+        timeout: (default, enabled),
+        commands,
+    } = input;
+    group_field(ui, &mut draft.group, groups);
+    timeout_field(ui, &mut draft.command_timeout_seconds, default, enabled);
+    command_fields(ui, draft, commands);
+}
+
 /// The Sign-in section: key files stay folded unless one is set.
-pub(super) fn sign_in_fields(ui: &mut egui::Ui, ssh: &mut SshOptions) {
+pub(crate) fn sign_in_fields(ui: &mut egui::Ui, ssh: &mut SshOptions) {
     form::section(ui, "Sign-in");
     form::hint(
         ui,
-        "Keys and agents come from OpenSSH. Passwords and 2FA are typed in the SSH terminal.",
+        "Keys and agents come from OpenSSH. Passwords and codes are asked for when Terminator connects.",
         "",
     );
     let custom = ssh.identity_file.is_some() || ssh.known_hosts_file.is_some();

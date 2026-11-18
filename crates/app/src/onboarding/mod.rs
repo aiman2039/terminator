@@ -95,7 +95,7 @@ impl App {
                 let _ = self.jobs.send(Job::HookStatus);
             }
             WelcomeAction::Keymap(jetbrains) => self.save_keymap_choice(jetbrains),
-            WelcomeAction::ImportSsh => self.open_ssh_import(),
+            WelcomeAction::ImportSsh => self.new_ssh_host(),
             WelcomeAction::OpenInbox => self.open_agents_inbox(),
             WelcomeAction::Close => self.finish_welcome(),
             WelcomeAction::None if dismissed => self.finish_welcome(),

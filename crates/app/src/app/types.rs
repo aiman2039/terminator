@@ -242,6 +242,7 @@ pub(crate) enum Job {
     /// Lists `~/.ssh/config` aliases for the SSH project dialog opened as
     /// this generation.
     SshConfigHosts(u64),
+    SshSignIn(ssh::SshOptions, onboard::SignInStep),
     /// `ssh -O check` per (project id, control socket) for the Hosts sidebar.
     SshControlStatus(Vec<(String, PathBuf)>),
     /// `StartForward`, `StopForward` or `ForwardStatus`.
@@ -368,6 +369,7 @@ pub(crate) enum Update {
     ),
     HostKeyTrusted(terminator_core::ssh::SshOptions, Result<(), String>),
     SshConfigHosts(u64, Vec<terminator_core::ssh::ConfigHost>),
+    SshSignIn(ssh::SshOptions, onboard::SignInUpdate),
     /// Empty when the check was not run.
     SshControlStatus(Vec<(String, bool)>),
     /// The (project, local port) the request toggled, if any, and the
