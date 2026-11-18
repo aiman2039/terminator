@@ -357,20 +357,30 @@ fn results(ui: &mut egui::Ui, find: &mut FindInFiles) -> bool {
 }
 
 /// One list row; in replace mode its include checkbox comes first.
+/// Screen readers get the file, line, snippet and state of each row.
 fn list_row(ui: &mut egui::Ui, find: &FindInFiles, row: Row<'_>) -> RowAsk {
     let replacing = find.replace.on;
     let mut ask = RowAsk::default();
     match row {
         Row::File(file) => {
-            let check = replacing.then(|| find.replace.file_check(file));
-            let (toggled, ()) = with_check(ui, check, |ui| file_row(ui, &find.root, file));
+            let path = crate::workspace_ops::relative_display(&find.root, &file.path);
+            let check =
+                replacing.then(|| (find.replace.file_check(file), format!("Include {path}")));
+            let (toggled, ()) = with_check(ui, check, |ui| file_row(ui, &path, file.hits.len()));
             ask.toggle = toggled.then(|| (file.path.clone(), None));
         }
         Row::Hit { file, hit, index } => {
+            let path = crate::workspace_ops::relative_display(&find.root, &file.path);
+            let line = hit.line.saturating_add(1);
             let included = !replacing || find.replace.line_included(&file.path, hit.line);
-            let check = replacing.then_some((included, false));
+            let check =
+                replacing.then(|| ((included, false), format!("Include {path} line {line}")));
             let looks = (index == find.selected, !included);
             let (toggled, response) = with_check(ui, check, |ui| hit_row(ui, hit, looks));
+            response.widget_info(|| {
+                let label = format!("{path} line {line}: {}", hit.preview.trim());
+                egui::WidgetInfo::selected(egui::Role::Button, true, looks.0, label)
+            });
             ask.toggle = toggled.then(|| (file.path.clone(), Some(hit.line)));
             if response.clicked() || response.double_clicked() {
                 ask.pick = Some(index);
@@ -381,38 +391,53 @@ fn list_row(ui: &mut egui::Ui, find: &FindInFiles, row: Row<'_>) -> RowAsk {
     ask
 }
 
-/// `row` after an include checkbox when `check` is `Some((checked,
-/// partial))`. Returns whether the box was clicked, and `row`'s result.
+/// `row` after an include checkbox when `check` is `Some(((checked,
+/// partial), name))`; `name` is what a screen reader says for the box.
+/// Returns whether the box was clicked, and `row`'s result.
 fn with_check<R>(
     ui: &mut egui::Ui,
-    check: Option<(bool, bool)>,
+    check: Option<((bool, bool), String)>,
     row: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (bool, R) {
-    let Some((checked, partial)) = check else {
+    let Some(((checked, partial), name)) = check else {
         return (false, row(ui));
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let mut value = checked;
         let check = egui::Checkbox::without_text(&mut value).indeterminate(partial);
-        let clicked = ui.add(check).clicked();
-        (clicked, row(ui))
+        let response = ui.add(check);
+        let enabled = ui.is_enabled();
+        // Like egui's own checkbox: no `selected` reads as mixed.
+        response.widget_info(|| {
+            if partial {
+                egui::WidgetInfo::labeled(egui::Role::CheckBox, enabled, &name)
+            } else {
+                egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, value, &name)
+            }
+        });
+        (response.clicked(), row(ui))
     })
     .inner
 }
 
 /// A file header row: path below the root, then its hit count.
-fn file_row(ui: &mut egui::Ui, root: &Path, file: &FileHits) {
-    let (rect, _) = ui.allocate_exact_size(
+fn file_row(ui: &mut egui::Ui, path: &str, count: usize) {
+    let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), ROW_HEIGHT),
         egui::Sense::hover(),
     );
+    let lines = if count == 1 { "line" } else { "lines" };
+    response.widget_info(|| {
+        let label = format!("{path}, {count} matching {lines}");
+        egui::WidgetInfo::labeled(egui::Role::Label, true, label)
+    });
     if !ui.is_rect_visible(rect) {
         return;
     }
     let painter = ui.painter_at(rect);
     let name = painter.layout_no_wrap(
-        crate::workspace_ops::relative_display(root, &file.path),
+        path.to_owned(),
         egui::FontId::proportional(appearance::FONT_BODY),
         ui.visuals().strong_text_color(),
     );
@@ -426,7 +451,7 @@ fn file_row(ui: &mut egui::Ui, root: &Path, file: &FileHits) {
     painter.text(
         egui::pos2(after, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        format!("({})", file.hits.len()),
+        format!("({count})"),
         egui::FontId::proportional(appearance::FONT_SMALL),
         ui.visuals().weak_text_color(),
     );
