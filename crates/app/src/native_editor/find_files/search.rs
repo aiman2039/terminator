@@ -34,13 +34,22 @@ pub(crate) struct SearchRequest {
 
 /// One matching line: 0-based line, UTF-16 column of the first match
 /// (for opening the file there), the trimmed line text, and the char
-/// ranges of the matches in that text.
+/// ranges of the matches in that text. `fingerprint` is the
+/// [`line_fingerprint`] of the whole line, so a replace can tell a change
+/// past the cut preview.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LineHit {
     pub line: u32,
     pub character: u32,
     pub preview: String,
     pub matches: Vec<(usize, usize)>,
+    pub fingerprint: u64,
+}
+
+/// A hash of the whole `line` (no line break). It is the same in every
+/// run, so the replace worker compares it with the line it reads again.
+pub(super) fn line_fingerprint(line: &str) -> u64 {
+    terminator_native_edit::doc::hash_bytes(line.as_bytes())
 }
 
 /// Hits in one file, in line order, and the lines around them.
@@ -189,6 +198,7 @@ pub(super) fn file_hits(
             character: u32::try_from(character).unwrap_or(u32::MAX),
             preview,
             matches,
+            fingerprint: line_fingerprint(line),
         });
     }
     Some(hits)

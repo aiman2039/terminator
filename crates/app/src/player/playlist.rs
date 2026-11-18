@@ -59,6 +59,7 @@ pub fn remove_tracks(
     drop: &HashSet<usize>,
     playing: Option<&Path>,
 ) -> RemoveOut {
+    let was_listed = follow_path(&tracks, playing).is_some();
     let tracks: Vec<PathBuf> = tracks
         .into_iter()
         .enumerate()
@@ -66,7 +67,8 @@ pub fn remove_tracks(
         .map(|(_, path)| path)
         .collect();
     let current = follow_path(&tracks, playing);
-    let stop = playing.is_some() && current.is_none();
+    // Stop only when this removal took away the playing track (#335).
+    let stop = was_listed && current.is_none();
     RemoveOut {
         tracks,
         current,
@@ -170,6 +172,53 @@ mod tests {
         let out = remove_tracks(tracks, &drop, Some(Path::new("c.mp3")));
         assert!(!out.stop);
         assert_eq!(out.current, Some(1));
+    }
+
+    #[test]
+    fn removing_from_a_list_without_the_playing_track_keeps_playback() {
+        let tracks = vec![PathBuf::from("b.mp3"), PathBuf::from("c.mp3")];
+        let drop = HashSet::from([0]);
+        let out = remove_tracks(tracks, &drop, Some(Path::new("a.mp3")));
+        assert_eq!(out.tracks, [PathBuf::from("c.mp3")]);
+        assert!(!out.stop);
+        assert_eq!(out.current, None);
+    }
+
+    #[test]
+    fn removing_the_last_copy_of_the_playing_track_stops() {
+        let tracks = vec![
+            PathBuf::from("a.mp3"),
+            PathBuf::from("b.mp3"),
+            PathBuf::from("a.mp3"),
+        ];
+        let drop = HashSet::from([0, 2]);
+        let out = remove_tracks(tracks, &drop, Some(Path::new("a.mp3")));
+        assert_eq!(out.tracks, [PathBuf::from("b.mp3")]);
+        assert!(out.stop);
+        assert_eq!(out.current, None);
+    }
+
+    #[test]
+    fn removing_one_of_two_copies_of_the_playing_track_keeps_playback() {
+        let tracks = vec![
+            PathBuf::from("a.mp3"),
+            PathBuf::from("b.mp3"),
+            PathBuf::from("a.mp3"),
+        ];
+        let drop = HashSet::from([0]);
+        let out = remove_tracks(tracks, &drop, Some(Path::new("a.mp3")));
+        assert!(!out.stop);
+        assert_eq!(out.current, Some(1));
+    }
+
+    #[test]
+    fn removing_tracks_in_radio_mode_never_stops() {
+        let tracks = vec![PathBuf::from("a.mp3"), PathBuf::from("b.mp3")];
+        let drop = HashSet::from([0, 1]);
+        let out = remove_tracks(tracks, &drop, None);
+        assert!(out.tracks.is_empty());
+        assert!(!out.stop);
+        assert_eq!(out.current, None);
     }
 
     #[test]

@@ -264,6 +264,7 @@ impl App {
             Action::ReviewLastTurn => self.review_last_turn(),
             Action::PromptComposer => self.open_composer(),
             Action::SearchAllScrollback => self.open_scrollback_find(),
+            Action::AgentSessions => self.open_agent_sessions(),
             Action::BroadcastInput => self.toggle_broadcast(),
             Action::QuickTerminal => self.quick_terminal_shortcut(ctx),
             Action::OpenLaunchLayout => self.open_launch_layout(),

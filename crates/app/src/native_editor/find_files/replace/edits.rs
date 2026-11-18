@@ -4,7 +4,7 @@
 //! `${name}` expand from the match. The worker re-reads each file, makes
 //! sure every planned line still reads as the search saw it, and hands
 //! the edits to the rename staging.
-use super::super::search::MAX_PREVIEW_CHARS;
+use super::super::search::{MAX_PREVIEW_CHARS, line_fingerprint};
 use super::*;
 use crate::native_editor::rename::{MAX_RENAME_BYTES, MAX_RENAME_EDITS, prepare_rename};
 use anyhow::Context as _;
@@ -70,11 +70,14 @@ pub(crate) fn change_line(line: &str, how: &LineReplace<'_>) -> LineChange {
     change
 }
 
-/// One file of a replace: its counted 0-based lines, each with its text
-/// as the search saw it (cut like the preview).
+/// One counted 0-based line: its text as the search saw it (cut like the
+/// preview) and the fingerprint of the whole line then.
+pub(crate) type PlannedLine = (u32, String, u64);
+
+/// One file of a replace: its counted lines.
 pub(crate) struct PlannedFile {
     pub path: PathBuf,
-    pub lines: Vec<(u32, String)>,
+    pub lines: Vec<PlannedLine>,
 }
 
 /// Everything a replace needs off the GUI thread.
@@ -171,24 +174,27 @@ pub(crate) fn prepare_replace(plan: &ReplacePlan) -> anyhow::Result<PreparedRena
 
 /// Edits that replace the matches on `lines` (sorted) of `text`, as
 /// language-server ranges. `None` when a planned line is gone or reads
-/// otherwise than the search saw it. Line breaks split as `str::lines`.
+/// otherwise than the search saw it, past the cut preview too (the whole
+/// line's fingerprint). Line breaks split as `str::lines`.
 fn file_edits(
     text: &str,
-    lines: &[(u32, String)],
+    lines: &[PlannedLine],
     how: &LineReplace<'_>,
 ) -> Option<Vec<native_lsp::RenameTextEdit>> {
     let mut wanted = lines.iter().peekable();
     let mut edits = Vec::new();
     for (index, piece) in text.split_inclusive('\n').enumerate() {
-        let Some((line, seen)) =
-            wanted.next_if(|(line, _)| usize::try_from(*line).is_ok_and(|line| line == index))
+        let Some((line, seen, fingerprint)) =
+            wanted.next_if(|(line, ..)| usize::try_from(*line).is_ok_and(|line| line == index))
         else {
             continue;
         };
         let body = piece
             .strip_suffix('\n')
             .map_or(piece, |body| body.strip_suffix('\r').unwrap_or(body));
-        if !body.chars().take(MAX_PREVIEW_CHARS).eq(seen.chars()) {
+        if !body.chars().take(MAX_PREVIEW_CHARS).eq(seen.chars())
+            || line_fingerprint(body) != *fingerprint
+        {
             return None;
         }
         for (range, new_text) in line_replacements(body, how) {

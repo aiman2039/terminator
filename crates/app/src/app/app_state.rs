@@ -449,6 +449,8 @@ pub struct App {
     pub(crate) composer: crate::composer::ComposerState,
     /// Data of `CenterPage::ScrollbackFind`.
     pub(crate) scrollback_find: crate::scrollback_find::FindPage,
+    /// Agent sessions window: past CLI conversations of a project (#314).
+    pub(crate) agent_sessions: crate::agent_sessions::AgentSessions,
     /// Broadcast input of one workspace tab (GUI memory only).
     pub(crate) broadcast: crate::workspace_ui::Broadcast,
     /// The system-wide quick terminal hotkey and its scratch terminal.

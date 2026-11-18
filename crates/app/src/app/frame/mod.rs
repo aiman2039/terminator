@@ -113,6 +113,8 @@ impl eframe::App for App {
             self.maybe_upgrade_idle_daemon();
         }
         if !self.exit.active() {
+            // Delayed autosave also for files whose view is hidden (#332).
+            self.autosave_native_docs(ctx);
             self.poll_background_services(ctx);
             self.poll_quick_terminal(ctx);
         }

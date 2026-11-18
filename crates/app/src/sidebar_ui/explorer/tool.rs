@@ -90,6 +90,18 @@ impl App {
         let local = self.selected_remote_project().is_none() && self.selected_project().is_some();
         let menu = ui.add_enabled_ui(local, |ui| {
             appearance::icon_menu_button(ui, "Terminal", |ui| {
+                let listed = appearance::menu_item(appearance::MenuItemInput {
+                    ui,
+                    label: crate::Action::AgentSessions.label(),
+                    icon: crate::Action::AgentSessions.icon(),
+                    shortcut: "",
+                })
+                .on_hover_text("Lists this project's past Claude Code and Codex conversations");
+                if listed.clicked() {
+                    self.open_agent_sessions();
+                    ui.close();
+                }
+                ui.separator();
                 for (kind, command) in crate::agent_presence::RESUME_PICKERS {
                     let agent = terminator_core::agents::display_name(kind);
                     let picked = appearance::menu_item(appearance::MenuItemInput {

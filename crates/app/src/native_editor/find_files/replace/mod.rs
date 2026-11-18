@@ -127,13 +127,13 @@ impl ReplaceState {
 
     /// The counted lines of `file` with their text as the search saw it.
     fn planned(&self, file: &FileHits) -> Option<edits::PlannedFile> {
-        let lines: Vec<(u32, String)> = file
+        let lines: Vec<edits::PlannedLine> = file
             .hits
             .iter()
             .filter(|hit| self.line_included(&file.path, hit.line))
             .map(|hit| {
                 let seen = file.lines.get(&hit.line).cloned().unwrap_or_default();
-                (hit.line, seen)
+                (hit.line, seen, hit.fingerprint)
             })
             .collect();
         (!lines.is_empty()).then(|| edits::PlannedFile {

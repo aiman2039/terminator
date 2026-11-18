@@ -1,3 +1,4 @@
+use super::staging::{commit_rename, stage_rename};
 use super::*;
 
 struct EditInput<'a> {
@@ -100,6 +101,107 @@ fn stale_disk_file_stops_rename_before_any_file_changes() {
     assert!(apply_rename(preview).is_err());
     assert_eq!(std::fs::read_to_string(a).unwrap(), "foo\n");
     assert_eq!(std::fs::read_to_string(b).unwrap(), "other\n");
+}
+
+/// Prepares a rename of `a.rs` ("alpha") and `b.rs` ("beta") in `root`.
+fn two_file_rename(root: &Path) -> (PathBuf, PathBuf, PreparedRename) {
+    let a = root.join("a.rs");
+    let b = root.join("b.rs");
+    std::fs::write(&a, "alpha\n").unwrap();
+    std::fs::write(&b, "beta\n").unwrap();
+    let prepared = prepare_rename(
+        root,
+        vec![
+            edit(EditInput {
+                path: &a,
+                line: 0,
+                start: 0,
+                end: 5,
+                replacement: "gamma",
+            }),
+            edit(EditInput {
+                path: &b,
+                line: 0,
+                start: 0,
+                end: 4,
+                replacement: "delta",
+            }),
+        ],
+    )
+    .unwrap();
+    (a, b, prepared)
+}
+
+/// Paths of files in `root` other than `a.rs` and `b.rs` that hold `bytes`.
+fn backups_with(root: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+    std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| !path.ends_with("a.rs") && !path.ends_with("b.rs"))
+        .filter(|path| std::fs::read(path).is_ok_and(|read| read == bytes))
+        .collect()
+}
+
+#[test]
+fn failed_later_write_restores_earlier_file_and_leaves_no_temp_files() {
+    let root = tempfile::tempdir().unwrap();
+    let (a, b, prepared) = two_file_rename(root.path());
+    let stages = stage_rename(&prepared).unwrap();
+    let result = commit_rename(&prepared, stages, |path| {
+        if path == b {
+            std::fs::write(&b, "other\n").unwrap();
+        }
+    });
+    assert!(result.is_err());
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "alpha\n");
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "other\n");
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn rollback_keeps_backup_and_concurrent_edit_when_file_changed_after_apply() {
+    let root = tempfile::tempdir().unwrap();
+    let (a, b, prepared) = two_file_rename(root.path());
+    let stages = stage_rename(&prepared).unwrap();
+    let error = commit_rename(&prepared, stages, |path| {
+        if path == b {
+            std::fs::write(&a, "concurrent\n").unwrap();
+            std::fs::write(&b, "other\n").unwrap();
+        }
+    })
+    .unwrap_err()
+    .to_string();
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "concurrent\n");
+    let backups = backups_with(root.path(), b"alpha\n");
+    assert_eq!(backups.len(), 1, "{error}");
+    assert!(error.contains(&backups[0].display().to_string()), "{error}");
+}
+
+#[test]
+#[cfg(unix)]
+fn rollback_keeps_backup_when_restoring_original_fails() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let (a, b, prepared) = two_file_rename(root.path());
+    let stages = stage_rename(&prepared).unwrap();
+    let mut writable = true;
+    let error = commit_rename(&prepared, stages, |path| {
+        if path == b {
+            let read_only = std::fs::Permissions::from_mode(0o555);
+            std::fs::set_permissions(root.path(), read_only).unwrap();
+            // A privileged user can still write; then nothing fails.
+            writable = std::fs::write(root.path().join("probe"), b"").is_ok();
+        }
+    });
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    if writable {
+        return;
+    }
+    let error = error.unwrap_err().to_string();
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "gamma\n");
+    let backups = backups_with(root.path(), b"alpha\n");
+    assert_eq!(backups.len(), 1, "{error}");
+    assert!(error.contains(&backups[0].display().to_string()), "{error}");
 }
 
 #[test]

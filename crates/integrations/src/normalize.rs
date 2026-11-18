@@ -104,7 +104,9 @@ fn hook_state(input: HookStateInput<'_>) -> Option<AgentState> {
     }
 }
 
-fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
+/// The agent CLI's own command that resumes conversation `provider`, if
+/// the agent has one.
+pub fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
     if kind == "copilot" {
         // The documented form; the session ID is optional after `--resume`.
         return Some(Resume {

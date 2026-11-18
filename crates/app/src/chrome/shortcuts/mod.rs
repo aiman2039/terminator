@@ -140,6 +140,8 @@ actions! {
     ReviewLastTurn => "review_last_turn", "Review last agent turn", "History";
     PromptComposer => "prompt_composer", "Prompt composer…", "Pencil";
     SearchAllScrollback => "search_all_scrollback", "Search all scrollback…", "Search";
+    // Past Claude Code / Codex conversations of the project; resume on pick.
+    AgentSessions => "agent_sessions", "Agent sessions…", "History";
     // Typed keys go to every terminal of the tab; GUI memory only.
     BroadcastInput => "broadcast_input", "Broadcast input to all panes in this tab", "Radio";
     // System-wide too (global-hotkey); unbound by default.

@@ -374,6 +374,7 @@ fn match_shell_script(argv: &[&str]) -> Option<&'static str> {
 
 /// PID/start-time identity. A reused PID has a different start time and never
 /// matches an earlier observation.
+pub mod conversations;
 mod detect;
 pub mod quota;
 pub use detect::{

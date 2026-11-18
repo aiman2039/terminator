@@ -368,6 +368,7 @@ impl App {
             git_extras: Default::default(),
             composer: Default::default(),
             scrollback_find: Default::default(),
+            agent_sessions: Default::default(),
             broadcast: Default::default(),
             quick_terminal: Default::default(),
             launch: Default::default(),
