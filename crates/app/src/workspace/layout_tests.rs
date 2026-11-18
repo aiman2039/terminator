@@ -321,7 +321,7 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(14);
+        saved["version"] = serde_json::json!(15);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()

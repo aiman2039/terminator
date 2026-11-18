@@ -13,6 +13,7 @@ impl App {
     pub(crate) fn document_view(&mut self, ui: &mut egui::Ui, path: &Path, kind: DocumentKind) {
         match kind {
             DocumentKind::Table => self.table_view(ui, path),
+            DocumentKind::Flow => self.flow_editor_view(ui, path),
         }
     }
 

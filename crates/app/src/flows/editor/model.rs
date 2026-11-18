@@ -203,6 +203,69 @@ pub(crate) fn draft_of(name: &str, snarl: &Snarl<Node>) -> Draft {
     Draft::new(name.trim(), steps.collect())
 }
 
+/// The steps in the order that they can run: a step comes after the
+/// steps that it needs. Steps of a cycle come last, in file order.
+fn run_order(draft: &Draft) -> Vec<&DraftStep> {
+    let mut done: Vec<&DraftStep> = Vec::new();
+    let mut left: Vec<&DraftStep> = draft.steps.iter().collect();
+    while !left.is_empty() {
+        let ready = |step: &DraftStep| {
+            step.needs
+                .iter()
+                .all(|needs| done.iter().any(|done| done.id == *needs))
+        };
+        let (now, later): (Vec<_>, Vec<_>) = left.iter().copied().partition(|step| ready(step));
+        if now.is_empty() {
+            done.extend(later);
+            break;
+        }
+        done.extend(now);
+        left = later;
+    }
+    done
+}
+
+/// The flow as a plan in Markdown: for the preview and the export.
+pub(crate) fn plan_text(draft: &Draft) -> String {
+    use std::fmt::Write as _;
+    let mut text = format!("# {}\n", draft.name);
+    let rules = [
+        ("Before each prompt", &draft.prompt_prefix),
+        ("After each prompt", &draft.prompt_suffix),
+    ];
+    for (label, rule) in rules {
+        if let Some(rule) = rule {
+            let _ = write!(text, "\n**{label}:**\n\n{rule}\n");
+        }
+    }
+    for (index, step) in run_order(draft).into_iter().enumerate() {
+        let kind = if step.gate.is_some() { "gate" } else { "step" };
+        let number = index.saturating_add(1);
+        let _ = write!(text, "\n## {number}. {} ({kind})\n\n", step.id);
+        if !step.needs.is_empty() {
+            let _ = writeln!(text, "- After: {}", step.needs.join(", "));
+        }
+        let lines = [
+            (
+                "Command",
+                step.command.as_ref().map(|line| format!("`{line}`")),
+            ),
+            ("Folder", step.cwd.clone()),
+            ("Worktree", step.worktree.clone()),
+            ("You approve", step.gate.clone()),
+        ];
+        for (label, value) in lines {
+            if let Some(value) = value {
+                let _ = writeln!(text, "- {label}: {value}");
+            }
+        }
+        if let Some(prompt) = &step.prompt {
+            let _ = write!(text, "\n{prompt}\n");
+        }
+    }
+    text
+}
+
 /// An ID that no node has: `base`, then `base-2`, `base-3`, …
 pub(crate) fn free_id(snarl: &Snarl<Node>, base: &str) -> String {
     let taken = |id: &str| snarl.nodes().any(|node| node.id() == id);

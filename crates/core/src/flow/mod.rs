@@ -62,6 +62,8 @@ pub enum FlowError {
     Version(u32),
     #[error("Flow name is empty or too long")]
     Name,
+    #[error("prompt_prefix or prompt_suffix is too long or has a control character")]
+    Rules,
     #[error("A flow needs at least one step")]
     Empty,
     #[error("A flow has at most {MAX_STEPS} steps")]
@@ -118,6 +120,10 @@ pub struct Step {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Flow {
     pub name: String,
+    /// Rules text that goes before each step's prompt.
+    pub prompt_prefix: Option<String>,
+    /// Rules text that goes after each step's prompt.
+    pub prompt_suffix: Option<String>,
     /// In file order.
     pub steps: Vec<Step>,
 }
@@ -129,6 +135,10 @@ pub struct Flow {
 pub struct Draft {
     pub version: u32,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_suffix: Option<String>,
     #[serde(default, rename = "step")]
     pub steps: Vec<DraftStep>,
 }
@@ -167,6 +177,8 @@ impl Draft {
         Self {
             version: VERSION,
             name: name.to_owned(),
+            prompt_prefix: None,
+            prompt_suffix: None,
             steps,
         }
     }
@@ -186,9 +198,17 @@ impl Draft {
         if self.steps.len() > MAX_STEPS {
             return Err(FlowError::TooManySteps);
         }
+        let rule = |text: Option<String>| match text.map(|text| text.trim().to_owned()) {
+            Some(text) if text.is_empty() => Ok(None),
+            Some(text) if !text_ok(&text, true) => Err(FlowError::Rules),
+            text => Ok(text),
+        };
+        let (prompt_prefix, prompt_suffix) = (rule(self.prompt_prefix)?, rule(self.prompt_suffix)?);
         let steps = self.steps.into_iter().map(step).collect::<Result<_, _>>()?;
         let flow = Flow {
             name: name.to_owned(),
+            prompt_prefix,
+            prompt_suffix,
             steps,
         };
         flow.check_graph()?;
@@ -228,7 +248,11 @@ impl From<&Flow> for Draft {
             }
             draft
         });
-        Self::new(&flow.name, steps.collect())
+        Self {
+            prompt_prefix: flow.prompt_prefix.clone(),
+            prompt_suffix: flow.prompt_suffix.clone(),
+            ..Self::new(&flow.name, steps.collect())
+        }
     }
 }
 
@@ -331,6 +355,19 @@ fn checked_worktree(id: &str, name: &str) -> Result<String, FlowError> {
 impl Flow {
     pub fn step(&self, id: &str) -> Option<&Step> {
         self.steps.iter().find(|step| step.id == id)
+    }
+
+    /// A step's prompt with the flow's rules text before and after it.
+    pub fn full_prompt(&self, prompt: &str) -> String {
+        [
+            self.prompt_prefix.as_deref(),
+            Some(prompt),
+            self.prompt_suffix.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
     }
 
     /// Unique IDs, known `needs` and no cycle.

@@ -1,28 +1,36 @@
-//! The native flow editor: a center page with a node graph (`egui-snarl`).
-//! Each node is a step or a gate, and a wire is `needs`. Save checks the
-//! graph with the flow file's own rules and writes `NAME.toml` on a worker
-//! thread; a wrong flow shows its error and writes nothing. The editor
-//! never runs a flow and never types into a terminal.
+//! The native flow editor: a workspace tab (`Tab::Document` with
+//! `DocumentKind::Flow`) with a node graph (`egui-snarl`). Each node is a
+//! step or a gate, and a wire is `needs`. Save checks the graph with the
+//! flow file's own rules and writes `NAME.toml` on a worker thread; a wrong
+//! flow shows its error and writes nothing. The editor never runs a flow
+//! and never types into a terminal.
+//!
+//! A flow with changes that are not saved stays in GUI memory when its
+//! tab closes: the same flow opens again with those changes.
 mod model;
 #[cfg(test)]
 mod tests;
+mod view;
 mod viewer;
 
+use crate::document_view::DocumentKind;
 use crate::*;
-use egui_snarl::{Snarl, ui::SnarlWidget};
+use egui_snarl::{NodeId, Snarl};
 use model::Node;
-use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, channel};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use terminator_core::flow::{Draft, Flow, files};
 
-/// One open flow in the editor. GUI memory only: it stays when the page
-/// hides, until Save and Close or Discard.
+/// One open flow in the editor. GUI memory only.
 pub(crate) struct FlowEditor {
     root: PathBuf,
-    /// The file name without `.toml`. Fixed after the first save.
+    /// The file name without `.toml`.
     file: String,
     /// The flow's display name.
     title: String,
+    /// Rules text before and after each step's prompt.
+    prefix: String,
+    suffix: String,
     /// False for a new flow that has no file yet.
     on_disk: bool,
     snarl: Snarl<Node>,
@@ -31,55 +39,82 @@ pub(crate) struct FlowEditor {
     error: Option<String>,
     /// The draft that a worker thread writes now, and its result.
     saving: Option<(Draft, Receiver<Result<PathBuf, String>>)>,
-    /// Close was clicked with changes that are not saved.
-    confirm_discard: bool,
+    /// The plan file that a worker thread writes now, and its result.
+    exporting: Option<Receiver<Result<PathBuf, String>>>,
     /// The next frame moves the view so that all nodes show.
     fit: bool,
+    dialog: Option<Dialog>,
+    /// The "closed with changes" note was shown.
+    warned: bool,
 }
 
-/// A flow file that a worker thread reads now for the editor.
-pub(crate) struct OpeningFlow {
-    project: String,
-    root: PathBuf,
-    file: String,
-    result: Receiver<Result<Flow, String>>,
+/// The dialog of an editor: one at a time.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dialog {
+    /// All fields of one node, with large text fields.
+    Node(NodeId),
+    /// The rules text before and after each prompt.
+    Rules,
+    /// The plan as Markdown and the flow file text.
+    Preview,
+}
+
+/// The editor of one flow file path.
+pub(crate) enum Slot {
+    Loading(Receiver<Result<Flow, files::LoadError>>),
+    Ready(Box<FlowEditor>),
+    /// The file is not a correct flow.
+    Failed(String),
+}
+
+/// The project folder and the flow name of a flow file path.
+fn place_of(path: &Path) -> Option<(PathBuf, String)> {
+    let file = path.file_stem()?.to_str()?.to_owned();
+    let root = path.parent()?.parent()?.parent()?.to_path_buf();
+    (files::path_of(&root, &file).ok()? == path).then_some((root, file))
 }
 
 impl FlowEditor {
-    fn new(root: PathBuf, file: &str) -> Self {
-        let snarl = model::starter();
+    fn with(root: PathBuf, file: &str, snarl: Snarl<Node>) -> Self {
         Self {
             saved: model::draft_of(file, &snarl),
             root,
             file: file.to_owned(),
             title: file.to_owned(),
+            prefix: String::new(),
+            suffix: String::new(),
             on_disk: false,
             snarl,
             error: None,
             saving: None,
-            confirm_discard: false,
+            exporting: None,
             fit: true,
+            dialog: None,
+            warned: false,
         }
+    }
+
+    fn new(root: PathBuf, file: &str) -> Self {
+        Self::with(root, file, model::starter())
     }
 
     fn of_flow(root: PathBuf, file: &str, flow: &Flow) -> Self {
-        let snarl = model::graph_of(flow);
-        Self {
-            saved: model::draft_of(&flow.name, &snarl),
-            root,
-            file: file.to_owned(),
-            title: flow.name.clone(),
-            on_disk: true,
-            snarl,
-            error: None,
-            saving: None,
-            confirm_discard: false,
-            fit: true,
-        }
+        let mut editor = Self::with(root, file, model::graph_of(flow));
+        editor.title.clone_from(&flow.name);
+        editor.prefix = flow.prompt_prefix.clone().unwrap_or_default();
+        editor.suffix = flow.prompt_suffix.clone().unwrap_or_default();
+        editor.on_disk = true;
+        editor.saved = editor.draft();
+        editor
     }
 
     fn draft(&self) -> Draft {
-        model::draft_of(&self.title, &self.snarl)
+        let rule = |text: &str| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
+        Draft {
+            prompt_prefix: rule(&self.prefix),
+            prompt_suffix: rule(&self.suffix),
+            ..model::draft_of(&self.title, &self.snarl)
+        }
     }
 
     /// A new flow, or a flow with a change since the last save.
@@ -87,137 +122,18 @@ impl FlowEditor {
         !self.on_disk || self.draft() != self.saved
     }
 
-    pub(crate) fn file(&self) -> &str {
-        &self.file
-    }
-}
-
-impl App {
-    /// Another flow cannot open while the editor has changes: they would
-    /// be lost.
-    fn editor_blocks_open(&mut self) -> bool {
-        let Some(editor) = &self.flows.editor else {
-            return false;
-        };
-        if !editor.dirty() {
-            return false;
-        }
-        self.info = Some(format!(
-            "The flow {} has changes. Save or close it first.",
-            editor.file
-        ));
-        self.show_center(CenterPage::FlowEditor);
-        true
-    }
-
-    /// Opens the editor with a new flow named `file`. Nothing is written
-    /// until Save.
-    pub(crate) fn new_flow_editor(&mut self, root: PathBuf, file: &str) {
-        let file = file.trim();
-        if !files::plain_name(file) {
-            self.info = Some("A flow name must be letters, digits, '-' or '_'.".into());
-            return;
-        }
-        if self.editor_blocks_open() {
-            return;
-        }
-        self.flows.editor = Some(FlowEditor::new(root, file));
-        self.show_center(CenterPage::FlowEditor);
-    }
-
-    /// Reads flow `file` on a worker thread; the editor opens when it is
-    /// there.
-    pub(crate) fn edit_flow_editor(&mut self, project: &str, root: PathBuf, file: &str) {
-        if self.editor_blocks_open() {
-            return;
-        }
-        let (sender, receiver) = channel();
-        let (read_root, name) = (root.clone(), file.to_owned());
-        let spawned = std::thread::Builder::new()
-            .name("flow-open".into())
-            .spawn(move || {
-                let flow = files::load(&read_root, &name).map_err(|error| error.to_string());
-                let _ = sender.send(flow);
-            });
-        if spawned.is_err() {
-            self.info = Some("Could not read the flow file.".into());
-            return;
-        }
-        self.flows.opening = Some(OpeningFlow {
-            project: project.to_owned(),
-            root,
-            file: file.to_owned(),
-            result: receiver,
-        });
-    }
-
-    /// Takes the results of the worker threads: an opened flow and a save.
-    pub(crate) fn poll_flow_editor(&mut self, ctx: &egui::Context) {
-        if let Some(opening) = &self.flows.opening {
-            match opening.result.try_recv() {
-                Ok(read) => {
-                    let opening = self.flows.opening.take();
-                    if let Some(opening) = opening {
-                        self.opened_flow(opening, read);
-                    }
-                }
-                Err(_) => ctx.request_repaint(),
-            }
-        }
-        let Some(editor) = &mut self.flows.editor else {
-            return;
-        };
-        let Some((draft, result)) = &editor.saving else {
-            return;
-        };
-        match result.try_recv() {
-            Ok(Ok(_)) => {
-                editor.saved = draft.clone();
-                editor.on_disk = true;
-                editor.error = None;
-                editor.saving = None;
-                self.info = Some(format!("Saved the flow {}.", editor.file));
-            }
-            Ok(Err(error)) => {
-                editor.error = Some(error);
-                editor.saving = None;
-            }
-            Err(_) => ctx.request_repaint(),
-        }
-    }
-
-    /// A flow that reads as correct opens in the editor. A wrong file
-    /// opens as text, so the user can repair it.
-    fn opened_flow(&mut self, opening: OpeningFlow, read: Result<Flow, String>) {
-        match read {
-            Ok(flow) => {
-                self.flows.editor = Some(FlowEditor::of_flow(opening.root, &opening.file, &flow));
-                self.show_center(CenterPage::FlowEditor);
-            }
-            Err(error) => {
-                self.error.set(format!("Flow {}: {error}", opening.file));
-                if let Ok(path) = files::path_of(&opening.root, &opening.file) {
-                    self.open_flow_as_text(&opening.project, &path);
-                }
-            }
-        }
-    }
-
     /// Save: the graph must be a correct flow, then a worker thread writes
     /// the file. A new flow never replaces a file.
-    fn save_flow_editor(&mut self) {
-        let Some(editor) = &mut self.flows.editor else {
-            return;
-        };
-        if editor.saving.is_some() {
+    fn save(&mut self) {
+        if self.saving.is_some() {
             return;
         }
-        let draft = editor.draft();
+        let draft = self.draft();
         if let Err(error) = draft.clone().check() {
-            editor.error = Some(error.to_string());
+            self.error = Some(error.to_string());
             return;
         }
-        let (root, file, replace) = (editor.root.clone(), editor.file.clone(), editor.on_disk);
+        let (root, file, replace) = (self.root.clone(), self.file.clone(), self.on_disk);
         let (sender, receiver) = channel();
         let write = draft.clone();
         let spawned = std::thread::Builder::new()
@@ -227,137 +143,219 @@ impl App {
                 let _ = sender.send(saved.map_err(|error| error.to_string()));
             });
         if spawned.is_ok() {
-            editor.error = None;
-            editor.saving = Some((draft, receiver));
+            self.error = None;
+            self.saving = Some((draft, receiver));
         } else {
-            editor.error = Some("Could not start the save.".into());
+            self.error = Some("Could not start the save.".into());
         }
     }
 
-    /// Close: with changes, the first click asks; Discard closes.
-    fn close_flow_editor(&mut self, discard: bool) {
-        let Some(editor) = &mut self.flows.editor else {
-            self.close_center_page(&CenterPage::FlowEditor);
-            return;
-        };
-        if editor.dirty() && !discard {
-            editor.confirm_discard = true;
+    /// Export: a worker thread writes the plan as `NAME.md` beside the
+    /// flow file. It replaces only that plan file.
+    fn export_plan(&mut self) {
+        if self.exporting.is_some() {
             return;
         }
-        self.flows.editor = None;
-        self.close_center_page(&CenterPage::FlowEditor);
+        let text = model::plan_text(&self.draft());
+        let Ok(flow) = files::path_of(&self.root, &self.file) else {
+            return;
+        };
+        let path = flow.with_extension("md");
+        let (sender, receiver) = channel();
+        let spawned = std::thread::Builder::new()
+            .name("flow-export".into())
+            .spawn(move || {
+                let written = path
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| std::fs::write(&path, text));
+                let _ = sender.send(written.map(|()| path).map_err(|error| error.to_string()));
+            });
+        if spawned.is_ok() {
+            self.exporting = Some(receiver);
+        } else {
+            self.error = Some("Could not start the export.".into());
+        }
     }
 
-    /// The editor page.
-    pub(crate) fn flow_editor_center(&mut self, ui: &mut egui::Ui) {
-        self.poll_flow_editor(ui.ctx());
-        let style = appearance::CenterCardStyle::new(&self.theme);
-        let colors = viewer::Colors {
-            canvas: appearance::color(&self.theme.window),
-            node: appearance::color(&self.theme.surface),
-            border: appearance::color(&self.theme.border),
-            step: appearance::color(&self.theme.status_running),
-            gate: appearance::color(&self.theme.status_waiting),
-        };
-        let mut click = None;
-        let ((), dismissed) = appearance::center_card(ui, style, |ui| {
-            ui.set_min_size(ui.available_size());
-            let Some(editor) = &mut self.flows.editor else {
-                ui.weak("No flow is open. Use Run flow… to make or edit one.");
-                return;
-            };
-            click = editor_bar(ui, editor);
-            if let Some(error) = &editor.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+    /// Takes the result of an export: the written plan file.
+    fn poll_export(&mut self) -> Option<PathBuf> {
+        match self.exporting.as_ref()?.try_recv() {
+            Ok(Ok(path)) => {
+                self.exporting = None;
+                Some(path)
             }
-            ui.weak(
-                "Drag from the right dot of a step to the left dot of the next step, \
-                 or use + in After. Right-click the canvas, a step or a wire for more.",
+            Ok(Err(error)) => {
+                self.error = Some(format!("Export: {error}"));
+                self.exporting = None;
+                None
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                self.exporting = None;
+                None
+            }
+        }
+    }
+
+    /// Takes the result of a save. Gives a note for the status bar.
+    fn poll(&mut self) -> Option<String> {
+        let (draft, result) = self.saving.as_ref()?;
+        match result.try_recv() {
+            Ok(Ok(_)) => {
+                self.saved = draft.clone();
+                self.on_disk = true;
+                self.error = None;
+                self.saving = None;
+                Some(format!("Saved the flow {}.", self.file))
+            }
+            Ok(Err(error)) => {
+                self.error = Some(error);
+                self.saving = None;
+                None
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                self.error = Some("The save did not finish.".into());
+                self.saving = None;
+                None
+            }
+        }
+    }
+}
+
+impl Slot {
+    /// Reads the flow of `path` on a worker thread.
+    fn load(path: &Path) -> Self {
+        let Some((root, file)) = place_of(path) else {
+            return Self::Failed(
+                "This file is not in a project's .terminator/flows folder.".into(),
             );
-            ui.add_space(4.0);
-            let fit = std::mem::take(&mut editor.fit).then(|| ui.available_rect_before_wrap());
-            SnarlWidget::new()
-                .id_salt("flow-editor")
-                .style(viewer::style(colors))
-                .show(&mut editor.snarl, &mut viewer::Viewer { colors, fit }, ui);
-        });
-        match click {
-            Some(Click::Save) => self.save_flow_editor(),
-            Some(Click::Close) => self.close_flow_editor(false),
-            Some(Click::Discard) => self.close_flow_editor(true),
-            Some(Click::Keep) => {
-                if let Some(editor) = &mut self.flows.editor {
-                    editor.confirm_discard = false;
-                }
+        };
+        let (sender, receiver) = channel();
+        let spawned = std::thread::Builder::new()
+            .name("flow-open".into())
+            .spawn(move || {
+                let _ = sender.send(files::load(&root, &file));
+            });
+        match spawned {
+            Ok(_) => Self::Loading(receiver),
+            Err(_) => Self::Failed("Could not read the flow file.".into()),
+        }
+    }
+
+    /// The editor of a read result. A flow with no file is a new flow.
+    fn loaded(path: &Path, read: Result<Flow, files::LoadError>) -> Self {
+        let Some((root, file)) = place_of(path) else {
+            return Self::Failed(
+                "This file is not in a project's .terminator/flows folder.".into(),
+            );
+        };
+        match read {
+            Ok(flow) => Self::Ready(Box::new(FlowEditor::of_flow(root, &file, &flow))),
+            Err(files::LoadError::Missing(_)) => {
+                Self::Ready(Box::new(FlowEditor::new(root, &file)))
             }
-            None => {}
+            Err(error) => Self::Failed(error.to_string()),
         }
-        // A click on the margin hides the page; the editor keeps its flow.
-        if dismissed {
-            self.hide_center_overlay();
+    }
+
+    /// Takes the read result when it is there.
+    fn poll(self, path: &Path) -> Self {
+        let Self::Loading(receiver) = self else {
+            return self;
+        };
+        match receiver.try_recv() {
+            Ok(read) => Self::loaded(path, read),
+            Err(TryRecvError::Empty) => Self::Loading(receiver),
+            Err(TryRecvError::Disconnected) => Self::Failed("Could not read the flow file.".into()),
         }
+    }
+
+    fn keep(&self) -> bool {
+        matches!(self, Self::Ready(editor) if editor.dirty() || editor.saving.is_some())
     }
 }
 
-/// One click in the editor's top bar.
-enum Click {
-    Save,
-    Close,
-    Discard,
-    Keep,
-}
+impl App {
+    /// Opens flow `file` of the project at `root` in an editor tab. A name
+    /// with no file opens as a new flow; nothing is written until Save.
+    /// False for a name that is not a flow name.
+    pub(crate) fn open_flow_tab(&mut self, project: &str, root: &Path, file: &str) -> bool {
+        let Ok(path) = files::path_of(root, file.trim()) else {
+            self.info = Some("A flow name must be letters, digits, '-' or '_'.".into());
+            return false;
+        };
+        if !self.project_available(project) {
+            self.info = Some("The flow's project is not open.".into());
+            return false;
+        }
+        if self.selected.as_deref() != Some(project) {
+            self.select_project(project.to_owned());
+        }
+        self.hide_center_overlay();
+        let origin = self
+            .active_session
+            .as_ref()
+            .map(|sid| Tab::Terminal(sid.clone()));
+        let after = self.editor_target(project, origin.as_ref(), None);
+        let tab = Tab::Document {
+            path,
+            kind: DocumentKind::Flow,
+        };
+        let _ = self
+            .update_tx
+            .send(Update::OpenDocument(project.into(), tab, after));
+        true
+    }
 
-/// The top bar: the flow's file and name, Add step, Add gate, Save, Close.
-fn editor_bar(ui: &mut egui::Ui, editor: &mut FlowEditor) -> Option<Click> {
-    let mut click = None;
-    ui.horizontal(|ui| {
-        ui.strong(format!("Flow {}.toml", editor.file));
-        ui.add(
-            egui::TextEdit::singleline(&mut editor.title)
-                .desired_width(180.0)
-                .hint_text("Name"),
-        );
-        if ui.button("Add step").clicked() {
-            let id = model::free_id(&editor.snarl, "step");
-            let at = next_place(&editor.snarl);
-            editor.snarl.insert_node(at, Node::step(&id, "claude", ""));
+    /// After the panes of a frame: takes save results of editors that no
+    /// pane painted, and drops editors with no changes and no pane. An
+    /// editor with changes stays; one note says so when its tab is gone.
+    pub(crate) fn flow_editors_end_frame(&mut self) {
+        if self.flows.editors.is_empty() {
+            return;
         }
-        if ui.button("Add gate").clicked() {
-            let id = model::free_id(&editor.snarl, "gate");
-            let at = next_place(&editor.snarl);
-            editor.snarl.insert_node(at, Node::gate(&id, ""));
+        let visible = std::mem::take(&mut self.flows.visible);
+        self.flows
+            .editors
+            .retain(|path, slot| visible.contains(path) || slot.keep());
+        let hidden: Vec<PathBuf> = self
+            .flows
+            .editors
+            .keys()
+            .filter(|path| !visible.contains(*path))
+            .cloned()
+            .collect();
+        self.flows.visible = visible;
+        if hidden.is_empty() {
+            return;
         }
-        let saving = editor.saving.is_some();
-        let save = ui
-            .add_enabled(editor.dirty() && !saving, egui::Button::new("Save"))
-            .on_disabled_hover_text(if saving { "Saving…" } else { "No changes" });
-        if save.clicked() {
-            click = Some(Click::Save);
-        }
-        if editor.confirm_discard {
-            ui.label("Discard the changes?");
-            if appearance::danger_button(ui, "Discard").clicked() {
-                click = Some(Click::Discard);
+        let open: Vec<PathBuf> = self
+            .open_tabs()
+            .filter_map(|(_, tab)| match tab {
+                Tab::Document {
+                    path,
+                    kind: DocumentKind::Flow,
+                } => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        for path in hidden {
+            let Some(Slot::Ready(editor)) = self.flows.editors.get_mut(&path) else {
+                continue;
+            };
+            if let Some(note) = editor.poll() {
+                self.info = Some(note);
             }
-            if ui.button("Keep editing").clicked() {
-                click = Some(Click::Keep);
+            let closed = !open.contains(&path);
+            if closed && editor.dirty() && !editor.warned {
+                editor.warned = true;
+                self.info = Some(format!(
+                    "The flow {} has changes that are not saved. Edit it again to save them.",
+                    editor.file
+                ));
             }
-        } else if ui.button("Close").clicked() {
-            click = Some(Click::Close);
         }
-    });
-    click
-}
-
-/// Where a node from the top bar goes: below the lowest node.
-fn next_place(snarl: &Snarl<Node>) -> egui::Pos2 {
-    let lowest = snarl
-        .nodes_pos()
-        .map(|(position, _)| position.y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    if lowest.is_finite() {
-        egui::pos2(0.0, lowest + 260.0)
-    } else {
-        egui::Pos2::ZERO
     }
 }

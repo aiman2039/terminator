@@ -73,21 +73,25 @@
   with a gate; the menu itself was not opened there (no reliable
   synthetic click). A window that is behind other windows gives an old
   frame to `screencapture`; `ctl window focus` first gives a new one.
-- Native flow editor (center page, `egui-snarl` node graph; replaces the
+- Native flow editor (a workspace tab, `Tab::Document` with
+  `DocumentKind::Flow`, layout v14; `egui-snarl` node graph; replaces the
   Excalidraw drawn flows, which are removed): unit tests in
   `flows::editor::tests` (graph and file give the same flow both ways,
   wires are `needs`, a new flow writes nothing until Save and replaces no
-  file, a wrong graph shows the error and writes nothing, Close asks
-  before it discards, a wrong file opens as text, page paint, first view
-  shows all nodes, a right-click shows the canvas menu and the node menu,
-  an After chip removes a wire and "+" adds one, with synthetic pointer
-  events in a headless frame) and `flow::tests` (draft to TOML and back,
-  save rules).
+  file, a wrong graph shows the error and writes nothing, a closed tab
+  keeps a flow with changes and drops a clean one, a wrong file shows its
+  error and Open as text, tab paint, first view shows all nodes, a
+  right-click shows the canvas menu and the card menu, an After chip
+  removes a wire and "+" adds one, a click on a prompt opens the card
+  dialog, the rules and preview dialogs paint, export writes `NAME.md`;
+  with synthetic pointer events in a headless frame) and `flow::tests`
+  (draft to TOML and back, save rules, prompt rules).
   Native GUI, macOS, test-support build with
-  `TERMINATOR_FIXTURE_FLOW_EDITOR`: the page showed the bar and the
-  plan, approve and build nodes in one row with wires (window
-  screenshot). Not verified in a running GUI: clicks, drags of nodes and
-  wires, the menus, and Save from the page (no reliable synthetic input).
+  `TERMINATOR_FIXTURE_FLOW_EDITOR`: the tab showed the toolbar, the three
+  cards and a canvas menu in the app menu style (window screenshot). Not
+  verified in a running GUI: clicks, drags of cards and wires, the
+  dialogs, Float window, Export and Save from the tab (no reliable
+  synthetic input). The prompt rules were not run with a real agent.
   `vendor/egui-snarl` and `vendor/egui-scale` are patched to egui 0.37
   (see each `UPSTREAM.md`).
 - Not verified: a click on the window's buttons (Approve, Reject, Send,

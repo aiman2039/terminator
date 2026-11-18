@@ -12,6 +12,9 @@ Changes:
   it would add a second egui to the lock file. The `cfg_attr(feature =
   "egui-probe", …)` lines stay in the source and are never active.
 - The demo, the logo images and the CI files are not vendored.
+- `SnarlViewer::menu_style` (new, default: no change): the style of the
+  graph, node and dropped-wire context menus. The three menus use
+  `egui::Popup::context_menu(..).style(..)`.
 - egui 0.37 renames: `Ui::id` and `UiBuilder::id` become `scope_id`,
   `Id::new` becomes `Id::unique`, and `SnarlWidget::id_salt` takes
   `impl Hash + Debug` in place of the deprecated `egui::AsId`.

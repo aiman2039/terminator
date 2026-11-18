@@ -179,7 +179,7 @@ impl Runner {
                     Some((needs.as_str(), note))
                 });
                 Phase::Starting {
-                    prompt: with_results(prompt, results),
+                    prompt: with_results(&self.flow.full_prompt(prompt), results),
                 }
             }
             None => Phase::Working { since: None },

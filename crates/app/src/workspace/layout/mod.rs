@@ -70,7 +70,7 @@ impl Workspace {
             let mut workspace: Self =
                 serde_json::from_value(value).context("Invalid project tabs")?;
             ensure!(
-                matches!(workspace.version, 2..=13),
+                matches!(workspace.version, 2..=14),
                 "Unsupported project tab layout version"
             );
             if contains_browser(&workspace) {

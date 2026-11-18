@@ -1296,7 +1296,8 @@ where
             };
 
             if viewer.has_dropped_wire_menu(pins, snarl) {
-                snarl_resp.context_menu(|ui| {
+                let menu_style = viewer.menu_style();
+                egui::Popup::context_menu(&snarl_resp).style(menu_style).show(|ui| {
                     let pins = match &new_wires {
                         NewWires::In(x) => AnyPins::In(x),
                         NewWires::Out(x) => AnyPins::Out(x),
@@ -1317,7 +1318,8 @@ where
                 });
             }
         } else if viewer.has_graph_menu(interact_pos, snarl) {
-            snarl_resp.context_menu(|ui| {
+            let menu_style = viewer.menu_style();
+            egui::Popup::context_menu(&snarl_resp).style(menu_style).show(|ui| {
                 let menu_pos = from_global * ui.cursor().min;
 
                 viewer.show_graph_menu(menu_pos, ui, snarl);
@@ -1889,7 +1891,8 @@ where
     }
 
     if viewer.has_node_menu(&snarl.nodes[node.0].value) {
-        r.context_menu(|ui| {
+        let menu_style = viewer.menu_style();
+        egui::Popup::context_menu(&r).style(menu_style).show(|ui| {
             viewer.show_node_menu(node, &inputs, &outputs, ui, snarl);
         });
 

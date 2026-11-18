@@ -45,7 +45,6 @@ impl App {
             CenterPage::WhatsNew => self.whats_new_center(ui),
             CenterPage::LastTurn => self.last_turn_center(ui),
             CenterPage::ScrollbackFind => self.scrollback_find_center(ui),
-            CenterPage::FlowEditor => self.flow_editor_center(ui),
         }
         false
     }

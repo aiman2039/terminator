@@ -352,4 +352,12 @@ pub trait SnarlViewer<T> {
     fn current_transform(&mut self, to_global: &mut TSTransform, snarl: &mut Snarl<T>) {
         let _ = (to_global, snarl);
     }
+
+    /// Style of the context menus (graph, node, dropped wire).
+    ///
+    /// By default it changes nothing.
+    #[inline]
+    fn menu_style(&mut self) -> fn(&mut egui::Style) {
+        |_| {}
+    }
 }

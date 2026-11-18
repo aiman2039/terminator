@@ -34,9 +34,6 @@ pub(crate) enum CenterPage {
     LastTurn,
     /// Search all scrollback; data is `App::scrollback_find`.
     ScrollbackFind,
-    /// The flow editor; data is `App::flows.editor`, which stays while the
-    /// page hides so changes are not lost.
-    FlowEditor,
 }
 
 impl CenterPage {

@@ -1,9 +1,9 @@
-//! How the flow editor's graph shows in `egui-snarl`: each node is one
-//! step with its fields in the node. The dot on the left edge is "after"
-//! and the dot on the right edge is "then": a wire from the right dot of A
-//! to the left dot of B means that B needs A. The "After" row of a node
-//! shows the same wires as chips, so a wire can be made and removed
-//! without a drag.
+//! How the flow editor's graph shows in `egui-snarl`: each node is a card
+//! of one step. The dot on the left edge is "after" and the dot on the
+//! right edge is "then": a wire from the right dot of A to the left dot of
+//! B means that B needs A. The "After" row of a card shows the same wires
+//! as chips, so a wire can be made and removed without a drag. A click on
+//! the prompt (or the question) opens the card's dialog with large fields.
 use super::model::{Node, free_id, input, output};
 use crate::appearance;
 use egui_snarl::{
@@ -11,12 +11,15 @@ use egui_snarl::{
     ui::{AnyPins, PinInfo, PinPlacement, SnarlPin, SnarlStyle, SnarlViewer, WireLayer},
 };
 
-/// Width of the text fields in a node.
-const FIELD_WIDTH: f32 = 240.0;
-const ID_WIDTH: f32 = 170.0;
+/// Width of the fields in a card.
+const FIELD_WIDTH: f32 = 250.0;
+const ID_WIDTH: f32 = 130.0;
 /// The dots are large so that a wire is easy to start and to drop.
 const PIN_SIZE: f32 = 14.0;
 const WIRE_WIDTH: f32 = 2.5;
+/// Lines and characters of a prompt that a card shows.
+const PREVIEW_LINES: usize = 4;
+const PREVIEW_CHARS: usize = 220;
 
 /// The editor's colors, from the app theme.
 #[derive(Clone, Copy)]
@@ -24,7 +27,7 @@ pub(super) struct Colors {
     pub(super) canvas: egui::Color32,
     pub(super) node: egui::Color32,
     pub(super) border: egui::Color32,
-    /// Wires, dots and the outline of a step.
+    /// Wires, dots and the label of a step.
     pub(super) step: egui::Color32,
     /// The outline and the label of a gate.
     pub(super) gate: egui::Color32,
@@ -33,12 +36,16 @@ pub(super) struct Colors {
 /// The viewer of one frame.
 pub(super) struct Viewer {
     pub(super) colors: Colors,
-    /// The canvas rectangle, on the first frame of a flow only: the view
-    /// then moves and zooms out until all nodes show.
+    /// The canvas rectangle when the view must move and zoom until all
+    /// nodes show: on the first frame of a flow, and on Fit to view.
     pub(super) fit: Option<egui::Rect>,
+    /// Out: the node whose dialog the user asked for.
+    pub(super) edit: Option<NodeId>,
+    /// Out: the user asked for Fit to view.
+    pub(super) refit: bool,
 }
 
-/// The graph style: dots on the node edges, thick wires behind the nodes,
+/// The graph style: dots on the card edges, thick wires behind the cards,
 /// a quiet grid, no collapse button.
 pub(super) fn style(colors: Colors) -> SnarlStyle {
     SnarlStyle {
@@ -51,15 +58,15 @@ pub(super) fn style(colors: Colors) -> SnarlStyle {
         wire_width: Some(WIRE_WIDTH),
         wire_layer: Some(WireLayer::BehindNodes),
         bg_frame: Some(egui::Frame::new().fill(colors.canvas)),
-        bg_pattern_stroke: Some(egui::Stroke::new(1.0, colors.border.gamma_multiply(0.7))),
+        bg_pattern_stroke: Some(egui::Stroke::new(1.0, colors.border)),
         min_scale: Some(0.3),
         max_scale: Some(1.5),
         ..SnarlStyle::new()
     }
 }
 
-/// The size of a step node, for the first view of a flow.
-const NODE_SIZE: egui::Vec2 = egui::vec2(310.0, 230.0);
+/// The size of a step card, for the first view of a flow.
+const NODE_SIZE: egui::Vec2 = egui::vec2(300.0, 250.0);
 const FIT_MARGIN: f32 = 40.0;
 
 /// The view in which all nodes show in `canvas`, at most at full size.
@@ -83,20 +90,8 @@ pub(super) fn fit_view(
     Some(egui::emath::TSTransform::new(offset, scaling))
 }
 
-/// One labeled field row of a node.
-fn field(ui: &mut egui::Ui, (label, hint): (&str, &str), text: &mut String, rows: usize) {
-    ui.weak(label);
-    let edit = if rows > 1 {
-        egui::TextEdit::multiline(text).desired_rows(rows)
-    } else {
-        egui::TextEdit::singleline(text)
-    };
-    ui.add(edit.desired_width(FIELD_WIDTH).hint_text(hint));
-    ui.end_row();
-}
-
 /// Adds a step or a gate at `pos` and gives its node.
-fn add_node(snarl: &mut Snarl<Node>, pos: egui::Pos2, gate: bool) -> NodeId {
+pub(super) fn add_node(snarl: &mut Snarl<Node>, pos: egui::Pos2, gate: bool) -> NodeId {
     if gate {
         let id = free_id(snarl, "gate");
         snarl.insert_node(pos, Node::gate(&id, ""))
@@ -106,31 +101,106 @@ fn add_node(snarl: &mut Snarl<Node>, pos: egui::Pos2, gate: bool) -> NodeId {
     }
 }
 
-/// The menu of one node: on a right-click and on its "more" button.
-fn node_menu(ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
-    if ui.button("Duplicate").clicked() {
-        if let Some(info) = snarl.get_node_info(node) {
+/// The small label above a field.
+fn caption(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).small().weak());
+}
+
+/// The start of `text` that a card shows.
+fn preview(text: &str) -> String {
+    let lines: Vec<&str> = text.trim().lines().take(PREVIEW_LINES).collect();
+    let mut shown: String = lines.join("\n").chars().take(PREVIEW_CHARS).collect();
+    if shown.len() < text.trim().len() {
+        shown.push('…');
+    }
+    shown
+}
+
+impl Viewer {
+    /// A long text as a block that opens the card's dialog on a click.
+    fn text_block(&self, ui: &mut egui::Ui, text: &str, empty: &str) -> bool {
+        let shown = if text.trim().is_empty() {
+            egui::RichText::new(empty).weak()
+        } else {
+            egui::RichText::new(preview(text))
+        };
+        let block = egui::Frame::new()
+            .fill(self.colors.canvas)
+            .stroke(egui::Stroke::new(1.0, self.colors.border))
+            .corner_radius(appearance::RADIUS_MEDIUM)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(FIELD_WIDTH - 16.0);
+                ui.add(egui::Label::new(shown).wrap().selectable(false));
+            });
+        block
+            .response
+            .interact(egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Edit in a large field")
+            .clicked()
+    }
+
+    /// The fields of a card. True when the user asked for the dialog.
+    fn fields(&self, ui: &mut egui::Ui, value: &mut Node) -> bool {
+        match value {
+            Node::Step {
+                command,
+                prompt,
+                cwd,
+                worktree,
+                ..
+            } => {
+                caption(ui, "Command");
+                ui.add(
+                    egui::TextEdit::singleline(command)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(FIELD_WIDTH)
+                        .hint_text("For example claude"),
+                );
+                caption(ui, "Prompt");
+                let edit = self.text_block(ui, prompt, "No prompt. Click to write one.");
+                let places = [("Folder", cwd), ("Worktree", worktree)];
+                for (label, text) in places {
+                    if !text.trim().is_empty() {
+                        ui.label(egui::RichText::new(format!("{label}: {}", text.trim())).small());
+                    }
+                }
+                edit
+            }
+            Node::Gate { message, .. } => {
+                caption(ui, "You approve");
+                self.text_block(ui, message, "No question. Click to write one.")
+            }
+        }
+    }
+
+    /// The menu of one card: on a right-click and on its "more" button.
+    fn node_menu(&mut self, ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
+        if appearance::menu_action(ui, true, "Edit…", "Pencil").clicked() {
+            self.edit = Some(node);
+        }
+        if appearance::menu_action(ui, true, "Duplicate", "Copy").clicked()
+            && let Some(info) = snarl.get_node_info(node)
+        {
             let mut copy = info.value.clone();
             let id = free_id(snarl, copy.id());
             *copy.id_mut() = id;
             let pos = egui::pos2(info.pos.x + 40.0, info.pos.y + 40.0);
             snarl.insert_node(pos, copy);
         }
-        ui.close();
-    }
-    if ui.button("Remove wires").clicked() {
-        snarl.drop_inputs(input(node));
-        snarl.drop_outputs(output(node));
-        ui.close();
-    }
-    ui.separator();
-    if ui.button("Remove").clicked() {
-        snarl.remove_node(node);
-        ui.close();
+        if appearance::menu_action(ui, true, "Remove wires", "Link").clicked() {
+            snarl.drop_inputs(input(node));
+            snarl.drop_outputs(output(node));
+        }
+        ui.separator();
+        if appearance::menu_danger_action(ui, true, "Remove", "Trash").clicked() {
+            snarl.remove_node(node);
+        }
     }
 }
 
-/// The "After" row: one chip per step that this node needs (a click
+/// The "After" row: one chip per step that this card needs (a click
 /// removes that wire), and "+" with the steps that it can need.
 fn after_row(ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
     let needs: Vec<_> = snarl
@@ -144,26 +214,24 @@ fn after_row(ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
         .filter(|(other, _)| *other != node && !needs.iter().any(|(from, _)| from.node == *other))
         .map(|(other, value)| (other, value.id().to_owned()))
         .collect();
-    ui.weak("After");
     ui.horizontal_wrapped(|ui| {
         ui.set_max_width(FIELD_WIDTH);
         for (from, id) in &needs {
             let chip = ui
-                .button(format!("{id} ×"))
+                .small_button(format!("{id} ×"))
                 .on_hover_text("Remove this wire");
             if chip.clicked() {
                 snarl.disconnect(*from, input(node));
             }
         }
         if needs.is_empty() {
-            ui.weak("the start");
+            ui.label(egui::RichText::new("the start").small().weak());
         }
         if !others.is_empty() {
-            ui.menu_button("+", |ui| {
+            appearance::compact_menu_button(ui, "+", |ui| {
                 for (other, id) in &others {
-                    if ui.button(id).clicked() {
+                    if appearance::menu_action(ui, true, id, "Plus").clicked() {
                         snarl.connect(output(*other), input(node));
-                        ui.close();
                     }
                 }
             })
@@ -171,7 +239,6 @@ fn after_row(ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
             .on_hover_text("Run this step after…");
         }
     });
-    ui.end_row();
 }
 
 impl SnarlViewer<Node> for Viewer {
@@ -183,6 +250,10 @@ impl SnarlViewer<Node> for Viewer {
         if let Some(view) = self.fit.take().and_then(|canvas| fit_view(snarl, canvas)) {
             *to_global = view;
         }
+    }
+
+    fn menu_style(&mut self) -> fn(&mut egui::Style) {
+        appearance::menu_style
     }
 
     fn title(&mut self, node: &Node) -> String {
@@ -209,6 +280,20 @@ impl SnarlViewer<Node> for Viewer {
             .stroke(egui::Stroke::new(width, color))
     }
 
+    fn header_frame(
+        &mut self,
+        default: egui::Frame,
+        _node: NodeId,
+        _inputs: &[InPin],
+        _outputs: &[OutPin],
+        _snarl: &Snarl<Node>,
+    ) -> egui::Frame {
+        // One flat card: no second box around the header.
+        default
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::NONE)
+    }
+
     fn show_header(
         &mut self,
         node: NodeId,
@@ -217,24 +302,30 @@ impl SnarlViewer<Node> for Viewer {
         ui: &mut egui::Ui,
         snarl: &mut Snarl<Node>,
     ) {
-        // A label that takes clicks would hide the node's right-click menu.
+        // A label that takes clicks would hide the card's right-click menu.
         ui.style_mut().interaction.selectable_labels = false;
         let Some(value) = snarl.get_node_mut(node) else {
             return;
         };
-        if value.is_gate() {
-            ui.colored_label(self.colors.gate, "GATE");
+        let (label, color) = if value.is_gate() {
+            ("GATE", self.colors.gate)
         } else {
-            ui.colored_label(self.colors.step, "STEP");
-        }
+            ("STEP", self.colors.step)
+        };
+        ui.label(egui::RichText::new(label).small().strong().color(color));
         ui.add(
             egui::TextEdit::singleline(value.id_mut())
                 .desired_width(ID_WIDTH)
                 .hint_text("ID: a-z, 0-9, - or _"),
         );
-        appearance::icon_menu_button(ui, "EllipsisVertical", |ui| node_menu(ui, node, snarl))
-            .response
-            .on_hover_text("More");
+        if appearance::sidebar_action(ui, "Maximize2", "Edit in a dialog").clicked() {
+            self.edit = Some(node);
+        }
+        appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
+            self.node_menu(ui, node, snarl);
+        })
+        .response
+        .on_hover_text("More");
     }
 
     fn inputs(&mut self, _node: &Node) -> usize {
@@ -276,29 +367,17 @@ impl SnarlViewer<Node> for Viewer {
         snarl: &mut Snarl<Node>,
     ) {
         ui.style_mut().interaction.selectable_labels = false;
-        egui::Grid::new(("flow-node", node))
-            .num_columns(2)
-            .show(ui, |ui| {
-                match snarl.get_node_mut(node) {
-                    Some(Node::Step {
-                        command,
-                        prompt,
-                        cwd,
-                        worktree,
-                        ..
-                    }) => {
-                        field(ui, ("Command", "For example claude"), command, 1);
-                        field(ui, ("Prompt", "Optional"), prompt, 2);
-                        field(ui, ("Folder", "In the project (optional)"), cwd, 1);
-                        field(ui, ("Worktree", "New name (optional)"), worktree, 1);
-                    }
-                    Some(Node::Gate { message, .. }) => {
-                        field(ui, ("Question", "What you approve"), message, 2);
-                    }
-                    None => return,
-                }
-                after_row(ui, node, snarl);
-            });
+        ui.vertical(|ui| {
+            ui.set_width(FIELD_WIDTH);
+            let Some(value) = snarl.get_node_mut(node) else {
+                return;
+            };
+            if self.fields(ui, value) {
+                self.edit = Some(node);
+            }
+            caption(ui, "After");
+            after_row(ui, node, snarl);
+        });
     }
 
     fn has_graph_menu(&mut self, _pos: egui::Pos2, _snarl: &mut Snarl<Node>) -> bool {
@@ -306,13 +385,15 @@ impl SnarlViewer<Node> for Viewer {
     }
 
     fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut egui::Ui, snarl: &mut Snarl<Node>) {
-        if ui.button("Add step").clicked() {
+        if appearance::menu_action(ui, true, "Add step", "Terminal").clicked() {
             add_node(snarl, pos, false);
-            ui.close();
         }
-        if ui.button("Add gate").clicked() {
+        if appearance::menu_action(ui, true, "Add gate", "CircleCheck").clicked() {
             add_node(snarl, pos, true);
-            ui.close();
+        }
+        ui.separator();
+        if appearance::menu_action(ui, true, "Fit to view", "Maximize").clicked() {
+            self.refit = true;
         }
     }
 
@@ -329,9 +410,9 @@ impl SnarlViewer<Node> for Viewer {
         src_pins: AnyPins,
         snarl: &mut Snarl<Node>,
     ) {
-        let gate = if ui.button("New step here").clicked() {
+        let gate = if appearance::menu_action(ui, true, "New step here", "Terminal").clicked() {
             false
-        } else if ui.button("New gate here").clicked() {
+        } else if appearance::menu_action(ui, true, "New gate here", "CircleCheck").clicked() {
             true
         } else {
             return;
@@ -349,7 +430,6 @@ impl SnarlViewer<Node> for Viewer {
                 }
             }
         }
-        ui.close();
     }
 
     fn has_node_menu(&mut self, _node: &Node) -> bool {
@@ -364,7 +444,7 @@ impl SnarlViewer<Node> for Viewer {
         ui: &mut egui::Ui,
         snarl: &mut Snarl<Node>,
     ) {
-        node_menu(ui, node, snarl);
+        self.node_menu(ui, node, snarl);
     }
 
     /// A step cannot need itself. A cycle through other steps is found by

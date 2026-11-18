@@ -335,6 +335,27 @@ fn draft_writes_a_file_that_reads_as_the_same_flow() {
 }
 
 #[test]
+fn prompt_rules_go_before_and_after_each_prompt() {
+    let mut draft = Draft::from(&flow());
+    assert_eq!(flow().full_prompt("Do it."), "Do it.");
+    draft.prompt_prefix = Some("  Obey AGENTS.md.\n".into());
+    draft.prompt_suffix = Some("   ".into());
+    let back = parse(&draft.to_toml().unwrap()).unwrap();
+    // The text is trimmed; an empty rule is no rule.
+    assert_eq!(back.prompt_prefix.as_deref(), Some("Obey AGENTS.md."));
+    assert_eq!(back.prompt_suffix, None);
+    assert_eq!(back.full_prompt("Do it."), "Obey AGENTS.md.\n\nDo it.");
+    draft.prompt_suffix = Some("Report the result.".into());
+    let back = draft.clone().check().unwrap();
+    assert_eq!(
+        back.full_prompt("Do it."),
+        "Obey AGENTS.md.\n\nDo it.\n\nReport the result."
+    );
+    draft.prompt_suffix = Some("bad \u{7} text".into());
+    assert_eq!(draft.check(), Err(FlowError::Rules));
+}
+
+#[test]
 fn draft_that_is_not_a_correct_flow_gives_no_file_text() {
     let mut draft = Draft::from(&flow());
     draft.steps[1].needs = vec!["missing".into()];

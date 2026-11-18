@@ -52,10 +52,11 @@ pub(crate) struct FlowsState {
     loaded: Option<LoadedFlows>,
     /// The typed name of a new flow.
     new_name: String,
-    /// The flow that is open in the editor, also while its page hides.
-    pub(crate) editor: Option<editor::FlowEditor>,
-    /// A flow file that a worker thread reads now for the editor.
-    opening: Option<editor::OpeningFlow>,
+    /// The flow editors by flow file path: one per editor tab, and each
+    /// flow with changes that are not saved (also when its tab is closed).
+    pub(crate) editors: HashMap<PathBuf, editor::Slot>,
+    /// The editors that a pane painted this frame.
+    visible: std::collections::HashSet<PathBuf>,
     /// The runs of the last read, newest first.
     runs: Vec<Run>,
     reading: Option<Receiver<Vec<Run>>>,
@@ -66,6 +67,17 @@ pub(crate) struct FlowsState {
     drafts: HashMap<(PathBuf, String), String>,
     /// The run whose Cancel waits for confirmation.
     confirm_cancel: Option<PathBuf>,
+}
+
+impl FlowsState {
+    pub(crate) fn begin_frame(&mut self) {
+        self.visible.clear();
+    }
+
+    /// A pane shows the editor of `path` this frame.
+    pub(crate) fn mark_visible(&mut self, path: &std::path::Path) {
+        self.visible.insert(path.into());
+    }
 }
 
 /// Read and check every flow file of a project. Blocking: call it on a

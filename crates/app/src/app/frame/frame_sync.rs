@@ -35,6 +35,7 @@ impl App {
         self.images
             .retain(|path, _| self.visible_images.contains(path));
         self.tables.prune();
+        self.flow_editors_end_frame();
         // View state and remote sessions both follow the tabs now that the
         // dock is checked back in and every copy has had its say.
         self.prune_vnc_views();

@@ -2,42 +2,19 @@
 //! flow. New flow and Edit open the native flow editor. Making or editing
 //! a flow needs no trust answer; Run does.
 use super::LoadedFlows;
-use crate::app::OpenFileInput;
 use crate::*;
-use std::path::Path;
 
 /// One click in the Flows window.
 enum Pick {
     Run(usize),
     Edit(usize),
     New,
-    Editor,
     Trust(bool),
 }
 
 impl App {
-    /// Opens a flow file as text in the editor tab: for a file that is
-    /// not a correct flow, so the flow editor cannot show it.
-    pub(super) fn open_flow_as_text(&mut self, project: &str, path: &Path) {
-        if !self.project_available(project) {
-            self.info = Some("The flow's project is not open.".into());
-            return;
-        }
-        if self.selected.as_deref() != Some(project) {
-            self.select_project(project.to_owned());
-        }
-        self.hide_center_overlay();
-        self.open_file(OpenFileInput {
-            path: path.to_path_buf(),
-            line: None,
-            split: None,
-            external: false,
-        });
-    }
-
     /// The Flows window.
     pub(crate) fn flow_dialog(&mut self, ctx: &egui::Context) {
-        self.poll_flow_editor(ctx);
         #[cfg(feature = "test-support")]
         self.fixture_flow_editor();
         if !self.flows.open {
@@ -52,11 +29,6 @@ impl App {
         let mut open = true;
         let mut pick = None;
         let mut name = std::mem::take(&mut self.flows.new_name);
-        let editing = self
-            .flows
-            .editor
-            .as_ref()
-            .map(|editor| (editor.file().to_owned(), editor.dirty()));
         self.popups
             .window(ctx, "Flows")
             .open(&mut open)
@@ -71,8 +43,7 @@ impl App {
                 pick = flow_trust_bar(ui, loaded, answer)
                     .map(Pick::Trust)
                     .or(flow_rows(ui, loaded, answer))
-                    .or(new_flow_row(ui, &mut name))
-                    .or(editor_row(ui, editing.as_ref()));
+                    .or(new_flow_row(ui, &mut name));
             });
         self.flows.new_name = name;
         if self.flows.loading.is_some() {
@@ -89,23 +60,18 @@ impl App {
             }
             Some(Pick::Edit(index)) => {
                 if let Some(file) = loaded.files.get(index) {
-                    self.edit_flow_editor(&loaded.project, loaded.root.clone(), &file.file);
+                    self.open_flow_tab(&loaded.project, &loaded.root, &file.file);
                     open = false;
                 }
             }
             Some(Pick::New) => {
                 let name = std::mem::take(&mut self.flows.new_name);
-                self.new_flow_editor(loaded.root.clone(), &name);
                 // A refused name stays in the field.
-                if self.center == CenterPage::FlowEditor {
+                if self.open_flow_tab(&loaded.project, &loaded.root, &name) {
                     open = false;
                 } else {
                     self.flows.new_name = name;
                 }
-            }
-            Some(Pick::Editor) => {
-                self.show_center(CenterPage::FlowEditor);
-                open = false;
             }
             None => {}
         }
@@ -128,13 +94,7 @@ impl App {
         if DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        let there =
-            terminator_core::flow::files::path_of(&root, &name).is_ok_and(|path| path.is_file());
-        if there {
-            self.edit_flow_editor(&id, root, &name);
-        } else {
-            self.new_flow_editor(root, &name);
-        }
+        self.open_flow_tab(&id, &root, &name);
     }
 }
 
@@ -219,22 +179,6 @@ fn new_flow_row(ui: &mut egui::Ui, name: &mut String) -> Option<Pick> {
         let field = ui.add(egui::TextEdit::singleline(name).hint_text("Name, for example feature"));
         let entered = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
         ((made || entered) && !name.trim().is_empty()).then_some(Pick::New)
-    })
-    .inner
-}
-
-/// The flow that is open in the editor, with a button to go back to it.
-fn editor_row(ui: &mut egui::Ui, editing: Option<&(String, bool)>) -> Option<Pick> {
-    let (file, dirty) = editing?;
-    ui.separator();
-    ui.horizontal(|ui| {
-        let open = ui.button("Open editor").clicked();
-        ui.label(if *dirty {
-            format!("{file}: changes that are not saved")
-        } else {
-            format!("{file} is open in the editor")
-        });
-        open.then_some(Pick::Editor)
     })
     .inner
 }

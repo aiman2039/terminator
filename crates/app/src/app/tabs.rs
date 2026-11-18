@@ -28,6 +28,10 @@ impl Tab {
 
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
+            Self::Document {
+                kind: crate::document_view::DocumentKind::Flow,
+                ..
+            } => 14,
             Self::Document { .. } => 13,
             Self::RemoteApp { .. } => 12,
             Self::ChangesDiff { .. } => 11,
