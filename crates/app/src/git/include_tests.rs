@@ -1,6 +1,7 @@
 //! `.worktreeinclude` copies against real `git` in temporary repositories.
 use super::task_tests::{git, repo_with_task};
-use super::worktree_include::{CopyReport, copy_included};
+use super::worktree_include::{CopyReport, copy_file, copy_included};
+use std::path::Path;
 
 #[test]
 fn listed_ignored_files_are_copied_and_nothing_else() {
@@ -101,6 +102,54 @@ fn an_existing_file_is_kept_and_links_are_not_followed() {
         "mine\n"
     );
     assert!(!task.join(".env.link").exists());
+}
+
+#[test]
+fn an_existing_destination_file_is_kept_and_no_staged_file_is_left() {
+    let source = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let dest = std::fs::canonicalize(dest.path()).unwrap();
+    let from = source.path().join(".env");
+    std::fs::write(&from, "source\n").unwrap();
+    std::fs::create_dir(dest.join("cfg")).unwrap();
+    std::fs::write(dest.join("cfg/.env"), "mine\n").unwrap();
+    let mut report = CopyReport::default();
+    copy_file(&from, (&dest, Path::new("cfg/.env")), &mut report);
+    assert_eq!((report.copied, report.kept), (0, 1), "{report:?}");
+    assert_eq!(
+        std::fs::read_to_string(dest.join("cfg/.env")).unwrap(),
+        "mine\n"
+    );
+    assert_eq!(std::fs::read_dir(dest.join("cfg")).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_copy_leaves_the_destination_free_for_a_retry() {
+    let source = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let dest = std::fs::canonicalize(dest.path()).unwrap();
+    // A folder opens like a file on unix, but reading it fails mid copy.
+    let broken = source.path().join("folder");
+    std::fs::create_dir(&broken).unwrap();
+    let mut report = CopyReport::default();
+    copy_file(&broken, (&dest, Path::new("cfg/.env")), &mut report);
+    assert_eq!(report.errors.len(), 1, "{report:?}");
+    assert!(!dest.join("cfg/.env").exists());
+    assert_eq!(
+        std::fs::read_dir(dest.join("cfg")).unwrap().count(),
+        0,
+        "no staged file is left"
+    );
+    let from = source.path().join(".env");
+    std::fs::write(&from, "KEY=1\n").unwrap();
+    let mut retry = CopyReport::default();
+    copy_file(&from, (&dest, Path::new("cfg/.env")), &mut retry);
+    assert_eq!(retry.copied, 1, "{retry:?}");
+    assert_eq!(
+        std::fs::read_to_string(dest.join("cfg/.env")).unwrap(),
+        "KEY=1\n"
+    );
 }
 
 #[cfg(unix)]

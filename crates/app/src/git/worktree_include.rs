@@ -319,39 +319,42 @@ fn copy_entry(
 }
 
 /// Copy `from` to `dest/part`, never over an existing file and never
-/// through a link out of `dest`.
-fn copy_file(from: &Path, (dest, part): (&Path, &Path), report: &mut CopyReport) {
+/// through a link out of `dest`. The copy is staged next to the target and
+/// published whole, so a failed copy leaves no file at the target.
+pub(super) fn copy_file(from: &Path, (dest, part): (&Path, &Path), report: &mut CopyReport) {
     let target = dest.join(part);
     let result = (|| -> std::io::Result<bool> {
-        if let Some(parent) = target.parent() {
-            // A linked folder already in the worktree could lead out of it:
-            // check before creating any folder below it.
-            let existing = parent.ancestors().find(|dir| dir.exists());
-            if !existing
-                .and_then(|dir| std::fs::canonicalize(dir).ok())
-                .is_some_and(|real| real.starts_with(dest))
-            {
-                return Ok(false);
-            }
-            std::fs::create_dir_all(parent)?;
-            if !std::fs::canonicalize(parent)?.starts_with(dest) {
-                return Ok(false);
-            }
+        let Some(parent) = target.parent() else {
+            return Ok(false);
+        };
+        // A linked folder already in the worktree could lead out of it:
+        // check before creating any folder below it.
+        let existing = parent.ancestors().find(|dir| dir.exists());
+        if !existing
+            .and_then(|dir| std::fs::canonicalize(dir).ok())
+            .is_some_and(|real| real.starts_with(dest))
+        {
+            return Ok(false);
+        }
+        std::fs::create_dir_all(parent)?;
+        if !std::fs::canonicalize(parent)?.starts_with(dest) {
+            return Ok(false);
+        }
+        // Skip the copy when the name is taken; the publish checks again.
+        if std::fs::symlink_metadata(&target).is_ok() {
+            return Ok(false);
         }
         let mut input = std::fs::File::open(from)?;
         let permissions = input.metadata()?.permissions();
-        let mut output = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-        {
-            Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        std::io::copy(&mut input, &mut output)?;
-        output.set_permissions(permissions)?;
-        Ok(true)
+        // Dropped on any error below: the staged file is removed.
+        let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+        std::io::copy(&mut input, staged.as_file_mut())?;
+        staged.as_file().set_permissions(permissions)?;
+        match staged.persist_noclobber(&target) {
+            Ok(_) => Ok(true),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error.error),
+        }
     })();
     match result {
         Ok(true) => report.copied = report.copied.saturating_add(1),
