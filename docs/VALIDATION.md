@@ -73,6 +73,18 @@
   with a gate; the menu itself was not opened there (no reliable
   synthetic click). A window that is behind other windows gives an old
   frame to `screencapture`; `ctl window focus` first gives a new one.
+- Drawn flows (`NAME.excalidraw`): unit tests in `flow::drawing::tests`
+  (template, arrows as `needs`, option lines, a free arrow end, notes,
+  the shared checks) and `flow::tests` (one name in both forms is
+  refused; New flow replaces no file). Real PTY, isolated daemon:
+  `terminator-hook flow new` made the drawing, `flow list` read it as 3
+  steps, and a drawing with shell steps ran box, diamond gate (`flow
+  approve`), box to done. Native GUI, macOS: the template opened in the
+  embedded Excalidraw tab with the box, the diamond, the arrows and the
+  legend (window screenshot), and the Flows tool window showed that run
+  as done. The Flows window's New flow and Edit buttons have paint and
+  action tests; they were not clicked in a running GUI, and no drawing
+  was changed by hand in the tab and then run.
 - Not verified: a click on the window's buttons (Approve, Reject, Send,
   Cancel run) and the Run flow… window in a running GUI (unit-tested
   only), and real agents with the installed hooks and the live daemon.

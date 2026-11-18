@@ -297,3 +297,53 @@ fn question_answer_needs_an_open_question_and_bounded_text() {
         "A"
     );
 }
+
+#[test]
+fn flow_is_found_as_a_toml_file_or_a_drawing_but_not_both() {
+    let project = tempfile::tempdir().unwrap();
+    let folder = project.path().join(FLOW_DIR);
+    std::fs::create_dir_all(&folder).unwrap();
+    assert!(files::names(project.path()).is_empty());
+    assert!(matches!(
+        files::load(project.path(), "plan"),
+        Err(files::LoadError::Missing(_))
+    ));
+    std::fs::write(folder.join("plan.toml"), PLAN_AND_BUILD).unwrap();
+    std::fs::write(folder.join("drawn.excalidraw"), drawing::template()).unwrap();
+    std::fs::write(folder.join("notes.md"), "no flow").unwrap();
+    assert_eq!(files::names(project.path()), ["drawn", "plan"]);
+    assert_eq!(files::load(project.path(), "plan").unwrap(), flow());
+    assert_eq!(files::load(project.path(), "drawn").unwrap().steps.len(), 3);
+    // A name is never a path.
+    assert!(matches!(
+        files::load(project.path(), "../plan"),
+        Err(files::LoadError::Name)
+    ));
+    // The same name in both forms: neither runs.
+    std::fs::write(folder.join("plan.excalidraw"), drawing::template()).unwrap();
+    assert_eq!(files::names(project.path()), ["drawn", "plan"]);
+    assert!(matches!(
+        files::load(project.path(), "plan"),
+        Err(files::LoadError::Twice(_))
+    ));
+}
+
+#[test]
+fn new_drawing_never_replaces_a_flow() {
+    let project = tempfile::tempdir().unwrap();
+    let folder = project.path().join(FLOW_DIR);
+    std::fs::create_dir_all(&folder).unwrap();
+    assert_eq!(
+        files::new_drawing_path(project.path(), "feature").unwrap(),
+        folder.join("feature.excalidraw")
+    );
+    std::fs::write(folder.join("feature.toml"), PLAN_AND_BUILD).unwrap();
+    assert!(matches!(
+        files::new_drawing_path(project.path(), "feature"),
+        Err(files::LoadError::Exists(_))
+    ));
+    assert!(matches!(
+        files::new_drawing_path(project.path(), "a b"),
+        Err(files::LoadError::Name)
+    ));
+}

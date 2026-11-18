@@ -18,6 +18,10 @@
 //! needs = ["plan"]
 //! ```
 //!
+//! A flow can also be a drawing, `NAME.excalidraw` in the same folder: a
+//! box is a step, a diamond is a gate and an arrow is `needs` (see
+//! `drawing`). Both forms give the same checked [`Flow`].
+//!
 //! `prompt` is sent after the agent's first hook report (Claude Code
 //! reports at its start). An agent that reports only after its first
 //! prompt (Codex) needs the prompt in `command`: `codex "Write the plan."`.
@@ -35,6 +39,8 @@ use std::{
 };
 
 pub mod control;
+pub mod drawing;
+pub mod files;
 mod run;
 pub use run::{Outcome, RUN_DIR, RunState, STATE_FILE, StepRun, StepStatus};
 
@@ -79,6 +85,9 @@ pub enum FlowError {
     UnknownNeed { step: String, needs: String },
     #[error("Step \"{0}\" is part of a cycle")]
     Cycle(String),
+    /// A drawing that is not a correct flow (see `drawing`).
+    #[error("{0}")]
+    Drawing(String),
 }
 
 /// What a step does.
@@ -144,17 +153,22 @@ pub fn parse(text: &str) -> Result<Flow, FlowError> {
     if raw.version != VERSION {
         return Err(FlowError::Version(raw.version));
     }
-    let name = raw.name.trim();
+    build(&raw.name, raw.step)
+}
+
+/// The checks that a TOML file and a drawing share.
+fn build(name: &str, steps: Vec<RawStep>) -> Result<Flow, FlowError> {
+    let name = name.trim();
     if !text_ok(name, false) {
         return Err(FlowError::Name);
     }
-    if raw.step.is_empty() {
+    if steps.is_empty() {
         return Err(FlowError::Empty);
     }
-    if raw.step.len() > MAX_STEPS {
+    if steps.len() > MAX_STEPS {
         return Err(FlowError::TooManySteps);
     }
-    let steps = raw.step.into_iter().map(step).collect::<Result<_, _>>()?;
+    let steps = steps.into_iter().map(step).collect::<Result<_, _>>()?;
     let flow = Flow {
         name: name.to_owned(),
         steps,

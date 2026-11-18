@@ -1,7 +1,7 @@
 use super::*;
 use std::path::Path;
 use std::sync::mpsc;
-use terminator_core::flow::{StepRun, StepStatus};
+use terminator_core::flow::{self, FLOW_DIR, StepRun, StepStatus};
 
 const FLOW: &str = "version = 1\nname = \"Build\"\n[[step]]\nid = \"one\"\ncommand = \"claude\"\n[[step]]\nid = \"ok\"\ngate = \"Good?\"\nneeds = [\"one\"]\n";
 
@@ -52,6 +52,62 @@ fn flow_files_are_listed_with_the_reason_a_file_is_refused() {
     assert_eq!(loaded.files[2].flow, Ok(("Build".into(), 2)));
     let none = tempfile::tempdir().expect("project");
     assert!(load_flows("p".into(), none.path().into()).files.is_empty());
+}
+
+#[test]
+fn new_flow_is_a_drawing_that_is_a_correct_flow_and_replaces_nothing() {
+    let project = tempfile::tempdir().expect("project");
+    let path = picker::write_new_flow(project.path(), "feature").expect("new flow");
+    assert_eq!(
+        path,
+        project.path().join(FLOW_DIR).join("feature.excalidraw")
+    );
+    let loaded = load_flows("p".into(), project.path().into());
+    assert_eq!(loaded.files.len(), 1);
+    assert_eq!(loaded.files[0].flow, Ok(("feature".into(), 3)));
+    assert_eq!(loaded.files[0].path.as_deref(), Some(path.as_path()));
+
+    // A second New flow with the same name changes nothing.
+    std::fs::write(&path, "my drawing").expect("edit");
+    assert!(picker::write_new_flow(project.path(), "feature").is_err());
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "my drawing");
+    assert!(picker::write_new_flow(project.path(), "../x").is_err());
+    // A TOML flow with the name also blocks it.
+    std::fs::write(project.path().join(FLOW_DIR).join("build.toml"), FLOW).expect("flow");
+    assert!(picker::write_new_flow(project.path(), "build").is_err());
+}
+
+#[test]
+fn flows_window_has_run_edit_and_new_flow() {
+    let project = project_with_flows();
+    let (mut app, received, _data) = app_with_project(project.path());
+    app.flows.loaded = Some(load_flows("p".into(), project.path().into()));
+    app.flows.open = true;
+    let ctx = egui::Context::default();
+    // An egui window sizes itself in its first frames and paints after.
+    for _ in 0..3 {
+        painted(&ctx, |ui| app.flow_dialog(ui.ctx()));
+    }
+    let text = painted(&ctx, |ui| app.flow_dialog(ui.ctx()));
+    for label in ["Flows", "Run", "Edit", "Build", "New flow"] {
+        assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    // Painting the window makes no file and no terminal.
+    assert!(received.try_recv().is_err());
+    assert_eq!(flow::files::names(project.path()).len(), 3);
+}
+
+#[test]
+fn edit_opens_the_flow_file_and_types_nothing() {
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let path = project.path().join(FLOW_DIR).join("build.toml");
+    app.edit_flow("other", &path);
+    assert!(app.info.is_some(), "an unknown project opens nothing");
+    app.info = None;
+    app.edit_flow("p", &path);
+    assert!(app.info.is_none());
+    assert!(app.post_create.by_tab.is_empty(), "Edit types nothing");
 }
 
 #[test]
@@ -146,7 +202,7 @@ fn new_tab_menu_has_the_flow_rows() {
     let (mut app, received, _data) = app_with_project(project.path());
     let ctx = egui::Context::default();
     let text = painted(&ctx, |ui| app.flow_menu_items(ui));
-    for label in ["Flows", "Run flow…", "Show flows"] {
+    for label in ["Flows", "Run flow…", "New flow…", "Show flows"] {
         assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
     }
     assert!(crate::icons::is_ui_icon("PanelRight"));

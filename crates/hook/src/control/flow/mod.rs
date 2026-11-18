@@ -16,13 +16,13 @@ mod runner;
 
 use super::{cli_paths, lookup::Ctl};
 use crate::output::Output;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use terminator_core::{
     flow::{
-        FLOW_DIR, Flow, Outcome, RUN_DIR, RunState, STATE_FILE,
+        Flow, Outcome, RUN_DIR, RunState, STATE_FILE,
         control::{self, ANSWERS, APPROVE, CANCEL, REJECT},
     },
     *,
@@ -45,6 +45,9 @@ enum Command {
     List { project: String },
     /// Validate a flow file. Starts nothing.
     Check { project: String, name: String },
+    /// Make the drawing NAME.excalidraw of a new flow from the template.
+    /// It replaces no file and starts nothing.
+    New { project: String, name: String },
     /// Run a flow: one new terminal per step, Enter on each command and
     /// prompt. The project must be trusted in Terminator.
     Run { project: String, name: String },
@@ -143,6 +146,11 @@ fn execute(cli: Cli) -> Result<Value> {
             let flow = load(&project_of(&paths, &project)?, &name)?;
             json!({"flow": flow.name, "steps": flow.steps.len(), "valid": true})
         }
+        Command::New { project, name } => {
+            let project = project_of(&paths, &project)?;
+            let file = flow::files::new_drawing(&project.path, &name)?;
+            json!({"file": file, "open": "Open the file in Terminator to draw the flow"})
+        }
         Command::Status { run } => serde_json::to_value(read_state(&run_dir(&paths, &run)?)?)?,
         Command::Approve { run, step } => {
             control::answer_gate(&run_dir(&paths, &run)?, &step, true)?;
@@ -196,37 +204,20 @@ fn project_of(paths: &Paths, name: &str) -> Result<Project> {
 /// Flow and run names are plain file names, never a path.
 fn plain_name(name: &str) -> Result<&str> {
     ensure!(
-        !name.is_empty()
-            && name.len() <= 128
-            && name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')),
+        flow::files::plain_name(name),
         "A name must be letters, digits, '-' or '_'"
     );
     Ok(name)
 }
 
+/// The flow `name` of the project: a TOML file or a drawing.
 fn load(project: &Project, name: &str) -> Result<Flow> {
-    let file = project
-        .path
-        .join(FLOW_DIR)
-        .join(format!("{}.toml", plain_name(name)?));
-    let text = std::fs::read_to_string(&file)
-        .with_context(|| format!("Cannot read {}", file.display()))?;
-    Ok(flow::parse(&text)?)
+    Ok(flow::files::load(&project.path, name)?)
 }
 
 /// Each flow file with its name, or the reason it is refused.
 fn list(project: &Project) -> Value {
-    let mut names: Vec<String> = std::fs::read_dir(project.path.join(FLOW_DIR))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
-        .filter_map(|path| Some(path.file_stem()?.to_string_lossy().into_owned()))
-        .collect();
-    names.sort_unstable();
+    let names = flow::files::names(&project.path);
     let rows = names.into_iter().map(|file| match load(project, &file) {
         Ok(flow) => json!({"file": file, "flow": flow.name, "steps": flow.steps.len()}),
         Err(error) => json!({"file": file, "error": format!("{error:#}")}),
