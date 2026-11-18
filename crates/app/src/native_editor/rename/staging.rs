@@ -161,9 +161,18 @@ fn staged_file(
     Ok(file)
 }
 
+/// A file to write: its path, the staged new bytes and a backup of the
+/// original bytes.
+pub(super) type Stage = (PathBuf, tempfile::NamedTempFile, tempfile::NamedTempFile);
+
 pub(in crate::native_editor) fn apply_rename(
     prepared: PreparedRename,
 ) -> anyhow::Result<Vec<PathBuf>> {
+    let stages = stage_rename(&prepared)?;
+    commit_rename(&prepared, stages, |_| {})
+}
+
+pub(super) fn stage_rename(prepared: &PreparedRename) -> anyhow::Result<Vec<Stage>> {
     let canonical_root = std::fs::canonicalize(&prepared.root)?;
     let mut stages = Vec::new();
     for file in &prepared.files {
@@ -179,8 +188,20 @@ pub(in crate::native_editor) fn apply_rename(
         let backup = staged_file(&path, &file.original, &permissions)?;
         stages.push((path, new, backup));
     }
+    Ok(stages)
+}
+
+/// Writes every stage, or rolls back the files already written.
+/// `before_write` runs before each file is checked and written.
+pub(super) fn commit_rename(
+    prepared: &PreparedRename,
+    stages: Vec<Stage>,
+    mut before_write: impl FnMut(&Path),
+) -> anyhow::Result<Vec<PathBuf>> {
+    let canonical_root = std::fs::canonicalize(&prepared.root)?;
     let mut committed: Vec<(PathBuf, tempfile::NamedTempFile)> = Vec::new();
     for (path, new, backup) in stages {
+        before_write(&path);
         let current = prepared
             .files
             .iter()
@@ -198,31 +219,55 @@ pub(in crate::native_editor) fn apply_rename(
             Ok(())
         })();
         if let Err(error) = result {
-            let mut rollback_errors = Vec::new();
-            for (previous, old) in committed.into_iter().rev() {
-                let expected = prepared.files.iter().find(|file| file.path == previous);
-                if expected.is_none_or(|file| {
-                    std::fs::read(&previous).ok().as_deref() != Some(file.changed.as_slice())
-                }) {
-                    rollback_errors.push(format!(
-                        "{} changed after apply; manual recovery is needed",
-                        previous.display()
-                    ));
-                    continue;
-                }
-                if let Err(restore) = old.persist(&previous) {
-                    rollback_errors.push(format!("{}: {}", previous.display(), restore.error));
-                }
-            }
-            if rollback_errors.is_empty() {
-                return Err(error);
-            }
-            anyhow::bail!(
-                "{error:#}; rollback also failed for {}",
-                rollback_errors.join(", ")
-            );
+            return Err(roll_back(prepared, committed, error));
         }
         committed.push((path, backup));
     }
     Ok(committed.into_iter().map(|(path, _)| path).collect())
+}
+
+/// Restores the original bytes of every written file. A file that changed
+/// after apply is left as is; its backup, like the backup of a failed
+/// restore, stays on disk and the error names it.
+fn roll_back(
+    prepared: &PreparedRename,
+    committed: Vec<(PathBuf, tempfile::NamedTempFile)>,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let mut rollback_errors = Vec::new();
+    for (previous, old) in committed.into_iter().rev() {
+        let expected = prepared.files.iter().find(|file| file.path == previous);
+        if expected.is_none_or(|file| {
+            std::fs::read(&previous).ok().as_deref() != Some(file.changed.as_slice())
+        }) {
+            rollback_errors.push(format!(
+                "{} changed after apply; {}; manual recovery is needed",
+                previous.display(),
+                kept_backup(old)
+            ));
+            continue;
+        }
+        if let Err(restore) = old.persist(&previous) {
+            let reason = restore.error.to_string();
+            rollback_errors.push(format!(
+                "{}: {reason}; {}",
+                previous.display(),
+                kept_backup(restore.file)
+            ));
+        }
+    }
+    if rollback_errors.is_empty() {
+        return error;
+    }
+    anyhow::anyhow!(
+        "{error:#}; rollback also failed for {}",
+        rollback_errors.join(", ")
+    )
+}
+
+fn kept_backup(backup: tempfile::NamedTempFile) -> String {
+    match backup.keep() {
+        Ok((_, path)) => format!("original bytes kept at {}", path.display()),
+        Err(error) => format!("original bytes could not be kept: {}", error.error),
+    }
 }
