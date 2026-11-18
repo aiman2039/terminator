@@ -549,6 +549,9 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
         "Approve",
         "Reject",
         "2 steps · Saved · Run: running",
+        "Run running",
+        "1 of 2 steps done",
+        "Now: ok. Waits for your approval",
     ] {
         assert_eq!(count(&text, label), 1, "{label}: {text:?}");
     }
@@ -587,8 +590,14 @@ fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
     assert_eq!(stay(&app), None);
 
     // The runner's terminal took the focus: the editor's tab comes back.
-    // Here the editor has no tab, so the wait ends.
+    // Here the editor has no tab yet (it opens with the run), so the wait
+    // continues a moment, then ends.
     app.flows.stay = Some(Stay::after_run(&path, &[]));
+    app.flows.begin_frame();
+    app.flow_editors_end_frame();
+    assert_eq!(stay(&app), Some((true, 0)));
+    app.flows.stay.as_mut().unwrap().away =
+        Instant::now().checked_sub(STAY_GRACE.saturating_mul(2));
     app.flows.begin_frame();
     app.flow_editors_end_frame();
     assert_eq!(stay(&app), None);

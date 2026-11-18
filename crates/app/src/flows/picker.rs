@@ -34,7 +34,7 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .show(ctx, |ui| {
-                ui.set_min_width(420.0);
+                ui.set_width(WIDTH);
                 let Some(loaded) = &self.flows.loaded else {
                     ui.weak("Reading flow files…");
                     return;
@@ -54,7 +54,7 @@ impl App {
             Some(Pick::Trust(trusted)) => self.answer_task_trust(&loaded.root, trusted),
             Some(Pick::Run(index)) => {
                 if let Some(file) = loaded.files.get(index) {
-                    self.run_flow(&loaded, &file.file);
+                    self.run_flow_in_editor(&loaded, &file.file);
                     open = false;
                 }
             }
@@ -95,6 +95,10 @@ impl App {
             return;
         }
         self.open_flow_tab(&id, &root, &name);
+        // `TERMINATOR_FIXTURE_FLOW_WINDOW` also opens the Flows window.
+        if std::env::var_os("TERMINATOR_FIXTURE_FLOW_WINDOW").is_some() {
+            self.open_flow_picker();
+        }
     }
 }
 
@@ -132,83 +136,106 @@ fn flow_rows(ui: &mut egui::Ui, loaded: &LoadedFlows, answer: Option<bool>) -> O
         return None;
     }
     let mut clicked = None;
-    // One row per flow: the name and the file, then the actions in one
-    // column for all rows.
-    egui::Grid::new("run-flow-rows")
-        .num_columns(2)
-        .spacing([24.0, 10.0])
-        .show(ui, |ui| {
-            for (index, file) in loaded.files.iter().enumerate() {
-                let allowed = file.flow.is_ok() && answer == Some(true);
-                let why = if file.flow.is_err() {
-                    "Correct the flow first"
-                } else {
-                    "Trust the project first"
-                };
-                ui.vertical(|ui| {
-                    // A long error wraps; it does not make the window wide.
-                    ui.set_max_width(300.0);
-                    match &file.flow {
-                        Ok((name, steps)) => {
-                            ui.strong(name);
-                            ui.weak(format!("{}.toml · {steps} steps", file.file));
-                        }
-                        Err(error) => {
-                            ui.strong(&file.file);
-                            let first = error.lines().next().unwrap_or_default();
-                            ui.colored_label(ui.visuals().error_fg_color, first)
-                                .on_hover_text(error);
-                        }
+    section(ui, "Flows of this project");
+    for (index, file) in loaded.files.iter().enumerate() {
+        let allowed = file.flow.is_ok() && answer == Some(true);
+        let why = if file.flow.is_err() {
+            "Correct the flow first"
+        } else {
+            "Trust the project first"
+        };
+        // One card per flow: the name and the file on the left, Edit and
+        // the main action Run on the right.
+        row_card(ui, |ui| {
+            ui.vertical(|ui| {
+                // A long error wraps; it does not push the buttons out.
+                ui.set_max_width(WIDTH - 190.0);
+                match &file.flow {
+                    Ok((name, steps)) => {
+                        ui.strong(name);
+                        let about = format!("{}.toml · {steps} steps", file.file);
+                        ui.label(egui::RichText::new(about).small().weak());
+                    }
+                    Err(error) => {
+                        ui.strong(&file.file);
+                        let first = error.lines().next().unwrap_or_default();
+                        ui.colored_label(ui.visuals().error_fg_color, first)
+                            .on_hover_text(error);
+                    }
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(allowed, |ui| {
+                    let tip = if allowed {
+                        "Start this flow. Its tab shows each step of the run."
+                    } else {
+                        why
+                    };
+                    let run = appearance::primary_button(ui, "Run")
+                        .on_hover_text(tip)
+                        .on_disabled_hover_text(tip);
+                    if run.clicked() {
+                        clicked = Some(Pick::Run(index));
                     }
                 });
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(allowed, |ui| {
-                        let tip = if allowed { "Run this flow" } else { why };
-                        if tool(ui, ("Play", "Run"), tip) {
-                            clicked = Some(Pick::Run(index));
-                        }
-                    });
-                    if tool(ui, ("Pencil", "Edit"), "Open the flow in the flow editor") {
-                        clicked = Some(Pick::Edit(index));
-                    }
-                });
-                ui.end_row();
-            }
+                let edit = ui
+                    .button("Edit")
+                    .on_hover_text("Open the flow in the flow editor");
+                if edit.clicked() {
+                    clicked = Some(Pick::Edit(index));
+                }
+            });
         });
+        ui.add_space(6.0);
+    }
     clicked
 }
 
-/// A frameless button with an icon and a text.
-fn tool(ui: &mut egui::Ui, (icon, label): (&str, &str), tip: &str) -> bool {
-    appearance::icon_label_button(appearance::IconLabelButtonInput {
-        ui,
-        icon,
-        label,
-        height: appearance::TOOLBAR_BUTTON,
-    })
-    .on_hover_text(tip)
-    .on_disabled_hover_text(tip)
-    .clicked()
+/// Width of the window's contents: fixed, so a row's buttons can be at
+/// its right end.
+const WIDTH: f32 = 460.0;
+
+/// The small heading of a part of the window.
+fn section(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(text).small().weak());
+    ui.add_space(2.0);
 }
 
-/// The name field and the New flow button.
+/// One row as a card on the whole width.
+fn row_card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(appearance::RADIUS_MEDIUM)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(WIDTH - 24.0);
+            ui.horizontal(add);
+        });
+}
+
+/// The name field and the Create button.
 fn new_flow_row(ui: &mut egui::Ui, name: &mut String) -> Option<Pick> {
-    ui.separator();
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new("New flow").small().weak());
-    ui.horizontal(|ui| {
+    ui.add_space(8.0);
+    section(ui, "New flow");
+    let mut pick = None;
+    row_card(ui, |ui| {
         let field = ui.add(
             appearance::singleline(name)
-                .desired_width(260.0)
+                .desired_width(WIDTH - 130.0)
                 .hint_text("Name, for example feature"),
         );
         let entered = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let made = tool(
-            ui,
-            ("Plus", "Create"),
-            "Open the flow editor with a new flow",
-        );
-        ((made || entered) && !name.trim().is_empty()).then_some(Pick::New)
-    })
-    .inner
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let made = ui
+                .button("Create")
+                .on_hover_text("Open the flow editor with a new flow")
+                .clicked();
+            if (made || entered) && !name.trim().is_empty() {
+                pick = Some(Pick::New);
+            }
+        });
+    });
+    pick
 }

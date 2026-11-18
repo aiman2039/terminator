@@ -185,6 +185,9 @@ impl App {
         if let Some(error) = &editor.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if let Some(run) = &run {
+            super::banner::run_banner(ui, run, self.flow_colors());
+        }
         self.flow_graph(ui, path, (editor, run.as_ref()));
         click = click.or(self.flow_editor_dialog(ui.ctx(), editor));
         self.flow_editor_click((ui.ctx(), path), editor, click)

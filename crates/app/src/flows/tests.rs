@@ -61,12 +61,36 @@ fn flows_window_has_run_edit_and_new_flow() {
     app.flows.loaded = Some(load_flows("p".into(), project.path().into()));
     app.flows.open = true;
     let ctx = egui::Context::default();
+    // A screen wider than the window, so its right end is in view.
+    let wide = |app: &mut App| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.flow_dialog(ui.ctx()),
+        );
+        output.textures_delta.clear();
+        crate::app::tests::support::painted_strings(&output.shapes)
+    };
     // An egui window sizes itself in its first frames and paints after.
     for _ in 0..3 {
-        painted(&ctx, |ui| app.flow_dialog(ui.ctx()));
+        wide(&mut app);
     }
-    let text = painted(&ctx, |ui| app.flow_dialog(ui.ctx()));
-    for label in ["Flows", "Run", "Edit", "Build", "New flow", "Create"] {
+    let text = wide(&mut app);
+    for label in [
+        "Flows",
+        "Flows of this project",
+        "Run",
+        "Edit",
+        "Build",
+        "build.toml · 2 steps",
+        "New flow",
+        "Create",
+    ] {
         assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
     }
     // Painting the window makes no file and no terminal.
