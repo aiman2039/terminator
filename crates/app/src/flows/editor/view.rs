@@ -256,7 +256,7 @@ impl App {
                 ("Edit gate", "The run stops here until you approve.")
             }
             Dialog::Node(_) => ("Edit step", "One new terminal with this command."),
-            Dialog::Rules => ("Flow rules", "One text for all steps of this flow."),
+            Dialog::Rules => ("Flow rules", "Global rules of this flow."),
             Dialog::Preview => ("Flow plan", "The flow as Markdown text."),
         };
         let width = DIALOG_WIDTH.min(ctx.content_rect().width() - 80.0);
@@ -357,7 +357,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut FlowEditor, run: Option<&str>) -> Opt
             set(tool(ui, "Play", "Run", tip), Click::Run);
         });
         set(
-            tool(ui, "Settings2", "Rules", "One text for all steps"),
+            tool(ui, "Settings2", "Rules", "Global rules of this flow"),
             Click::Rules,
         );
         set(

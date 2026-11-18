@@ -94,8 +94,16 @@
   verified in a running GUI: clicks, drags of cards and wires, the
   dialogs, Float window, Export and Save from the tab (no reliable
   synthetic input), the modal dialogs, the restyled Flows window, and
-  the run state on the cards with a real run. The flow rules were not
-  run with a real agent.
+  the run state on the cards with a real run.
+  Live provider, runner API (no GUI), isolated daemon: Claude Code as a
+  step with a fixture hook file (`claude --settings FILE`), a flow with
+  `rules`, a gate and a shell step. Claude wrote the file from its prompt
+  and the file from the flow rules, the gate waited, `flow approve`
+  started the last step, and the run ended with all steps done.
+  Known limit: a GUI whose data folder is not the one in the agent's
+  installed hooks gets no hook report, so a step fails after 120 seconds
+  ("No agent hook report"). A development build beside an installed app
+  is such a case.
   `vendor/egui-snarl` and `vendor/egui-scale` are patched to egui 0.37
   (see each `UPSTREAM.md`).
 - Not verified: a click on the window's buttons (Approve, Reject, Send,

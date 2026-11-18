@@ -217,7 +217,7 @@ fn plan_text_lists_the_steps_in_run_order_with_the_rules() {
         "```mermaid\nflowchart LR\n",
         "    n0[\"plan\"]\n    n1{\"approve\"}\n    n2[\"build\"]\n",
         "    n0 --> n1\n    n1 --> n2\n```",
-        "## Rules for every step",
+        "## Rules\n",
         "- After: approve",
         "- Command: `claude`",
         "- You approve: Is the plan correct?",
@@ -505,7 +505,7 @@ fn click_on_a_prompt_opens_the_card_dialog_with_large_fields() {
         frame(&mut app, &ctx, &path, Vec::new());
     }
     let text = frame(&mut app, &ctx, &path, Vec::new());
-    for label in ["Flow rules", "Rules for every step"] {
+    for label in ["Flow rules", "Global rules of this flow."] {
         assert!(count(&text, label) > 0, "{label}: {text:?}");
     }
     ready(&mut app, &path).dialog = Some(Dialog::Preview);

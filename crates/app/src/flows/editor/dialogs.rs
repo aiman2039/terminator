@@ -62,18 +62,18 @@ pub(super) fn node_dialog(ui: &mut egui::Ui, editor: &mut FlowEditor, node: Node
     true
 }
 
-/// The rules text of the flow: one text for all steps.
+/// The rules text of the flow: one global text.
 pub(super) fn rules_dialog(ui: &mut egui::Ui, editor: &mut FlowEditor) {
     let hint = "For example: Obey AGENTS.md. Report the result with terminator-hook flow report.";
     egui::ScrollArea::vertical()
         .max_height(320.0)
         .show(ui, |ui| {
-            let label = ("Rules for every step", hint);
+            let label = ("Rules", hint);
             field(ui, label, &mut editor.rules, PROMPT_ROWS);
         });
     ui.weak(
-        "Each step's agent gets this text before its prompt. A step with no prompt, \
-         or with its prompt in the command, does not get it.",
+        "The agents of this flow get this text with their prompt. An agent with no \
+         prompt, or with its prompt in the command, does not get it.",
     );
 }
 

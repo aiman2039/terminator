@@ -262,7 +262,7 @@ pub(crate) fn plan_text(draft: &Draft, file: &str) -> String {
         mermaid(&steps)
     );
     if let Some(rules) = &draft.rules {
-        let _ = write!(text, "\n## Rules for every step\n\n{rules}\n");
+        let _ = write!(text, "\n## Rules\n\n{rules}\n");
     }
     for (index, step) in steps.into_iter().enumerate() {
         let kind = if step.gate.is_some() { "gate" } else { "step" };
