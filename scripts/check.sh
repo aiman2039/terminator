@@ -64,7 +64,9 @@ case "${1:-all}" in
         ;;
     test)
         need_plugin nextest
-        cargo nextest run --workspace --all-features --locked --profile ci
+        # Extra arguments go to nextest, for example a `-E` filter (CI on Windows).
+        shift
+        cargo nextest run --workspace --all-features --locked --profile ci "$@"
         # No `cargo test --doc`: the workspace has no doc examples, so the step
         # only compiled rustdoc test harnesses for an empty run. `cargo test`
         # (scripts/test.sh) and `cargo test --doc` still cover them on demand.

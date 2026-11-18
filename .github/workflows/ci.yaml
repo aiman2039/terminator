@@ -30,9 +30,9 @@ jobs:
       matrix:
         os: [macos-15, ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
-    # TEMPORARY: Windows checks do not block the release until the
-    # deleted_and_recreated_root_refreshes_and_keeps_watching hang is fixed.
-    continue-on-error: ${{ matrix.os == 'windows-2025' }}
+    # Every OS blocks the release. TEMPORARY: on Windows only, the
+    # deleted_and_recreated_root_refreshes_and_keeps_watching hang (#330)
+    # is skipped in Tests and runs alone in a bounded, non-blocking step.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -135,10 +135,31 @@ jobs:
       # Runs after an earlier failed step too, so the test build still
       # fills sccache and the test results stay visible.
       - name: Tests
-        if: ${{ !cancelled() && runner.os != 'Linux' }}
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         env:
           TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-state
         run: sh scripts/check.sh test
+      # TEMPORARY (#330): every test but the known watcher hang; this blocks.
+      - name: Tests (without known watcher hang)
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        shell: bash
+        env:
+          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-state
+        run: >-
+          sh scripts/check.sh test
+          -E 'not test(=daemon_link::refresh::recovery_tests::deleted_and_recreated_root_refreshes_and_keeps_watching)'
+      # TEMPORARY (#330): the watcher hang alone, bounded and visible but not
+      # blocking. Default nextest profile, so the ci junit.xml stays intact.
+      - name: Known watcher hang (does not block)
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        env:
+          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-watcher-state
+        run: >-
+          cargo nextest run --workspace --all-features --locked
+          -E 'test(=daemon_link::refresh::recovery_tests::deleted_and_recreated_root_refreshes_and_keeps_watching)'
       - name: Tests with coverage
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         # An explicit bash adds pipefail, so a failure is not hidden by tee.
