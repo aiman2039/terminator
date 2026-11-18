@@ -4,9 +4,83 @@ use super::*;
 /// concentric with the halves' widget corner.
 const MODE_INSET: f32 = 2.0;
 
+/// Padding between the playlist or radio surface and its content.
+const PANEL_PAD: f32 = 8.0;
+
+/// The rounded surface that holds the playlist or the radio catalog. It
+/// takes the remaining height.
+pub(super) fn surface_panel(app: &mut App, ui: &mut Ui, add: impl FnOnce(&mut App, &mut Ui)) {
+    let panel = ui.available_rect_before_wrap();
+    ui.painter().rect_filled(
+        panel,
+        appearance::RADIUS_LARGE,
+        appearance::color(&app.theme.surface),
+    );
+    ui.advance_cursor_after_rect(panel);
+    let mut inner = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(panel.shrink(PANEL_PAD))
+            .id_salt("player-panel"),
+    );
+    add(app, &mut inner);
+}
+
+/// A line across the surface panel, between its header, list and footer.
+pub(super) fn divider(ui: &mut Ui) {
+    ui.add_space(4.0);
+    let x = ui.max_rect().expand2(vec2(PANEL_PAD, 0.0)).x_range();
+    let y = ui.cursor().min.y;
+    ui.painter()
+        .hline(x, y, ui.visuals().widgets.noninteractive.bg_stroke);
+    ui.add_space(4.0);
+}
+
+/// The round accent Play/Pause button.
+pub(super) fn play_button(ui: &mut Ui, playing: bool) -> egui::Response {
+    let name = if playing { "Pause" } else { "Play" };
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(PLAY_BUTTON), Sense::click());
+    let response = response.on_hover_text(name);
+    let accent = ui.visuals().selection.stroke.color;
+    let fill = if response.hovered() {
+        accent.gamma_multiply(0.85)
+    } else {
+        accent
+    };
+    ui.painter()
+        .circle_filled(rect.center(), PLAY_BUTTON / 2.0, fill);
+    appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
+        ui,
+        rect,
+        icon: name,
+        size: 18.0,
+        tint: appearance::contrast_text(accent),
+    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
+    appearance::paint_focus(ui, &response);
+    response
+}
+
+/// Frameless icon and label button of the playlist footer; accent while its
+/// menu is open.
+pub(super) fn footer_button(ui: &mut Ui, (icon, label): (&str, &str), lit: bool) -> egui::Response {
+    let tint = if lit {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color()
+    };
+    appearance::icon_label_chip(appearance::IconLabelChipInput {
+        ui,
+        icon,
+        label,
+        tint,
+        height: appearance::HEADER_BUTTON,
+        max_width: 96.0,
+    })
+}
+
 pub(super) fn mode_toggle(app: &mut App, ui: &mut Ui) {
     let radio = app.player.radio_mode;
-    let (rect, _) = ui.allocate_exact_size(vec2(72.0, 32.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(160.0, appearance::HEADER_BUTTON), Sense::hover());
     ui.painter().rect(
         rect,
         f32::from(appearance::WIDGET_RADIUS) + MODE_INSET,
@@ -21,7 +95,7 @@ pub(super) fn mode_toggle(app: &mut App, ui: &mut Ui) {
         ui,
         rect: files,
         icon: "ListMusic",
-        tip: "Files",
+        label: "Files",
         active: !radio,
     })
     .clicked()
@@ -34,7 +108,7 @@ pub(super) fn mode_toggle(app: &mut App, ui: &mut Ui) {
         ui,
         rect: radio_rect,
         icon: "Radio",
-        tip: "Radio",
+        label: "Radio",
         active: radio,
     })
     .clicked()
@@ -49,7 +123,7 @@ pub(crate) struct ModeHalfInput<'a> {
     pub(crate) ui: &'a mut Ui,
     pub(crate) rect: Rect,
     pub(crate) icon: &'a str,
-    pub(crate) tip: &'a str,
+    pub(crate) label: &'a str,
     pub(crate) active: bool,
 }
 
@@ -58,12 +132,11 @@ pub(super) fn mode_half(input: ModeHalfInput<'_>) -> egui::Response {
         ui,
         rect,
         icon,
-        tip,
+        label,
         active,
     } = input;
-    let response = ui
-        .interact(rect, ui.scope_id().with(icon), Sense::click())
-        .on_hover_text(tip);
+    let response = ui.interact(rect, ui.scope_id().with(icon), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     if active {
         ui.painter().rect_filled(
             rect,
@@ -82,9 +155,21 @@ pub(super) fn mode_half(input: ModeHalfInput<'_>) -> egui::Response {
     } else {
         appearance::icon_color()
     };
-    egui::Image::new(icons::source(icon))
-        .tint(tint)
-        .paint_at(ui, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)));
+    let text = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(appearance::FONT_SMALL),
+        tint,
+    );
+    let glyph = appearance::TOOLBAR_ICON;
+    let gap = 6.0;
+    let left = rect.center().x - (glyph + gap + text.size().x) / 2.0;
+    let middle = rect.center().y;
+    egui::Image::new(icons::source(icon)).tint(tint).paint_at(
+        ui,
+        Rect::from_center_size(pos2(left + glyph / 2.0, middle), vec2(glyph, glyph)),
+    );
+    let at = pos2(left + glyph + gap, middle - text.size().y / 2.0);
+    ui.painter().galley(at, text, tint);
     response
 }
 

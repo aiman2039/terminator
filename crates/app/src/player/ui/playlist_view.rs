@@ -1,8 +1,12 @@
 use super::*;
 
+const ROW_H: f32 = 28.0;
+
 pub(super) fn playlist_panel(app: &mut App, ui: &mut Ui, project: &str) {
+    playlist_header(app, ui);
+    divider(ui);
     let extra = app.player.stack.is_some() || app.player.url_prompt;
-    let footer_h = if extra { 92.0 } else { 36.0 };
+    let footer_h = if extra { 100.0 } else { 44.0 };
     let height = (ui.available_height() - footer_h).max(120.0);
     let (list, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     playlist_rows(PlaylistRowsInput {
@@ -11,7 +15,66 @@ pub(super) fn playlist_panel(app: &mut App, ui: &mut Ui, project: &str) {
         rect: list,
         project,
     });
+    divider(ui);
     playlist_footer(app, ui, project);
+}
+
+/// The playlist switcher, and the track count with the total time.
+fn playlist_header(app: &mut App, ui: &mut Ui) {
+    let names: Vec<String> = app
+        .preferences
+        .playlists
+        .iter()
+        .map(|playlist| playlist.name.clone())
+        .collect();
+    let selected = app.preferences.selected_playlist.clone();
+    let title = if selected.is_empty() {
+        "Playlist"
+    } else {
+        selected.as_str()
+    };
+    let summary = playlist_summary(app);
+    let mut pick = None;
+    ui.horizontal(|ui| {
+        appearance::text_menu_button(ui, title, |ui| {
+            for name in &names {
+                if ui.selectable_label(*name == selected, name).clicked() {
+                    pick = Some(name.clone());
+                    ui.close();
+                }
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.weak(egui::RichText::new(summary).size(appearance::FONT_SMALL));
+        });
+    });
+    if let Some(name) = pick {
+        app.player.confirm = None;
+        app.player_switch_list(name);
+    }
+}
+
+pub(super) fn track_count(count: usize) -> String {
+    if count == 1 {
+        "1 track".into()
+    } else {
+        format!("{count} tracks")
+    }
+}
+
+/// `12 tracks · 41:07`; the time counts only the durations read so far.
+pub(super) fn playlist_summary(app: &App) -> String {
+    let tracks = app.preferences.selected_tracks();
+    let total: Duration = tracks
+        .iter()
+        .filter_map(|path| app.player.durations.get(path).copied())
+        .fold(Duration::ZERO, Duration::saturating_add);
+    let count = track_count(tracks.len());
+    if total.is_zero() {
+        count
+    } else {
+        format!("{count} · {}", format_clock(total))
+    }
 }
 
 fn empty_playlist(app: &mut App, ui: &mut Ui) {
@@ -40,12 +103,9 @@ pub(super) fn playlist_rows(input: PlaylistRowsInput<'_>) {
         rect,
         project,
     } = input;
-    let surface = appearance::color(&app.theme.surface);
-    ui.painter()
-        .rect_filled(rect, appearance::RADIUS_SMALL, surface);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(rect.shrink(4.0))
+            .max_rect(rect)
             .layout(egui::Layout::top_down(egui::Align::Min))
             .id_salt("player-rows"),
     );
@@ -59,12 +119,14 @@ pub(super) fn playlist_rows(input: PlaylistRowsInput<'_>) {
         selection: child.visuals().selection.bg_fill,
         accent: child.visuals().selection.stroke.color,
         text: child.visuals().text_color(),
+        muted: child.visuals().weak_text_color(),
+        hover: child.visuals().widgets.hovered.bg_fill,
     };
     let tracks = app.preferences.selected_tracks();
     egui::ScrollArea::vertical()
         .id_salt("player-playlist")
         .auto_shrink([false, false])
-        .show_rows(&mut child, 22.0, tracks.len(), |ui, range| {
+        .show_rows(&mut child, ROW_H, tracks.len(), |ui, range| {
             for index in range {
                 let Some(path) = tracks.get(index) else {
                     continue;
@@ -100,6 +162,8 @@ struct RowColors {
     selection: egui::Color32,
     accent: egui::Color32,
     text: egui::Color32,
+    muted: egui::Color32,
+    hover: egui::Color32,
 }
 
 struct PlaylistRowInput<'a> {
@@ -126,26 +190,67 @@ fn playlist_row(input: PlaylistRowInput<'_>) -> egui::Response {
         .map(format_clock)
         .unwrap_or_else(|| "--:--".into());
     let playing = !player.radio() && player.file_index == Some(index);
-    let (row, response) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
-    if player.selected.contains(&index) {
+    let (row, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+    let fill = if player.selected.contains(&index) {
+        Some(colors.selection)
+    } else if playing {
+        Some(colors.accent.gamma_multiply(0.12))
+    } else if response.hovered() {
+        Some(colors.hover)
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
         ui.painter()
-            .rect_filled(row, appearance::RADIUS_XSMALL, colors.selection);
+            .rect_filled(row, appearance::RADIUS_SMALL, fill);
     }
-    let color = if playing { colors.accent } else { colors.text };
-    ui.painter().text(
-        pos2(row.min.x + 6.0, row.center().y),
-        egui::Align2::LEFT_CENTER,
-        format!("{}. {title}", index.saturating_add(1)),
-        egui::FontId::proportional(appearance::FONT_BODY),
-        color,
-    );
-    ui.painter().text(
-        pos2(row.max.x - 6.0, row.center().y),
+    let (color, dim) = if playing {
+        (colors.accent, colors.accent)
+    } else {
+        (colors.text, colors.muted)
+    };
+    let small = egui::FontId::monospace(appearance::FONT_SMALL);
+    let middle = row.center().y;
+    // The number column; the playing track shows the audio glyph there.
+    let number = Rect::from_min_max(row.min, pos2(row.min.x + 32.0, row.max.y));
+    if playing {
+        appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
+            ui,
+            rect: number,
+            icon: "AudioLines",
+            size: appearance::TOOLBAR_ICON,
+            tint: colors.accent,
+        });
+    } else {
+        ui.painter().text(
+            pos2(number.max.x - 8.0, middle),
+            egui::Align2::RIGHT_CENTER,
+            index.saturating_add(1),
+            small.clone(),
+            dim,
+        );
+    }
+    let time = ui.painter().text(
+        pos2(row.max.x - 8.0, middle),
         egui::Align2::RIGHT_CENTER,
         duration,
-        egui::FontId::monospace(appearance::FONT_SMALL),
-        color,
+        small,
+        dim,
     );
+    // A long title stops before the duration.
+    let clip = Rect::from_min_max(
+        pos2(number.max.x + 4.0, row.min.y),
+        pos2(time.min.x - 8.0, row.max.y),
+    );
+    ui.painter()
+        .with_clip_rect(clip.intersect(ui.clip_rect()))
+        .text(
+            clip.left_center(),
+            egui::Align2::LEFT_CENTER,
+            title,
+            egui::FontId::proportional(appearance::FONT_BODY),
+            color,
+        );
     response
 }
 
@@ -161,12 +266,7 @@ pub(super) fn playlist_footer(app: &mut App, ui: &mut Ui, project: &str) {
                 .id(egui::Id::unique("player-playlist-name")),
         );
     }
-    ui.horizontal(|ui| {
-        stack_buttons(app, ui);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.weak(running_time(app));
-        });
-    });
+    ui.horizontal(|ui| stack_buttons(app, ui));
     stack_menu(app, ui, project);
 }
 
@@ -184,36 +284,18 @@ pub(super) fn url_row(app: &mut App, ui: &mut Ui, project: &str) {
     });
 }
 
-pub(super) fn running_time(app: &App) -> String {
-    let position = match &app.player.status {
-        Status::Playing { position, .. } | Status::Paused { position, .. } => *position,
-        _ => Duration::ZERO,
-    };
-    let total: Duration = app
-        .preferences
-        .selected_tracks()
-        .iter()
-        .filter_map(|path| app.player.durations.get(path).copied())
-        .fold(Duration::ZERO, Duration::saturating_add);
-    if total.is_zero() {
-        format!("{}/--:--", format_clock(position))
-    } else {
-        format!("{}/{}", format_clock(position), format_clock(total))
-    }
-}
-
 pub(super) fn stack_buttons(app: &mut App, ui: &mut Ui) {
     let stacks = [
-        (Stack::Add, "Add"),
-        (Stack::Rem, "Rem"),
-        (Stack::Sel, "Sel"),
-        (Stack::Misc, "Misc"),
-        (Stack::List, "List"),
+        (Stack::Add, "Plus", "Add"),
+        (Stack::Rem, "Minus", "Remove"),
+        (Stack::Sel, "TextSelect", "Select"),
+        (Stack::Misc, "ArrowDownWideNarrow", "Misc"),
+        (Stack::List, "ListMusic", "List"),
     ];
-    for (stack, label) in stacks {
+    for (stack, icon, label) in stacks {
         let lit = app.player.stack == Some(stack);
-        let response = chip(ui, label, lit);
-        if label == "Add" {
+        let response = footer_button(ui, (icon, label), lit);
+        if stack == Stack::Add {
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "player-add-files", response.rect);
         }

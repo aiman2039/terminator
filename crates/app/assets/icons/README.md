@@ -34,7 +34,8 @@ and white-stroke adaptation: `message-circle-question-mark` (needs input),
 and `circle-question-mark` (unknown).
 
 `audio-lines.svg`, `skip-back.svg`, `play.svg`, `pause.svg`, `skip-forward.svg`,
-`list-music.svg`, `square.svg`, `shuffle.svg`, `repeat.svg`, and `radio.svg` come from
+`list-music.svg`, `square.svg`, `shuffle.svg`, `repeat.svg`, `radio.svg`, and
+`volume-2.svg` come from
 Lucide 0.577.0 with the same license and white-stroke adaptation, for the chrome
 player.
 

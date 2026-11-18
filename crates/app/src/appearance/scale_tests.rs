@@ -29,13 +29,11 @@ const SIZED_FIELDS: [&str; 3] = ["FontId{size:", "CornerRadius{nw:", "corner_rad
 
 /// Deliberate literals: the file under `src/`, and the call as the guard
 /// reports it.
-const ALLOWED: [(&str, &str); 4] = [
+const ALLOWED: [(&str, &str); 3] = [
     // The Markdown preview sets document reading sizes, not app chrome.
     ("markdown/previews/render.rs", "FontId::proportional(16.0)"),
     ("markdown/previews/render.rs", "FontId::new(28.0,"),
     ("markdown/previews/render.rs", "FontId::monospace(14.0)"),
-    // Player spectrum bars keep a hairline corner at any bar width.
-    ("player/ui/mod.rs", "rect_filled(bar,1.0,"),
 ];
 
 /// Folders that keep their own sizes: the VNC page, cards, and overlays.
