@@ -32,6 +32,9 @@ const MAX_OPEN: usize = 8;
 #[serde(rename_all = "lowercase")]
 pub enum DocumentKind {
     Table,
+    /// The flow editor (layout v14). Not read-only: see `flows::editor`.
+    /// Never a default viewer: only New flow and Edit open it.
+    Flow,
 }
 
 impl DocumentKind {

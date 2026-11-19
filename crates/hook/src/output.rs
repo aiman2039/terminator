@@ -13,6 +13,13 @@ impl Output {
         println!("{text}");
     }
 
+    /// Prints one line to stdout, and ignores a stdout that is gone (for
+    /// example the closed terminal of a process that got SIGHUP).
+    pub fn line_or_drop(text: impl std::fmt::Display) {
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout().lock(), "{text}");
+    }
+
     /// Prints text to stdout without a trailing newline.
     pub fn text(text: impl std::fmt::Display) {
         print!("{text}");

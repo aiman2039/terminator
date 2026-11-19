@@ -13,6 +13,7 @@ impl App {
         self.visible_sessions.clear();
         self.visible_images.clear();
         self.tables.begin_frame();
+        self.flows.begin_frame();
         self.visible_browsers.clear();
         self.browser_covers.clear();
         for (key, view) in &mut self.vnc_views {

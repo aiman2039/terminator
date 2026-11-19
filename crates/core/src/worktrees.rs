@@ -100,6 +100,19 @@ fn run(common: &Path, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
     )?
     .stdout)
 }
+/// A worktree name of `ctl spawn --worktree` and of a flow step: the
+/// branch is `terminator/NAME` in the folder `terminator-NAME` beside the
+/// project. Letters, digits, '-', '_' and '.', not first '-' or '.', and
+/// no "..".
+pub fn name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with(['-', '.'])
+        && !name.contains("..")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
 pub fn common_dir(cwd: &Path) -> Result<PathBuf> {
     let mut command = Command::new(git_executable()?);
     command

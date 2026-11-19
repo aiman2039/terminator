@@ -140,7 +140,12 @@ enum Task {
         output: PathBuf,
     },
     /// Real-PTY, auth, hooks, reconnect, and daemon-recovery checks.
-    Integration,
+    Integration {
+        /// Run one group only: run, controls, hook_controls, flows or
+        /// regressions.
+        #[arg(long)]
+        only: Option<String>,
+    },
     /// Opt-in live SSH checks against the Docker fixture (host keys,
     /// `ControlMaster` reuse, forwards, transfers). Skips without Docker.
     Ssh {
@@ -284,7 +289,7 @@ fn dispatch(task: Task) -> Result<()> {
             build_number,
             destination: &output,
         }),
-        Task::Integration => integration_all(),
+        Task::Integration { only } => integration_all(only.as_deref()),
         Task::Ssh { require } => ssh_fixture::run(require),
         Task::Gui(args) => args.run(),
         Task::Load {
@@ -298,14 +303,27 @@ fn dispatch(task: Task) -> Result<()> {
         Task::MuseEcho { muse } => integration::muse(&muse),
     }
 }
-fn integration_all() -> Result<()> {
+/// One integration group: its `--only` name and its checks.
+type Group = (&'static str, fn() -> Result<()>);
+
+fn integration_all(only: Option<&str>) -> Result<()> {
+    let groups: [Group; 5] = [
+        ("run", integration::run),
+        ("controls", integration::controls),
+        ("hook_controls", integration::hook_controls),
+        ("flows", integration::flows),
+        ("regressions", regressions::run),
+    ];
+    anyhow::ensure!(
+        only.is_none_or(|only| groups.iter().any(|(name, _)| *name == only)),
+        "Unknown integration group"
+    );
     std::thread::scope(|scope| -> Result<()> {
-        let tasks = [
-            ("run", scope.spawn(integration::run)),
-            ("controls", scope.spawn(integration::controls)),
-            ("hook_controls", scope.spawn(integration::hook_controls)),
-            ("regressions", scope.spawn(regressions::run)),
-        ];
+        let tasks: Vec<_> = groups
+            .into_iter()
+            .filter(|(name, _)| only.is_none_or(|only| *name == only))
+            .map(|(name, group)| (name, scope.spawn(group)))
+            .collect();
         let mut failures = Vec::new();
         for (name, task) in tasks {
             match task.join() {

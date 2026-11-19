@@ -327,6 +327,14 @@ fn language_server_trust_answers_survive_restart() {
     prefs.save(dir.path()).unwrap();
     let loaded = UiPreferences::load(dir.path()).unwrap();
     assert_eq!(loaded.lsp_trust, prefs.lsp_trust);
+    // The flow runner reads the same answers from the saved file.
+    let trust = |name: &str| {
+        terminator_core::ui_preferences::trust_answer(dir.path(), &dir.path().join(name))
+    };
+    assert_eq!(
+        (trust("trusted"), trust("refused")),
+        (Some(true), Some(false))
+    );
 }
 
 #[test]

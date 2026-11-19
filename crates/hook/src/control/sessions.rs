@@ -90,17 +90,32 @@ impl Ctl {
             "Supply either literal text or --stdin"
         );
         self.session(&sid)?;
-        let mut bytes = Self::send_bytes(stdin, text)?;
+        let bytes = Self::send_bytes(stdin, text)?;
         ensure!(bytes.len() <= 1024 * 1024, "Input exceeds 1 MiB");
         ensure!(
             !has_control_chars(&bytes),
             "Text must not contain line breaks or control characters; use --enter to press Enter"
         );
         if enter {
-            bytes.push(b'\r');
+            self.type_and_enter(&sid, bytes)?;
+        } else {
+            self.attach_and_input(sid, bytes)?;
         }
-        self.attach_and_input(sid, bytes)?;
         Ok(json!({"sent":true}))
+    }
+    /// Types `text`, then presses Enter in a second write. An agent's input
+    /// box (Claude Code) takes text and Enter in one write as a paste, and
+    /// that Enter becomes a line break, not a submit.
+    pub(super) fn type_and_enter(&self, sid: &str, text: Vec<u8>) -> Result<()> {
+        let mut writes = enter_writes(text).into_iter();
+        if let Some(first) = writes.next() {
+            self.attach_and_input(sid.to_owned(), first)?;
+        }
+        for write in writes {
+            std::thread::sleep(ENTER_GAP);
+            self.attach_and_input(sid.to_owned(), write)?;
+        }
+        Ok(())
     }
     fn send_bytes(stdin: bool, text: Option<String>) -> Result<Vec<u8>> {
         if stdin {
@@ -227,6 +242,20 @@ impl Ctl {
     }
 }
 
+/// Time between typed text and its Enter (see `type_and_enter`).
+const ENTER_GAP: Duration = Duration::from_millis(300);
+
+/// The writes for text followed by Enter: the text (when there is some),
+/// then Enter alone.
+fn enter_writes(text: Vec<u8>) -> Vec<Vec<u8>> {
+    let enter = b"\r".to_vec();
+    if text.is_empty() {
+        vec![enter]
+    } else {
+        vec![text, enter]
+    }
+}
+
 /// True when typed text holds a character that a terminal can act on as a
 /// key (CR, LF, ESC, Ctrl-C and the like). Tab is plain text. Enter comes
 /// only from `--enter`, so a line break in the text must not run it.
@@ -238,7 +267,17 @@ fn has_control_chars(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::has_control_chars;
+    use super::{enter_writes, has_control_chars};
+
+    #[test]
+    fn send_with_enter_never_puts_text_and_enter_in_one_write() {
+        assert_eq!(
+            enter_writes(b"fix the test".to_vec()),
+            [b"fix the test".to_vec(), b"\r".to_vec()]
+        );
+        // Enter alone (`ctl send SESSION '' --enter`) is one write.
+        assert_eq!(enter_writes(Vec::new()), [b"\r".to_vec()]);
+    }
 
     #[test]
     fn send_text_with_line_break_or_escape_is_refused() {

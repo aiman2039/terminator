@@ -31,6 +31,7 @@ impl App {
             SidebarTool::Hosts => self.hosts_sidebar(ui),
             SidebarTool::Ports => self.ports_panel(ui),
             SidebarTool::Usage => self.usage_panel(ui),
+            SidebarTool::Flows => self.flows_panel(ui),
             SidebarTool::Agents => self.agents_view(ui),
             SidebarTool::Explorer => self.explorer_tool(ui),
             SidebarTool::Git => self.git_tool(ui),

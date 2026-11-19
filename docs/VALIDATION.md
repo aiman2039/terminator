@@ -1,5 +1,142 @@
 # Validation evidence — 2026-09-08
 
+## Flows (agent orchestration) — 2026-11-18
+
+- Unit tests: the strict file format, the step order and the run state
+  (`terminator-core` `flow::tests`); the runner's step rules, the trust
+  gate, the agent commands and the MCP limits (`terminator-hook`
+  `control::flow`); Run flow… and the tool window's pure parts
+  (`terminator` `flows::tests`, for example
+  `run_flow_types_nothing_before_trust`).
+- Real PTY, isolated daemon (`TERMINATOR_DATA_DIR` under `/tmp`), no GUI:
+  three runs with `terminator-hook flow run`. Two parallel steps, a prompt
+  sent after the first hook report, a gate with `flow approve`, a refused
+  early approve, `flow cancel`, a refused run with no trust answer, a shell
+  step that ended by `flow report done`, a step that read `flow context`,
+  asked with `flow ask` and got the `flow answer` text, and a step that
+  stopped the run with `flow report failed`.
+- The agent in those runs was a fixture: `terminator-hook emit` with
+  normalized hook events. No real agent (Claude Code, Codex) ran.
+- The first real run found that the daemon removes an ended shell with its
+  exit code. An ended terminal thus never ends a step as done; only a hook
+  report or `flow report` does
+  (`ended_terminal_never_ends_a_step_as_done`).
+- `cargo xtask integration --only flows` (new `--only` option) repeats the
+  real-PTY checks: trust gate, shell report, gate, handoff note in
+  `flow context`, ask and answer, and the fixture agent's prompt. Its first
+  runs found a second defect: a step's command could run before the state
+  file had the terminal's session, so `flow context` and `flow ask` did not
+  find their step. The runner now saves the session before it types the
+  command.
+- Native GUI, isolated daemon, macOS: the Flows tool window (opened from
+  the saved `tool` preference) showed a run from `terminator-hook flow
+  run`: the step rows, the gate question with Approve and Reject, and
+  "done" after the approve. Checked on two window screenshots. The approve
+  came from the CLI. A second run in a Git project had a `worktree` step:
+  the step ran in the new `terminator-flowcheck` checkout, and the window
+  showed its result note and the next step's question with the Answer
+  field and Send.
+- Live providers, real PTY, isolated daemon, macOS: Claude Code 2.1.327
+  and Codex 0.170.0 as flow steps. The hooks came from fixture files
+  (`claude --settings FILE`, `codex -c hooks...`), because the installed
+  hooks name the live data folder; no user agent configuration changed.
+  - Claude Code: in a folder with no Claude trust, its trust question
+    showed and the runner sent nothing (no hook report), as designed. In a
+    trusted folder the start report came, the prompt was typed 2 seconds
+    later, and the Stop hook ended the step as done.
+  - Defect found: the runner sent the prompt and Enter in one write.
+    Claude Code took that as a paste and the Enter became a line break, so
+    the prompt was not submitted. The runner now sends Enter in a second
+    write, 300 ms later. After that, the Claude step ran with no manual
+    help (twice).
+  - Codex reports no hook at its start, only after its first prompt, so a
+    separate `prompt` is never sent. With the prompt in the command
+    (`codex "..."`), the Stop hook ended the step as done with no manual
+    help. The runner's time-out message and the format notes now say this.
+  - A final run had both: a Claude step with `prompt`, then a Codex step
+    with the prompt in its command. Both ended as done, and both wrote
+    their files.
+- `terminator-hook ctl send TEXT --enter` (also the MCP `send` tool with
+  `enter` and the `inbox` reply, which use it) had the same one-write
+  defect. It now sends Enter in a second write, through the function the
+  flow runner uses (`send_with_enter_never_puts_text_and_enter_in_one_write`).
+  Live check: one `ctl send PROMPT --enter` to real Claude Code 2.1.327
+  submitted the prompt, the hook state reached completed, and the file was
+  written. The GUI's Paste and send was read, not changed or run: it sends
+  Enter as its own write after a bracketed paste.
+- The new-tab menu has a Flows section: Run flow… and Show flows. A run
+  from Run flow… also shows the Flows tool window. Paint and action tests:
+  `new_tab_menu_has_the_flow_rows`,
+  `flows_tool_window_shows_after_a_run_and_from_the_menu_action`,
+  `flows_panel_shows_a_gate_with_approve_and_a_question_with_send`. The
+  native build ran in an isolated GUI and its Flows window showed a run
+  with a gate; the menu itself was not opened there (no reliable
+  synthetic click). A window that is behind other windows gives an old
+  frame to `screencapture`; `ctl window focus` first gives a new one.
+- Native flow editor (a workspace tab, `Tab::Document` with
+  `DocumentKind::Flow`, layout v14; `egui-snarl` node graph; replaces the
+  Excalidraw drawn flows, which are removed): unit tests in
+  `flows::editor::tests` (graph and file give the same flow both ways,
+  wires are `needs`, a new flow writes nothing until Save and replaces no
+  file, a wrong graph shows the error and writes nothing, a closed tab
+  keeps a flow with changes and drops a clean one, a wrong file shows its
+  error and Open as text, tab paint, first view shows all nodes, a
+  right-click shows the canvas menu and the card menu, an After chip
+  removes a wire and "+" adds one, a click on a prompt opens the card
+  dialog, the rules and preview dialogs paint, export writes `NAME.md`,
+  the plan has the flow file and a Mermaid flowchart, the cards show the
+  newest run with Approve on a gate that waits; with synthetic pointer
+  events in a headless frame) and `flow::tests` (draft to TOML and back,
+  save rules, flow rules).
+  Native GUI, macOS, test-support build with
+  `TERMINATOR_FIXTURE_FLOW_EDITOR`: the tab showed the toolbar, the three
+  cards and a canvas menu in the app menu style (window screenshot). Not
+  verified in a running GUI: clicks, drags of cards and wires, the
+  dialogs, Float window, Export and Save from the tab (no reliable
+  synthetic input), the modal dialogs, the restyled Flows window, and
+  the run state on the cards with a real run.
+  Live provider, runner API (no GUI), isolated daemon: Claude Code as a
+  step with a fixture hook file (`claude --settings FILE`), a flow with
+  `rules`, a gate and a shell step. Claude wrote the file from its prompt
+  and the file from the flow rules, the gate waited, `flow approve`
+  started the last step, and the run ended with all steps done.
+  Known limit: a GUI whose data folder is not the one in the agent's
+  installed hooks gets no hook report, so a step fails after 120 seconds
+  ("No agent hook report"). A development build beside an installed app
+  is such a case.
+  `vendor/egui-snarl` and `vendor/egui-scale` are patched to egui 0.37
+  (see each `UPSTREAM.md`).
+- Not verified: a click on the window's buttons (Approve, Reject, Send,
+  Cancel run) and the Run flow… window in a running GUI (unit-tested
+  only), and real agents with the installed hooks and the live daemon.
+- MCP, real PTY, isolated daemon: JSON-RPC lines on the stdin of
+  `terminator-hook mcp` (legacy `initialize`, then `tools/call`).
+  `flow_context` gave the run and step, `flow_approve` was an unknown
+  tool, `flow_ask` waited and returned the text of `flow answer`, and
+  `flow_report` ended the step and the run as done. No MCP client program
+  (Claude Code, Codex) was used.
+- `cargo xtask integration` (all groups) did not end in three runs of five
+  on this machine: the existing `stalled_attachment` regression stayed in
+  its socket read (`regressions/daemon.rs:96`, seen in a process sample).
+  One of those runs was a trial with the flow group after the other
+  groups, and it stopped before the flow group started, so the flow group
+  is not the cause. One run without the flow group ended correctly, one
+  run failed in the `run` group with a broken pipe while another cargo
+  build ran, and `--only regressions` and `--only flows` pass. Not
+  checked on `master`.
+- Cause and correction of that stop: the daemon sends a heartbeat frame
+  every 2 seconds, so the test's 5-second read timeout never fired. On a
+  loaded machine the shell made its output late, the test read all of it
+  before the daemon's 3-second write deadline, the daemon kept the
+  attachment, and the read loop had no end. The test now waits for the
+  saved output before the stall, and its read loop has a 30-second limit.
+  The same stopped case is in a leftover folder of 2026-11-15, before the
+  flow work. After the correction the full set passed three times in
+  sequence (load average 28 at the start).
+- `panel_buttons_write_only_the_users_answers` covers the tool window's
+  Approve, Send and Cancel run actions (the files they write, and that
+  they make no terminal).
+
 ## Radio playback after a pre-roll (103FM) — 2026-11-18
 
 - Cause: 103FM sometimes starts the stream with a pre-roll MP3 file. Its

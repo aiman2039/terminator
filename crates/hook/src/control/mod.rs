@@ -1,5 +1,6 @@
 //! User-invoked high-level controls. Never called by observational agent hooks.
 mod agents;
+pub(crate) mod flow;
 pub(crate) mod inbox;
 mod lookup;
 #[cfg(test)]

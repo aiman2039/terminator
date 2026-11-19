@@ -29,6 +29,7 @@ These are not optional. They come from `AGENTS.md`, `docs/ARCHITECTURE.md`, and
 - Do not auto-launch agents or infer lifecycle from terminal text. Hooks stay
   explicit Settings actions. The worktree wizard may create a checkout and a
   terminal; the user starts `claude` / `codex` / … in that terminal.
+  Exception: the steps of a flow that the user started with an explicit Run.
 - Preserve unrelated TOML keys, hook config, and unknown layout versions.
 - Tests use isolated `TERMINATOR_DATA_DIR` / config dirs, not the user’s machine.
 - Appearance lives in config TOML; functional settings stay in the daemon
@@ -40,7 +41,7 @@ Orca features we are **not** taking in this plan:
 
 - Design Mode / per-worktree embedded browser (in-app OS webview tabs are a separate GUI-only feature)
 - Native chat UI, agent hibernation, cloud VMs, mobile companion
-- Orchestration DAGs, computer-use, public artifacts
+- Computer-use, public artifacts
 - Geist/glass visual identity, i18n packs, plugin marketplaces
 
 Those need a browser or a different product. Revisit only after the native loop

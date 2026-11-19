@@ -3,7 +3,12 @@ use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::{fs, io::Read, thread, time::Duration};
+use std::{
+    fs,
+    io::Read,
+    thread,
+    time::{Duration, Instant},
+};
 use terminator_core::{quote, read_frame};
 
 pub(super) fn large_snapshots() -> Result<()> {
@@ -88,17 +93,38 @@ pub(super) fn stalled_attachment() -> Result<()> {
         &mut stream,
         "stty -echo; head -c 2000000 /dev/zero | tr '\\0' x; printf '\\nBURST_DONE\\n'\n",
     )?;
+    // On a loaded machine the shell can make its output late. A fixed sleep
+    // from the write then ends before the daemon's writer deadline, this
+    // client drains the output, and the daemon keeps the attachment. Wait
+    // for the full output first: the daemon saves it to the history folder
+    // also when no client reads.
+    let saved = || -> u64 {
+        fs::read_dir(h.root.join("history"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|file| file.len())
+            .sum()
+    };
+    h.wait(|_| saved() >= 2_000_000, 30)?;
     // Exceed the daemon writer deadline without reading any output.
     thread::sleep(Duration::from_secs(4));
     let mut bytes = [0; 65536];
     let mut total = 0usize;
+    // The daemon's 2-second heartbeat frames keep a kept attachment
+    // readable with no end, so the read timeout alone cannot end this loop.
+    let started = Instant::now();
     loop {
         let n = stream.read(&mut bytes)?;
         if n == 0 {
             break;
         }
         total = total.saturating_add(n);
-        ensure!(total < 4 * 1024 * 1024, "Stalled output did not disconnect");
+        ensure!(
+            total < 4 * 1024 * 1024 && started.elapsed() < Duration::from_secs(30),
+            "Stalled output did not disconnect"
+        );
     }
     ensure!(
         h.write(&mut stream, "printf 'SHOULD_NOT_EXECUTE\\n'\n")

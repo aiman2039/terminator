@@ -22,7 +22,9 @@ const VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 const UNSUPPORTED_VERSION: i64 = -32022;
 const INSTRUCTIONS: &str = "Controls Terminator terminals with the limits of `terminator-hook ctl`. \
 Tools never start an agent. `send` presses Enter only when `enter` is true. \
-Agent state comes from hooks, never from terminal text.";
+Agent state comes from hooks, never from terminal text. \
+The `flow_*` tools are for the agent of a flow step: context, report and ask. \
+No tool runs, approves, rejects, answers or cancels a flow.";
 
 /// Global `ctl` options given to `terminator-hook mcp`.
 pub(crate) struct Server {
@@ -147,6 +149,20 @@ impl Server {
     }
 
     fn run(&self, argv: Vec<String>) -> Result<Value> {
+        if argv.first().is_some_and(|word| word == "flow") {
+            let args: Vec<String> = self
+                .globals
+                .iter()
+                .cloned()
+                .chain(argv.into_iter().skip(1))
+                .collect();
+            let value = crate::control::flow::execute_args(&args)?;
+            return Ok(tool_result(
+                serde_json::to_string_pretty(&value)?,
+                Some(value),
+                false,
+            ));
+        }
         let args: Vec<String> = self.globals.iter().cloned().chain(argv).collect();
         Ok(match crate::control::execute_args(&args)? {
             crate::control::Outcome::Json(value) => {

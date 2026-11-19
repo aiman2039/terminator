@@ -195,6 +195,10 @@ impl App {
                     Tab::Image { path } => {
                         self.visible_images.insert(path.clone());
                     }
+                    Tab::Document {
+                        path,
+                        kind: crate::document_view::DocumentKind::Flow,
+                    } => self.flows.mark_visible(path),
                     Tab::Document { path, .. } => self.tables.mark_visible(path),
                     _ => {}
                 }

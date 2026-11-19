@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*"]
-exclude = [".claude", "vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100", "vendor/egui_commonmark", "vendor/vnc-rs", "vendor/wprs"]
+exclude = [".claude", "vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100", "vendor/egui_commonmark", "vendor/vnc-rs", "vendor/wprs", "vendor/egui-snarl", "vendor/egui-scale"]
 resolver = "2"
 [workspace.package]
 version = "0.183.0"
@@ -40,6 +40,8 @@ egui_commonmark = { path = "vendor/egui_commonmark" }
 egui_dock = { path = "vendor/egui_dock" }
 egui-winit = { path = "vendor/egui-winit" }
 vt100 = { path = "vendor/vt100" }
+egui-snarl = { path = "vendor/egui-snarl" }
+egui-scale = { path = "vendor/egui-scale" }
 
 # `scripts/check.sh clippy` uses `-D warnings`, so every warn here fails that check.
 # Pedantic is priority -1 so a later allow on one lint wins. Nursery stays off.

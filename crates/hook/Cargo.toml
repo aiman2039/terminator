@@ -10,6 +10,7 @@ terminator-core.workspace = true
 terminator-integrations.workspace = true
 terminator-sys.workspace = true
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 rustix.workspace = true

@@ -63,6 +63,7 @@ pub enum SidebarTool {
     Hosts,
     Ports,
     Usage,
+    Flows,
 }
 
 /// A tool this build does not know (written by a newer build) falls back to
@@ -363,7 +364,7 @@ impl UiPreferences {
         state_loaded && project_count == 0 && !self.setup_completed
     }
     pub fn load(data: &Path) -> Result<Self> {
-        let bytes = match fs::read(data.join("ui-preferences.json")) {
+        let bytes = match fs::read(data.join(terminator_core::ui_preferences::FILE)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => return Err(e.into()),
@@ -455,7 +456,7 @@ impl UiPreferences {
     pub fn save(&self, data: &Path) -> Result<()> {
         fs::create_dir_all(data)?;
         terminator_core::atomic_write(
-            &data.join("ui-preferences.json"),
+            &data.join(terminator_core::ui_preferences::FILE),
             &serde_json::to_vec_pretty(self)?,
         )?;
         Ok(())

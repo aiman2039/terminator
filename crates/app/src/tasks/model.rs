@@ -15,7 +15,7 @@
 //! repository, so none of its commands is typed before the project is
 //! trusted. A task runs only on an explicit Run.
 use crate::PostCreate;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// Project task file, relative to the project folder.
 pub(crate) const PROJECT_TASK_FILE: &str = ".terminator/tasks.toml";
@@ -88,7 +88,7 @@ pub(crate) fn parse_tasks(text: &str, source: TaskSource) -> Result<Vec<TaskDef>
             .filter(|cwd| !cwd.is_empty());
         if source == TaskSource::Project
             && let Some(cwd) = &cwd
-            && !inside_project(Path::new(cwd))
+            && !terminator_core::flow::inside_project(Path::new(cwd))
         {
             return Err(format!("Task \"{name}\": cwd must stay inside the project"));
         }
@@ -101,11 +101,6 @@ pub(crate) fn parse_tasks(text: &str, source: TaskSource) -> Result<Vec<TaskDef>
         });
     }
     Ok(tasks)
-}
-
-fn inside_project(path: &Path) -> bool {
-    path.components()
-        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
 }
 
 /// What one load found: tasks (user first) and file errors.

@@ -4,7 +4,7 @@ use super::StripeTool;
 use crate::*;
 
 /// Stripe buttons top to bottom: tool, Lucide icon, caption.
-const STRIPE_TOOLS: [(StripeTool, &str, &str); 12] = [
+const STRIPE_TOOLS: [(StripeTool, &str, &str); 13] = [
     (StripeTool::Projects, "Folder", "Projects"),
     (StripeTool::Tool(SidebarTool::Explorer), "Files", "Explorer"),
     (StripeTool::Tool(SidebarTool::Agents), "Bell", "Agents"),
@@ -25,6 +25,7 @@ const STRIPE_TOOLS: [(StripeTool, &str, &str); 12] = [
     (StripeTool::Tool(SidebarTool::Hosts), "Globe", "Hosts"),
     (StripeTool::Tool(SidebarTool::Ports), "Plug", "Ports"),
     (StripeTool::Tool(SidebarTool::Usage), "Gauge", "Usage"),
+    (StripeTool::Tool(SidebarTool::Flows), "Split", "Flows"),
 ];
 
 #[cfg(feature = "test-support")]

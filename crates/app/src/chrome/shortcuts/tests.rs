@@ -252,6 +252,7 @@ const UNBOUND_BY_DEFAULT: &[Action] = &[
 const TASK_ACTIONS: &[Action] = &[
     Action::RunTask,
     Action::RerunTask,
+    Action::RunFlow,
     Action::ShowWelcome,
     Action::ShowWhatsNew,
 ];

@@ -187,6 +187,11 @@ impl App {
             }
             return;
         }
+        // Flow editors with content that is not saved live only in GUI
+        // memory: ask before they are lost.
+        if self.flow_quit_waits(ctx) {
+            return;
+        }
         if self.vnc_quit_prompt {
             return;
         }
@@ -195,6 +200,7 @@ impl App {
             return;
         }
         self.pending_app_quit = false;
+        self.reset_flow_quit();
         self.begin_exit();
     }
     /// End the current quit and everything it owns: its VNC answer, its
@@ -203,6 +209,7 @@ impl App {
     pub(crate) fn cancel_app_quit(&mut self) {
         self.vnc_quit_confirmed = false;
         self.vnc_quit_prompt = false;
+        self.reset_flow_quit();
         let quit = native_editor::CloseOwner::Quit;
         self.native_close_prompts
             .retain(|request| request.owner != quit);
