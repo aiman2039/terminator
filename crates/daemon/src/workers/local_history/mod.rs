@@ -48,6 +48,8 @@ const ROOTS_EVERY: Duration = Duration::from_secs(5);
 const PRUNE_EVERY: Duration = Duration::from_hours(24);
 /// After new snapshots, the size budget and per-file cap apply this soon.
 const PRUNE_AFTER_RECORD: Duration = Duration::from_mins(1);
+/// A root whose watch failed is tried again no sooner than this.
+const RETRY_FAILED_WATCH: Duration = Duration::from_mins(1);
 /// Files recorded per tick; the rest stay pending for later ticks (#192).
 const MAX_BATCH: usize = 256;
 
@@ -57,6 +59,8 @@ pub(crate) struct LocalHistoryWorker {
     watcher: Option<notify::RecommendedWatcher>,
     /// Watched project roots; the recorder is on while this is non-empty.
     watched: BTreeSet<PathBuf>,
+    /// Wanted roots whose watch failed, with the time of the last try.
+    failed: HashMap<PathBuf, Instant>,
     days: u32,
     /// Size budget and per-file cap from the settings.
     limits: (u64, u32),
@@ -90,6 +94,7 @@ impl LocalHistoryWorker {
                 tx,
                 watcher: None,
                 watched: BTreeSet::new(),
+                failed: HashMap::new(),
                 days: 0,
                 limits: (
                     local_history::DEFAULT_MIB,
@@ -199,19 +204,25 @@ impl LocalHistoryWorker {
         } else {
             BTreeSet::new()
         };
+        // A wanted root whose watch failed is never in `watched`, so this
+        // does not skip its retry.
         if wanted == self.watched {
+            self.failed.clear();
             return;
         }
         if wanted.is_empty() {
             self.watcher = None;
             self.watched.clear();
+            self.failed.clear();
             self.pending.clear();
             return;
         }
-        self.rewatch(wanted);
+        self.rewatch(&wanted, Instant::now());
     }
 
-    fn rewatch(&mut self, wanted: BTreeSet<PathBuf>) {
+    /// Watch the `wanted` roots. Only roots whose watch succeeded go in
+    /// `watched`; the others wait in `failed` for their next try.
+    fn rewatch(&mut self, wanted: &BTreeSet<PathBuf>, now: Instant) {
         use notify::Watcher;
         if self.watcher.is_none() {
             let tx = self.tx.clone();
@@ -228,15 +239,35 @@ impl LocalHistoryWorker {
         let Some(watcher) = self.watcher.as_mut() else {
             return;
         };
-        for gone in self.watched.difference(&wanted) {
+        for gone in self.watched.difference(wanted) {
             let _ = watcher.unwatch(gone);
         }
-        for added in wanted.difference(&self.watched) {
-            // A root that cannot be watched (gone, inotify limit) stays in
-            // the set so it is not retried every few seconds.
-            let _ = watcher.watch(added, notify::RecursiveMode::Recursive);
+        self.watched.retain(|root| wanted.contains(root));
+        self.failed.retain(|root, _| wanted.contains(root));
+        let missing: Vec<PathBuf> = wanted.difference(&self.watched).cloned().collect();
+        for added in &missing {
+            // A root that cannot be watched (gone, inotify limit) is
+            // tried again only after RETRY_FAILED_WATCH.
+            let last = self.failed.get(added).copied();
+            if last.is_some_and(|at| now.saturating_duration_since(at) < RETRY_FAILED_WATCH) {
+                continue;
+            }
+            match watcher.watch(added, notify::RecursiveMode::Recursive) {
+                Ok(()) => {
+                    self.failed.remove(added);
+                    self.watched.insert(added.clone());
+                }
+                Err(error) => {
+                    if last.is_none() {
+                        crate::console::Console::err(format_args!(
+                            "Local History: cannot watch {}: {error}; trying again every minute",
+                            added.display()
+                        ));
+                    }
+                    self.failed.insert(added.clone(), now);
+                }
+            }
         }
-        self.watched = wanted;
     }
 
     /// Only the active generation records; a draining one stops watching.
@@ -288,11 +319,19 @@ mod tests {
             DROPPED.swap(false, Ordering::AcqRel),
             "the third job was dropped"
         );
-        let mut worker = LocalHistoryWorker {
-            store: local_history::Store::in_data(data.path()),
-            tx: tx.clone(),
+        let mut worker = worker(data.path(), tx.clone());
+        worker.drain(&rx);
+        assert_eq!(worker.pending.len(), 2);
+        assert!(rx.try_recv().is_err());
+    }
+
+    fn worker(data: &std::path::Path, tx: mpsc::SyncSender<LocalHistoryJob>) -> LocalHistoryWorker {
+        LocalHistoryWorker {
+            store: local_history::Store::in_data(data),
+            tx,
             watcher: None,
             watched: BTreeSet::new(),
+            failed: HashMap::new(),
             days: 1,
             limits: (
                 local_history::DEFAULT_MIB,
@@ -302,9 +341,33 @@ mod tests {
             roots_checked: None,
             pruned: None,
             recorded: false,
-        };
-        worker.drain(&rx);
-        assert_eq!(worker.pending.len(), 2);
-        assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn a_root_that_cannot_be_watched_is_retried_after_a_minute() {
+        let data = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::sync_channel(16);
+        let mut worker = worker(data.path(), tx);
+        let root = data.path().join("project");
+        let wanted = BTreeSet::from([root.clone()]);
+        let start = Instant::now();
+        // The folder is missing: the watch fails and the root waits.
+        worker.rewatch(&wanted, start);
+        assert!(worker.watched.is_empty());
+        assert!(worker.failed.contains_key(&root));
+        std::fs::create_dir(&root).unwrap();
+        // No new try before the retry time.
+        worker.rewatch(&wanted, start + Duration::from_secs(5));
+        assert!(worker.watched.is_empty());
+        assert_eq!(worker.failed.get(&root), Some(&start));
+        // After it, the root is watched.
+        worker.rewatch(&wanted, start + RETRY_FAILED_WATCH);
+        assert_eq!(worker.watched, wanted);
+        assert!(worker.failed.is_empty());
+        // A root that is no longer wanted leaves both sets.
+        worker.rewatch(&BTreeSet::from([data.path().join("other")]), start);
+        assert!(worker.watched.is_empty());
+        assert!(!worker.failed.contains_key(&root));
     }
 }

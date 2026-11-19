@@ -52,6 +52,12 @@ pub(super) fn line_fingerprint(line: &str) -> u64 {
     terminator_native_edit::doc::hash_bytes(line.as_bytes())
 }
 
+/// A hash of a whole file's bytes, so a replace can tell any change since
+/// the search, not only on the hit lines.
+pub(super) fn file_fingerprint(bytes: &[u8]) -> u64 {
+    terminator_native_edit::doc::hash_bytes(bytes)
+}
+
 /// Hits in one file, in line order, and the lines around them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FileHits {
@@ -60,6 +66,8 @@ pub(crate) struct FileHits {
     /// Hit lines and up to [`CONTEXT_LINES`] around each, by 0-based line,
     /// untrimmed (long lines cut): what the preview shows.
     pub lines: BTreeMap<u32, String>,
+    /// [`file_fingerprint`] of the file's bytes as the search read them.
+    pub fingerprint: u64,
 }
 
 /// How a walk ended: hits sent, whether the limit stopped it, and whether
@@ -92,7 +100,7 @@ pub(crate) fn run(
         let Some(path) = wanted_file(entry, &request.root, include.as_ref()) else {
             continue;
         };
-        let Some(text) = read_text(&path) else {
+        let Some((text, fingerprint)) = read_text(&path) else {
             continue;
         };
         let room = request.limit.saturating_sub(finish.total);
@@ -105,7 +113,13 @@ pub(crate) fn run(
         if !hits.is_empty() {
             finish.total = finish.total.saturating_add(hits.len());
             let lines = context_lines(&text, &hits);
-            if !sink(FileHits { path, hits, lines }) {
+            let file = FileHits {
+                path,
+                hits,
+                lines,
+                fingerprint,
+            };
+            if !sink(file) {
                 finish.cancelled = true;
                 break;
             }
@@ -157,8 +171,9 @@ fn wanted_file(
     allowed.then_some(path)
 }
 
-/// Text of a searchable file: small enough and not binary.
-fn read_text(path: &Path) -> Option<String> {
+/// Text of a searchable file (small enough and not binary), and the
+/// [`file_fingerprint`] of its bytes.
+fn read_text(path: &Path) -> Option<(String, u64)> {
     if std::fs::metadata(path).ok()?.len() > MAX_FILE_BYTES {
         return None;
     }
@@ -166,7 +181,8 @@ fn read_text(path: &Path) -> Option<String> {
     if bytes.contains(&0) {
         return None;
     }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let fingerprint = file_fingerprint(&bytes);
+    Some((String::from_utf8_lossy(&bytes).into_owned(), fingerprint))
 }
 
 /// Up to `limit` matching lines of `text`, or `None` when `cancel` is set

@@ -1,7 +1,7 @@
 use super::super::search::{MAX_PREVIEW_CHARS, line_fingerprint, run};
 use super::edits::Stale;
 use super::*;
-use crate::native_editor::rename::apply_rename;
+use crate::native_editor::rename::{MAX_RENAME_EDITS, apply_rename};
 use crate::native_editor::test_support;
 use crate::search::{Query, build_regex};
 
@@ -83,6 +83,7 @@ fn hits(path: &str, lines: &[u32]) -> FileHits {
             .iter()
             .map(|&line| (line, format!("foo {line}")))
             .collect(),
+        fingerprint: 0,
     }
 }
 
@@ -183,6 +184,49 @@ fn match_case_and_words_decide_which_spellings_change() {
         expand: false,
     };
     assert_eq!(change_line("a.b axb", &how).new, "c axb");
+}
+
+/// `file_edits` of `text` on its line 0, with `foo` → `bar`.
+fn foo_edits(text: &str, room: usize) -> Result<Vec<native_lsp::RenameTextEdit>, edits::Refusal> {
+    let regex = build_regex(&Query {
+        text: "foo".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let how = LineReplace {
+        regex: &regex,
+        replacement: "bar",
+        expand: false,
+    };
+    let line = text.lines().next().unwrap_or_default();
+    let seen = line.chars().take(MAX_PREVIEW_CHARS).collect();
+    edits::file_edits(text, &[(0, seen, line_fingerprint(line))], &how, room)
+}
+
+#[test]
+fn a_line_with_more_matches_than_the_limit_stops_at_the_limit() {
+    let line = "foo ".repeat(MAX_RENAME_EDITS * 4);
+    assert_eq!(
+        foo_edits(&line, MAX_RENAME_EDITS).err(),
+        Some(edits::Refusal::TooMany)
+    );
+    // Room left by earlier files counts too.
+    assert_eq!(
+        foo_edits("foo foo foo\n", 2).err(),
+        Some(edits::Refusal::TooMany)
+    );
+    assert_eq!(foo_edits("foo foo foo\n", 3).unwrap().len(), 3);
+}
+
+#[test]
+fn replace_edit_columns_count_utf16_units_past_wide_chars() {
+    let edits = foo_edits("é😀foo x😀 foo\n", 10).unwrap();
+    let columns: Vec<(u32, u32)> = edits
+        .iter()
+        .map(|edit| (edit.range.start.character, edit.range.end.character))
+        .collect();
+    // é is 1 unit, 😀 is 2.
+    assert_eq!(columns, [(3, 6), (11, 14)]);
 }
 
 #[test]
@@ -309,6 +353,26 @@ fn a_match_added_past_the_cut_preview_stops_the_replace_before_any_write() {
     assert!(error.to_string().contains("b.txt changed since the search"));
     assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\n");
     assert_eq!(std::fs::read_to_string(&b).unwrap(), changed);
+}
+
+#[test]
+fn a_line_appended_since_the_search_stops_the_replace_before_any_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "a.txt", "foo\nbar\n");
+    let mut find = searched(dir.path(), "foo", false);
+    find.replace.text = "baz".into();
+    let plan = find.replace_plan(false).unwrap();
+    // The hit line is the same; a new match came after it.
+    std::fs::write(&a, "foo\nbar\nfoo\n").unwrap();
+    let error = prepare_replace(&plan).err().unwrap();
+    assert!(error.downcast_ref::<Stale>().is_some(), "{error:#}");
+    assert!(error.to_string().contains("a.txt changed since the search"));
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\nbar\nfoo\n");
+    // A change on a line without a hit stops it too.
+    std::fs::write(&a, "foo\nbaR\n").unwrap();
+    let error = prepare_replace(&plan).err().unwrap();
+    assert!(error.downcast_ref::<Stale>().is_some(), "{error:#}");
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\nbaR\n");
 }
 
 #[test]
