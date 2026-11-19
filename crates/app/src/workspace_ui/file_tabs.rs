@@ -50,10 +50,14 @@ impl App {
 
     /// A native editor anywhere in this top-level tab has unsaved changes.
     pub(crate) fn group_unsaved(&self, group: &WorkspaceTab) -> bool {
-        group
-            .layout
-            .iter_all_tabs()
-            .any(|(_, tab)| matches!(tab, Tab::NativeEditor { path } if self.native_dirty(path)))
+        group.layout.iter_all_tabs().any(|(_, tab)| match tab {
+            Tab::NativeEditor { path } => self.native_dirty(path),
+            Tab::Document {
+                path,
+                kind: crate::document_view::DocumentKind::Flow,
+            } => self.flow_tab_dirty(path),
+            _ => false,
+        })
     }
 
     /// [`folder_hint`] for a tab's file among the `open` tab files. The

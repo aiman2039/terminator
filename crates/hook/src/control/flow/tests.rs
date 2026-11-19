@@ -214,6 +214,68 @@ fn ask_without_an_answer_ends_with_an_error_and_removes_the_question() {
     assert!(agent::ask(&own, "  ", std::time::Duration::ZERO).is_err());
 }
 
+/// A runner of [`FLOW`] in a new run folder of a data folder with no
+/// daemon, and the flag that a signal sets.
+fn runner_without_daemon() -> (
+    tempfile::TempDir,
+    PathBuf,
+    runner::Runner,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let data = tempfile::tempdir().unwrap();
+    let dir = new_run_dir(data.path(), "n-1").unwrap();
+    let project = Project {
+        id: "p".into(),
+        name: "p".into(),
+        path: data.path().into(),
+        layout: Value::Null,
+    };
+    let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let runner = runner::Runner::new(
+        Paths::at(data.path().into()),
+        project,
+        (flow::parse(FLOW).unwrap(), "n"),
+        (dir.clone(), std::sync::Arc::clone(&interrupted)),
+    );
+    (data, dir, runner, interrupted)
+}
+
+#[test]
+fn a_report_ends_its_step_while_the_daemon_does_not_answer() {
+    let (_data, dir, mut runner, _interrupted) = runner_without_daemon();
+    runner.running_command("build", "s1");
+    // No daemon snapshot and no report: the step still runs.
+    runner.poll_running();
+    assert_eq!(runner.state().status("build"), StepStatus::Running);
+    let own = agent::Own {
+        dir: dir.clone(),
+        step: "build".into(),
+        state: runner.state().clone(),
+    };
+    agent::report(&own, true, Some("All tests pass")).unwrap();
+    runner.poll_running();
+    let build = &runner.state().steps["build"];
+    assert_eq!(build.status, StepStatus::Done);
+    assert_eq!(build.note.as_deref(), Some("All tests pass"));
+}
+
+#[test]
+fn a_signal_before_the_first_write_ends_the_run_with_a_state_file() {
+    let (data, dir, runner, interrupted) = runner_without_daemon();
+    // The signal came while the folder had no state file yet.
+    assert!(!dir.join(STATE_FILE).exists());
+    interrupted.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(matches!(runner.run().unwrap(), Outcome::Stopped));
+    let view = control::read_run(&dir).unwrap();
+    assert_eq!(view.status, control::RunStatus::Stopped);
+    assert!(view.state.ended);
+    // The tool window lists it, and Remove deletes it.
+    let runs = control::recent_runs(data.path(), 10, &mut control::EndedRuns::new());
+    assert_eq!(runs.len(), 1);
+    control::remove(data.path(), &dir).unwrap();
+    assert!(!dir.exists());
+}
+
 #[test]
 fn mcp_has_no_flow_tool_for_the_users_side() {
     let args = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();

@@ -25,7 +25,7 @@ const STRIPE_TOOLS: [(StripeTool, &str, &str); 13] = [
     (StripeTool::Tool(SidebarTool::Hosts), "Globe", "Hosts"),
     (StripeTool::Tool(SidebarTool::Ports), "Plug", "Ports"),
     (StripeTool::Tool(SidebarTool::Usage), "Gauge", "Usage"),
-    (StripeTool::Tool(SidebarTool::Flows), "Split", "Flows"),
+    (StripeTool::Tool(SidebarTool::Flows), "Workflow", "Flows"),
 ];
 
 #[cfg(feature = "test-support")]

@@ -1,8 +1,12 @@
-//! The rows of one run in the Flows tool window. Only the newest run and
-//! the runs that did not end show their steps; an older ended run is one
-//! line that a click opens. The open state is GUI memory only.
+//! The "Needs you" and "Runs" sections of the Flows tool window. Needs
+//! you holds every gate and question of the shown runs that did not end,
+//! as amber cards with Approve/Reject or an answer field: an explicit click
+//! answers. In Runs, only the newest run and the runs that did not end show
+//! their steps; an older ended run is one line that a click opens. The
+//! open state is GUI memory only.
 use super::Run;
-use super::panel::{Act, ROW_HEIGHT, run_status, step_icon};
+use super::panel::{Act, ROW_HEIGHT, run_status, section_title};
+use super::status::{self, Tone};
 use crate::*;
 use std::sync::Arc;
 use terminator_core::flow::{StepRun, StepStatus};
@@ -10,16 +14,62 @@ use terminator_core::flow::{StepRun, StepStatus};
 /// Most text rows of a note under a step; the full text is on hover.
 const NOTE_ROWS: usize = 2;
 
-/// "stopped · 1 of 4 steps done".
+/// "stopped · 1 of 4 steps done": the hover text of a run.
 pub(super) fn run_summary(run: &Run) -> String {
-    let total = run.state.steps.len();
-    let done = run
-        .state
-        .steps
-        .values()
+    let (done, total) = done_of(run);
+    format!("{} · {done} of {total} steps done", run_status(run))
+}
+
+/// Steps done, and all steps.
+fn done_of(run: &Run) -> (usize, usize) {
+    let steps = run.state.steps.values();
+    let done = steps
+        .clone()
         .filter(|step| step.status == StepStatus::Done)
         .count();
-    format!("{} · {done} of {total} steps done", run_status(run))
+    (done, steps.count())
+}
+
+/// The trailing text of a run row: "1/2" while it runs, else when it
+/// started ("2h ago", from the second in its folder name).
+pub(super) fn run_trailing(run: &Run, now: u64) -> String {
+    if !run.ended() {
+        let (done, total) = done_of(run);
+        return format!("{done}/{total}");
+    }
+    started_at(run).map_or_else(String::new, |at| agent_presence::ago(at, now))
+}
+
+/// The second in a run's folder name (`NAME-SECONDS`), when it has one.
+fn started_at(run: &Run) -> Option<u64> {
+    let name = run.dir.file_name()?.to_str()?;
+    let (_, second) = name.rsplit_once('-')?;
+    second.parse().ok().filter(|second| *second > 1_000_000_000)
+}
+
+/// One gate or question that waits for the user.
+pub(super) struct Need<'a> {
+    pub(super) run: &'a Run,
+    pub(super) step: &'a str,
+    pub(super) state: &'a StepRun,
+}
+
+/// Every gate and question that waits in `runs`, in run order and then
+/// in flow order. Ended runs (a gone runner too) wait for nothing.
+pub(super) fn needs_you<'a>(runs: &[&'a Run]) -> Vec<Need<'a>> {
+    runs.iter()
+        .filter(|run| !run.ended())
+        .flat_map(|run| {
+            run.state.order.iter().filter_map(|id| {
+                let state = run.state.steps.get(id)?;
+                status::waits_for_user(state).then_some(Need {
+                    run,
+                    step: id,
+                    state,
+                })
+            })
+        })
+        .collect()
 }
 
 /// A note laid out in at most [`NOTE_ROWS`] rows of `width`.
@@ -31,16 +81,20 @@ pub(super) fn note_galley(ui: &egui::Ui, text: &str, width: f32) -> Arc<egui::Ga
     ui.painter().layout_job(job)
 }
 
-/// A short note: clipped, with the full text on hover when clipped.
+/// A short note under a step row: clipped, with the full text on hover
+/// when clipped.
 fn clipped_note(ui: &mut egui::Ui, text: &str) {
-    let galley = note_galley(ui, text, ui.available_width().max(0.0));
-    let (rect, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
-    let elided = galley.elided;
-    let color = ui.visuals().weak_text_color();
-    ui.painter().galley(rect.min, galley, color);
-    if elided {
-        response.on_hover_text(text);
-    }
+    ui.horizontal(|ui| {
+        ui.add_space(26.0);
+        let galley = note_galley(ui, text, ui.available_width().max(0.0));
+        let (rect, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+        let elided = galley.elided;
+        let color = ui.visuals().weak_text_color();
+        ui.painter().galley(rect.min, galley, color);
+        if elided {
+            response.on_hover_text(text);
+        }
+    });
 }
 
 impl App {
@@ -54,83 +108,149 @@ impl App {
             .unwrap_or(index == 0 || !run.ended())
     }
 
-    pub(super) fn flow_run_rows(
+    /// The gates and questions that wait, at the top, as amber cards.
+    pub(super) fn needs_you_section(
         &mut self,
         ui: &mut egui::Ui,
-        (index, run): (usize, &Run),
+        runs: &[&Run],
         act: &mut Option<Act>,
     ) {
-        let open = self.run_expanded(index, run);
-        self.flow_run_header(ui, (run, open), act);
-        if self.flows.confirm_cancel.as_ref() == Some(&run.dir) {
-            ui.label("Cancel this run? No new step starts. Running terminals continue.");
-            ui.horizontal(|ui| {
-                if appearance::danger_button(ui, "Cancel run").clicked() {
-                    *act = Some(Act::Cancel(run.dir.clone()));
-                }
-                if ui.button("Keep").clicked() {
-                    *act = Some(Act::KeepRun);
-                }
-            });
-        }
-        if !open {
+        let needs = needs_you(runs);
+        if needs.is_empty() {
             return;
         }
-        for id in &run.state.order {
-            if let Some(step) = run.state.steps.get(id) {
-                self.flow_step_rows(ui, (run, id, step), act);
-            }
+        section_title(ui, "Needs you", needs.len());
+        let amber = Tone::Waits.color(&self.theme);
+        for need in needs {
+            egui::Frame::new()
+                .fill(amber.gamma_multiply(0.06))
+                .stroke(egui::Stroke::new(1.0, amber.gamma_multiply(0.5)))
+                .corner_radius(appearance::RADIUS_MEDIUM)
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    self.need_card(ui, &need, act);
+                });
+            ui.add_space(6.0);
         }
     }
 
-    /// One line: open/close, flow name, state and summary, and Remove for
-    /// an ended run or Cancel for a running one.
+    /// "Flow › step", the gate message or the question, and its answer.
+    fn need_card(&mut self, ui: &mut egui::Ui, need: &Need<'_>, act: &mut Option<Act>) {
+        let place = format!("{} › {}", need.run.state.flow, need.step);
+        let place = ui.label(
+            egui::RichText::new(place)
+                .size(appearance::FONT_CAPTION)
+                .weak(),
+        );
+        if let Some(session) = &need.state.session {
+            let place = place.interact(egui::Sense::click());
+            if place
+                .on_hover_text("Show the terminal of this step")
+                .clicked()
+            {
+                *act = Some(Act::Go(session.clone()));
+            }
+        }
+        let (dir, step) = (need.run.dir.clone(), need.step.to_owned());
+        if let Some(question) = &need.state.question {
+            ui.label(question);
+            let draft = self
+                .flows
+                .drafts
+                .entry((dir.clone(), step.clone()))
+                .or_default();
+            appearance::footer_row(ui, |ui| {
+                // Send sits after the field; Enter in the field also sends.
+                let clicked = appearance::primary_button(ui, "Send").clicked();
+                let field = ui.add(
+                    appearance::singleline(draft)
+                        .hint_text("Answer…")
+                        .desired_width(ui.available_width()),
+                );
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (clicked || entered) && !draft.trim().is_empty() {
+                    *act = Some(Act::Answer(dir, step));
+                }
+            });
+        } else if let Some(message) = &need.state.gate {
+            ui.label(message);
+            appearance::footer_row(ui, |ui| {
+                if appearance::primary_button(ui, "Approve").clicked() {
+                    *act = Some(Act::Gate(dir.clone(), step.clone(), true));
+                }
+                if appearance::danger_button(ui, "Reject").clicked() {
+                    *act = Some(Act::Gate(dir, step, false));
+                }
+            });
+        }
+    }
+
+    /// The runs with a status chip, a progress bar and their steps.
+    pub(super) fn runs_section(&mut self, ui: &mut egui::Ui, runs: &[&Run], act: &mut Option<Act>) {
+        section_title(ui, "Runs", runs.len());
+        if runs.is_empty() {
+            ui.weak("No runs yet. Run a flow to start one.");
+            return;
+        }
+        let now = terminator_core::now();
+        for (index, run) in runs.iter().enumerate() {
+            let open = self.run_expanded(index, run);
+            self.flow_run_header(ui, (run, open, now), act);
+            status::progress_bar(ui, run, &self.theme);
+            if open {
+                for id in &run.state.order {
+                    if let Some(step) = run.state.steps.get(id) {
+                        self.flow_step_row(ui, (id, step), act);
+                    }
+                }
+            }
+            ui.add_space(4.0);
+        }
+    }
+
+    /// One line: open/close, flow name, status chip, and Remove for an
+    /// ended run or Cancel for a running one. The chip and the action come
+    /// first, so a long name never hides them.
     fn flow_run_header(
         &mut self,
         ui: &mut egui::Ui,
-        (run, open): (&Run, bool),
+        (run, open, now): (&Run, bool, u64),
         act: &mut Option<Act>,
     ) {
-        let name = run
-            .dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let summary = run_summary(run);
+        let name = terminator_core::flow::control::run_name(&run.dir);
+        let (word, tone) = status::run_chip(run);
+        let trailing = run_trailing(run, now);
         let tint = appearance::color(&self.theme.text);
+        let gone = if run.gone {
+            " Its runner is gone (its terminal closed or the process stopped), \
+             so nothing changes this run again."
+        } else {
+            ""
+        };
+        let what = if open { "hide" } else { "show" };
+        let hover = format!(
+            "Run {name}: {}.{gone} Click to {what} its steps.",
+            run_summary(run)
+        );
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if run.ended() {
-                    if appearance::sidebar_action(
-                        ui,
-                        "Trash",
-                        "Remove this run from the list. Its terminals stay open.",
-                    )
-                    .clicked()
-                    {
+                    let tip = "Remove this run from the list. Its terminals stay open.";
+                    if appearance::sidebar_action(ui, "Trash", tip).clicked() {
                         *act = Some(Act::Remove(run.dir.clone()));
                     }
-                } else if appearance::sidebar_action(ui, "CircleStop", "Cancel run…").clicked() {
+                } else if appearance::sidebar_action(ui, "Square", "Cancel run…").clicked() {
                     *act = Some(Act::AskCancel(run.dir.clone()));
                 }
-                let gone = if run.gone {
-                    " Its runner is gone (its terminal closed or the process stopped), \
-                     so nothing changes this run again."
-                } else {
-                    ""
-                };
-                let hover = if open {
-                    format!("Run {name}.{gone} Click to hide its steps.")
-                } else {
-                    format!("Run {name}.{gone} Click to show its steps.")
-                };
+                status::chip(ui, word, tone.color(&self.theme)).on_hover_text(run_summary(run));
                 let row = appearance::row(appearance::RowInput {
                     ui,
                     label: &run.state.flow,
                     icon: if open { "ChevronDown" } else { "ChevronRight" },
                     selected: false,
                     height: ROW_HEIGHT,
-                    trailing: &summary,
+                    trailing: &trailing,
                     tint,
                 })
                 .on_hover_text(hover);
@@ -141,76 +261,45 @@ impl App {
         });
     }
 
-    fn flow_step_rows(
+    /// One step: its colored state icon (the loader turns), its ID and
+    /// what it waits for. A click shows its terminal.
+    fn flow_step_row(
         &mut self,
         ui: &mut egui::Ui,
-        (run, id, step): (&Run, &String, &StepRun),
+        (id, step): (&String, &StepRun),
         act: &mut Option<Act>,
     ) {
-        let (icon, tip) = step_icon(step);
+        let style = status::step_style(step);
         // A step that waits shows what it waits for; the others their state.
         let state = match step.status {
             StepStatus::Waiting if !step.needs.is_empty() => {
                 format!("after {}", step.needs.join(", "))
             }
-            _ => tip.to_lowercase(),
+            _ => style.label.to_lowercase(),
         };
         let hover = if step.session.is_some() {
-            format!("{tip}. Click to show the terminal of this step.")
+            format!("{}. Click to show the terminal of this step.", style.label)
         } else {
-            tip.to_owned()
+            style.label.to_owned()
         };
-        let row = appearance::row(appearance::RowInput {
-            ui,
-            label: id,
-            icon,
-            selected: false,
-            height: ROW_HEIGHT,
-            trailing: &state,
-            tint: appearance::color(&self.theme.text),
+        let row = appearance::status_row(appearance::StatusRowInput {
+            row: appearance::RowInput {
+                ui,
+                label: id,
+                icon: style.icon,
+                selected: false,
+                height: ROW_HEIGHT,
+                trailing: &state,
+                tint: appearance::color(&self.theme.text),
+            },
+            icon_tint: style.color(&self.theme),
+            spin: style.spin,
         })
         .on_hover_text(hover);
         if row.clicked()
             && let Some(session) = &step.session
         {
             *act = Some(Act::Go(session.clone()));
-        }
-        if step.status == StepStatus::Running
-            && let Some(message) = &step.gate
-        {
-            ui.label(message);
-            ui.horizontal(|ui| {
-                if ui.button("Approve").clicked() {
-                    *act = Some(Act::Gate(run.dir.clone(), id.clone(), true));
-                }
-                if ui.button("Reject").clicked() {
-                    *act = Some(Act::Gate(run.dir.clone(), id.clone(), false));
-                }
-            });
-        }
-        if let Some(question) = &step.question {
-            ui.label(question);
-            let draft = self
-                .flows
-                .drafts
-                .entry((run.dir.clone(), id.clone()))
-                .or_default();
-            ui.horizontal(|ui| {
-                // Send sits after the field; Enter in the field also sends.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let clicked = ui.button("Send").clicked();
-                    let field = ui.add(
-                        egui::TextEdit::singleline(draft)
-                            .hint_text("Answer")
-                            .desired_width(ui.available_width()),
-                    );
-                    let entered =
-                        field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (clicked || entered) && !draft.trim().is_empty() {
-                        *act = Some(Act::Answer(run.dir.clone(), id.clone()));
-                    }
-                });
-            });
         }
         // What a running step waits for, and the note of a failed one.
         if matches!(step.status, StepStatus::Running | StepStatus::Failed) {

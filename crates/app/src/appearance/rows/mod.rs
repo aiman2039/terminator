@@ -11,8 +11,9 @@ use super::theme::icon_color;
 pub use counters::{RowExtras, StateCounter};
 use eframe::egui::{self, Color32, FontId};
 pub(crate) use list::RowInput;
-pub use list::row;
+pub(crate) use list::StatusRowInput;
 use list::{RowSpec, row_ext};
+pub use list::{row, status_row};
 #[cfg(test)]
 pub use markdown_header::MarkdownHeader;
 pub(crate) use markdown_header::MarkdownHeaderInput;

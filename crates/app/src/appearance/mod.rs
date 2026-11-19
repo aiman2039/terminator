@@ -29,6 +29,7 @@ pub(crate) use rows::MarkdownHeaderInput;
 pub(crate) use rows::PaintStatusIconInput;
 pub(crate) use rows::ProjectRowInput;
 pub(crate) use rows::RowInput;
+pub(crate) use rows::StatusRowInput;
 mod theme;
 
 pub use bars::*;

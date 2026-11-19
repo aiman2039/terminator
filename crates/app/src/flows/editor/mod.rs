@@ -9,19 +9,30 @@
 //! tab closes: the same flow opens again with those changes.
 mod banner;
 mod canvas;
+mod cards;
 mod dialogs;
+mod failed;
+mod inspector;
+mod keys;
 mod model;
 mod quit;
 mod stay;
+mod style;
+mod tab;
 #[cfg(test)]
 mod tests;
+mod toolbar;
 mod view;
+#[cfg(test)]
+mod view_tests;
 mod viewer;
 
 use crate::document_view::DocumentKind;
 use crate::*;
 pub(crate) use banner::Starting;
 use egui_snarl::{NodeId, Snarl};
+pub(crate) use failed::Failure;
+pub(crate) use keys::FLOW_ACTIONS;
 use model::Node;
 pub(crate) use quit::Quit;
 #[cfg(test)]
@@ -29,6 +40,7 @@ use stay::STAY_GRACE;
 pub(crate) use stay::Stay;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+pub(crate) use tab::FLOW_TAB_ICON;
 use terminator_core::flow::{Draft, Flow, files};
 
 /// One open flow in the editor. GUI memory only.
@@ -52,6 +64,20 @@ pub(crate) struct FlowEditor {
     exporting: Option<Receiver<Result<PathBuf, String>>>,
     /// The next frame moves the view so that all nodes show.
     fit: bool,
+    /// The measured size of each card, from the last frame.
+    sizes: canvas::Sizes,
+    /// The canvas size of the last frame: a new size fits the view again.
+    canvas: Option<egui::Vec2>,
+    /// The card that the inspector edits.
+    selected: Option<NodeId>,
+    /// The cards that egui-snarl selected (Shift+click or a drag box).
+    marked: Vec<NodeId>,
+    /// The flow name shows as a field.
+    editing_title: bool,
+    /// The inspector shows the rules, also on a narrow pane.
+    rules_open: bool,
+    /// Cancel run waits for its confirmation, opened at this point.
+    confirm_cancel: Option<egui::Pos2>,
     dialog: Option<Dialog>,
     /// The "closed with changes" note was shown.
     warned: bool,
@@ -62,21 +88,28 @@ pub(crate) struct FlowEditor {
 /// The dialog of an editor: one at a time.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Dialog {
-    /// All fields of one node, with large text fields.
-    Node(NodeId),
-    /// The flow's rules text.
-    Rules,
     /// The plan as Markdown and the flow file text.
     Preview,
 }
 
+/// A worker thread's read of a flow file.
+pub(crate) enum Read {
+    Flow(Flow),
+    /// No file: a new flow.
+    Missing,
+    Failed(Failure),
+}
+
 /// The editor of one flow file path.
 pub(crate) enum Slot {
-    Loading(Receiver<Result<Flow, files::LoadError>>),
+    Loading(Receiver<Read>),
     Ready(Box<FlowEditor>),
     /// The file is not a correct flow.
-    Failed(String),
+    Failed(Failure),
 }
+
+const OUTSIDE: &str = "This file is not in a project's .terminator/flows folder.";
+const UNREAD: &str = "Could not read the flow file.";
 
 /// The project folder and the flow name of a flow file path.
 fn place_of(path: &Path) -> Option<(PathBuf, String)> {
@@ -99,6 +132,13 @@ impl FlowEditor {
             saving: None,
             exporting: None,
             fit: true,
+            sizes: canvas::Sizes::new(),
+            canvas: None,
+            selected: None,
+            marked: Vec::new(),
+            editing_title: false,
+            rules_open: false,
+            confirm_cancel: None,
             dialog: None,
             warned: false,
             preview_cache: egui_commonmark::CommonMarkCache::default(),
@@ -249,35 +289,35 @@ impl Slot {
     /// Reads the flow of `path` on a worker thread.
     fn load(path: &Path) -> Self {
         let Some((root, file)) = place_of(path) else {
-            return Self::Failed(
-                "This file is not in a project's .terminator/flows folder.".into(),
-            );
+            return Self::Failed(Failure::plain(OUTSIDE));
         };
         let (sender, receiver) = channel();
+        let path = path.to_path_buf();
         let spawned = std::thread::Builder::new()
             .name("flow-open".into())
             .spawn(move || {
-                let _ = sender.send(files::load(&root, &file));
+                let read = match files::load(&root, &file) {
+                    Ok(flow) => Read::Flow(flow),
+                    Err(files::LoadError::Missing(_)) => Read::Missing,
+                    Err(error) => Read::Failed(failed::failure_of(&path, &error)),
+                };
+                let _ = sender.send(read);
             });
         match spawned {
             Ok(_) => Self::Loading(receiver),
-            Err(_) => Self::Failed("Could not read the flow file.".into()),
+            Err(_) => Self::Failed(Failure::plain(UNREAD)),
         }
     }
 
     /// The editor of a read result. A flow with no file is a new flow.
-    fn loaded(path: &Path, read: Result<Flow, files::LoadError>) -> Self {
+    fn loaded(path: &Path, read: Read) -> Self {
         let Some((root, file)) = place_of(path) else {
-            return Self::Failed(
-                "This file is not in a project's .terminator/flows folder.".into(),
-            );
+            return Self::Failed(Failure::plain(OUTSIDE));
         };
         match read {
-            Ok(flow) => Self::Ready(Box::new(FlowEditor::of_flow(root, &file, &flow))),
-            Err(files::LoadError::Missing(_)) => {
-                Self::Ready(Box::new(FlowEditor::new(root, &file)))
-            }
-            Err(error) => Self::Failed(error.to_string()),
+            Read::Flow(flow) => Self::Ready(Box::new(FlowEditor::of_flow(root, &file, &flow))),
+            Read::Missing => Self::Ready(Box::new(FlowEditor::new(root, &file))),
+            Read::Failed(failure) => Self::Failed(failure),
         }
     }
 
@@ -289,7 +329,7 @@ impl Slot {
         match receiver.try_recv() {
             Ok(read) => Self::loaded(path, read),
             Err(TryRecvError::Empty) => Self::Loading(receiver),
-            Err(TryRecvError::Disconnected) => Self::Failed("Could not read the flow file.".into()),
+            Err(TryRecvError::Disconnected) => Self::Failed(Failure::plain(UNREAD)),
         }
     }
 

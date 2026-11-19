@@ -132,7 +132,7 @@ fn graph_and_file_give_the_same_flow_both_ways() {
     // A saved place is kept; a step with none gets a column by its depth.
     assert_eq!(back.step("build").unwrap().at, Some([900, 40]));
     assert_eq!(back.step("plan").unwrap().at, Some([0, 0]));
-    assert_eq!(back.step("approve").unwrap().at, Some([380, 0]));
+    assert_eq!(back.step("approve").unwrap().at, Some([320, 0]));
     // The editor keeps the rules text of the file.
     let editor = FlowEditor::of_flow("/p".into(), "f", &flow);
     assert!(!editor.dirty());
@@ -357,24 +357,26 @@ fn editor_tab_shows_the_toolbar_the_steps_and_the_gate() {
         "Rules",
         "Preview",
         "Export",
-        "3 steps · New flow, not saved",
-        "STEP",
-        "GATE",
+        "Run",
+        "New flow, not saved",
+        "Flow rules",
         "plan",
         "approve",
         "build",
         "claude",
         "Write the plan in PLAN.md.",
         "Is the plan correct?",
-        "After",
-        "the start",
-        "plan ×",
-        "approve ×",
     ] {
         assert!(count(&text, label) > 0, "{label}: {text:?}");
     }
-    // No menu and no dialog shows before a click.
-    for label in ["New step here", "Duplicate", "Remove", "Flow rules"] {
+    // No menu, no dialog and no form on a card before a click.
+    for label in [
+        "New step here",
+        "Duplicate",
+        "Remove",
+        "Flow plan",
+        "Runs after",
+    ] {
         assert_eq!(count(&text, label), 0, "{label}: {text:?}");
     }
 }
@@ -414,7 +416,7 @@ fn right_click_shows_the_canvas_menu_and_the_card_menu() {
     let empty = at(&text, "approve") - egui::vec2(0.0, 200.0);
     click(&mut app, &ctx, &path, (empty, secondary));
     let text = frame(&mut app, &ctx, &path, Vec::new());
-    for label in ["Add step", "Add gate", "Fit to view"] {
+    for label in ["Add step", "Add gate", "Fit to view", "Tidy layout"] {
         assert_eq!(count(&text, label), 1, "{label}: {text:?}");
     }
     let escape = egui::Event::Key {
@@ -426,95 +428,11 @@ fn right_click_shows_the_canvas_menu_and_the_card_menu() {
     };
     frame(&mut app, &ctx, &path, vec![escape]);
 
-    // The type label of a card.
-    click(&mut app, &ctx, &path, (at(&text, "GATE"), secondary));
+    // The ID label of a card.
+    click(&mut app, &ctx, &path, (at(&text, "approve"), secondary));
     let text = frame(&mut app, &ctx, &path, Vec::new());
     for label in ["Edit…", "Duplicate", "Remove wires", "Remove"] {
         assert_eq!(count(&text, label), 1, "{label}: {text:?}");
-    }
-}
-
-#[test]
-fn after_chip_removes_a_wire_and_plus_adds_one() {
-    let project = project_with_flows();
-    let (mut app, _received, _data) = app_with_project(project.path());
-    let ctx = egui::Context::default();
-    let path = flow_path(project.path(), "feature");
-    let text = settle(&mut app, &ctx, &path);
-    let needs = |app: &mut App, id: &str| {
-        let draft = ready(app, &path).draft();
-        draft
-            .steps
-            .iter()
-            .find(|step| step.id == id)
-            .unwrap()
-            .needs
-            .clone()
-    };
-    let primary = egui::PointerButton::Primary;
-    assert_eq!(needs(&mut app, "build"), ["approve"]);
-    click(&mut app, &ctx, &path, (at(&text, "approve ×"), primary));
-    assert!(needs(&mut app, "build").is_empty());
-
-    // The gate's "+" is the one next to its "plan ×" chip. Its menu has
-    // the step that the gate does not need yet, "build", below the "+".
-    let text = frame(&mut app, &ctx, &path, Vec::new());
-    let plus = near(&text, "+", at(&text, "plan ×"));
-    click(&mut app, &ctx, &path, (plus, primary));
-    let text = frame(&mut app, &ctx, &path, Vec::new());
-    click(&mut app, &ctx, &path, (near(&text, "build", plus), primary));
-    assert_eq!(needs(&mut app, "approve"), ["build", "plan"]);
-}
-
-#[test]
-fn click_on_a_prompt_opens_the_card_dialog_with_large_fields() {
-    let project = project_with_flows();
-    let (mut app, _received, _data) = app_with_project(project.path());
-    let ctx = egui::Context::default();
-    let path = flow_path(project.path(), "feature");
-    let text = settle(&mut app, &ctx, &path);
-    let prompt = at(&text, "Write the plan in PLAN.md.");
-    click(
-        &mut app,
-        &ctx,
-        &path,
-        (prompt, egui::PointerButton::Primary),
-    );
-    assert!(matches!(
-        ready(&mut app, &path).dialog,
-        Some(Dialog::Node(_))
-    ));
-    for _ in 0..3 {
-        frame(&mut app, &ctx, &path, Vec::new());
-    }
-    let text = frame(&mut app, &ctx, &path, Vec::new());
-    for label in [
-        "Edit step",
-        "Command",
-        "Prompt",
-        "Folder",
-        "Worktree",
-        "Done",
-    ] {
-        assert!(count(&text, label) > 0, "{label}: {text:?}");
-    }
-
-    // The rules dialog and the preview.
-    ready(&mut app, &path).dialog = Some(Dialog::Rules);
-    for _ in 0..3 {
-        frame(&mut app, &ctx, &path, Vec::new());
-    }
-    let text = frame(&mut app, &ctx, &path, Vec::new());
-    for label in ["Flow rules", "Global rules of this flow."] {
-        assert!(count(&text, label) > 0, "{label}: {text:?}");
-    }
-    ready(&mut app, &path).dialog = Some(Dialog::Preview);
-    for _ in 0..3 {
-        frame(&mut app, &ctx, &path, Vec::new());
-    }
-    let text = frame(&mut app, &ctx, &path, Vec::new());
-    for label in ["Flow plan", "Copy plan", "Save as feature.md"] {
-        assert!(count(&text, label) > 0, "{label}: {text:?}");
     }
 }
 
@@ -547,28 +465,28 @@ fn banner_says_starting_after_run_and_an_ended_run_banner_can_be_hidden() {
     app.flows.starting = Some(Starting::now(&path));
     let text = show(&mut app, vec![run("Build-100", true)]);
     assert_eq!(count(&text, "Starting the run…"), 1, "{text:?}");
-    assert_eq!(count(&text, "Run stopped"), 0, "{text:?}");
+    assert_eq!(count(&text, "Stopped"), 0, "{text:?}");
 
     // The run of that click shows: its folder name ends with a later second.
     let text = show(&mut app, vec![run("Build-99999999999", false)]);
     assert_eq!(count(&text, "Starting the run…"), 0, "{text:?}");
-    assert_eq!(count(&text, "Run running"), 1, "{text:?}");
+    assert_eq!(count(&text, "Running"), 1, "{text:?}");
     assert!(app.flows.starting.is_none());
 
     // An ended run's banner goes away when the user closes it; a newer run
     // has its own banner.
     let text = show(&mut app, vec![run("Build-100", true)]);
-    assert_eq!(count(&text, "Run stopped"), 1, "{text:?}");
+    assert_eq!(count(&text, "Stopped"), 1, "{text:?}");
     app.flows
         .banner_hidden
         .insert(project.path().join("Build-100"));
     let text = show(&mut app, vec![run("Build-100", true)]);
-    assert_eq!(count(&text, "Run stopped"), 0, "{text:?}");
+    assert_eq!(count(&text, "Stopped"), 0, "{text:?}");
     let text = show(
         &mut app,
         vec![run("Build-200", true), run("Build-100", true)],
     );
-    assert_eq!(count(&text, "Run stopped"), 1, "{text:?}");
+    assert_eq!(count(&text, "Stopped"), 1, "{text:?}");
 }
 
 #[test]
@@ -585,7 +503,7 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     let mut state = RunState::new(&flow, "build", "p");
     state.steps.get_mut("one").unwrap().status = StepStatus::Done;
     state.steps.get_mut("one").unwrap().session = Some("s1".into());
-    state.steps.get_mut("one").unwrap().waits_for = Some("Waits for the hook report".into());
+    state.steps.get_mut("one").unwrap().note = Some("Fixed the test.".into());
     state.steps.get_mut("ok").unwrap().status = StepStatus::Running;
     app.flows.runs = vec![crate::flows::Run {
         dir: project.path().join("run"),
@@ -596,18 +514,21 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     app.flows.read_at = Some(Instant::now());
     let text = settle(&mut app, &ctx, &path);
     for label in [
-        "Done",
-        "Waits for the hook report",
-        "Show terminal",
-        "Waits for your approval",
-        "Approve",
-        "Reject",
-        "2 steps · Saved · Run: running",
-        "Run running",
-        "1 of 2 steps done",
-        "Now: ok. Waits for your approval",
+        "done",
+        "Fixed the test.",
+        "Open terminal",
+        "waits",
+        "Saved",
+        // The strip says the run waits: the shared run word of a gate.
+        "Waits",
+        "1 of 2 done",
+        "ok: Good?",
     ] {
         assert_eq!(count(&text, label), 1, "{label}: {text:?}");
+    }
+    // Approve and Reject on the gate's card and in the run strip.
+    for label in ["Approve", "Reject"] {
+        assert_eq!(count(&text, label), 2, "{label}: {text:?}");
     }
 }
 
@@ -644,17 +565,15 @@ fn cards_show_only_the_runs_of_their_own_flow_file() {
     // The run of the other file with the same name is not this flow's run.
     let text = show(&mut app, vec![run("copy", false)]);
     assert_eq!(count(&text, "Approve"), 0, "{text:?}");
-    assert_eq!(count(&text, "Run running"), 0, "{text:?}");
+    assert_eq!(count(&text, "Waits"), 0, "{text:?}");
     let text = show(&mut app, vec![run("copy", false), run("build", false)]);
-    assert_eq!(count(&text, "Approve"), 1, "{text:?}");
-    assert_eq!(count(&text, "Run running"), 1, "{text:?}");
+    assert_eq!(count(&text, "Approve"), 2, "card and strip: {text:?}");
+    assert_eq!(count(&text, "Waits"), 1, "{text:?}");
 
     // A run whose runner is gone is stopped: no Approve, and Run applies.
     let text = show(&mut app, vec![run("build", true)]);
     assert_eq!(count(&text, "Approve"), 0, "{text:?}");
-    assert_eq!(count(&text, "Run stopped (runner gone)"), 1, "{text:?}");
-    let toolbar = "2 steps · Saved · Run: stopped (runner gone)";
-    assert_eq!(count(&text, toolbar), 1, "{text:?}");
+    assert_eq!(count(&text, "Runner gone"), 1, "{text:?}");
 
     // Only this flow's step terminals keep the app on its editor.
     let mut other = run("copy", false);
@@ -785,18 +704,6 @@ fn export_writes_the_plan_beside_the_flow_file() {
     assert!(!flow_path(project.path(), "feature").exists());
 }
 
-#[test]
-fn first_view_shows_all_nodes_in_a_small_canvas() {
-    let canvas = egui::Rect::from_min_size(egui::pos2(300.0, 200.0), egui::vec2(600.0, 500.0));
-    let view = viewer::fit_view(&starter(), canvas).unwrap();
-    assert!(view.scaling < 1.0);
-    for (position, _) in starter().nodes_pos() {
-        let node = egui::Rect::from_min_size(position, egui::vec2(300.0, 250.0));
-        assert!(canvas.contains_rect(view * node), "{node:?}");
-    }
-    assert!(viewer::fit_view(&Snarl::new(), canvas).is_none());
-}
-
 /// Moves the first card of the editor of `path` by `by`.
 fn move_card(app: &mut App, path: &Path, by: egui::Vec2) {
     let editor = ready(app, path);
@@ -831,14 +738,14 @@ fn moved_card_is_a_layout_change_that_keeps_run_on() {
     assert!(editor.dirty(), "Save is on for the new place");
     assert!(!editor.changed(), "a place is display only");
     let text = frame(&mut app, &ctx, &path, Vec::new());
-    assert_eq!(count(&text, "2 steps · Layout not saved"), 1, "{text:?}");
+    assert_eq!(count(&text, "Layout not saved"), 1, "{text:?}");
     let trust = Some("Trust the project before running its flows.".to_owned());
     assert_eq!(click_run(&mut app, &ctx, &path), trust, "Run is on");
 
     // A content change turns Run off until Save.
     ready(&mut app, &path).title = "Build 2".into();
     let text = frame(&mut app, &ctx, &path, Vec::new());
-    assert_eq!(count(&text, "2 steps · Changes not saved"), 1, "{text:?}");
+    assert_eq!(count(&text, "Changes not saved"), 1, "{text:?}");
     assert_eq!(click_run(&mut app, &ctx, &path), None, "Run is off");
 
     // Save of a moved card writes its place; the flow is saved again.

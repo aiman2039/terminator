@@ -143,13 +143,20 @@ pub fn read_run(dir: &Path) -> Result<RunView, RunError> {
 /// Every readable run in the data folder, newest first, with its folder.
 #[cfg(test)]
 pub fn runs(data: &Path) -> Vec<(PathBuf, RunState)> {
-    recent_runs(data, usize::MAX)
+    recent_runs(data, usize::MAX, &mut EndedRuns::default())
 }
 
+/// The older run folders that [`recent_runs`] found ended, with the time
+/// their state file changed. A later read skips them without reading the
+/// file again while that time stays the same.
+pub type EndedRuns = std::collections::HashMap<PathBuf, std::time::SystemTime>;
+
 /// The readable runs among the `limit` run folders whose state file
-/// changed last, newest first. Only those state files are read.
-/// Blocking: call it off the GUI thread.
-pub fn recent_runs(data: &Path, limit: usize) -> Vec<(PathBuf, RunState)> {
+/// changed last, newest first, and after them every older run that did
+/// not end: a gate there can still wait, or its runner is gone and only
+/// Remove clears it. `ended` keeps the older ended runs between reads, so
+/// their files are read once. Blocking: call it off the GUI thread.
+pub fn recent_runs(data: &Path, limit: usize, ended: &mut EndedRuns) -> Vec<(PathBuf, RunState)> {
     let mut found: Vec<_> = std::fs::read_dir(data.join(RUN_DIR))
         .into_iter()
         .flatten()
@@ -161,11 +168,27 @@ pub fn recent_runs(data: &Path, limit: usize) -> Vec<(PathBuf, RunState)> {
         })
         .collect();
     found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
-    found
+    let mut seen = EndedRuns::new();
+    let runs = found
         .into_iter()
-        .take(limit)
-        .filter_map(|(_, dir)| Some((dir.clone(), read_state(&dir).ok()?)))
-        .collect()
+        .enumerate()
+        .filter_map(|(index, (changed, dir))| {
+            let older = index >= limit;
+            if older && ended.get(&dir) == Some(&changed) {
+                seen.insert(dir, changed);
+                return None;
+            }
+            let state = read_state(&dir).ok()?;
+            if older && state.ended {
+                seen.insert(dir, changed);
+                return None;
+            }
+            Some((dir, state))
+        })
+        .collect();
+    // Removed folders leave the cache.
+    *ended = seen;
+    runs
 }
 
 /// Write `bytes` as the file `step` in the folder `folder` of the run in

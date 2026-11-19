@@ -10,9 +10,11 @@
 //! Edit open the native flow editor (`editor`). Files are read and written
 //! on worker threads.
 mod editor;
+pub(crate) use editor::{FLOW_ACTIONS, FLOW_TAB_ICON};
 mod panel;
 mod picker;
 mod runs_view;
+mod status;
 #[cfg(test)]
 mod tests;
 
@@ -106,6 +108,8 @@ pub(crate) struct FlowsState {
     runs: Vec<Run>,
     reading: Option<Receiver<Vec<Run>>>,
     read_at: Option<Instant>,
+    /// Older ended run folders that the reads skip (one read at a time).
+    ended_runs: std::sync::Arc<std::sync::Mutex<control::EndedRuns>>,
     /// Answers that a worker thread writes now.
     acting: Vec<Receiver<Result<(), String>>>,
     /// Typed answers to open questions, by run folder and step.
@@ -116,6 +120,13 @@ pub(crate) struct FlowsState {
     confirm_clear: bool,
     /// Runs whose steps the user showed (true) or hid, by run folder.
     expanded: HashMap<PathBuf, bool>,
+    /// The flow files of the selected project for the Flows tool window,
+    /// read on a worker thread while it shows.
+    tool_flows: Option<LoadedFlows>,
+    tool_loading: Option<Receiver<LoadedFlows>>,
+    tool_read_at: Option<Instant>,
+    /// Where the Run flow window moves next frame, so its list fits.
+    picker_top: Option<egui::Pos2>,
 }
 
 impl FlowsState {

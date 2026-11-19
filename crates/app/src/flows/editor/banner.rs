@@ -1,29 +1,197 @@
-//! The run banner of the flow editor: one line below the toolbar that says
-//! where the newest run of the flow is, so a click on Run has a clear
-//! result.
-use super::viewer::Colors;
+//! The run strip of the flow editor: one row below the toolbar with the
+//! state of the newest run of the flow, one progress segment per step,
+//! what the run does now, and the one action that applies: Approve and
+//! Reject for a gate that waits, the answer of a question, or Cancel run…
+//! (after a confirmation). A Run click has a clear result here.
+use super::style::Colors;
 use crate::flows::Run;
-use crate::flows::panel::{run_status, step_icon};
+use crate::flows::status::{self, chip, step_style};
 use crate::*;
 use std::path::{Path, PathBuf};
-use terminator_core::flow::StepStatus;
+use terminator_core::flow::{StepRun, StepStatus};
 
-/// What the run does now: the step that runs and what it waits for, or
-/// the step that stopped the run.
-fn now_text(run: &Run) -> Option<String> {
-    let steps = || {
-        run.state
-            .order
-            .iter()
-            .filter_map(|id| Some((id, run.state.steps.get(id)?)))
-    };
-    if let Some((id, step)) = steps().find(|(_, step)| step.status == StepStatus::Running) {
-        let state = step.waits_for.as_deref().unwrap_or(step_icon(step).1);
-        return Some(format!("Now: {id}. {state}"));
+/// One click in the run strip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum StripClick {
+    /// Hide the strip of an ended run.
+    Hide,
+    /// Approve (true) or reject the gate of this step.
+    Gate(String, bool),
+    /// Send the typed answer of this step's question.
+    Answer(String),
+    /// Ask to cancel the run.
+    Cancel,
+}
+
+/// The run's state as a chip: the shared run word (`status::run_chip`)
+/// with a capital, and its tone's color.
+fn status_chip(run: &Run, colors: Colors) -> (String, egui::Color32) {
+    let (word, tone) = status::run_chip(run);
+    let color = colors.tone(tone);
+    let mut chars = word.chars();
+    let word = chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    });
+    (word, color)
+}
+
+/// The steps of `run` in their order.
+fn steps(run: &Run) -> impl Iterator<Item = (&String, &StepRun)> {
+    run.state
+        .order
+        .iter()
+        .filter_map(|id| Some((id, run.state.steps.get(id)?)))
+}
+
+/// The step that waits for the user: a gate or a question.
+fn waits_for_user(run: &Run) -> Option<(&String, &StepRun)> {
+    if run.ended() {
+        return None;
     }
-    let (id, step) = steps().find(|(_, step)| step.status == StepStatus::Failed)?;
+    steps(run).find(|(_, step)| status::waits_for_user(step))
+}
+
+/// What the run does now: "build: waits for the agent's first hook
+/// report", or the step that stopped it.
+pub(super) fn now_text(run: &Run) -> Option<String> {
+    if run.gone {
+        return Some("Its runner is gone: nothing changes this run again.".into());
+    }
+    if let Some((id, step)) = waits_for_user(run) {
+        let text = step
+            .question
+            .as_deref()
+            .or(step.gate.as_deref())
+            .unwrap_or("");
+        return Some(format!("{id}: {text}"));
+    }
+    if let Some((id, step)) = steps(run).find(|(_, step)| step.status == StepStatus::Running) {
+        let state = step.waits_for.as_deref().unwrap_or("runs");
+        return Some(format!("{id}: {}", lower_first(state)));
+    }
+    let (id, step) = steps(run).find(|(_, step)| step.status == StepStatus::Failed)?;
     let note = step.note.as_deref().unwrap_or("No reason given.");
-    Some(format!("Failed: {id}. {note}"))
+    Some(format!("{id} failed: {note}"))
+}
+
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_lowercase().chain(chars).collect()
+    })
+}
+
+/// One segment per step, in the color of its state.
+fn progress(ui: &mut egui::Ui, run: &Run, colors: Colors) {
+    let count = run.state.order.len().max(1);
+    let segment = egui::vec2((96.0 / f32_from(count)).clamp(6.0, 18.0), 6.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (id, step) in steps(run) {
+            let style = step_style(step);
+            let (rect, response) = ui.allocate_exact_size(segment, egui::Sense::hover());
+            let fill = colors.wire(style);
+            ui.painter()
+                .rect_filled(rect, appearance::RADIUS_XSMALL, fill);
+            response.on_hover_text(format!("{id}: {}", style.label));
+        }
+    });
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "A flow has at most a few dozen steps."
+)]
+fn f32_from(count: usize) -> f32 {
+    count as f32
+}
+
+/// The frame of the strip.
+fn strip_frame(colors: Colors, line: egui::Color32) -> egui::Frame {
+    egui::Frame::new()
+        .fill(colors.node)
+        .stroke(egui::Stroke::new(1.0, line))
+        .corner_radius(appearance::RADIUS_MEDIUM)
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .outer_margin(egui::Margin::symmetric(8, 2))
+}
+
+/// The strip of `run`. `draft` is the typed answer of the question that
+/// waits, if any.
+pub(super) fn run_strip(
+    ui: &mut egui::Ui,
+    run: &Run,
+    colors: Colors,
+    drafts: &mut std::collections::HashMap<(PathBuf, String), String>,
+) -> Option<StripClick> {
+    let (state, color) = status_chip(run, colors);
+    let total = run.state.steps.len();
+    let done = run
+        .state
+        .steps
+        .values()
+        .filter(|step| step.status == StepStatus::Done)
+        .count();
+    let mut click = None;
+    strip_frame(colors, colors.border).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            chip(ui, &state, color);
+            progress(ui, run, colors);
+            ui.weak(format!("{done} of {total} done"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                click = strip_action(ui, run, drafts);
+                let now = now_text(run).unwrap_or_default();
+                ui.allocate_ui_with_layout(
+                    ui.available_size(),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        let label = egui::Label::new(egui::RichText::new(&now).weak()).truncate();
+                        ui.add(label).on_hover_text(&now);
+                    },
+                );
+            });
+        });
+    });
+    ui.add_space(2.0);
+    click
+}
+
+/// The one action of the strip, right to left.
+fn strip_action(
+    ui: &mut egui::Ui,
+    run: &Run,
+    drafts: &mut std::collections::HashMap<(PathBuf, String), String>,
+) -> Option<StripClick> {
+    if run.ended() {
+        let hide = appearance::sidebar_action(ui, "X", "Hide this run strip").clicked();
+        return hide.then_some(StripClick::Hide);
+    }
+    if let Some((id, step)) = waits_for_user(run) {
+        if step.question.is_none() {
+            if appearance::primary_button(ui, "Approve").clicked() {
+                return Some(StripClick::Gate(id.clone(), true));
+            }
+            if appearance::danger_button(ui, "Reject").clicked() {
+                return Some(StripClick::Gate(id.clone(), false));
+            }
+            return None;
+        }
+        let draft = drafts.entry((run.dir.clone(), id.clone())).or_default();
+        let filled = !draft.trim().is_empty();
+        let send = ui.add_enabled(filled, egui::Button::new("Send")).clicked();
+        let field = ui.add(
+            appearance::singleline(draft)
+                .hint_text("Answer…")
+                .desired_width(200.0),
+        );
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        return ((send || entered) && filled).then(|| StripClick::Answer(id.clone()));
+    }
+    let cancel = ui
+        .button("Cancel run…")
+        .on_hover_text("No new step starts. Running terminals continue.");
+    cancel.clicked().then_some(StripClick::Cancel)
 }
 
 /// A Run click whose new run does not show yet.
@@ -35,7 +203,7 @@ pub(crate) struct Starting {
     since: Instant,
 }
 
-/// The longest time that the banner says "Starting".
+/// The longest time that the strip says "Starting".
 const STARTING_LIMIT: Duration = Duration::from_secs(30);
 
 impl Starting {
@@ -80,85 +248,15 @@ pub(super) fn still_starting(
     true
 }
 
-/// The banner between a Run click and the first state of its run.
-pub(super) fn starting_banner(ui: &mut egui::Ui, colors: Colors) {
-    egui::Frame::new()
-        .fill(colors.node)
-        .stroke(egui::Stroke::new(1.0, colors.step))
-        .corner_radius(appearance::RADIUS_MEDIUM)
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .outer_margin(egui::Margin::symmetric(8, 2))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.spinner();
-                ui.label(
-                    egui::RichText::new("Starting the run…")
-                        .strong()
-                        .color(colors.step),
-                );
-                ui.weak("The runner starts in its own terminal tab.");
-            });
+/// The strip between a Run click and the first state of its run.
+pub(super) fn starting_strip(ui: &mut egui::Ui, colors: Colors) {
+    strip_frame(colors, colors.border).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(egui::RichText::new("Starting the run…").color(colors.step));
+            ui.weak("The runner starts in its own terminal tab.");
         });
+    });
     ui.add_space(2.0);
-}
-
-/// The banner of `run`. True when the user closed it (an ended run only).
-pub(super) fn run_banner(ui: &mut egui::Ui, run: &Run, colors: Colors) -> bool {
-    let mut closed = false;
-    let status = run_status(run);
-    let total = run.state.steps.len();
-    let done = run
-        .state
-        .steps
-        .values()
-        .filter(|step| step.status == StepStatus::Done)
-        .count();
-    let color = match status {
-        "running" | "done" => colors.step,
-        _ => colors.failed,
-    };
-    egui::Frame::new()
-        .fill(colors.node)
-        .stroke(egui::Stroke::new(1.0, color))
-        .corner_radius(appearance::RADIUS_MEDIUM)
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .outer_margin(egui::Margin::symmetric(8, 2))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("Run {status}"))
-                        .strong()
-                        .color(color),
-                );
-                ui.label(format!("{done} of {total} steps done"));
-                if let Some(now) = now_text(run) {
-                    ui.weak(now);
-                }
-                // An ended run is old news: its banner can go away. A
-                // newer run has its own banner.
-                if run.ended() {
-                    closed = appearance::sidebar_action(ui, "X", "Hide this banner").clicked();
-                }
-            });
-            let hint = if run.gone {
-                Some(
-                    "The runner's terminal closed or its process stopped, so nothing \
-                     changes this run again. Step terminals stay open. Run starts a new run.",
-                )
-            } else if !run.state.ended {
-                Some(
-                    "Each step runs in its own terminal: use Show terminal on its card. \
-                     Cancel run is in the Flows tool window.",
-                )
-            } else {
-                None
-            };
-            if let Some(hint) = hint {
-                ui.label(egui::RichText::new(hint).small().weak());
-            }
-        });
-    ui.add_space(2.0);
-    closed
 }

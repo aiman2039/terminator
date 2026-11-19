@@ -10,6 +10,17 @@ fn tool_window_key(digit: char) -> String {
     }
 }
 
+/// Remove selected flow cards: the Delete key of each keyboard (Backspace
+/// on a Mac, Delete on Linux); the editor takes the other one too.
+fn flow_remove_key() -> String {
+    if cfg!(target_os = "macos") {
+        "Backspace"
+    } else {
+        "Delete"
+    }
+    .to_owned()
+}
+
 /// Next/previous top-level tab: Cmd+Shift+] / [ on macOS (Safari,
 /// `JetBrains`), Ctrl+PageDown / PageUp on Linux, where stored `command`
 /// already means Ctrl+Shift and Ctrl+Shift+] is Next pane.
@@ -165,6 +176,12 @@ impl Settings {
             // Free in both keymaps (Linux: Ctrl+Shift+H / X).
             ("hints_mode".into(), "command+shift+H".into()),
             ("copy_mode".into(), "command+shift+X".into()),
+            // Flow editor canvas keys (JetBrains: Delete, Cmd+D / Ctrl+D).
+            // Stored `cmd` is Cmd on macOS and plain Ctrl on Linux, where
+            // `command` (Ctrl+Shift+D) is Split right.
+            ("flow_remove".into(), flow_remove_key()),
+            ("flow_duplicate".into(), "cmd+D".into()),
+            ("flow_fit".into(), "F".into()),
         ]
         .into()
     }

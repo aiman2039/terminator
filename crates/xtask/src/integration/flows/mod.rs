@@ -3,6 +3,8 @@
 //! handoff note, a question with its answer, and a fixture agent whose
 //! prompt waits for the first hook report. The agent is `terminator-hook
 //! emit` with normalized hook events; no real agent runs.
+mod stops;
+
 use super::super::harness::{Harness, Process, bin, git, id, output, wait_child};
 use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::{Value, json};
@@ -52,12 +54,14 @@ pub fn flows() -> Result<()> {
             .is_err(),
         "A second run took the folder of an earlier run"
     );
-    case.hangup_ends_the_run()?;
+    case.signals_end_the_run()?;
     case.killed_runner_is_gone()?;
+    case.failure_and_reject_stop_only_the_steps_after_them()?;
+    case.cancel_starts_nothing_and_leaves_sessions()?;
     case.worktree_step_runs_twice()?;
     println!(
         "{}",
-        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true,"flow_sighup_ends_run":true,"flow_killed_runner_gone":true,"flow_worktree_second_run":true})
+        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true,"flow_rules_before_prompt":true,"flow_signals_end_run":true,"flow_killed_runner_gone":true,"flow_failure_and_reject":true,"flow_cancel":true,"flow_worktree_second_run":true})
     );
     Ok(())
 }
@@ -172,20 +176,30 @@ impl Case<'_> {
         Ok((runner, dir))
     }
 
-    /// SIGHUP (its terminal tab closed) ends the run as cancelled.
-    fn hangup_ends_the_run(&self) -> Result<()> {
-        let (mut runner, dir) = self.start_hold("hangup")?;
-        terminator_core::signals::signal_process(runner.0.id(), ProcSignal::Hangup)?;
-        wait_child(&mut runner.0, Duration::from_secs(10))?;
-        let state = read_state(&dir)?;
-        ensure!(
-            state.get("ended") == Some(&Value::Bool(true)),
-            "SIGHUP left the run open: {state}"
-        );
-        ensure!(
-            is(&state, "/steps/wait/status", "cancelled") && is(&state, "/file", "hangup"),
-            "{state}"
-        );
+    /// SIGHUP (its terminal tab closed), SIGINT (Ctrl-C) and SIGTERM end
+    /// the run as cancelled, with a failure exit.
+    fn signals_end_the_run(&self) -> Result<()> {
+        let signals = [
+            ("hangup", ProcSignal::Hangup),
+            ("interrupt", ProcSignal::Interrupt),
+            ("term", ProcSignal::Term),
+        ];
+        for (file, signal) in signals {
+            let (mut runner, dir) = self.start_hold(file)?;
+            terminator_core::signals::signal_process(runner.0.id(), signal)?;
+            let status = wait_child(&mut runner.0, Duration::from_secs(10))?;
+            ensure!(!status.success(), "{file}: a cancelled run exited as done");
+            let state = read_state(&dir)?;
+            ensure!(
+                state.get("ended") == Some(&Value::Bool(true)),
+                "{file}: the signal left the run open: {state}"
+            );
+            ensure!(
+                is(&state, "/steps/wait/status", "cancelled") && is(&state, "/file", file),
+                "{state}"
+            );
+            ensure!(!control::alive(&dir), "{file}: the lock stayed");
+        }
         Ok(())
     }
 
@@ -256,6 +270,19 @@ impl Case<'_> {
             String::from_utf8_lossy(&branch).trim() == "terminator/flowtree",
             "The step's worktree is not on its branch"
         );
+        // A checkout that left its branch is not used again, and nothing
+        // resets or forces it back.
+        git(&checkout, &["switch", "-q", "-c", "elsewhere"])?;
+        ensure!(
+            self.flow(&["run", id(&self.project), "tree", "--run", "tree-moved"])
+                .is_err(),
+            "A step ran in a worktree that is not on terminator/flowtree"
+        );
+        let branch = git(&checkout, &["branch", "--show-current"])?;
+        ensure!(
+            String::from_utf8_lossy(&branch).trim() == "elsewhere",
+            "The runner moved the user's checkout"
+        );
         Ok(())
     }
 
@@ -282,6 +309,11 @@ impl Case<'_> {
             is(&answer, "/answer", "Use A"),
             "The answer did not arrive: {answer}"
         );
+        let rules = fs::read_to_string(self.root.join("rules.txt")).unwrap_or_default();
+        ensure!(
+            rules.trim() == "ruled",
+            "The flow rules did not go before the prompt"
+        );
         Ok(())
     }
 }
@@ -303,9 +335,11 @@ fn write_flow(data: &Path, root: &Path) -> Result<()> {
         Ok(quote(&file.to_string_lossy()))
     };
     let (start, done) = (event("start", "unknown")?, event("done", "completed")?);
+    // The rules go before each prompt: the fixture's shell runs them.
     let text = format!(
         r#"version = 1
 name = "Demo"
+rules = "echo ruled > rules.txt;"
 
 [[step]]
 id = "build"

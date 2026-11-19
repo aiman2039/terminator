@@ -290,22 +290,43 @@ fn cancel_and_answers_are_refused_for_an_ended_run() {
 }
 
 #[test]
-fn recent_runs_reads_only_the_newest_folders() {
+fn recent_runs_reads_the_newest_folders_and_every_run_that_did_not_end() {
     let data = tempfile::tempdir().unwrap();
-    let state = RunState::new(&flow(), "plan", "p");
-    let old = save_run(data.path(), "a-1", &state);
-    let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
-    std::fs::File::options()
-        .write(true)
-        .open(old.join(STATE_FILE))
-        .unwrap()
-        .set_modified(time)
-        .unwrap();
-    let new = save_run(data.path(), "a-2", &state);
-    let recent = control::recent_runs(data.path(), 1);
-    assert_eq!(recent.len(), 1);
-    assert_eq!(recent[0].0, new);
-    assert_eq!(control::runs(data.path()).len(), 2);
+    let mut state = RunState::new(&flow(), "plan", "p");
+    let age = |dir: &std::path::Path, secs| {
+        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::File::options()
+            .write(true)
+            .open(dir.join(STATE_FILE))
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+    };
+    // An old run that did not end (a gate can wait for days) and an old
+    // ended run.
+    let open = save_run(data.path(), "a-1", &state);
+    age(&open, 1_000);
+    state.ended = true;
+    let old = save_run(data.path(), "a-2", &state);
+    age(&old, 2_000);
+    let new = save_run(data.path(), "a-3", &state);
+    let mut ended = control::EndedRuns::new();
+    let dirs = |runs: Vec<(std::path::PathBuf, RunState)>| -> Vec<_> {
+        runs.into_iter().map(|(dir, _)| dir).collect()
+    };
+    let recent = control::recent_runs(data.path(), 1, &mut ended);
+    assert_eq!(dirs(recent), [new.clone(), open.clone()]);
+    assert_eq!(ended.keys().collect::<Vec<_>>(), [&old]);
+    // The next read skips the known ended run without reading it.
+    std::fs::write(old.join(STATE_FILE), "{").unwrap();
+    age(&old, 2_000);
+    let recent = control::recent_runs(data.path(), 1, &mut ended);
+    assert_eq!(dirs(recent), [new, open]);
+    assert_eq!(
+        control::runs(data.path()).len(),
+        2,
+        "a damaged file is skipped"
+    );
 }
 
 #[test]

@@ -1,8 +1,121 @@
-//! The Flows window: the project's flow files with Run and Edit, and New
-//! flow. New flow and Edit open the native flow editor. Making or editing
-//! a flow needs no trust answer; Run does.
+//! The Run flow window and the "Flows" section of the Flows tool window:
+//! the project's flow files with Run and Edit, and New flow. New flow and
+//! Edit open the native flow editor. Making or editing a flow needs no
+//! trust answer; Run does, and only an explicit click runs.
 use super::LoadedFlows;
+use super::panel::{Act, ROW_HEIGHT, section_title};
+use super::status::Tone;
 use crate::*;
+
+impl App {
+    /// The tool window's flow files: Edit and Run on each, the trust
+    /// question inline above them, and New flow. A broken file shows red
+    /// with its error.
+    pub(super) fn flow_files_section(&mut self, ui: &mut egui::Ui, act: &mut Option<Act>) {
+        let Some(loaded) = self.tool_flows().cloned() else {
+            section_title(ui, "Flows", 0);
+            ui.weak("Reading flow files…");
+            return;
+        };
+        section_title(ui, "Flows", loaded.files.len());
+        let answer = self.lsp.trust_answer(&loaded.root);
+        if let Some(trusted) = flow_trust_bar(ui, &loaded, answer) {
+            *act = Some(Act::Trust(trusted));
+        }
+        for file in &loaded.files {
+            self.flow_file_row(ui, (file, answer == Some(true)), act);
+        }
+        let new = appearance::row(appearance::RowInput {
+            ui,
+            label: "New flow…",
+            icon: "Plus",
+            selected: false,
+            height: ROW_HEIGHT,
+            trailing: "",
+            tint: Tone::Dim.color(&self.theme),
+        })
+        .on_hover_text("Name a new flow, then make it in the flow editor");
+        if new.clicked() {
+            *act = Some(Act::NewFlow);
+        }
+    }
+
+    /// One flow file: its name and step count, or the file name and its
+    /// error in red; Edit, and Run once the project is `trusted`.
+    fn flow_file_row(
+        &self,
+        ui: &mut egui::Ui,
+        (file, trusted): (&super::FlowFile, bool),
+        act: &mut Option<Act>,
+    ) {
+        let failed = Tone::Failed.color(&self.theme);
+        let (label, trailing, icon, tint) = match &file.flow {
+            Ok((name, steps)) => {
+                let steps = appearance::count_noun(*steps, "step");
+                let text = appearance::color(&self.theme.text);
+                let dim = Tone::Dim.color(&self.theme);
+                (name.clone(), steps, ("Workflow", dim), text)
+            }
+            // The error goes on its own line below: a trailing text that
+            // does not fit would not show.
+            Err(_) => (
+                file.file.clone(),
+                String::new(),
+                ("CircleAlert", failed),
+                failed,
+            ),
+        };
+        let hover = match &file.flow {
+            Ok(_) => format!("{}.toml", file.file),
+            Err(error) => format!("{}.toml: {error}", file.file),
+        };
+        let why = if file.flow.is_err() {
+            "Correct the flow first"
+        } else {
+            "Trust the project first"
+        };
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(file.flow.is_ok() && trusted, |ui| {
+                    let run = appearance::sidebar_action(ui, "Play", "Run this flow")
+                        .on_disabled_hover_text(why);
+                    if run.clicked() {
+                        *act = Some(Act::Run(file.file.clone()));
+                    }
+                });
+                let edit = "Open the flow in the flow editor";
+                if appearance::sidebar_action(ui, "Pencil", edit).clicked() {
+                    *act = Some(Act::Edit(file.file.clone()));
+                }
+                appearance::status_row(appearance::StatusRowInput {
+                    row: appearance::RowInput {
+                        ui,
+                        label: &label,
+                        icon: icon.0,
+                        selected: false,
+                        height: ROW_HEIGHT,
+                        trailing: &trailing,
+                        tint,
+                    },
+                    icon_tint: icon.1,
+                    spin: false,
+                })
+                .on_hover_text(hover.clone());
+            });
+        });
+        if let Err(error) = &file.flow {
+            ui.horizontal(|ui| {
+                ui.add_space(26.0);
+                let first = error.lines().next().unwrap_or_default();
+                let text = egui::RichText::new(first)
+                    .size(appearance::FONT_CAPTION)
+                    .color(failed);
+                ui.add(egui::Label::new(text).truncate())
+                    .on_hover_text(hover);
+            });
+        }
+    }
+}
 
 /// One click in the Flows window.
 enum Pick {
@@ -27,25 +140,7 @@ impl App {
             self.flows.loaded = Some(loaded);
         }
         let mut open = true;
-        let mut pick = None;
-        let mut name = std::mem::take(&mut self.flows.new_name);
-        self.popups
-            .window(ctx, "Flows")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.set_width(WIDTH);
-                let Some(loaded) = &self.flows.loaded else {
-                    ui.weak("Reading flow files…");
-                    return;
-                };
-                let answer = self.lsp.trust_answer(&loaded.root);
-                pick = flow_trust_bar(ui, loaded, answer)
-                    .map(Pick::Trust)
-                    .or(flow_rows(ui, loaded, answer))
-                    .or(new_flow_row(ui, &mut name));
-            });
-        self.flows.new_name = name;
+        let pick = self.run_flow_window(ctx, &mut open);
         if self.flows.loading.is_some() {
             ctx.request_repaint();
         }
@@ -78,6 +173,58 @@ impl App {
         self.flows.open = open;
     }
 
+    /// The Run flow window. It opens at the click, or centered on the
+    /// focused pane after a key (`Popups::window`), and stays inside the
+    /// app window: when its list does not fit below its top, it moves up,
+    /// and what still does not fit scrolls in it.
+    fn run_flow_window(&mut self, ctx: &egui::Context, open: &mut bool) -> Option<Pick> {
+        let mut pick = None;
+        let mut name = std::mem::take(&mut self.flows.new_name);
+        let bounds = ctx.content_rect();
+        let max_height = (bounds.height() - 96.0).max(160.0);
+        let mut window = self
+            .popups
+            .window(ctx, "Run flow")
+            .open(open)
+            .collapsible(false)
+            // Sized by its content, not egui's default window height.
+            .auto_sized();
+        if let Some(top) = self.flows.picker_top.take() {
+            window = window.movable(false).current_pos(top);
+        }
+        let shown = window.show(ctx, |ui| {
+            ui.set_width(WIDTH);
+            let Some(loaded) = &self.flows.loaded else {
+                ui.weak("Reading flow files…");
+                return None;
+            };
+            let answer = self.lsp.trust_answer(&loaded.root);
+            let scroll = egui::ScrollArea::vertical()
+                .max_height(max_height)
+                .show(ui, |ui| {
+                    pick = flow_trust_bar(ui, loaded, answer)
+                        .map(Pick::Trust)
+                        .or(flow_rows(ui, loaded, answer))
+                        .or(new_flow_row(ui, &mut name));
+                });
+            Some(scroll.content_size.y - scroll.inner_rect.height())
+        });
+        self.flows.new_name = name;
+        // Hidden rows: move the window up by as much, inside the app window.
+        if let Some(shown) = shown
+            && let Some(Some(hidden)) = shown.inner
+            && hidden > 1.0
+        {
+            let rect = shown.response.rect;
+            let top = (rect.top() - hidden).max(bounds.top() + 8.0);
+            if top < rect.top() - 0.5 {
+                self.flows.picker_top = Some(egui::pos2(rect.left(), top));
+                ctx.request_repaint();
+            }
+        }
+        pick
+    }
+
     /// Test builds only: `TERMINATOR_FIXTURE_FLOW_EDITOR=NAME` opens the
     /// editor with flow NAME (or a new flow) of the selected project one
     /// time, so a fixture can look at the page without a click.
@@ -103,7 +250,11 @@ impl App {
 }
 
 /// Trust question for a project's flow files. Returns the clicked answer.
-fn flow_trust_bar(ui: &mut egui::Ui, loaded: &LoadedFlows, answer: Option<bool>) -> Option<bool> {
+pub(super) fn flow_trust_bar(
+    ui: &mut egui::Ui,
+    loaded: &LoadedFlows,
+    answer: Option<bool>,
+) -> Option<bool> {
     if loaded.files.is_empty() || answer == Some(true) {
         return None;
     }
@@ -114,7 +265,7 @@ fn flow_trust_bar(ui: &mut egui::Ui, loaded: &LoadedFlows, answer: Option<bool>)
     };
     settings_controls::description_line(ui, text);
     ui.horizontal(|ui| {
-        if ui.button("Trust project").clicked() {
+        if appearance::primary_button(ui, "Trust project").clicked() {
             Some(true)
         } else if answer.is_none() && ui.button("Don't trust").clicked() {
             Some(false)
@@ -178,8 +329,7 @@ fn flow_rows(ui: &mut egui::Ui, loaded: &LoadedFlows, answer: Option<bool>) -> O
                         clicked = Some(Pick::Run(index));
                     }
                 });
-                let edit = ui
-                    .button("Edit")
+                let edit = appearance::secondary_button(ui, "Edit")
                     .on_hover_text("Open the flow in the flow editor");
                 if edit.clicked() {
                     clicked = Some(Pick::Edit(index));
