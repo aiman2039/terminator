@@ -62,7 +62,8 @@ fn close_focused_editor(f: &Fixture, o: &Options) -> Result<()> {
         name: "editor-closed",
         actions: json!([
             {"wait":{}, "target":format!("terminal:{}",id(editor))},
-            {"wait":{}, "target":format!("editor-close:{}",id(editor))}
+            {"wait":{}, "target":format!("terminal:{}",id(editor)), "hover":true,
+             "key":"W", "command":true, "ctrl":!cfg!(target_os = "macos")}
         ]),
         after: 3500,
     })?;
