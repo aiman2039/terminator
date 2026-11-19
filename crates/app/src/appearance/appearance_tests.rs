@@ -968,6 +968,7 @@ mod row_tests {
         install(&ctx);
         let mut fill = None;
         let mut text = None;
+        let mut expected = (None, None);
         let pos = egui::pos2(40.0, 20.0);
         for events in [
             vec![],
@@ -999,6 +1000,10 @@ mod row_tests {
                     context_menu(&response, |ui| {
                         fill = Some(ui.visuals().window_fill);
                         text = ui.visuals().override_text_color;
+                        // The menu colors are process-wide and another
+                        // test can apply a different theme at any time:
+                        // read the expected colors at the same moment.
+                        expected = (Some(menu_fill()), Some(menu_text()));
                         menu_item(MenuItemInput {
                             ui,
                             label: "Copy",
@@ -1010,8 +1015,8 @@ mod row_tests {
             );
             output.textures_delta.clear();
         }
-        assert_eq!(fill, Some(menu_fill()));
-        assert_eq!(text, Some(menu_text()));
+        assert!(fill.is_some(), "the menu showed");
+        assert_eq!((fill, text), expected);
     }
 }
 
