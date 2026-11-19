@@ -169,7 +169,6 @@ impl App {
                         highlight: true,
                         brand_icon,
                         brand_label,
-                        show_read: false,
                         pinned: self.session_pinned(&n.session_id),
                         triage: self.triage_available(),
                         usage: &usage,

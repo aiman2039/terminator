@@ -99,7 +99,7 @@ impl GitPanelPass<'_, '_> {
         ui.separator();
         ui.horizontal(|ui| self.commit_options(ui));
         self.commit_message(ui, blocked);
-        self.readiness_line(ui);
+        self.readiness_line(ui, blocked);
         ui.horizontal_wrapped(|ui| self.commit_buttons(ui, blocked));
         self.commit_progress(ui);
         self.commit_failure(ui);

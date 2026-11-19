@@ -5,6 +5,9 @@
 //! the cursor, Enter opens the hit at its match, Esc closes. A click
 //! picks a hit; a double click opens it.
 use super::cursor::{Row, keep_visible};
+use super::filters::{
+    chip_width, filter_chip, filter_row, filter_toggle, filters_open, folded_summary,
+};
 use super::preview::{JobColors, line_job, preview_pane};
 use super::replace::{DiffColors, ReplaceAsk, changes_pane, replace_buttons};
 use super::*;
@@ -24,7 +27,7 @@ const FIELD_KEYS: egui::EventFilter = egui::EventFilter {
     escape: true,
 };
 
-fn field_id(name: &str) -> egui::Id {
+pub(super) fn field_id(name: &str) -> egui::Id {
     egui::Id::unique(("find-in-files", name))
 }
 
@@ -138,22 +141,28 @@ fn take_keys(ui: &mut egui::Ui) -> Keys {
     })
 }
 
-/// Width of a text field beside the four toggle icons.
+/// Width of a text field beside the five toggle icons.
 fn field_width(ui: &egui::Ui) -> f32 {
-    (ui.available_width() - 120.0).max(160.0)
+    (ui.available_width() - 148.0).max(160.0)
 }
 
-/// Query row with toggles (replace mode last), then the file mask and
-/// Exclude globs.
+/// Query row with toggles (replace mode, then the filter toggle); the
+/// file mask and Exclude globs show under it while the filter toggle is
+/// on. Folded, set filters show as a short chip beside the query.
 fn find_inputs(ui: &mut egui::Ui, find: &mut FindInFiles) {
+    let summary = folded_summary(ui.ctx(), find);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
+        let chip = chip_width(ui, summary.as_ref());
         let mut output = appearance::singleline(&mut find.query)
             .id(field_id("query"))
             .event_filter(FIELD_KEYS)
             .hint_text("Text to find")
-            .desired_width(field_width(ui))
+            .desired_width((field_width(ui) - chip).max(120.0))
             .show(ui);
+        if let Some(text) = &summary {
+            filter_chip(ui, find, text);
+        }
         if std::mem::take(&mut find.select_query) {
             let all = egui::text::CCursorRange::select_all(&output.galley);
             output.state.cursor.set_char_range(Some(all));
@@ -193,19 +202,11 @@ fn find_inputs(ui: &mut egui::Ui, find: &mut FindInFiles) {
         {
             find.set_replace_mode(!find.replace.on);
         }
+        filter_toggle(ui);
     });
-    ui.horizontal(|ui| {
-        let width = ((ui.available_width() - 130.0) / 2.0).max(80.0);
-        ui.weak("File mask");
-        glob_field(ui, (&mut find.mask, "mask"), "*.rs, src/**", width);
-        ui.weak("Exclude");
-        glob_field(
-            ui,
-            (&mut find.exclude, "exclude"),
-            "target/**, *.min.js",
-            width,
-        );
-    });
+    if filters_open(ui.ctx()) {
+        filter_row(ui, find, FIELD_KEYS);
+    }
 }
 
 /// The replacement, under the query; `$1` inserts group 1 in regex mode.
@@ -231,16 +232,6 @@ fn replace_input(ui: &mut egui::Ui, find: &mut FindInFiles) {
             output.response.request_focus();
         }
     });
-}
-
-fn glob_field(ui: &mut egui::Ui, (text, name): (&mut String, &str), hint: &str, width: f32) {
-    ui.add(
-        appearance::singleline(text)
-            .id(field_id(name))
-            .event_filter(FIELD_KEYS)
-            .hint_text(hint)
-            .desired_width(width),
-    );
 }
 
 /// Where the search runs (an X widens a folder to the project), then the

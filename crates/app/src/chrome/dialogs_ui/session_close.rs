@@ -1,6 +1,22 @@
 //! Session and workspace-tab close confirmation.
 use crate::*;
 
+/// Sessions the Close tab dialog names before "and N more".
+const SESSION_LIST_LIMIT: usize = 8;
+
+/// One `• name` line per session, at most `limit`, then `and N more`.
+pub(crate) fn session_lines(names: &[String], limit: usize) -> Vec<String> {
+    let mut lines: Vec<String> = names
+        .iter()
+        .take(limit)
+        .map(|name| format!("• {name}"))
+        .collect();
+    if names.len() > limit {
+        lines.push(format!("and {} more", names.len().saturating_sub(limit)));
+    }
+    lines
+}
+
 struct ConfirmWorkspaceCloseInput<'a> {
     ctx: &'a egui::Context,
     project: &'a str,
@@ -229,7 +245,22 @@ impl App {
         .default_action(
             appearance::ConfirmButton::new("Keep running").id("workspace-keep-running"),
         );
-        match appearance::confirm(ctx, window, dialog, |_| {}) {
+        let names: Vec<String> = live
+            .iter()
+            .map(|id| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|session| &session.id == id)
+                    .map_or_else(|| id.clone(), |session| session.label.clone())
+            })
+            .collect();
+        let lines = session_lines(&names, SESSION_LIST_LIMIT);
+        match appearance::confirm(ctx, window, dialog, |ui| {
+            for line in &lines {
+                ui.weak(line);
+            }
+        }) {
             Some(appearance::ConfirmAnswer::Destructive) => {
                 for session in &live {
                     self.send(Request::Stop {
@@ -244,5 +275,21 @@ impl App {
             Some(appearance::ConfirmAnswer::Cancel) => self.abort_workspace_close(),
             None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_lines;
+
+    #[test]
+    fn close_tab_names_its_sessions_up_to_a_limit() {
+        let names: Vec<String> = (1..=10).map(|n| format!("shell {n}")).collect();
+        let lines = session_lines(&names[..2], 8);
+        assert_eq!(lines, ["• shell 1", "• shell 2"]);
+        let lines = session_lines(&names, 8);
+        assert_eq!(lines.len(), 9);
+        assert_eq!(lines[7], "• shell 8");
+        assert_eq!(lines[8], "and 2 more");
     }
 }

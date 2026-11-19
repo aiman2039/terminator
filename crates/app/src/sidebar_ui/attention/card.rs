@@ -13,6 +13,8 @@ const PAD: egui::Vec2 = egui::vec2(6.0, 3.0);
 const BRAND_SIZE: f32 = 12.0;
 /// Height of the "This event has resolved." line.
 const RESOLVED_LINE: f32 = 18.0;
+/// The title width that the Peek label never takes.
+const MIN_TITLE: f32 = 32.0;
 
 /// The glyph at the start of line 1, with its hover text.
 #[derive(Clone, Copy)]
@@ -89,7 +91,9 @@ fn status_glyph(ui: &mut egui::Ui, glyph: CardGlyph) -> egui::Response {
 }
 
 pub(super) use super::card_actions::CardButton;
-use super::card_actions::{ActionsInput, action_buttons, attention_actions, card_keys, card_menu};
+use super::card_actions::{
+    ActionsInput, action_buttons, attention_actions, buttons_width, card_keys, card_menu,
+};
 
 /// One line of text cut with an ellipsis at `width`.
 fn one_line(
@@ -144,7 +148,7 @@ pub(crate) fn attention_card_in(
             target: "agent",
         };
         let verbs = CardVerbs {
-            buttons: action_buttons(&input),
+            buttons: action_buttons(),
             keys: |ui: &egui::Ui| card_keys(ui, &input),
             menu: |card: &egui::Response| card_menu(card, &input),
         };
@@ -307,10 +311,13 @@ fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
         show,
         buttons,
     } = row;
-    #[expect(clippy::cast_precision_loss, reason = "a handful of buttons")]
-    let count = buttons.len() as f32;
+    // Peek keeps its label while the title still has room beside it.
+    let labels = line1.right() - buttons_width(ui, &buttons, true) - title_left >= MIN_TITLE;
     let actions_rect = egui::Rect::from_min_max(
-        egui::pos2(line1.right() - ATTENTION_ACTION_SIZE * count, line1.top()),
+        egui::pos2(
+            line1.right() - buttons_width(ui, &buttons, labels),
+            line1.top(),
+        ),
         line1.max,
     );
     let tint = face.glyph.tint;
@@ -371,6 +378,7 @@ fn paint_title_row(ui: &egui::Ui, row: TitleRow<'_>) -> AttentionAction {
             session_id: face.session_id,
             buttons,
             show,
+            labels,
         },
     )
 }

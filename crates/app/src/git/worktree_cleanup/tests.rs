@@ -253,6 +253,29 @@ fn remove_selected_asks_the_daemon_for_each_and_clears_the_ticks() {
 }
 
 #[test]
+fn the_remove_dialog_lists_each_branch_and_checkout_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&dir);
+    register(&mut app, Path::new("/w/main"), Path::new("/w/task"));
+    // Without Git facts the project name stands in for the branch.
+    assert_eq!(
+        app.removal_list(&["task".to_owned()]),
+        [("task".to_owned(), "/w/task".to_owned())]
+    );
+    app.worktree_stats.apply(
+        PathBuf::from("/w/task"),
+        Some(crate::worktree_stats::WorktreeGit {
+            branch: Some("terminator/fix".into()),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        app.removal_list(&["task".to_owned()]),
+        [("terminator/fix".to_owned(), "/w/task".to_owned())]
+    );
+}
+
+#[test]
 fn the_worktrees_page_shows_each_task_with_its_facts_and_actions() {
     let (dir, main, task, _) = task_repo();
     let mut app = app(&dir);

@@ -32,6 +32,11 @@ impl App {
                 self.paint_settings_no_match(ui);
                 return;
             }
+            // From the last frame: sections whose rows all missed.
+            let empty: Vec<bool> = SettingsSection::ALL
+                .into_iter()
+                .map(|section| self.section_rows_empty(section))
+                .collect();
             self.reset_section_matches();
             egui::ScrollArea::both()
                 .id_salt(("settings-section", section as u8, searching))
@@ -44,13 +49,34 @@ impl App {
                     }
                     // A search lists the matching rows of every section,
                     // each under its own heading.
-                    for shown in SettingsSection::ALL {
+                    // A section with no matching row never shows only its
+                    // heading: it is painted hidden, so its rows are still
+                    // counted for the next frame.
+                    for (shown, &empty) in SettingsSection::ALL.into_iter().zip(&empty) {
                         if !self.section_visible(shown) {
                             continue;
                         }
                         self.settings_section = shown;
+                        if empty {
+                            let mut hidden = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(ui.available_rect_before_wrap())
+                                    .invisible(),
+                            );
+                            self.paint_settings_section(&mut hidden, shown, frame);
+                            continue;
+                        }
                         self.paint_settings_section(ui, shown, frame);
                         ui.add_space(12.0);
+                    }
+                    // A new search paints once with old counts; paint
+                    // again so a heading with no rows never stays.
+                    let changed = SettingsSection::ALL
+                        .into_iter()
+                        .zip(&empty)
+                        .any(|(section, &was)| self.section_rows_empty(section) != was);
+                    if changed {
+                        ui.ctx().request_repaint();
                     }
                     self.settings_section = section;
                 });

@@ -289,6 +289,10 @@ impl App {
         let weak = appearance::color(&self.theme.secondary);
         let width = rect.width() - 58.0 - (label_x - 30.0) - badge_reserve;
         let mut text = tab_label_job(&face.label, face.hint.as_deref(), [tint, weak], width);
+        // The active tab's name is semibold, apart from any status color.
+        if *active && let Some(name) = text.sections.first_mut() {
+            name.format.font_id.family = appearance::semibold();
+        }
         // The Git panel's preview diff tab reads in italics until kept.
         if self.is_preview_diff(Self::group_primary(paint.group)) {
             for section in &mut text.sections {

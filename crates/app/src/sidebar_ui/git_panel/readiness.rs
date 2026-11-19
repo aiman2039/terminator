@@ -86,8 +86,9 @@ pub(super) fn pr_link(compare: Option<&CompareData>, known: Option<&KnownPr>) ->
 }
 
 impl GitPanelPass<'_, '_> {
-    /// The readiness line; nothing when the tree is clean.
-    pub(super) fn readiness_line(&mut self, ui: &mut egui::Ui) {
+    /// The readiness line; nothing when the tree is clean. With something
+    /// staged, `blocked` (why Commit cannot run) follows the counts.
+    pub(super) fn readiness_line(&mut self, ui: &mut egui::Ui, blocked: Option<&str>) {
         let context = self.input.context;
         let known = ui
             .ctx()
@@ -124,6 +125,19 @@ impl GitPanelPass<'_, '_> {
                             .small()
                             .color(tint(&theme.git_deleted)),
                     );
+                }
+                if ready.staged > 0
+                    && let Some(why) = blocked
+                {
+                    let why = ui.label(
+                        RichText::new(why)
+                            .small()
+                            .color(appearance::color(&theme.status_waiting)),
+                    );
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), "git-commit-blocked", why.rect);
+                    #[cfg(not(feature = "test-support"))]
+                    let _ = why;
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

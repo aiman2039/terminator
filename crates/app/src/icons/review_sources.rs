@@ -1,5 +1,6 @@
-//! Bundled theme-tinted glyphs for Git stage verbs, diff review notes and
-//! the Flows tool window stripe (the main table in `ui_sources` is full).
+//! Bundled theme-tinted glyphs for Git stage verbs, diff review notes,
+//! the Flows tool window stripe and the Find in Files filter toggle (the
+//! main table in `ui_sources` is full).
 
 use eframe::egui;
 
@@ -22,5 +23,9 @@ pub(super) static REVIEW_SOURCES: SourceTable = &[
     (
         "Workflow",
         egui::include_image!("../../assets/icons/workflow.svg"),
+    ),
+    (
+        "Funnel",
+        egui::include_image!("../../assets/icons/funnel.svg"),
     ),
 ];

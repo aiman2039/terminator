@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Narrow Settings show one Section menu above the form in place of the wrapped section tabs.
+- Settings search never shows a section heading without a matching row. "font size" now finds Appearance → Interface size, and Interface size no longer hides when the search misses Density.
+- Git panel: when something is staged but Commit cannot run, the readiness line says why (for example "Write a commit message").
+- The active workspace tab has a thicker accent underline and a semibold title, so a red accent does not look like an error mark.
+- Agents inbox card: a labeled Peek action opens the read-only screen peek (same as Space). Pin, Mark read/unread and Snooze moved to the card menu (right click); the keys Space, P and U stay. On a narrow sidebar Peek shows only its icon.
+- Find in Files: the File mask / Exclude row folds behind a filter toggle on the query row. When it is folded, the set filters show as a short chip beside the query; a click opens the row. The app keeps the open state while it runs.
+- Close tab names the running sessions (the first 8, then "and N more").
+- Remove worktrees lists the branch and checkout path of each worktree (the list scrolls when long).
 - Fixed: Replace in Files wrote a file that changed since the search when the change was not on a hit line (for example a new line at the end). Any change to the file now stops the replace before any write.
 - Fixed: Replace in Files stops as soon as a file has more matches than the limit, and counts columns in one pass per line, so a long line with many matches no longer takes a long time.
 - Fixed: Local History stopped recording a project for good when its folder could not be watched (for example a folder made later). The session service now tries such a folder again once a minute and logs the failure once.

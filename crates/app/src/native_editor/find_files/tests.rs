@@ -671,6 +671,39 @@ fn painted_text(app: &mut App, ctx: &egui::Context) -> Vec<String> {
 }
 
 #[test]
+fn filters_fold_behind_a_toggle_and_show_as_a_chip_when_set() {
+    use super::filters::{filter_summary, filters_open, set_filters_open};
+    assert_eq!(filter_summary(" ", ""), None);
+    assert_eq!(
+        filter_summary("*.rs", "target/**").as_deref(),
+        Some("*.rs · −target/**")
+    );
+    let long = filter_summary("src/**/*.rs, tests/**/*.rs", "target/**").unwrap();
+    assert!(long.ends_with('…') && long.chars().count() == 28, "{long}");
+    let (mut app, ctx, _dir) = app_with_project();
+    app.open_find_in_files(Some("a"), "hit".into());
+    for _ in 0..3 {
+        paint(&mut app, &ctx, &[]);
+    }
+    // Closed by default: no mask row and, with no filter, no chip.
+    assert!(!filters_open(&ctx));
+    let text = painted_text(&mut app, &ctx);
+    assert!(!text.iter().any(|t| t == "File mask"), "{text:?}");
+    let find = app.find_in_files.as_mut().unwrap();
+    find.mask = "*.rs".into();
+    let text = painted_text(&mut app, &ctx);
+    assert!(text.iter().any(|t| t == "*.rs"), "{text:?}");
+    // Open: the row shows (the chip goes); the state outlives the window.
+    set_filters_open(&ctx, true);
+    let text = painted_text(&mut app, &ctx);
+    assert!(text.iter().any(|t| t == "File mask"), "{text:?}");
+    app.find_in_files.as_mut().unwrap().hide();
+    app.open_find_in_files(Some("a"), "hit".into());
+    paint(&mut app, &ctx, &[]);
+    assert!(filters_open(&ctx));
+}
+
+#[test]
 fn replace_mode_shows_each_change_and_keeps_the_window_keys() {
     let (mut app, ctx, _dir) = app_with_project();
     app.open_replace_in_files(Some("a"), "hit".into());
