@@ -103,7 +103,7 @@ impl App {
         Some(project.id.clone())
     }
 
-    /// The newest run of the editor's saved flow: its folder and state.
+    /// The newest run of the editor's flow file: its folder and state.
     /// The cards show it, so the editor is also the view of a run.
     fn flow_run_of(&mut self, ctx: &egui::Context, editor: &FlowEditor) -> Option<Run> {
         if !editor.on_disk {
@@ -111,15 +111,12 @@ impl App {
         }
         self.poll_flow_runs(ctx);
         let project = self.flow_project(editor)?;
-        let run = self
-            .flows
+        let name = Some(editor.saved.name.as_str());
+        self.flows
             .runs
             .iter()
-            .find(|run| run.state.project == project && run.state.flow == editor.saved.name)?;
-        Some(Run {
-            dir: run.dir.clone(),
-            state: run.state.clone(),
-        })
+            .find(|run| run.of_flow(&project, &editor.file, name))
+            .cloned()
     }
 
     /// The graph, with the state of `run` on its cards. Does the clicks
@@ -186,7 +183,7 @@ impl App {
             run = None;
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
-        let state = run.as_ref().map(|run| run_status(&run.state));
+        let state = run.as_ref().map(run_status);
         let mut click = toolbar(ui, editor, state);
         if let Some(error) = &editor.error {
             ui.colored_label(ui.visuals().error_fg_color, error);

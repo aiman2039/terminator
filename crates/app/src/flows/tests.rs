@@ -209,6 +209,7 @@ fn flows_panel_shows_a_gate_with_approve_and_a_question_with_send() {
     app.flows.runs = vec![Run {
         dir: data.path().join("flows").join("build-1"),
         state,
+        gone: false,
     }];
     let ctx = egui::Context::default();
     let text = painted(&ctx, |ui| app.flows_panel(ui));
@@ -272,13 +273,66 @@ fn step_icon_shows_what_waits_for_the_user() {
 
 #[test]
 fn run_status_is_done_only_when_every_step_is_done() {
+    let state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    let mut run = Run {
+        dir: PathBuf::from("/data/flows/build-1"),
+        state,
+        gone: false,
+    };
+    assert_eq!(panel::run_status(&run), "running");
+    run.gone = true;
+    assert_eq!(panel::run_status(&run), "stopped (runner gone)");
+    assert!(run.ended());
+    run.gone = false;
+    run.state.set("one", StepStatus::Done);
+    run.state.ended = true;
+    assert_eq!(panel::run_status(&run), "stopped");
+    run.state.set("ok", StepStatus::Done);
+    assert_eq!(panel::run_status(&run), "done");
+}
+
+#[test]
+fn a_run_whose_runner_is_gone_is_stopped_with_no_answer_buttons() {
+    let project = project_with_flows();
+    let (mut app, received, data) = app_with_project(project.path());
     let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
-    assert_eq!(panel::run_status(&state), "running");
     state.set("one", StepStatus::Done);
-    state.ended = true;
-    assert_eq!(panel::run_status(&state), "stopped");
-    state.set("ok", StepStatus::Done);
-    assert_eq!(panel::run_status(&state), "done");
+    state.set("ok", StepStatus::Running);
+    let dir = data.path().join("flows").join("build-1");
+    let alive = Run {
+        dir: dir.clone(),
+        state: state.clone(),
+        gone: false,
+    };
+    save(&alive);
+    // The worker's read: no runner holds the lock.
+    let run = Run::read(dir.clone(), state);
+    assert!(run.gone && run.ended());
+    assert_eq!(run.state.status("ok"), StepStatus::Cancelled);
+    let runner = flow::control::hold_runner(&dir).expect("lock");
+    assert!(!Run::read(dir.clone(), alive.state.clone()).gone);
+    drop(runner);
+    // An older ended run first: the gone run is not the newest.
+    app.flows.runs = vec![run_of(data.path(), "build-2", Some(2)), run];
+    app.flows.read_at = Some(Instant::now());
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    let summary = "stopped (runner gone) · 1 of 2 steps done";
+    assert_eq!(count(&text, summary), 1, "{text:?}");
+    // Closed by default like an ended run, and no answer goes to it.
+    assert_eq!(count(&text, "one"), 1, "{text:?}");
+    app.apply_flow_act(panel::Act::Toggle(dir.clone(), true));
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    assert_eq!(count(&text, "Approve"), 0, "{text:?}");
+    // Clear ended runs counts it, and Remove deletes it.
+    app.apply_flow_act(panel::Act::AskClear);
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    let clear = "Remove 2 ended runs from the list? Their terminals stay open.";
+    assert_eq!(count(&text, clear), 1, "{text:?}");
+    app.apply_flow_act(panel::Act::Remove(dir.clone()));
+    settle(&mut app);
+    assert!(!dir.exists());
+    assert!(received.try_recv().is_err(), "no terminal");
 }
 
 /// Waits for a file that a worker thread writes, and gives its text.
@@ -311,6 +365,7 @@ fn panel_buttons_write_only_the_users_answers() {
         serde_json::to_vec(&state).expect("json"),
     )
     .expect("state");
+    let _runner = flow::control::hold_runner(&dir).expect("lock");
 
     // Approve: the gate's answer file.
     app.apply_flow_act(panel::Act::Gate(dir.clone(), "ok".into(), true));
@@ -351,6 +406,7 @@ fn run_of(data: &Path, name: &str, ended: Option<usize>) -> Run {
     Run {
         dir: data.join("flows").join(name),
         state,
+        gone: false,
     }
 }
 
@@ -447,10 +503,12 @@ fn remove_and_clear_delete_only_ended_runs_after_a_click() {
             ..done.state.clone()
         },
         dir: data.path().join("flows/build-4"),
+        gone: false,
     };
     for run in [&running, &stopped, &done, &other] {
         save(run);
     }
+    let _runner = flow::control::hold_runner(&running.dir).expect("lock");
     // Remove of a running run is refused and deletes nothing.
     app.apply_flow_act(panel::Act::Remove(running.dir.clone()));
     settle(&mut app);

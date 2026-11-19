@@ -273,6 +273,7 @@ fn cancel_and_answers_are_refused_for_an_ended_run() {
     let mut state = RunState::new(&flow(), "p");
     state.set("approve", StepStatus::Running);
     let dir = save_run(data.path(), "a-1", &state);
+    let _runner = control::hold_runner(&dir).unwrap();
     control::cancel(&dir).unwrap();
     assert!(dir.join(control::CANCEL).exists());
     state.ended = true;
@@ -312,17 +313,103 @@ fn remove_deletes_only_an_ended_run_folder() {
     let data = tempfile::tempdir().unwrap();
     let mut state = RunState::new(&flow(), "p");
     let running = save_run(data.path(), "a-1", &state);
+    let runner = control::hold_runner(&running).unwrap();
     assert!(matches!(
         control::remove(data.path(), &running),
         Err(control::RunError::NotEnded)
     ));
     assert!(running.join(STATE_FILE).is_file(), "a running run stays");
+    drop(runner);
     state.ended = true;
     let ended = save_run(data.path(), "a-2", &state);
     std::fs::create_dir_all(ended.join(control::ANSWERS)).unwrap();
     control::remove(data.path(), &ended).unwrap();
     assert!(!ended.exists());
-    assert_eq!(control::runs(data.path()).len(), 1);
+    // The runner of the first run is gone now: that run can go too.
+    control::remove(data.path(), &running).unwrap();
+    assert!(control::runs(data.path()).is_empty());
+}
+
+#[test]
+fn a_run_whose_runner_is_gone_takes_no_answer_and_can_be_removed() {
+    let data = tempfile::tempdir().unwrap();
+    let mut state = RunState::new(&flow(), "p");
+    state.set("approve", StepStatus::Running);
+    let dir = save_run(data.path(), "a-1", &state);
+    // A run from an older build has no lock file: no runner can be seen.
+    assert!(!control::alive(&dir));
+    assert!(control::runner_gone(&dir, &state));
+    let runner = control::hold_runner(&dir).unwrap();
+    assert!(control::alive(&dir), "the runner holds its lock");
+    assert!(control::alive(&dir), "a check does not take the lock away");
+    assert!(!control::runner_gone(&dir, &state));
+    // The OS lets the lock go when the runner ends in any way.
+    drop(runner);
+    assert!(control::runner_gone(&dir, &state));
+    let gone = |result: Result<(), control::RunError>| {
+        matches!(result, Err(control::RunError::RunnerGone))
+    };
+    assert!(gone(control::cancel(&dir)));
+    assert!(gone(control::answer_gate(&dir, "approve", true)));
+    std::fs::create_dir_all(dir.join(control::QUESTIONS)).unwrap();
+    std::fs::write(dir.join(control::QUESTIONS).join("plan"), "A?").unwrap();
+    assert!(gone(control::answer_question(&dir, "plan", "A")));
+    assert!(!dir.join(control::CANCEL).exists());
+    assert!(!dir.join(control::ANSWERS).exists());
+    control::remove(data.path(), &dir).unwrap();
+    assert!(!dir.exists());
+    // An ended run is never gone: it ended.
+    state.ended = true;
+    assert!(!control::runner_gone(&dir, &state));
+}
+
+#[test]
+fn abort_fails_running_steps_and_cancels_the_rest() {
+    let mut state = RunState::new(&flow(), "p");
+    state.set("plan", StepStatus::Done);
+    state.set("approve", StepStatus::Running);
+    state.steps.get_mut("approve").unwrap().question = Some("A?".into());
+    state.abort("The runner stopped: disk full");
+    assert_eq!(state.status("plan"), StepStatus::Done);
+    assert_eq!(state.status("approve"), StepStatus::Failed);
+    assert_eq!(
+        state.steps["approve"].note.as_deref(),
+        Some("The runner stopped: disk full")
+    );
+    assert_eq!(state.steps["approve"].question, None);
+    assert_eq!(state.status("build"), StepStatus::Cancelled);
+    assert_eq!(flow().outcome(&state), Outcome::Stopped);
+}
+
+#[test]
+fn run_state_keeps_its_flow_file_and_reads_older_files_without_one() {
+    let mut state = RunState::new(&flow(), "p");
+    let older = serde_json::to_string(&state).unwrap();
+    assert!(!older.contains("\"file\""), "{older}");
+    state.file = Some("plan".into());
+    let text = serde_json::to_string(&state).unwrap();
+    assert_eq!(serde_json::from_str::<RunState>(&text).unwrap(), state);
+    let back: RunState = serde_json::from_str(&older).unwrap();
+    assert_eq!(back.file, None);
+}
+
+#[test]
+fn two_steps_with_one_worktree_name_are_refused() {
+    let two = one_step(
+        "id = \"a\"\ncommand = \"x\"\nworktree = \"w\"\n[[step]]\nid = \"b\"\ncommand = \"y\"\nworktree = \"W\"",
+    );
+    assert_eq!(
+        two,
+        Err(FlowError::DuplicateWorktree {
+            step: "b".into(),
+            first: "a".into(),
+            name: "W".into(),
+        })
+    );
+    let other = one_step(
+        "id = \"a\"\ncommand = \"x\"\nworktree = \"w\"\n[[step]]\nid = \"b\"\ncommand = \"y\"\nworktree = \"v\"",
+    );
+    assert!(other.is_ok());
 }
 
 #[test]
@@ -384,6 +471,7 @@ fn remove_never_follows_a_link_out_of_the_run_folder() {
 fn question_answer_needs_an_open_question_and_bounded_text() {
     let data = tempfile::tempdir().unwrap();
     let dir = save_run(data.path(), "a-1", &RunState::new(&flow(), "p"));
+    let _runner = control::hold_runner(&dir).unwrap();
     assert!(matches!(
         control::answer_question(&dir, "plan", "yes"),
         Err(control::RunError::NoQuestion)

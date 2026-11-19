@@ -15,9 +15,10 @@ pub(crate) struct Stay {
     /// When Run was clicked or, later, when the runner line was last seen
     /// waiting: `pending` counts only a short time after that.
     since: Instant,
-    /// Step terminals of all runs at the last time the editor took the
-    /// focus back.
-    pub(super) sessions: usize,
+    /// Step terminals of the runs of this editor's flow (project and flow
+    /// file) at the last time the editor took the focus back. `None`
+    /// until the first check after Run, which counts them.
+    pub(super) sessions: Option<usize>,
     /// When another tab took the focus with no new step terminal.
     pub(super) away: Option<Instant>,
 }
@@ -26,28 +27,50 @@ pub(super) const STAY_GRACE: Duration = Duration::from_secs(3);
 /// How long the wait for the runner's terminal lasts after Run.
 const STAY_PENDING: Duration = Duration::from_secs(10);
 
-/// The number of step terminals in `runs`.
-fn step_sessions(runs: &[crate::flows::Run]) -> usize {
+/// The number of step terminals in the runs of flow file `file` of
+/// `project`. A run from an older build (no file) does not count.
+pub(super) fn step_sessions(runs: &[crate::flows::Run], project: &str, file: &str) -> usize {
     runs.iter()
+        .filter(|run| run.of_flow(project, file, None))
         .flat_map(|run| run.state.steps.values())
         .filter(|step| step.session.is_some())
         .count()
 }
 
 impl Stay {
-    pub(super) fn after_run(path: &Path, runner: String, runs: &[crate::flows::Run]) -> Self {
+    /// After Run in the editor of `path`. The step terminals of its flow
+    /// are counted at the first check, in this frame, with the project of
+    /// `path` (the runs then are the same as at the click).
+    pub(super) fn after_run(path: &Path, runner: String, _runs: &[crate::flows::Run]) -> Self {
         Self {
             path: path.into(),
             runner,
             pending: true,
             since: Instant::now(),
-            sessions: step_sessions(runs),
+            sessions: None,
             away: None,
         }
     }
 }
 
 impl App {
+    /// The step terminals of the runs of the flow file at `path`, in the
+    /// project whose folder holds it.
+    fn flow_step_sessions(&self, path: &Path) -> usize {
+        let Some(file) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            return 0;
+        };
+        // `ROOT/.terminator/flows/FILE.toml`.
+        let root = path.ancestors().nth(3);
+        self.state
+            .projects
+            .iter()
+            .find(|project| Some(project.path.as_path()) == root)
+            .map_or(0, |project| {
+                step_sessions(&self.flows.runs, &project.id, file)
+            })
+    }
+
     /// Makes the workspace tab with the editor of `path` the active one.
     /// False when the selected project has no such tab.
     fn show_flow_tab(&mut self, path: &Path) -> bool {
@@ -83,14 +106,16 @@ impl App {
     /// its shell shows a prompt. Until then the editor takes nothing back:
     /// a hidden runner tab would keep the line, and the run would not start.
     pub(super) fn flow_stay_on_editor(&mut self) {
-        let waiting = self
-            .flows
-            .stay
-            .as_ref()
-            .is_some_and(|stay| stay.pending && self.runner_line_queued(&stay.runner));
+        let Some((waiting, sessions)) = self.flows.stay.as_ref().map(|stay| {
+            let waiting = stay.pending && self.runner_line_queued(&stay.runner);
+            (waiting, self.flow_step_sessions(&stay.path))
+        }) else {
+            return;
+        };
         let Some(stay) = &mut self.flows.stay else {
             return;
         };
+        let before = *stay.sessions.get_or_insert(sessions);
         if waiting {
             stay.since = Instant::now();
             stay.away = None;
@@ -100,14 +125,13 @@ impl App {
             stay.away = None;
             return;
         }
-        let sessions = step_sessions(&self.flows.runs);
         let pending = stay.pending && stay.since.elapsed() < STAY_PENDING;
-        if pending || sessions > stay.sessions {
+        if pending || sessions > before {
             let path = stay.path.clone();
             if self.show_flow_tab(&path) {
                 if let Some(stay) = &mut self.flows.stay {
                     stay.pending = false;
-                    stay.sessions = sessions;
+                    stay.sessions = Some(sessions);
                     stay.away = None;
                 }
                 return;

@@ -109,6 +109,57 @@ impl Ctl {
         Ok(true)
     }
 
+    /// The worktree `NAME` of a flow step: the checkout an earlier run made
+    /// when it is still a managed worktree of `source`'s repository on
+    /// branch `terminator/NAME`, else a new one. Nothing is reset, forced
+    /// or removed; the earlier checkout is used as it is.
+    pub(super) fn step_worktree(&self, source: &Project, name: &str) -> Result<Project> {
+        match self.earlier_worktree(source, name)? {
+            Some(project) => Ok(project),
+            None => self.spawn_worktree(source, name),
+        }
+    }
+
+    /// The project of the managed worktree at `terminator-NAME`, if any.
+    /// A folder there that is another checkout is an error.
+    fn earlier_worktree(&self, source: &Project, name: &str) -> Result<Option<Project>> {
+        let (branch, path) = worktree_target(&source.path, name)?;
+        let Ok(canonical) = path.canonicalize() else {
+            return Ok(None);
+        };
+        let Some(record) = self
+            .state
+            .worktrees
+            .iter()
+            .find(|w| !w.removed && (w.path == canonical || w.path == path))
+        else {
+            // Not a managed worktree: the add refuses the folder.
+            return Ok(None);
+        };
+        let common = worktrees::common_dir(&source.path)?;
+        let same = |a: &Path, b: &Path| {
+            a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+        };
+        ensure!(
+            same(&record.common_dir, &common),
+            "{} is a worktree of another repository",
+            canonical.display()
+        );
+        ensure!(
+            worktrees::existing(&common, &canonical, Some(&branch))?.is_some(),
+            "{} is not on branch {branch}, or it is locked or missing",
+            canonical.display()
+        );
+        let project = self
+            .state
+            .projects
+            .iter()
+            .find(|p| p.id == record.project_id)
+            .cloned()
+            .context("The earlier worktree is not a project")?;
+        Ok(Some(project))
+    }
+
     /// Adds `terminator/NAME` beside the project and returns its project.
     pub(super) fn spawn_worktree(&self, source: &Project, name: &str) -> Result<Project> {
         self.capability(WORKTREES_CAPABILITY)?;

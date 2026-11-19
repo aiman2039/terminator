@@ -243,12 +243,13 @@ fn run_flow(paths: Paths, project: &str, name: &str) -> Result<()> {
     ensure!(!dir.exists(), "Run {run} exists; try again");
     Output::line(format_args!("Run {run}: {}", flow.name));
     let outcome_of = flow.clone();
-    let state = runner::Runner::new(paths, project, flow, dir)?.run()?;
+    let state = runner::Runner::new(paths, project, (flow, name), dir)?.run()?;
     let outcome = match outcome_of.outcome(&state) {
         Outcome::Done => "done",
         Outcome::Active | Outcome::Stopped => "stopped",
     };
-    Output::line(format_args!("Run {run}: {outcome}"));
+    // After SIGHUP the terminal is gone; the run ended all the same.
+    Output::line_or_drop(format_args!("Run {run}: {outcome}"));
     if outcome != "done" {
         std::process::exit(1);
     }

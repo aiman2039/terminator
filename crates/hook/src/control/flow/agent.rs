@@ -14,7 +14,7 @@ use terminator_core::{
     atomic_write,
     flow::{
         RUN_DIR, RunState, StepStatus,
-        control::{QUESTIONS, REPLIES, bounded},
+        control::{self, QUESTIONS, REPLIES, bounded},
     },
 };
 
@@ -64,7 +64,8 @@ pub(super) fn own_step(data: &Path, session: Option<String>) -> Result<Own> {
                 run.status == StepStatus::Running && run.session.as_deref() == Some(&session)
             })
             .map(|(id, _)| id.clone());
-        if let Some(step) = step.filter(|_| !state.ended) {
+        // A run whose runner is gone reads no report and no answer.
+        if let Some(step) = step.filter(|_| !state.ended && control::alive(&dir)) {
             return Ok(Own { dir, step, state });
         }
     }
@@ -133,6 +134,11 @@ pub(super) fn ask(own: &Own, question: &str, timeout: Duration) -> Result<Value>
         if deadline.is_some_and(|at| Instant::now() >= at) {
             let _ = std::fs::remove_file(&asked);
             bail!("No answer in {} seconds", timeout.as_secs());
+        }
+        // Nobody can answer a run whose runner is gone.
+        if !control::alive(&own.dir) {
+            let _ = std::fs::remove_file(&asked);
+            bail!("The flow runner of this run is gone; no answer can come");
         }
         std::thread::sleep(POLL);
     }

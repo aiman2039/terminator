@@ -3,7 +3,8 @@ use terminator_core::flow::StepStatus;
 
 const FLOW: &str = "version = 1\nname = \"n\"\n[[step]]\nid = \"build\"\ncommand = \"x\"\n[[step]]\nid = \"ok\"\ngate = \"Good?\"\nneeds = [\"build\"]\n";
 
-fn run_folder(gate: StepStatus) -> tempfile::TempDir {
+/// A run folder whose runner (this test) holds the lock.
+fn run_folder(gate: StepStatus) -> (tempfile::TempDir, control::RunnerLock) {
     let dir = tempfile::tempdir().unwrap();
     let mut state = RunState::new(&flow::parse(FLOW).unwrap(), "p");
     state.set("ok", gate);
@@ -12,12 +13,13 @@ fn run_folder(gate: StepStatus) -> tempfile::TempDir {
         serde_json::to_vec(&state).unwrap(),
     )
     .unwrap();
-    dir
+    let runner = control::hold_runner(dir.path()).unwrap();
+    (dir, runner)
 }
 
 #[test]
 fn approve_is_written_only_for_a_gate_that_waits() {
-    let dir = run_folder(StepStatus::Running);
+    let (dir, _runner) = run_folder(StepStatus::Running);
     control::answer_gate(dir.path(), "ok", true).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join(ANSWERS).join("ok")).unwrap(),
@@ -31,7 +33,7 @@ fn approve_is_written_only_for_a_gate_that_waits() {
     // A command step, an unknown step, and a gate that does not wait.
     assert!(control::answer_gate(dir.path(), "build", true).is_err());
     assert!(control::answer_gate(dir.path(), "../x", true).is_err());
-    let waiting = run_folder(StepStatus::Waiting);
+    let (waiting, _waiting_runner) = run_folder(StepStatus::Waiting);
     assert!(control::answer_gate(waiting.path(), "ok", true).is_err());
     assert!(!waiting.path().join(ANSWERS).exists());
 }
@@ -77,8 +79,9 @@ fn flow_has_no_command_that_starts_a_flow_without_run() {
     assert!(parse(&["start", "p", "n"]).is_err());
 }
 
-/// A data folder with one run in which step `build` runs in session `s1`.
-fn data_with_run(ended: bool) -> (tempfile::TempDir, PathBuf) {
+/// A data folder with one run in which step `build` runs in session `s1`,
+/// and the lock of its runner (this test).
+fn data_with_run(ended: bool) -> (tempfile::TempDir, PathBuf, control::RunnerLock) {
     let data = tempfile::tempdir().unwrap();
     let dir = data.path().join(RUN_DIR).join("n-1");
     std::fs::create_dir_all(&dir).unwrap();
@@ -87,25 +90,39 @@ fn data_with_run(ended: bool) -> (tempfile::TempDir, PathBuf) {
     state.steps.get_mut("build").unwrap().session = Some("s1".into());
     state.ended = ended;
     std::fs::write(dir.join(STATE_FILE), serde_json::to_vec(&state).unwrap()).unwrap();
-    (data, dir)
+    let runner = control::hold_runner(&dir).unwrap();
+    (data, dir, runner)
 }
 
 #[test]
 fn agent_commands_find_only_the_running_step_of_their_terminal() {
-    let (data, dir) = data_with_run(false);
+    let (data, dir, runner) = data_with_run(false);
     let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
     assert_eq!(
         (own.step.as_str(), own.dir.as_path()),
         ("build", dir.as_path())
     );
     assert!(agent::own_step(data.path(), Some("other".into())).is_err());
-    let (ended, _) = data_with_run(true);
+    let (ended, _, _ended_runner) = data_with_run(true);
     assert!(agent::own_step(ended.path(), Some("s1".into())).is_err());
+    // A run whose runner is gone has no running step for its agent.
+    drop(runner);
+    assert!(agent::own_step(data.path(), Some("s1".into())).is_err());
+}
+
+#[test]
+fn ask_ends_when_the_runner_is_gone() {
+    let (data, dir, runner) = data_with_run(false);
+    let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
+    drop(runner);
+    let error = agent::ask(&own, "Anyone?", std::time::Duration::from_secs(20)).unwrap_err();
+    assert!(error.to_string().contains("gone"), "{error:#}");
+    assert!(control::question(&dir, "build").is_none());
 }
 
 #[test]
 fn context_names_the_run_the_step_and_the_needed_steps() {
-    let (data, dir) = data_with_run(false);
+    let (data, dir, _runner) = data_with_run(false);
     let mut state = read_state(&dir).unwrap();
     state.set("build", StepStatus::Done);
     state.set("ok", StepStatus::Running);
@@ -122,7 +139,7 @@ fn context_names_the_run_the_step_and_the_needed_steps() {
 
 #[test]
 fn report_is_recorded_for_the_runner_and_starts_nothing() {
-    let (data, dir) = data_with_run(false);
+    let (data, dir, _runner) = data_with_run(false);
     let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
     assert!(agent::read_report(&dir, "build").is_none());
     agent::report(&own, false, Some(" tests fail ")).unwrap();
@@ -140,7 +157,7 @@ fn report_is_recorded_for_the_runner_and_starts_nothing() {
 
 #[test]
 fn ask_waits_for_the_users_answer_and_returns_it() {
-    let (data, dir) = data_with_run(false);
+    let (data, dir, _runner) = data_with_run(false);
     // No open question: an answer is refused.
     assert!(control::answer_question(&dir, "build", "yes").is_err());
     let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
@@ -165,7 +182,7 @@ fn ask_waits_for_the_users_answer_and_returns_it() {
 
 #[test]
 fn ask_without_an_answer_ends_with_an_error_and_removes_the_question() {
-    let (data, dir) = data_with_run(false);
+    let (data, dir, _runner) = data_with_run(false);
     let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
     assert!(agent::ask(&own, "Anyone?", std::time::Duration::ZERO).is_err());
     assert!(control::question(&dir, "build").is_none());

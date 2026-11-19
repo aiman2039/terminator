@@ -3,7 +3,7 @@
 //! handoff note, a question with its answer, and a fixture agent whose
 //! prompt waits for the first hook report. The agent is `terminator-hook
 //! emit` with normalized hook events; no real agent runs.
-use super::super::harness::{Harness, Process, bin, id, output, wait_child};
+use super::super::harness::{Harness, Process, bin, git, id, output, wait_child};
 use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -13,7 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use terminator_core::quote;
+use terminator_core::{quote, signals::ProcSignal};
 
 pub fn flows() -> Result<()> {
     let h = Harness::new()?;
@@ -45,12 +45,19 @@ pub fn flows() -> Result<()> {
         case.flow(&["cancel", &run]).is_err(),
         "An ended run took a cancel"
     );
+    case.hangup_ends_the_run()?;
+    case.killed_runner_is_gone()?;
+    case.worktree_step_runs_twice()?;
     println!(
         "{}",
-        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true})
+        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true,"flow_sighup_ends_run":true,"flow_killed_runner_gone":true,"flow_worktree_second_run":true})
     );
     Ok(())
 }
+
+/// A flow whose only step is a gate: its run waits until a signal.
+const HOLD: &str =
+    "version = 1\nname = \"Hold\"\n\n[[step]]\nid = \"wait\"\ngate = \"Continue?\"\n";
 
 /// One fixture daemon with the flow's project.
 struct Case<'a> {
@@ -138,6 +145,120 @@ impl Case<'_> {
             format!("state: {state}\nterminal: {}", text.unwrap_or_default())
         })?;
         self.flow(&["answer", run, "ask", "Use A"])?;
+        Ok(())
+    }
+
+    /// Starts `flow run` of flow file `file` and gives its process and its
+    /// run folder (`flows/FILE-SECOND`), once the gate step waits.
+    fn start_hold(&self, file: &str) -> Result<(Process, PathBuf)> {
+        let flows = self.root.join(".terminator/flows");
+        fs::write(flows.join(format!("{file}.toml")), HOLD)?;
+        let mut command = self.h.command("terminator-hook");
+        command
+            .args(["flow", "run", id(&self.project), file])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null());
+        let runner = Process(command.spawn().context("flow run did not start")?);
+        let prefix = format!("{file}-");
+        let dir = until(20, "the waiting gate", || {
+            let found = fs::read_dir(self.h.root.join("flows"))?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|dir| {
+                    dir.file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+                });
+            Ok(found.filter(|dir| {
+                read_state(dir).is_ok_and(|state| is(&state, "/steps/wait/status", "running"))
+            }))
+        })?;
+        ensure!(
+            terminator_core::flow::control::alive(&dir),
+            "A live runner holds no lock"
+        );
+        Ok((runner, dir))
+    }
+
+    /// SIGHUP (its terminal tab closed) ends the run as cancelled.
+    fn hangup_ends_the_run(&self) -> Result<()> {
+        let (mut runner, dir) = self.start_hold("hangup")?;
+        terminator_core::signals::signal_process(runner.0.id(), ProcSignal::Hangup)?;
+        wait_child(&mut runner.0, Duration::from_secs(10))?;
+        let state = read_state(&dir)?;
+        ensure!(
+            state.get("ended") == Some(&Value::Bool(true)),
+            "SIGHUP left the run open: {state}"
+        );
+        ensure!(
+            is(&state, "/steps/wait/status", "cancelled") && is(&state, "/file", "hangup"),
+            "{state}"
+        );
+        Ok(())
+    }
+
+    /// SIGKILL writes nothing: the lock shows that the runner is gone.
+    /// Such a run takes no cancel, and Remove deletes it.
+    fn killed_runner_is_gone(&self) -> Result<()> {
+        let (mut runner, dir) = self.start_hold("killed")?;
+        terminator_core::signals::signal_process(runner.0.id(), ProcSignal::Kill)?;
+        wait_child(&mut runner.0, Duration::from_secs(10))?;
+        let state = read_state(&dir)?;
+        ensure!(state.get("ended") != Some(&Value::Bool(true)), "{state}");
+        ensure!(
+            !terminator_core::flow::control::alive(&dir),
+            "A killed runner still holds its lock"
+        );
+        let run = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .context("run name")?;
+        ensure!(
+            self.flow(&["cancel", &run]).is_err() && self.flow(&["approve", &run, "wait"]).is_err(),
+            "A run without a runner took an answer"
+        );
+        terminator_core::flow::control::remove(&self.h.root, &dir)?;
+        ensure!(!dir.exists(), "The run of a killed runner stayed");
+        Ok(())
+    }
+
+    /// A step with `worktree` makes the worktree on the first run and runs
+    /// in that same checkout on the second run.
+    fn worktree_step_runs_twice(&self) -> Result<()> {
+        let author = [
+            "-c",
+            "user.name=Flow",
+            "-c",
+            "user.email=flow@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        git(&self.root, &["init", "-q"])?;
+        git(&self.root, &[&author[..], &["add", "-A"]].concat())?;
+        git(
+            &self.root,
+            &[&author[..], &["commit", "-q", "-m", "init"]].concat(),
+        )?;
+        let hook = quote(&bin().join("terminator-hook").to_string_lossy());
+        let text = format!(
+            "version = 1\nname = \"Tree\"\n\n[[step]]\nid = \"work\"\nworktree = \"flowtree\"\ncommand = \"{hook} flow report done\"\n"
+        );
+        fs::write(self.root.join(".terminator/flows/tree.toml"), text)?;
+        for round in ["first", "second"] {
+            // Run folders are named by the second; two runs need two.
+            thread::sleep(Duration::from_millis(1100));
+            self.flow(&["run", id(&self.project), "tree"])
+                .with_context(|| format!("The {round} run of a worktree step failed"))?;
+        }
+        let checkout = self
+            .root
+            .parent()
+            .context("project parent")?
+            .join("terminator-flowtree");
+        let branch = git(&checkout, &["branch", "--show-current"])?;
+        ensure!(
+            String::from_utf8_lossy(&branch).trim() == "terminator/flowtree",
+            "The step's worktree is not on its branch"
+        );
         Ok(())
     }
 

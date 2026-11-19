@@ -106,7 +106,7 @@ pub(super) fn starting_banner(ui: &mut egui::Ui, colors: Colors) {
 /// The banner of `run`. True when the user closed it (an ended run only).
 pub(super) fn run_banner(ui: &mut egui::Ui, run: &Run, colors: Colors) -> bool {
     let mut closed = false;
-    let status = run_status(&run.state);
+    let status = run_status(run);
     let total = run.state.steps.len();
     let done = run
         .state
@@ -138,19 +138,25 @@ pub(super) fn run_banner(ui: &mut egui::Ui, run: &Run, colors: Colors) -> bool {
                 }
                 // An ended run is old news: its banner can go away. A
                 // newer run has its own banner.
-                if run.state.ended {
+                if run.ended() {
                     closed = appearance::sidebar_action(ui, "X", "Hide this banner").clicked();
                 }
             });
-            if !run.state.ended {
-                ui.label(
-                    egui::RichText::new(
-                        "Each step runs in its own terminal: use Show terminal on its card. \
-                         Cancel run is in the Flows tool window.",
-                    )
-                    .small()
-                    .weak(),
-                );
+            let hint = if run.gone {
+                Some(
+                    "The runner's terminal closed or its process stopped, so nothing \
+                     changes this run again. Step terminals stay open. Run starts a new run.",
+                )
+            } else if !run.state.ended {
+                Some(
+                    "Each step runs in its own terminal: use Show terminal on its card. \
+                     Cancel run is in the Flows tool window.",
+                )
+            } else {
+                None
+            };
+            if let Some(hint) = hint {
+                ui.label(egui::RichText::new(hint).small().weak());
             }
         });
     ui.add_space(2.0);

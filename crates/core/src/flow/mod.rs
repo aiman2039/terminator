@@ -10,7 +10,8 @@
 //! id = "plan"
 //! command = "claude"            # typed in a new terminal
 //! prompt = "Write the plan."    # optional, sent when the agent waits
-//! worktree = "plan"             # optional, new worktree terminator/plan
+//! worktree = "plan"             # optional, worktree terminator/plan (made
+//!                               # on the first run, used again later)
 //!
 //! [[step]]
 //! id = "approve"
@@ -82,6 +83,14 @@ pub enum FlowError {
     Cwd(String),
     #[error("Step \"{0}\": worktree must be letters, digits, '-', '_' or '.'")]
     Worktree(String),
+    #[error(
+        "Step \"{step}\": worktree \"{name}\" is also the worktree of step \"{first}\"; give each step its own worktree name"
+    )]
+    DuplicateWorktree {
+        step: String,
+        first: String,
+        name: String,
+    },
     #[error("Step \"{step}\" needs unknown step \"{needs}\"")]
     UnknownNeed { step: String, needs: String },
     #[error("Step \"{0}\" is part of a cycle")]
@@ -98,7 +107,9 @@ pub enum StepKind {
         prompt: Option<String>,
         /// Folder relative to the project (or to the step's worktree).
         cwd: Option<String>,
-        /// Name of a new worktree for this step (branch `terminator/NAME`).
+        /// Name of this step's worktree (branch `terminator/NAME`): made on
+        /// the first run, and that same checkout on later runs. Unique in
+        /// a flow.
         worktree: Option<String>,
     },
     /// Stop until the user approves `message`.
@@ -206,6 +217,7 @@ impl Draft {
             steps,
         };
         flow.check_graph()?;
+        flow.check_worktrees()?;
         Ok(flow)
     }
 
@@ -356,6 +368,29 @@ impl Flow {
             Some(rules) => format!("{rules}\n\n{prompt}"),
             None => prompt.to_owned(),
         }
+    }
+
+    /// One step per worktree name. Names that differ only in case are the
+    /// same folder on a file system that ignores case.
+    fn check_worktrees(&self) -> Result<(), FlowError> {
+        let mut seen = BTreeMap::new();
+        for step in &self.steps {
+            let StepKind::Command {
+                worktree: Some(name),
+                ..
+            } = &step.kind
+            else {
+                continue;
+            };
+            if let Some(first) = seen.insert(name.to_ascii_lowercase(), step.id.as_str()) {
+                return Err(FlowError::DuplicateWorktree {
+                    step: step.id.clone(),
+                    first: first.to_owned(),
+                    name: name.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Unique IDs, known `needs` and no cycle.

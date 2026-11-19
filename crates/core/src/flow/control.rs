@@ -17,6 +17,8 @@ pub const QUESTIONS: &str = "questions";
 pub const REPLIES: &str = "replies";
 /// Longest note, question or answer, in bytes.
 pub const MAX_TEXT: usize = 16 * 1024;
+/// File in a run folder that the runner keeps locked while it lives.
+pub const RUNNER_LOCK: &str = "runner.lock";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -26,6 +28,10 @@ pub enum RunError {
     State,
     #[error("This run ended")]
     Ended,
+    #[error(
+        "The runner of this run is gone (its terminal closed, or the process stopped). Nothing reads this run now; remove it and run the flow again"
+    )]
+    RunnerGone,
     #[error("This step is not a gate that waits for an answer")]
     NotGate,
     #[error("Unknown step")]
@@ -90,11 +96,52 @@ fn write(dir: &Path, folder: &str, step: &str, bytes: &[u8]) -> Result<(), RunEr
     Ok(crate::atomic_write(&dir.join(folder).join(step), bytes)?)
 }
 
-/// A run that did not end.
+/// The runner's exclusive lock on [`RUNNER_LOCK`] in its run folder, held
+/// while this value lives. The OS releases it when the runner ends in any
+/// way (also SIGKILL or a reboot), so a reader that can take the lock knows
+/// that the runner is gone.
+pub struct RunnerLock {
+    _file: std::fs::File,
+}
+
+/// Take the runner's lock. Call it before the first state file write.
+pub fn hold_runner(dir: &Path) -> Result<RunnerLock, RunError> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(RUNNER_LOCK))?;
+    file.lock()?;
+    Ok(RunnerLock { _file: file })
+}
+
+/// True while a runner holds the lock of the run in `dir`. A run with no
+/// lock file (from an older build) has no runner that can be seen, so it
+/// counts as gone. A lock that cannot be checked counts as held. Blocking:
+/// call it off the GUI thread.
+pub fn alive(dir: &Path) -> bool {
+    let file = match std::fs::File::open(dir.join(RUNNER_LOCK)) {
+        Ok(file) => file,
+        Err(error) => return error.kind() != std::io::ErrorKind::NotFound,
+    };
+    // A shared lock taken here goes away with `file`.
+    !matches!(file.try_lock_shared(), Ok(()))
+}
+
+/// A run that did not end and whose runner is gone: nothing changes it
+/// again. Blocking: call it off the GUI thread.
+pub fn runner_gone(dir: &Path, state: &RunState) -> bool {
+    !state.ended && !alive(dir)
+}
+
+/// A run that did not end, with its runner.
 fn open(dir: &Path) -> Result<RunState, RunError> {
     let state = read_state(dir)?;
     if state.ended {
         return Err(RunError::Ended);
+    }
+    if !alive(dir) {
+        return Err(RunError::RunnerGone);
     }
     Ok(state)
 }
@@ -135,10 +182,10 @@ pub fn cancel(dir: &Path) -> Result<(), RunError> {
     Ok(std::fs::write(dir.join(CANCEL), b"")?)
 }
 
-/// Delete the folder of an ended run. `dir` must be a real folder (not a
-/// link) directly in the run folder of `data`, with a plain name and a
-/// readable state file. Its sessions are not touched. Blocking: call it
-/// off the GUI thread.
+/// Delete the folder of an ended run, or of a run whose runner is gone.
+/// `dir` must be a real folder (not a link) directly in the run folder of
+/// `data`, with a plain name and a readable state file. Its sessions are
+/// not touched. Blocking: call it off the GUI thread.
 pub fn remove(data: &Path, dir: &Path) -> Result<(), RunError> {
     let plain = dir
         .file_name()
@@ -152,7 +199,7 @@ pub fn remove(data: &Path, dir: &Path) -> Result<(), RunError> {
     if parent.as_deref() != Some(runs.as_path()) {
         return Err(RunError::NotRun);
     }
-    if !read_state(dir)?.ended {
+    if !read_state(dir)?.ended && alive(dir) {
         return Err(RunError::NotEnded);
     }
     // `remove_dir_all` deletes links inside the folder, never their targets.

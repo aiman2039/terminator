@@ -19,7 +19,7 @@ pub(super) fn run_summary(run: &Run) -> String {
         .values()
         .filter(|step| step.status == StepStatus::Done)
         .count();
-    format!("{} · {done} of {total} steps done", run_status(&run.state))
+    format!("{} · {done} of {total} steps done", run_status(run))
 }
 
 /// A note laid out in at most [`NOTE_ROWS`] rows of `width`.
@@ -51,7 +51,7 @@ impl App {
             .expanded
             .get(&run.dir)
             .copied()
-            .unwrap_or(index == 0 || !run.state.ended)
+            .unwrap_or(index == 0 || !run.ended())
     }
 
     pub(super) fn flow_run_rows(
@@ -100,7 +100,7 @@ impl App {
         let tint = appearance::color(&self.theme.text);
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if run.state.ended {
+                if run.ended() {
                     if appearance::sidebar_action(
                         ui,
                         "Trash",
@@ -113,10 +113,16 @@ impl App {
                 } else if appearance::sidebar_action(ui, "CircleStop", "Cancel run…").clicked() {
                     *act = Some(Act::AskCancel(run.dir.clone()));
                 }
-                let hover = if open {
-                    format!("Run {name}. Click to hide its steps.")
+                let gone = if run.gone {
+                    " Its runner is gone (its terminal closed or the process stopped), \
+                     so nothing changes this run again."
                 } else {
-                    format!("Run {name}. Click to show its steps.")
+                    ""
+                };
+                let hover = if open {
+                    format!("Run {name}.{gone} Click to hide its steps.")
+                } else {
+                    format!("Run {name}.{gone} Click to show its steps.")
                 };
                 let row = appearance::row(appearance::RowInput {
                     ui,

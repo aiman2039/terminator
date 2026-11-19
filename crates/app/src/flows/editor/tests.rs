@@ -533,6 +533,7 @@ fn banner_says_starting_after_run_and_an_ended_run_banner_can_be_hidden() {
         crate::flows::Run {
             dir: project.path().join(name),
             state,
+            gone: false,
         }
     };
     let show = |app: &mut App, runs: Vec<crate::flows::Run>| {
@@ -589,6 +590,7 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     app.flows.runs = vec![crate::flows::Run {
         dir: project.path().join("run"),
         state,
+        gone: false,
     }];
     // No read of the run folders replaces this run in the next frames.
     app.flows.read_at = Some(Instant::now());
@@ -610,6 +612,64 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
 }
 
 #[test]
+fn cards_show_only_the_runs_of_their_own_flow_file() {
+    use terminator_core::flow::{RunState, StepStatus};
+    let project = project_with_flows();
+    // A second file with the same display name, "Build".
+    let path = flow_path(project.path(), "build");
+    std::fs::copy(&path, flow_path(project.path(), "copy")).unwrap();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    settle(&mut app, &ctx, &path);
+    let flow = flow::files::load(project.path(), "build").unwrap();
+    let run = |file: &str, gone: bool| {
+        let mut state = RunState::new(&flow, "p");
+        state.file = Some(file.to_owned());
+        state.set("one", StepStatus::Done);
+        state.set("ok", StepStatus::Running);
+        if gone {
+            state.cancel();
+        }
+        crate::flows::Run {
+            dir: project.path().join(format!("{file}-1")),
+            state,
+            gone,
+        }
+    };
+    let show = |app: &mut App, runs: Vec<crate::flows::Run>| {
+        app.flows.runs = runs;
+        app.flows.read_at = Some(Instant::now());
+        settle(app, &ctx, &path)
+    };
+
+    // The run of the other file with the same name is not this flow's run.
+    let text = show(&mut app, vec![run("copy", false)]);
+    assert_eq!(count(&text, "Approve"), 0, "{text:?}");
+    assert_eq!(count(&text, "Run running"), 0, "{text:?}");
+    let text = show(&mut app, vec![run("copy", false), run("build", false)]);
+    assert_eq!(count(&text, "Approve"), 1, "{text:?}");
+    assert_eq!(count(&text, "Run running"), 1, "{text:?}");
+
+    // A run whose runner is gone is stopped: no Approve, and Run applies.
+    let text = show(&mut app, vec![run("build", true)]);
+    assert_eq!(count(&text, "Approve"), 0, "{text:?}");
+    assert_eq!(count(&text, "Run stopped (runner gone)"), 1, "{text:?}");
+    let toolbar = "2 steps · Saved · Run: stopped (runner gone)";
+    assert_eq!(count(&text, toolbar), 1, "{text:?}");
+
+    // Only this flow's step terminals keep the app on its editor.
+    let mut other = run("copy", false);
+    other.state.steps.get_mut("one").unwrap().session = Some("s1".into());
+    let mut own = run("build", false);
+    own.state.steps.get_mut("one").unwrap().session = Some("s2".into());
+    let mut elsewhere = run("build", false);
+    elsewhere.state.project = "other".into();
+    elsewhere.state.steps.get_mut("one").unwrap().session = Some("s3".into());
+    let runs = [other, own, elsewhere];
+    assert_eq!(super::stay::step_sessions(&runs, "p", "build"), 1);
+}
+
+#[test]
 fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
     let project = project_with_flows();
     let (mut app, _received, _data) = app_with_project(project.path());
@@ -626,14 +686,14 @@ fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
     app.flows.begin_frame();
     app.flows.mark_visible(&path);
     app.flow_editors_end_frame();
-    assert_eq!(stay(&app), Some((true, 0)));
+    assert_eq!(stay(&app), Some((true, Some(0))));
 
     // Another tab took the focus with no new step terminal (the user went
     // there): the editor waits a moment for a late read, and takes nothing.
     app.flows.stay.as_mut().unwrap().pending = false;
     app.flows.begin_frame();
     app.flow_editors_end_frame();
-    assert_eq!(stay(&app), Some((false, 0)));
+    assert_eq!(stay(&app), Some((false, Some(0))));
     assert!(app.flows.stay.as_ref().unwrap().away.is_some());
     app.flows.stay.as_mut().unwrap().away =
         Instant::now().checked_sub(STAY_GRACE.saturating_mul(2));
@@ -647,7 +707,7 @@ fn run_keeps_the_app_on_the_editor_until_the_user_goes_away() {
     app.flows.stay = Some(Stay::after_run(&path, "runner".into(), &[]));
     app.flows.begin_frame();
     app.flow_editors_end_frame();
-    assert_eq!(stay(&app), Some((true, 0)));
+    assert_eq!(stay(&app), Some((true, Some(0))));
     app.flows.stay.as_mut().unwrap().away =
         Instant::now().checked_sub(STAY_GRACE.saturating_mul(2));
     app.flows.begin_frame();

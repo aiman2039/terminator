@@ -9,7 +9,7 @@ use crate::*;
 use std::path::PathBuf;
 use std::sync::mpsc::{TryRecvError, channel};
 use terminator_core::flow::{
-    RunState, StepRun, StepStatus,
+    StepRun, StepStatus,
     control::{self, RunError},
 };
 
@@ -39,13 +39,20 @@ pub(super) enum Act {
     Clear(Vec<PathBuf>),
 }
 
-/// "running", "done" or "stopped".
-pub(super) fn run_status(state: &RunState) -> &'static str {
-    let done = state
+/// The run status shown for a run whose runner is gone.
+pub(super) const RUNNER_GONE: &str = "stopped (runner gone)";
+
+/// "running", "done", "stopped" or [`RUNNER_GONE`].
+pub(super) fn run_status(run: &Run) -> &'static str {
+    if run.gone {
+        return RUNNER_GONE;
+    }
+    let done = run
+        .state
         .steps
         .values()
         .all(|step| step.status == StepStatus::Done);
-    match (state.ended, done) {
+    match (run.state.ended, done) {
         (false, _) => "running",
         (true, true) => "done",
         (true, false) => "stopped",
@@ -113,7 +120,7 @@ impl App {
                 .spawn(move || {
                     let runs = control::recent_runs(&data, READ_RUNS)
                         .into_iter()
-                        .map(|(dir, state)| Run { dir, state })
+                        .map(|(dir, state)| Run::read(dir, state))
                         .collect();
                     let _ = sender.send(runs);
                 });
@@ -149,7 +156,7 @@ impl App {
         self.flows
             .runs
             .iter()
-            .filter(|run| run.state.ended)
+            .filter(|run| run.ended())
             .filter(|run| self.selected.as_deref() == Some(run.state.project.as_str()))
             .map(|run| run.dir.clone())
             .collect()

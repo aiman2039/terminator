@@ -66,6 +66,10 @@ pub struct RunState {
     pub version: u32,
     /// The flow's name, for display.
     pub flow: String,
+    /// The flow file name without `.toml`: what finds the runs of one flow
+    /// file. A run from an older build has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     /// The project's ID.
     pub project: String,
     /// The runner ended; nothing changes after this.
@@ -90,6 +94,7 @@ impl RunState {
         Self {
             version: super::VERSION,
             flow: flow.name.clone(),
+            file: None,
             project: project.to_owned(),
             ended: false,
             order: flow.steps.iter().map(|step| step.id.clone()).collect(),
@@ -122,14 +127,29 @@ impl RunState {
     }
 
     /// Mark every step that did not end as cancelled. A cancelled step
-    /// waits for nothing.
+    /// waits for nothing and has no open question.
     pub fn cancel(&mut self) {
         for step in self.steps.values_mut() {
             if matches!(step.status, StepStatus::Waiting | StepStatus::Running) {
                 step.status = StepStatus::Cancelled;
                 step.waits_for = None;
+                step.question = None;
             }
         }
+    }
+
+    /// The runner stopped on an error: a running step fails with `note`
+    /// (its terminal stays), and a step that did not start is cancelled.
+    pub fn abort(&mut self, note: &str) {
+        for step in self.steps.values_mut() {
+            if step.status == StepStatus::Running {
+                step.status = StepStatus::Failed;
+                step.note = Some(note.to_owned());
+                step.waits_for = None;
+                step.question = None;
+            }
+        }
+        self.cancel();
     }
 }
 

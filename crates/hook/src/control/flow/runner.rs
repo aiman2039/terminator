@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 use terminator_core::{
-    flow::{Flow, Outcome, RunState, STATE_FILE, Step, StepKind, StepStatus},
+    flow::{Flow, Outcome, RunState, STATE_FILE, Step, StepKind, StepStatus, control},
     *,
 };
 
@@ -49,18 +49,30 @@ pub(super) struct Runner {
     phases: BTreeMap<String, (Phase, Instant)>,
     /// The last state file text.
     saved: Vec<u8>,
-    /// Ctrl-C or SIGTERM: cancel the run.
+    /// Ctrl-C, SIGTERM or SIGHUP (its terminal closed): cancel the run.
     interrupted: Arc<AtomicBool>,
 }
 
 impl Runner {
-    pub(super) fn new(paths: Paths, project: Project, flow: Flow, dir: PathBuf) -> Result<Self> {
+    /// The runner of flow file `file` (`flow` is its content).
+    pub(super) fn new(
+        paths: Paths,
+        project: Project,
+        (flow, file): (Flow, &str),
+        dir: PathBuf,
+    ) -> Result<Self> {
         let interrupted = Arc::new(AtomicBool::new(false));
-        for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        for signal in [
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+        ] {
             signal_hook::flag::register(signal, Arc::clone(&interrupted))?;
         }
+        let mut state = RunState::new(&flow, &project.id);
+        state.file = Some(file.to_owned());
         Ok(Self {
-            state: RunState::new(&flow, &project.id),
+            state,
             paths,
             project,
             flow,
@@ -73,8 +85,26 @@ impl Runner {
 
     /// Runs until every step is done, a step stops the run, or the user
     /// cancels. A cancel starts no new step and leaves sessions alone.
+    /// The run ends (`ended`) also when the loop fails; a runner that dies
+    /// without a write lets its lock go, so readers see it gone.
     pub(super) fn run(mut self) -> Result<RunState> {
         std::fs::create_dir_all(self.dir.join(ANSWERS))?;
+        // Before the first state file write: a reader never sees this run
+        // without its runner's lock.
+        let _lock = control::hold_runner(&self.dir)?;
+        let looped = self.run_loop();
+        if let Err(error) = &looped {
+            self.state
+                .abort(&format!("The flow runner stopped: {error:#}"));
+        }
+        self.state.ended = true;
+        let saved = self.save();
+        looped?;
+        saved?;
+        Ok(self.state)
+    }
+
+    fn run_loop(&mut self) -> Result<()> {
         self.save()?;
         loop {
             if self.interrupted.load(Ordering::Relaxed) || self.dir.join(CANCEL).exists() {
@@ -100,9 +130,7 @@ impl Runner {
             }
             std::thread::sleep(POLL);
         }
-        self.state.ended = true;
-        self.save()?;
-        Ok(self.state)
+        Ok(())
     }
 
     fn save(&mut self) -> Result<()> {
@@ -126,7 +154,7 @@ impl Runner {
             Ok(phase) => {
                 self.state.set(&step.id, StepStatus::Running);
                 self.phases.insert(step.id.clone(), (phase, Instant::now()));
-                Output::line(format_args!("{}: started", step.id));
+                Output::line_or_drop(format_args!("{}: started", step.id));
             }
             Err(error) => self.finish(&step.id, Some(Err(format!("{error:#}")))),
         }
@@ -147,7 +175,7 @@ impl Runner {
         let ctl = Ctl::connect(&self.paths)?;
         let mut project = self.project.clone();
         if let Some(name) = worktree {
-            project = ctl.spawn_worktree(&project, name)?;
+            project = ctl.step_worktree(&project, name)?;
         }
         let session = ctl.create_session(NewSession {
             project: &project,
@@ -211,7 +239,7 @@ impl Runner {
 
     fn announce_gate(&self, step: &Step, message: &str) {
         let run = self.run_name();
-        Output::line(format_args!(
+        Output::line_or_drop(format_args!(
             "{id}: gate: {message}\n  terminator-hook flow approve {run} {id}\n  terminator-hook flow reject {run} {id}",
             id = step.id
         ));
@@ -254,7 +282,7 @@ impl Runner {
         }
         let run = self.run_name();
         for (id, session, question) in asked {
-            Output::line(format_args!(
+            Output::line_or_drop(format_args!(
                 "{id}: question: {question}\n  terminator-hook flow answer {run} {id} \"...\""
             ));
             self.notify(session, "Flow question", &question);
@@ -349,10 +377,10 @@ impl Runner {
             None => return,
             Some(Ok(())) => {
                 self.state.set(id, StepStatus::Done);
-                Output::line(format_args!("{id}: done"));
+                Output::line_or_drop(format_args!("{id}: done"));
             }
             Some(Err(note)) => {
-                Output::line(format_args!("{id}: failed: {note}"));
+                Output::line_or_drop(format_args!("{id}: failed: {note}"));
                 self.state.fail(id, note);
             }
         }

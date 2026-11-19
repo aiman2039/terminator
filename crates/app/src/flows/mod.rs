@@ -40,9 +40,43 @@ pub(crate) struct LoadedFlows {
 }
 
 /// One run with its folder.
+#[derive(Clone)]
 pub(crate) struct Run {
     pub(crate) dir: PathBuf,
     pub(crate) state: RunState,
+    /// The run did not end, but its runner is gone (its terminal closed,
+    /// the process was killed, or the computer restarted): nothing
+    /// changes it again. Its steps that did not end show as cancelled.
+    pub(crate) gone: bool,
+}
+
+impl Run {
+    /// A run as the worker thread reads it. Blocking (the runner's lock):
+    /// call it off the GUI thread.
+    pub(crate) fn read(dir: PathBuf, mut state: RunState) -> Self {
+        let gone = terminator_core::flow::control::runner_gone(&dir, &state);
+        if gone {
+            // Approve, answers and Cancel go to no runner, so they do not show.
+            state.cancel();
+        }
+        Self { dir, state, gone }
+    }
+
+    /// Ended, or its runner is gone: Remove and Run again apply.
+    pub(crate) fn ended(&self) -> bool {
+        self.state.ended || self.gone
+    }
+
+    /// True for a run of the flow file `file` of `project`. A run from an
+    /// older build names no file; then the flow's display name `name`
+    /// decides, when there is one.
+    pub(crate) fn of_flow(&self, project: &str, file: &str, name: Option<&str>) -> bool {
+        self.state.project == project
+            && match &self.state.file {
+                Some(run_file) => run_file == file,
+                None => name.is_some_and(|name| self.state.flow == name),
+            }
+    }
 }
 
 /// The Run flow window and the Flows tool window.
