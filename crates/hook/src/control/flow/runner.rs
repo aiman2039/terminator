@@ -7,6 +7,7 @@ use super::{
         lookup::{Ctl, NewSession},
     },
     ANSWERS, CANCEL, agent,
+    cancel::Cancelled,
     progress::{ENDED, Phase, Progress, Wait, progress, with_results},
     retry::take_retries,
 };
@@ -133,16 +134,14 @@ impl Runner {
     fn run_loop(&mut self) -> Result<()> {
         self.save()?;
         loop {
-            if self.interrupted.load(Ordering::Relaxed) || self.dir.join(CANCEL).exists() {
+            if self.cancelled() {
                 self.state.cancel();
                 self.changed = true;
                 break;
             }
             self.retries();
             self.skips();
-            for step in self.ready() {
-                self.start(&step);
-            }
+            self.start_ready();
             self.poll_running();
             self.sync_questions();
             self.save()?;
@@ -173,10 +172,6 @@ impl Runner {
         }
     }
 
-    fn ready(&self) -> Vec<Step> {
-        self.flow.ready(&self.state).into_iter().cloned().collect()
-    }
-
     /// Writes the state file when the state changed.
     fn save(&mut self) -> Result<()> {
         if !self.changed {
@@ -191,7 +186,16 @@ impl Runner {
         Ok(())
     }
 
-    fn start(&mut self, step: &Step) {
+    /// Cancel or a signal (SIGINT, SIGTERM, SIGHUP) came: no step starts.
+    pub(super) fn cancelled(&self) -> bool {
+        self.interrupted.load(Ordering::Relaxed) || self.dir.join(CANCEL).exists()
+    }
+
+    pub(super) fn ready(&self) -> Vec<Step> {
+        self.flow.ready(&self.state).into_iter().cloned().collect()
+    }
+
+    pub(super) fn start(&mut self, step: &Step) {
         let started = match &step.kind {
             StepKind::Gate { message, options } => {
                 self.announce_gate(step, message, options);
@@ -199,7 +203,14 @@ impl Runner {
             }
             StepKind::Command { .. } => self.start_command(step),
         };
+        self.started(step, started);
+    }
+
+    /// Records the result of a launch. A launch that Cancel stopped leaves
+    /// its step waiting: the run's cancel marks it cancelled, not failed.
+    pub(super) fn started(&mut self, step: &Step, started: Result<Phase>) {
         match started {
+            Err(error) if error.is::<Cancelled>() => {}
             Ok(phase) => {
                 self.state.set(&step.id, StepStatus::Running);
                 if let Some(run) = self.state.steps.get_mut(&step.id) {
@@ -229,6 +240,11 @@ impl Runner {
         let mut project = self.project.clone();
         if let Some(name) = worktree {
             project = ctl.step_worktree(&project, name)?;
+        }
+        // The worktree can take seconds: Cancel during it starts no
+        // terminal.
+        if self.cancelled() {
+            return Err(Cancelled.into());
         }
         let session = ctl.create_session(NewSession {
             project: &project,

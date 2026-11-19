@@ -18,6 +18,7 @@
 //! (also MCP tools); the user answers with `flow answer`. The MCP server
 //! has no tool for the user's side or for `flow run`.
 mod agent;
+mod cancel;
 mod gates;
 mod progress;
 mod retry;
@@ -366,6 +367,8 @@ fn run_dir(paths: &Paths, run: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+#[cfg(test)]
+mod cancel_tests;
 #[cfg(test)]
 mod gates_tests;
 #[cfg(test)]
