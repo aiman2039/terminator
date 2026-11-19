@@ -1,39 +1,41 @@
-//! How the flow editor's graph shows in `egui-snarl`: each node is a card
-//! of one step. The dot on the left edge is "after" and the dot on the
-//! right edge is "then": a wire from the right dot of A to the left dot of
-//! B means that B needs A. The "After" row of a card shows the same wires
-//! as chips, so a wire can be made and removed without a drag. A click on
-//! the prompt (or the question) opens the card's dialog with large fields.
-pub(super) use super::canvas::{add_node, fit_view, style};
-use super::model::{Node, free_id, input, output};
+//! How the flow editor's graph shows in `egui-snarl`: each node is a
+//! compact, read-only card of one step (`cards`). The dot on the left edge
+//! is "after" and the dot on the right edge is "then": a wire from the
+//! right dot of A to the left dot of B means that B needs A. A click on a
+//! card selects it, and the inspector beside the canvas edits it. In a
+//! run, the dots and wires take the color of their source step's state.
+pub(super) use super::canvas::{Sizes, add_node, duplicate, fit_view, style};
+use super::inspector::CheckError;
+use super::model::{Node, input, output, would_cycle};
+use super::style::Colors;
 use crate::appearance;
-use crate::flows::panel::step_icon;
+use crate::flows::status::{StepStyle, chip, step_style};
 use egui_snarl::{
     InPin, NodeId, OutPin, Snarl,
     ui::{AnyPins, PinInfo, SnarlPin, SnarlViewer},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use terminator_core::flow::{StepRun, StepStatus};
 
-/// Width of the fields in a card.
-const FIELD_WIDTH: f32 = 250.0;
-const ID_WIDTH: f32 = 130.0;
-/// Lines and characters of a prompt that a card shows.
-const PREVIEW_LINES: usize = 4;
-const PREVIEW_CHARS: usize = 220;
+/// Width of a card's content.
+pub(super) const CARD_WIDTH: f32 = 196.0;
 
-/// The editor's colors, from the app theme.
-#[derive(Clone, Copy)]
-pub(super) struct Colors {
-    pub(super) canvas: egui::Color32,
-    pub(super) node: egui::Color32,
-    pub(super) border: egui::Color32,
-    /// Wires, dots and the label of a step.
-    pub(super) step: egui::Color32,
-    /// The outline and the label of a gate.
-    pub(super) gate: egui::Color32,
-    /// A step that failed in the shown run.
-    pub(super) failed: egui::Color32,
+/// What the user did on the canvas this frame.
+#[derive(Default)]
+pub(super) struct Out {
+    /// The session of the step whose terminal the user asked for.
+    pub(super) go: Option<String>,
+    /// The gate that the user approved (true) or rejected.
+    pub(super) answer: Option<(String, bool)>,
+    /// The question step whose typed answer the user sent.
+    pub(super) send: Option<String>,
+    /// The card that the user clicked or asked to edit.
+    pub(super) select: Option<NodeId>,
+    /// A primary click landed on a card.
+    pub(super) on_card: bool,
+    /// The user asked for Fit to view, or Tidy layout.
+    pub(super) refit: bool,
+    pub(super) tidy: bool,
 }
 
 /// The viewer of one frame.
@@ -42,157 +44,55 @@ pub(super) struct Viewer<'a> {
     /// The steps of the newest run of this flow, by step ID: each card
     /// shows its step's state.
     pub(super) run: Option<&'a BTreeMap<String, StepRun>>,
-    /// Out: the session of the step whose terminal the user asked for.
-    pub(super) go: Option<String>,
-    /// Out: the gate that the user approved (true) or rejected.
-    pub(super) answer: Option<(String, bool)>,
+    /// Typed answers of the shown run's questions, by step ID.
+    pub(super) drafts: &'a mut HashMap<String, String>,
+    pub(super) selected: Option<NodeId>,
+    /// The first check error of the graph, on the card it concerns.
+    pub(super) error: Option<&'a CheckError>,
+    /// The measured card sizes: written each frame, read by Fit.
+    pub(super) sizes: &'a mut Sizes,
     /// The canvas rectangle when the view must move and zoom until all
-    /// nodes show: on the first frame of a flow, and on Fit to view.
+    /// cards show: on the first frames of a flow, on Fit to view and after
+    /// a resize of the canvas.
     pub(super) fit: Option<egui::Rect>,
-    /// Out: the node whose dialog the user asked for.
-    pub(super) edit: Option<NodeId>,
-    /// Out: the user asked for Fit to view.
-    pub(super) refit: bool,
-}
-
-/// The small label above a field.
-fn caption(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).small().weak());
-}
-
-/// The start of `text` that a card shows.
-fn preview(text: &str) -> String {
-    let lines: Vec<&str> = text.trim().lines().take(PREVIEW_LINES).collect();
-    let mut shown: String = lines.join("\n").chars().take(PREVIEW_CHARS).collect();
-    if shown.len() < text.trim().len() {
-        shown.push('…');
-    }
-    shown
+    pub(super) out: Out,
 }
 
 impl<'a> Viewer<'a> {
     /// The state of a card's step in the shown run.
-    fn step_run(&self, node: Option<&Node>) -> Option<&'a StepRun> {
+    pub(super) fn step_run(&self, node: Option<&Node>) -> Option<&'a StepRun> {
         self.run?.get(node?.id().trim())
     }
 
-    /// The color of a step's state in the shown run.
-    fn run_color(&self, step: &StepRun) -> egui::Color32 {
-        match step.status {
-            _ if step.question.is_some() => self.colors.gate,
-            StepStatus::Running if step.gate.is_some() => self.colors.gate,
-            StepStatus::Running | StepStatus::Done => self.colors.step,
-            StepStatus::Failed | StepStatus::Cancelled => self.colors.failed,
-            StepStatus::Waiting => self.colors.border,
+    /// The look of a card's step: `None` without a run.
+    fn style_of(&self, node: Option<&Node>) -> Option<StepStyle> {
+        self.step_run(node).map(step_style)
+    }
+
+    /// The color of a wire from `node`: its state in the run, or a quiet
+    /// color when the run did not reach it or there is no run.
+    fn wire_color(&self, node: Option<&Node>) -> egui::Color32 {
+        match self.style_of(node) {
+            Some(style) => self.colors.wire(style),
+            None => self.colors.weak,
         }
     }
 
-    /// The run row of a card: the state of its step, Approve and Reject
-    /// for a gate that waits, and the way to the step's terminal.
-    fn run_row(&mut self, ui: &mut egui::Ui, id: &str, step: &StepRun) {
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            ui.set_max_width(FIELD_WIDTH);
-            let (_, state) = step_icon(step);
-            ui.label(
-                egui::RichText::new(state)
-                    .small()
-                    .color(self.run_color(step)),
-            );
-            if step.status == StepStatus::Running && step.gate.is_some() {
-                if ui.small_button("Approve").clicked() {
-                    self.answer = Some((id.to_owned(), true));
-                }
-                if ui.small_button("Reject").clicked() {
-                    self.answer = Some((id.to_owned(), false));
-                }
-            }
-            if let Some(session) = &step.session
-                && ui
-                    .small_button("Show terminal")
-                    .on_hover_text("Go to the terminal of this step")
-                    .clicked()
-            {
-                self.go = Some(session.clone());
-            }
-        });
-        // What the runner waits for, then the result or failure note.
-        for text in [&step.waits_for, &step.note].into_iter().flatten() {
-            ui.label(egui::RichText::new(preview(text)).small().weak());
-        }
-    }
-
-    /// A long text as a block that opens the card's dialog on a click.
-    fn text_block(&self, ui: &mut egui::Ui, text: &str, empty: &str) -> bool {
-        let shown = if text.trim().is_empty() {
-            egui::RichText::new(empty).weak()
-        } else {
-            egui::RichText::new(preview(text))
+    /// True when the check error concerns this card.
+    fn has_error(&self, node: Option<&Node>) -> bool {
+        let (Some(error), Some(node)) = (self.error, node) else {
+            return false;
         };
-        let block = egui::Frame::new()
-            .fill(self.colors.canvas)
-            .stroke(egui::Stroke::new(1.0, self.colors.border))
-            .corner_radius(appearance::RADIUS_MEDIUM)
-            .inner_margin(egui::Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                ui.set_width(FIELD_WIDTH - 16.0);
-                ui.add(egui::Label::new(shown).wrap().selectable(false));
-            });
-        block
-            .response
-            .interact(egui::Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("Edit in a large field")
-            .clicked()
-    }
-
-    /// The fields of a card. True when the user asked for the dialog.
-    fn fields(&self, ui: &mut egui::Ui, value: &mut Node) -> bool {
-        match value {
-            Node::Step {
-                command,
-                prompt,
-                cwd,
-                worktree,
-                ..
-            } => {
-                caption(ui, "Command");
-                ui.add(
-                    egui::TextEdit::singleline(command)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(FIELD_WIDTH)
-                        .hint_text("For example claude"),
-                );
-                caption(ui, "Prompt");
-                let edit = self.text_block(ui, prompt, "No prompt. Click to write one.");
-                let places = [("Folder", cwd), ("Worktree", worktree)];
-                for (label, text) in places {
-                    if !text.trim().is_empty() {
-                        ui.label(egui::RichText::new(format!("{label}: {}", text.trim())).small());
-                    }
-                }
-                edit
-            }
-            Node::Gate { message, .. } => {
-                caption(ui, "You approve");
-                self.text_block(ui, message, "No question. Click to write one.")
-            }
-        }
+        error.step.as_deref() == Some(node.id().trim())
     }
 
     /// The menu of one card: on a right-click and on its "more" button.
     fn node_menu(&mut self, ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
         if appearance::menu_action(ui, true, "Edit…", "Pencil").clicked() {
-            self.edit = Some(node);
+            self.out.select = Some(node);
         }
-        if appearance::menu_action(ui, true, "Duplicate", "Copy").clicked()
-            && let Some(info) = snarl.get_node_info(node)
-        {
-            let mut copy = info.value.clone();
-            let id = free_id(snarl, copy.id());
-            *copy.id_mut() = id;
-            let pos = egui::pos2(info.pos.x + 40.0, info.pos.y + 40.0);
-            snarl.insert_node(pos, copy);
+        if appearance::menu_action(ui, true, "Duplicate", "Copy").clicked() {
+            self.out.select = duplicate(snarl, node).or(self.out.select);
         }
         if appearance::menu_action(ui, true, "Remove wires", "Link").clicked() {
             snarl.drop_inputs(input(node));
@@ -203,47 +103,14 @@ impl<'a> Viewer<'a> {
             snarl.remove_node(node);
         }
     }
-}
 
-/// The "After" row: one chip per step that this card needs (a click
-/// removes that wire), and "+" with the steps that it can need.
-fn after_row(ui: &mut egui::Ui, node: NodeId, snarl: &mut Snarl<Node>) {
-    let needs: Vec<_> = snarl
-        .in_pin(input(node))
-        .remotes
-        .iter()
-        .filter_map(|from| Some((*from, snarl.get_node(from.node)?.id().to_owned())))
-        .collect();
-    let others: Vec<_> = snarl
-        .node_ids()
-        .filter(|(other, _)| *other != node && !needs.iter().any(|(from, _)| from.node == *other))
-        .map(|(other, value)| (other, value.id().to_owned()))
-        .collect();
-    ui.horizontal_wrapped(|ui| {
-        ui.set_max_width(FIELD_WIDTH);
-        for (from, id) in &needs {
-            let chip = ui
-                .small_button(format!("{id} ×"))
-                .on_hover_text("Remove this wire");
-            if chip.clicked() {
-                snarl.disconnect(*from, input(node));
-            }
-        }
-        if needs.is_empty() {
-            ui.label(egui::RichText::new("the start").small().weak());
-        }
-        if !others.is_empty() {
-            appearance::compact_menu_button(ui, "+", |ui| {
-                for (other, id) in &others {
-                    if appearance::menu_action(ui, true, id, "Plus").clicked() {
-                        snarl.connect(output(*other), input(node));
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Run this step after…");
-        }
-    });
+    fn pin(&self, color: egui::Color32, reached: bool) -> PinInfo {
+        let fill = if reached { color } else { self.colors.node };
+        PinInfo::circle()
+            .with_fill(fill)
+            .with_stroke(egui::Stroke::new(2.0, color))
+            .with_wire_color(color)
+    }
 }
 
 impl SnarlViewer<Node> for Viewer<'_> {
@@ -252,7 +119,11 @@ impl SnarlViewer<Node> for Viewer<'_> {
         to_global: &mut egui::emath::TSTransform,
         snarl: &mut Snarl<Node>,
     ) {
-        if let Some(view) = self.fit.take().and_then(|canvas| fit_view(snarl, canvas)) {
+        if let Some(view) = self
+            .fit
+            .take()
+            .and_then(|canvas| fit_view(snarl, self.sizes, canvas))
+        {
             *to_global = view;
         }
     }
@@ -275,18 +146,23 @@ impl SnarlViewer<Node> for Viewer<'_> {
     ) -> egui::Frame {
         let value = snarl.get_node(node);
         let gate = value.is_some_and(Node::is_gate);
-        // In a run, the outline shows the state of the step.
-        let active = self
-            .step_run(value)
-            .filter(|step| step.status != StepStatus::Waiting);
-        let (width, color) = match active {
-            Some(step) => (2.0, self.run_color(step)),
-            None if gate => (1.5, self.colors.gate),
-            None => (1.0, self.colors.border),
+        // The selection first, then a check error, then the run's state.
+        let active = self.style_of(value).filter(|style| style.reached);
+        let (width, color) = if self.selected == Some(node) {
+            (2.5, self.colors.accent)
+        } else if self.has_error(value) {
+            (2.0, self.colors.failed)
+        } else if let Some(style) = active {
+            (2.0, self.colors.of_style(style))
+        } else if gate {
+            (1.5, self.colors.gate.gamma_multiply(0.7))
+        } else {
+            (1.0, self.colors.border)
         };
         default
             .fill(self.colors.node)
             .corner_radius(appearance::RADIUS_LARGE)
+            .inner_margin(egui::Margin::symmetric(12, 8))
             .stroke(egui::Stroke::new(width, color))
     }
 
@@ -314,54 +190,89 @@ impl SnarlViewer<Node> for Viewer<'_> {
     ) {
         // A label that takes clicks would hide the card's right-click menu.
         ui.style_mut().interaction.selectable_labels = false;
-        let Some(value) = snarl.get_node_mut(node) else {
+        let Some(value) = snarl.get_node(node) else {
             return;
         };
-        let (label, color) = if value.is_gate() {
-            ("GATE", self.colors.gate)
+        let style = self.style_of(Some(value));
+        let error = self.has_error(Some(value));
+        let (icon, color) = if value.is_gate() {
+            ("ShieldQuestion", self.colors.gate)
         } else {
-            ("STEP", self.colors.step)
+            ("Terminal", self.colors.step)
         };
-        ui.label(egui::RichText::new(label).small().strong().color(color));
-        ui.add(
-            egui::TextEdit::singleline(value.id_mut())
-                .desired_width(ID_WIDTH)
-                .hint_text("ID: a-z, 0-9, - or _"),
-        );
-        if appearance::sidebar_action(ui, "Maximize2", "Edit in a dialog").clicked() {
-            self.edit = Some(node);
-        }
-        appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
-            self.node_menu(ui, node, snarl);
-        })
-        .response
-        .on_hover_text("More");
+        let id = value.id().trim().to_owned();
+        ui.horizontal(|ui| {
+            ui.set_width(CARD_WIDTH);
+            let size = egui::Vec2::splat(appearance::TOOLBAR_ICON);
+            ui.add(
+                egui::Image::new(crate::icons::source(icon))
+                    .tint(color)
+                    .fit_to_exact_size(size),
+            );
+            let shown = if id.is_empty() {
+                egui::RichText::new("no ID").weak()
+            } else {
+                egui::RichText::new(&id).strong()
+            };
+            ui.add(egui::Label::new(shown).truncate());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
+                    self.node_menu(ui, node, snarl);
+                })
+                .response
+                .on_hover_text("More");
+                if error {
+                    chip(ui, "error", self.colors.failed);
+                } else if let Some(style) = style {
+                    chip(ui, style.chip, self.colors.of_style(style)).on_hover_text(style.label);
+                }
+            });
+        });
     }
 
     fn inputs(&mut self, _node: &Node) -> usize {
         1
     }
 
+    /// The dot and the wires into a step: the color of the steps it needs.
+    /// Of several, the one the run reached least.
     fn show_input(
         &mut self,
-        _pin: &InPin,
+        pin: &InPin,
         _ui: &mut egui::Ui,
-        _snarl: &mut Snarl<Node>,
+        snarl: &mut Snarl<Node>,
     ) -> impl SnarlPin + 'static {
-        PinInfo::circle().with_wire_color(self.colors.step)
+        let sources: Vec<Option<StepStyle>> = pin
+            .remotes
+            .iter()
+            .map(|from| self.style_of(snarl.get_node(from.node)))
+            .collect();
+        let rank = |style: &Option<StepStyle>| match style {
+            None => 0,
+            Some(style) if !style.reached => 1,
+            Some(_) => 2,
+        };
+        let least = sources.iter().min_by_key(|style| rank(style));
+        match least {
+            Some(Some(style)) => self.pin(self.colors.wire(*style), style.reached),
+            _ => self.pin(self.colors.weak, false),
+        }
     }
 
     fn outputs(&mut self, _node: &Node) -> usize {
         1
     }
 
+    /// The dot and the wires out of a step: the color of its own state.
     fn show_output(
         &mut self,
-        _pin: &OutPin,
+        pin: &OutPin,
         _ui: &mut egui::Ui,
-        _snarl: &mut Snarl<Node>,
+        snarl: &mut Snarl<Node>,
     ) -> impl SnarlPin + 'static {
-        PinInfo::circle().with_wire_color(self.colors.step)
+        let value = snarl.get_node(pin.id.node);
+        let reached = self.style_of(value).is_some_and(|style| style.reached);
+        self.pin(self.wire_color(value), reached)
     }
 
     fn has_body(&mut self, _node: &Node) -> bool {
@@ -377,21 +288,33 @@ impl SnarlViewer<Node> for Viewer<'_> {
         snarl: &mut Snarl<Node>,
     ) {
         ui.style_mut().interaction.selectable_labels = false;
+        let Some(value) = snarl.get_node(node).cloned() else {
+            return;
+        };
+        let step = self.step_run(Some(&value));
         ui.vertical(|ui| {
-            ui.set_width(FIELD_WIDTH);
-            let Some(value) = snarl.get_node_mut(node) else {
-                return;
-            };
-            if self.fields(ui, value) {
-                self.edit = Some(node);
-            }
-            let id = value.id().trim().to_owned();
-            caption(ui, "After");
-            after_row(ui, node, snarl);
-            if let Some(step) = self.run.and_then(|run| run.get(&id)) {
-                self.run_row(ui, &id, step);
+            ui.set_width(CARD_WIDTH);
+            super::cards::summary(ui, &value, self.colors);
+            if let Some(step) = step {
+                self.footer(ui, value.id().trim(), step);
             }
         });
+    }
+
+    /// The size of each card for Fit to view, and the click that selects
+    /// it. A click on a button of the card also selects the card.
+    fn final_node_rect(
+        &mut self,
+        node: NodeId,
+        rect: egui::Rect,
+        ui: &mut egui::Ui,
+        _snarl: &mut Snarl<Node>,
+    ) {
+        self.sizes.insert(node, rect.size());
+        if clicked_in(ui, rect) {
+            self.out.select = Some(node);
+            self.out.on_card = true;
+        }
     }
 
     fn has_graph_menu(&mut self, _pos: egui::Pos2, _snarl: &mut Snarl<Node>) -> bool {
@@ -400,14 +323,17 @@ impl SnarlViewer<Node> for Viewer<'_> {
 
     fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut egui::Ui, snarl: &mut Snarl<Node>) {
         if appearance::menu_action(ui, true, "Add step", "Terminal").clicked() {
-            add_node(snarl, pos, false);
+            self.out.select = Some(add_node(snarl, pos, false));
         }
-        if appearance::menu_action(ui, true, "Add gate", "CircleCheck").clicked() {
-            add_node(snarl, pos, true);
+        if appearance::menu_action(ui, true, "Add gate", "ShieldQuestion").clicked() {
+            self.out.select = Some(add_node(snarl, pos, true));
         }
         ui.separator();
         if appearance::menu_action(ui, true, "Fit to view", "Maximize").clicked() {
-            self.refit = true;
+            self.out.refit = true;
+        }
+        if appearance::menu_action(ui, true, "Tidy layout", "LayoutDashboard").clicked() {
+            self.out.tidy = true;
         }
     }
 
@@ -426,7 +352,7 @@ impl SnarlViewer<Node> for Viewer<'_> {
     ) {
         let gate = if appearance::menu_action(ui, true, "New step here", "Terminal").clicked() {
             false
-        } else if appearance::menu_action(ui, true, "New gate here", "CircleCheck").clicked() {
+        } else if appearance::menu_action(ui, true, "New gate here", "ShieldQuestion").clicked() {
             true
         } else {
             return;
@@ -444,6 +370,7 @@ impl SnarlViewer<Node> for Viewer<'_> {
                 }
             }
         }
+        self.out.select = Some(node);
     }
 
     fn has_node_menu(&mut self, _node: &Node) -> bool {
@@ -461,11 +388,38 @@ impl SnarlViewer<Node> for Viewer<'_> {
         self.node_menu(ui, node, snarl);
     }
 
-    /// A step cannot need itself. A cycle through other steps is found by
-    /// Save, with the name of a step in it.
+    /// A wire that would close a cycle (also a step after itself) is not
+    /// made.
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<Node>) {
-        if from.id.node != to.id.node {
+        if !would_cycle(snarl, from.id.node, to.id.node) {
             snarl.connect(from.id, to.id);
         }
     }
+}
+
+/// A primary click this frame in `rect` of `ui`'s (zoomed) layer, with no
+/// popup or window above it.
+pub(super) fn clicked_in(ui: &egui::Ui, rect: egui::Rect) -> bool {
+    let Some(pos) = ui.input(|input| {
+        input
+            .pointer
+            .primary_clicked()
+            .then(|| input.pointer.interact_pos())
+            .flatten()
+    }) else {
+        return false;
+    };
+    let ctx = ui.ctx();
+    let rect = ctx
+        .layer_transform_to_global(ui.layer_id())
+        .map_or(rect, |to_global| to_global.mul_rect(rect));
+    rect.contains(pos)
+        && ctx
+            .layer_id_at(pos)
+            .is_some_and(|layer| layer.order == ui.layer_id().order)
+}
+
+/// True for a step whose gate waits for the user's approval.
+pub(super) fn gate_waits(step: &StepRun) -> bool {
+    step.status == StepStatus::Running && step.gate.is_some()
 }

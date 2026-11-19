@@ -78,7 +78,13 @@ impl Viewer<'_> {
                 ),
                 egui::vec2(13.0, 13.0),
             ),
-            icon: icons::file_icon(path),
+            icon: match tab {
+                Tab::Document {
+                    kind: crate::document_view::DocumentKind::Flow,
+                    ..
+                } => crate::flows::FLOW_TAB_ICON,
+                _ => icons::file_icon(path),
+            },
             tint: appearance::icon_color(),
             spin: false,
         });

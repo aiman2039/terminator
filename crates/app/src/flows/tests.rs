@@ -82,7 +82,7 @@ fn flows_window_has_run_edit_and_new_flow() {
     }
     let text = wide(&mut app);
     for label in [
-        "Flows",
+        "Run flow",
         "Flows of this project",
         "Run",
         "Edit",
@@ -184,6 +184,18 @@ pub(super) fn painted(ctx: &egui::Context, paint: impl FnMut(&mut egui::Ui)) -> 
     crate::app::tests::support::painted_strings(&output.shapes)
 }
 
+/// Every text of the third frame of `paint`: an egui window sizes itself
+/// in its first frames and paints after.
+pub(super) fn painted_frames(
+    ctx: &egui::Context,
+    mut paint: impl FnMut(&mut egui::Ui),
+) -> Vec<String> {
+    for _ in 0..2 {
+        painted(ctx, &mut paint);
+    }
+    painted(ctx, paint)
+}
+
 #[test]
 fn new_tab_menu_has_the_flow_rows() {
     let project = project_with_flows();
@@ -215,8 +227,12 @@ fn flows_panel_shows_a_gate_with_approve_and_a_question_with_send() {
     let text = painted(&ctx, |ui| app.flows_panel(ui));
     for label in [
         "Flows",
+        "NEEDS YOU",
+        "Build › one",
+        "Build › ok",
         "Build",
-        "running · 0 of 2 steps done",
+        "waits",
+        "0/2",
         "one",
         "A or B?",
         "Send",
@@ -241,7 +257,7 @@ fn step_icon_shows_what_waits_for_the_user() {
         question: question.map(str::to_owned),
         ..StepRun::default()
     };
-    let icon = |step: &StepRun| panel::step_icon(step).0;
+    let icon = |step: &StepRun| status::step_style(step).icon;
     assert_eq!(
         icon(&step(StepStatus::Waiting, Some("ok?"), None)),
         "Circle"
@@ -317,8 +333,7 @@ fn a_run_whose_runner_is_gone_is_stopped_with_no_answer_buttons() {
     app.flows.read_at = Some(Instant::now());
     let ctx = egui::Context::default();
     let text = painted(&ctx, |ui| app.flows_panel(ui));
-    let summary = "stopped (runner gone) · 1 of 2 steps done";
-    assert_eq!(count(&text, summary), 1, "{text:?}");
+    assert_eq!(count(&text, "runner gone"), 1, "{text:?}");
     // Closed by default like an ended run, and no answer goes to it.
     assert_eq!(count(&text, "one"), 1, "{text:?}");
     app.apply_flow_act(panel::Act::Toggle(dir.clone(), true));
@@ -326,9 +341,13 @@ fn a_run_whose_runner_is_gone_is_stopped_with_no_answer_buttons() {
     assert_eq!(count(&text, "Approve"), 0, "{text:?}");
     // Clear ended runs counts it, and Remove deletes it.
     app.apply_flow_act(panel::Act::AskClear);
-    let text = painted(&ctx, |ui| app.flows_panel(ui));
-    let clear = "Remove 2 ended runs from the list? Their terminals stay open.";
-    assert_eq!(count(&text, clear), 1, "{text:?}");
+    let text = painted_frames(&ctx, |ui| app.flows_panel(ui));
+    assert_eq!(
+        count(&text, "Remove 2 ended runs from the list?"),
+        1,
+        "{text:?}"
+    );
+    assert_eq!(count(&text, "Their terminals stay open."), 1, "{text:?}");
     app.apply_flow_act(panel::Act::Remove(dir.clone()));
     settle(&mut app);
     assert!(!dir.exists());
@@ -430,11 +449,7 @@ fn only_the_newest_and_running_runs_show_their_steps() {
     // The newest (done) and the running run show their steps; the older
     // stopped run is one line with its summary.
     assert_eq!(count(&text, "one"), 2, "{text:?}");
-    for label in [
-        "done · 2 of 2 steps done",
-        "stopped · 0 of 2 steps done",
-        "running · 0 of 2 steps done",
-    ] {
+    for label in ["done", "stopped", "running", "0/2"] {
         assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
     }
     // A click opens the stopped run, a second one closes it again.
@@ -452,6 +467,35 @@ fn only_the_newest_and_running_runs_show_their_steps() {
     for icon in ["Trash", "ChevronRight", "ChevronDown", "EllipsisVertical"] {
         assert!(crate::icons::is_ui_icon(icon), "{icon}");
     }
+}
+
+#[test]
+fn running_run_shows_behind_many_newer_ended_runs() {
+    let project = project_with_flows();
+    let (mut app, _received, data) = app_with_project(project.path());
+    // A gate that waits in an older run: its state file did not change
+    // while the user ran the flow again and again.
+    let mut waiting = run_of(data.path(), "build-0", None);
+    waiting.state.set("one", StepStatus::Done);
+    waiting.state.set("ok", StepStatus::Running);
+    let mut runs: Vec<Run> = (1..=12)
+        .rev()
+        .map(|n| run_of(data.path(), &format!("build-{n}"), Some(2)))
+        .collect();
+    runs.push(waiting);
+    let shown = panel::shown_runs(&runs, Some("p"));
+    assert_eq!(shown.len(), 11, "the 10 newest and the running one");
+    assert!(
+        shown.iter().any(|run| run.dir.ends_with("build-0")),
+        "the run that waits for the user is hidden"
+    );
+    app.flows.runs = runs;
+    app.flows.read_at = Some(Instant::now());
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    // Its gate is at the top, in Needs you, above the long list of runs.
+    assert_eq!(count(&text, "Approve"), 1, "{text:?}");
+    assert_eq!(count(&text, "11"), 1, "the Runs count: {text:?}");
 }
 
 #[test]
@@ -528,10 +572,10 @@ fn remove_and_clear_delete_only_ended_runs_after_a_click() {
     app.flows.runs = vec![running, stopped, other];
     let ctx = egui::Context::default();
     app.apply_flow_act(panel::Act::AskClear);
-    let text = painted(&ctx, |ui| app.flows_panel(ui));
-    assert!(
-        text.iter()
-            .any(|line| line == "Remove 1 ended run from the list? Their terminals stay open."),
+    let text = painted_frames(&ctx, |ui| app.flows_panel(ui));
+    assert_eq!(
+        count(&text, "Remove 1 ended run from the list?"),
+        1,
         "{text:?}"
     );
     app.apply_flow_act(panel::Act::KeepRuns);
@@ -544,4 +588,174 @@ fn remove_and_clear_delete_only_ended_runs_after_a_click() {
     assert!(data.path().join("flows/build-1/state.json").is_file());
     assert!(data.path().join("flows/build-4/state.json").is_file());
     assert!(received.try_recv().is_err(), "no terminal");
+}
+
+#[test]
+fn needs_you_collects_the_gates_and_questions_of_every_running_run() {
+    let project = project_with_flows();
+    let (mut app, received, data) = app_with_project(project.path());
+    let mut gate = run_of(data.path(), "build-3", None);
+    gate.state.set("one", StepStatus::Done);
+    gate.state.set("ok", StepStatus::Running);
+    let mut asks = run_of(data.path(), "build-2", None);
+    asks.state.set("one", StepStatus::Running);
+    asks.state.steps.get_mut("one").expect("step").question = Some("A or B?".into());
+    // An ended run waits for nothing, even with a question left in it.
+    let mut ended = run_of(data.path(), "build-1", Some(1));
+    ended.state.steps.get_mut("ok").expect("step").question = Some("Old?".into());
+    let runs = [&gate, &asks, &ended];
+    let needs = runs_view::needs_you(&runs);
+    let found: Vec<(&str, &str)> = needs
+        .iter()
+        .map(|need| {
+            (
+                need.run
+                    .dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(""),
+                need.step,
+            )
+        })
+        .collect();
+    assert_eq!(found, [("build-3", "ok"), ("build-2", "one")]);
+
+    app.flows.runs = vec![gate, asks, ended];
+    app.flows.read_at = Some(Instant::now());
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    for label in ["NEEDS YOU", "Build › ok", "Good?", "Build › one", "A or B?"] {
+        assert_eq!(count(&text, label), 1, "{label}: {text:?}");
+    }
+    // Each answer shows once: in Needs you, not again under the run.
+    assert_eq!(count(&text, "Approve"), 1, "{text:?}");
+    assert_eq!(count(&text, "Reject"), 1, "{text:?}");
+    assert_eq!(count(&text, "Send"), 1, "{text:?}");
+    assert_eq!(count(&text, "Old?"), 0, "{text:?}");
+    // Painting answers nothing and starts nothing.
+    assert!(!data.path().join("flows").exists());
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn step_style_colors_each_state_and_spins_only_while_running() {
+    use status::{Tone, step_style};
+    let step = |status, gate: Option<&str>, question: Option<&str>| StepRun {
+        status,
+        gate: gate.map(str::to_owned),
+        question: question.map(str::to_owned),
+        ..StepRun::default()
+    };
+    let style = |step: StepRun| {
+        let style = step_style(&step);
+        (style.icon, style.tone, style.spin)
+    };
+    assert_eq!(
+        style(step(StepStatus::Done, None, None)),
+        ("CircleCheck", Tone::Good, false)
+    );
+    assert_eq!(
+        style(step(StepStatus::Running, None, None)),
+        ("LoaderCircle", Tone::Good, true)
+    );
+    assert_eq!(
+        style(step(StepStatus::Running, Some("ok?"), None)),
+        ("ShieldQuestion", Tone::Waits, false)
+    );
+    assert_eq!(
+        style(step(StepStatus::Running, None, Some("A?"))),
+        ("MessageCircleQuestion", Tone::Waits, false)
+    );
+    assert_eq!(
+        style(step(StepStatus::Failed, None, None)),
+        ("CircleAlert", Tone::Failed, false)
+    );
+    assert_eq!(style(step(StepStatus::Cancelled, None, None)).1, Tone::Dim);
+    assert_eq!(
+        style(step(StepStatus::Waiting, Some("ok?"), None)).1,
+        Tone::Dim
+    );
+    // Each tone has its own theme color.
+    let theme = terminator_core::appearance::AppearanceConfig::default();
+    let colors: std::collections::HashSet<_> = [Tone::Good, Tone::Waits, Tone::Failed, Tone::Dim]
+        .into_iter()
+        .map(|tone| tone.color(&theme))
+        .collect();
+    assert_eq!(colors.len(), 4);
+    assert!(crate::icons::is_ui_icon("Workflow"));
+    assert!(crate::icons::is_ui_icon("Square"));
+}
+
+#[test]
+fn run_chip_and_time_show_the_state_of_a_run() {
+    let data = Path::new("/data");
+    let mut run = run_of(data, "build-1700000000", None);
+    assert_eq!(status::run_chip(&run), ("running", status::Tone::Good));
+    assert_eq!(runs_view::run_trailing(&run, 1_700_007_200), "0/2");
+    run.state.set("ok", StepStatus::Running);
+    assert_eq!(status::run_chip(&run).0, "waits");
+    run.state.set("ok", StepStatus::Failed);
+    run.state.ended = true;
+    assert_eq!(status::run_chip(&run), ("failed", status::Tone::Failed));
+    assert_eq!(runs_view::run_trailing(&run, 1_700_007_200), "2h ago");
+    let done = run_of(data, "build-2", Some(2));
+    assert_eq!(status::run_chip(&done).0, "done");
+    assert_eq!(runs_view::run_trailing(&done, 1_700_007_200), "");
+    assert_eq!(
+        status::segments(&run),
+        [status::Tone::Dim, status::Tone::Failed]
+    );
+}
+
+#[test]
+fn empty_project_offers_new_flow_and_says_where_flows_live() {
+    let project = tempfile::tempdir().expect("project");
+    let (mut app, received, _data) = app_with_project(project.path());
+    app.flows.tool_flows = Some(load_flows("p".into(), project.path().into()));
+    app.flows.tool_read_at = Some(Instant::now());
+    app.flows.read_at = Some(Instant::now());
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    for label in [
+        "No flows in this project",
+        "New flow",
+        "Flows are stored in .terminator/flows/.",
+    ] {
+        assert_eq!(count(&text, label), 1, "{label}: {text:?}");
+    }
+    app.apply_flow_act(panel::Act::NewFlow);
+    assert!(app.flows.open, "New flow opens the Run flow window");
+    assert!(received.try_recv().is_err());
+    assert!(
+        !project.path().join(FLOW_DIR).exists(),
+        "nothing is written"
+    );
+}
+
+#[test]
+fn flows_section_lists_files_and_runs_only_after_trust() {
+    let project = project_with_flows();
+    let (mut app, received, _data) = app_with_project(project.path());
+    app.flows.tool_flows = Some(load_flows("p".into(), project.path().into()));
+    app.flows.tool_read_at = Some(Instant::now());
+    app.flows.read_at = Some(Instant::now());
+    let ctx = egui::Context::default();
+    let text = painted(&ctx, |ui| app.flows_panel(ui));
+    for label in ["RUNS", "FLOWS", "Build", "2 steps", "broken", "New flow…"] {
+        assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    assert!(
+        text.iter()
+            .any(|line| line.starts_with("Trust this project?")),
+        "{text:?}"
+    );
+    // A broken file shows why, on its own line.
+    let loaded = app.flows.tool_flows.clone().expect("flows");
+    let error = loaded.files[1].flow.clone().expect_err("broken");
+    let first = error.lines().next().expect("error line");
+    assert!(text.iter().any(|line| line == first), "{first}: {text:?}");
+    // Run before the trust answer types nothing.
+    app.apply_flow_act(panel::Act::Run("build".into()));
+    assert!(received.try_recv().is_err(), "no terminal before trust");
+    assert!(app.post_create.by_tab.is_empty());
 }

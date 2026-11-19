@@ -391,6 +391,28 @@ fn rename_terminal_has_its_own_default_and_a_saved_shared_chord_still_splits_by_
 }
 
 #[test]
+fn flow_editor_defaults_are_jetbrains_keys_free_on_both_keymaps() {
+    let defaults = terminator_core::Settings::default().keybindings;
+    let duplicate = parse(&defaults["flow_duplicate"]).unwrap();
+    assert_eq!(duplicate.key, Key::D);
+    // Cmd+D on macOS, plain Ctrl+D on Linux (Ctrl+Shift+D is Split right).
+    assert!(!duplicate.modifiers.shift && !duplicate.modifiers.alt);
+    assert_eq!(duplicate.modifiers.mac_cmd, cfg!(target_os = "macos"));
+    assert_eq!(parse(&defaults["flow_fit"]).unwrap().key, Key::F);
+    for flow in ["flow_remove", "flow_duplicate", "flow_fit"] {
+        let chord = parse(&defaults[flow]);
+        for (action, value) in &defaults {
+            if action != flow {
+                assert_ne!(parse(value), chord, "{flow} and {action}");
+            }
+        }
+        for &(keymap, command, _) in jetbrains_app_chords() {
+            assert_ne!(parse(keymap), chord, "{flow} and {command:?}");
+        }
+    }
+}
+
+#[test]
 fn every_default_chord_is_unique_and_free_of_jetbrains_app_chords() {
     let defaults = terminator_core::Settings::default().keybindings;
     let mut seen = Vec::<(Chord, &str)>::new();
@@ -481,10 +503,16 @@ fn git_actions_start_unbound() {
 }
 
 fn linux_chord_id(value: &str) -> String {
+    // Only the word `command` adds Shift on Linux; `cmd`, `super` and
+    // `meta` are plain Ctrl there (see `parse`).
     let mut parts = value
         .split('+')
         .map(|part| part.trim().to_lowercase())
         .filter(|part| !part.is_empty())
+        .map(|part| match part.as_str() {
+            "cmd" | "super" | "meta" | "control" => "ctrl".to_owned(),
+            _ => part,
+        })
         .collect::<Vec<_>>();
     let key = parts.pop().unwrap_or_default();
     if parts.iter().any(|part| part == "command") && !parts.iter().any(|part| part == "shift") {

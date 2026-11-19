@@ -69,6 +69,10 @@ impl App {
             | Action::DiffPrevChange
             | Action::DiffNextFile
             | Action::DiffPrevFile => self.active_diff_tab(),
+            Action::EditorSave if self.active_flow_editor().is_some() => true,
+            action if crate::flows::FLOW_ACTIONS.contains(&action) => {
+                self.active_flow_editor().is_some()
+            }
             Action::EditorSave | Action::CompareDisk | Action::MoveToMain | Action::MoveToStrip => {
                 self.active_session_record()
                     .is_some_and(|session| self.session_action_applies(action, session))
@@ -203,7 +207,15 @@ impl App {
             Action::RenameTerminal => self.rename_active_terminal(),
             Action::CloseSession => self.close_active_session(),
             Action::ClearScrollback => self.clear_active_scrollback(),
-            Action::EditorSave => self.save_active_editor(),
+            Action::EditorSave => {
+                // A focused flow editor saves its flow; else the editor.
+                if !self.run_flow_editor_key(action) {
+                    self.save_active_editor();
+                }
+            }
+            Action::FlowRemove | Action::FlowDuplicate | Action::FlowFit => {
+                self.run_flow_editor_key(action);
+            }
             Action::CompareDisk => self.compare_active_editor(),
             Action::ToggleLeftSidebar => self.toggle_left_sidebar(),
             Action::ToggleRightSidebar => self.toggle_right_sidebar(),

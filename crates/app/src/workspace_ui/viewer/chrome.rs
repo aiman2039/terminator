@@ -80,6 +80,11 @@ impl Viewer<'_> {
 
     pub(super) fn tab_title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
+            // A flow editor tab shows the flow's name.
+            Tab::Document {
+                path,
+                kind: crate::document_view::DocumentKind::Flow,
+            } => self.app.flow_tab_title(path).into(),
             // Unsaved changes show as a dot in the close button's place
             // (`tab_modified`), not in the title.
             Tab::Image { path } | Tab::NativeEditor { path } | Tab::Document { path, .. } => {
@@ -280,6 +285,13 @@ impl Viewer<'_> {
             response.clone().on_hover_ui(|ui| {
                 ui.label(presented.diagnostics(now()));
             });
+        }
+        if let Tab::Document {
+            path,
+            kind: crate::document_view::DocumentKind::Flow,
+        } = tab
+        {
+            response.clone().on_hover_text(path.display().to_string());
         }
         if response.hovered() && !response.dragged() {
             response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);

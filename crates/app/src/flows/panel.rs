@@ -1,20 +1,23 @@
-//! The Flows tool window: the runs of the selected project, one row per
-//! step (`runs_view`). It reads the run state files on a worker thread
-//! once per second while it shows. Its buttons write the user's answers
-//! through `terminator_core::flow::control` on a worker thread, and Remove
-//! and Clear ended runs delete ended run folders there; they never start a
-//! step, never type into a terminal and never close a session.
+//! The Flows tool window: the hub of the selected project's flows. "Needs
+//! you" holds every gate and question that waits, "Runs" the runs with one
+//! row per step (`runs_view`), and "Flows" the flow files with Edit and Run
+//! (`picker`). It reads the run state files and the flow files on worker
+//! threads while it shows. Its buttons write the user's answers through
+//! `terminator_core::flow::control` on a worker thread, and Remove and
+//! Clear ended runs delete ended run folders there; they never start a
+//! step, never type into a terminal and never close a session. Run starts
+//! a flow only on its explicit click, after the trust answer.
 use super::Run;
 use crate::*;
 use std::path::PathBuf;
 use std::sync::mpsc::{TryRecvError, channel};
-use terminator_core::flow::{
-    StepRun, StepStatus,
-    control::{self, RunError},
-};
+use terminator_core::flow::control::{self, RunError};
 
 const READ_EVERY: Duration = Duration::from_secs(1);
-/// Most runs shown for one project, newest first.
+/// How often the tool window reads the flow files again.
+const READ_FLOWS_EVERY: Duration = Duration::from_secs(3);
+/// Most ended runs shown for one project, newest first. Runs that did
+/// not end always show.
 const SHOWN_RUNS: usize = 10;
 /// Most run folders read each second, newest first, of all projects.
 const READ_RUNS: usize = 100;
@@ -23,6 +26,14 @@ pub(super) const ROW_HEIGHT: f32 = 26.0;
 /// One click in the panel.
 pub(super) enum Act {
     RunFlow,
+    /// Open the window with New flow.
+    NewFlow,
+    /// Open this flow file of the tool window's project in the editor.
+    Edit(String),
+    /// Run this flow file of the tool window's project (explicit click).
+    Run(String),
+    /// The trust answer for the tool window's project.
+    Trust(bool),
     Go(String),
     Gate(PathBuf, String, bool),
     Answer(PathBuf, String),
@@ -44,17 +55,16 @@ pub(super) fn run_status(run: &Run) -> &'static str {
     run.status().label()
 }
 
-/// The icon and the hover text of a step row.
-pub(super) fn step_icon(step: &StepRun) -> (&'static str, &'static str) {
-    match step.status {
-        _ if step.question.is_some() => ("MessageCircleQuestion", "Waits for your answer"),
-        StepStatus::Running if step.gate.is_some() => ("ShieldQuestion", "Waits for your approval"),
-        StepStatus::Waiting => ("Circle", "Waiting"),
-        StepStatus::Running => ("LoaderCircle", "Running"),
-        StepStatus::Done => ("CircleCheck", "Done"),
-        StepStatus::Failed => ("CircleAlert", "Failed"),
-        StepStatus::Cancelled => ("CircleStop", "Cancelled"),
-    }
+/// The runs of `project` that the tool window shows: the newest runs, and
+/// every run that did not end (a gate or a question there waits for the
+/// user, however old the run is).
+pub(super) fn shown_runs<'a>(runs: &'a [Run], project: Option<&str>) -> Vec<&'a Run> {
+    runs.iter()
+        .filter(|run| project == Some(run.state.project.as_str()))
+        .enumerate()
+        .filter(|(index, run)| *index < SHOWN_RUNS || !run.ended())
+        .map(|(_, run)| run)
+        .collect()
 }
 
 /// Delete each run folder; keeps going after a refusal and gives the first.
@@ -117,6 +127,43 @@ impl App {
         ctx.request_repaint_after(READ_EVERY);
     }
 
+    /// Takes the finished read of the flow files and starts the next one:
+    /// at once for another project, else every few seconds.
+    fn poll_tool_flows(&mut self) {
+        if let Some(receiver) = &self.flows.tool_loading
+            && let Ok(loaded) = receiver.try_recv()
+        {
+            self.flows.tool_flows = Some(loaded);
+            self.flows.tool_loading = None;
+        }
+        let Some(project) = self.selected_project() else {
+            return;
+        };
+        let other = self
+            .flows
+            .tool_flows
+            .as_ref()
+            .is_none_or(|loaded| loaded.project != project.id);
+        let due = self
+            .flows
+            .tool_read_at
+            .is_none_or(|at| at.elapsed() >= READ_FLOWS_EVERY);
+        if self.flows.tool_loading.is_some() || !(other || due) {
+            return;
+        }
+        let (id, root) = (project.id.clone(), project.path.clone());
+        let (sender, receiver) = channel();
+        let spawned = std::thread::Builder::new()
+            .name("flow-files".into())
+            .spawn(move || {
+                let _ = sender.send(super::load_flows(id, root));
+            });
+        if spawned.is_ok() {
+            self.flows.tool_loading = Some(receiver);
+        }
+        self.flows.tool_read_at = Some(Instant::now());
+    }
+
     /// Writes one answer off the GUI thread and reads the runs again soon.
     pub(super) fn flow_act(
         &mut self,
@@ -147,29 +194,36 @@ impl App {
             .collect()
     }
 
+    /// The flow files of the selected project, once read.
+    pub(super) fn tool_flows(&self) -> Option<&super::LoadedFlows> {
+        self.flows
+            .tool_flows
+            .as_ref()
+            .filter(|loaded| self.selected.as_deref() == Some(loaded.project.as_str()))
+    }
+
     pub(crate) fn flows_panel(&mut self, ui: &mut egui::Ui) {
         self.poll_flow_runs(ui.ctx());
+        self.poll_tool_flows();
         let mut act = None;
         let ended = self.ended_runs();
         flows_header(ui, ended.len(), &mut act);
-        if self.flows.confirm_clear {
-            clear_confirmation(ui, ended, &mut act);
-        }
+        self.flow_confirmations(ui.ctx(), ended, &mut act);
         ui.add_space(4.0);
         let runs = std::mem::take(&mut self.flows.runs);
-        let shown: Vec<&Run> = runs
-            .iter()
-            .filter(|run| self.selected.as_deref() == Some(run.state.project.as_str()))
-            .take(SHOWN_RUNS)
-            .collect();
-        if shown.is_empty() {
-            ui.weak("No flow runs in this project. Use Run flow… to start one.");
+        let shown = shown_runs(&runs, self.selected.as_deref());
+        let no_flows = self
+            .tool_flows()
+            .is_some_and(|loaded| loaded.files.is_empty());
+        if self.selected_project().is_none() {
+            ui.weak("Select a local project to see its flows.");
+        } else if shown.is_empty() && no_flows {
+            empty_state(ui, &mut act);
         } else {
             appearance::sidebar_scroll("flows-tool").show(ui, |ui| {
-                for (index, run) in shown.into_iter().enumerate() {
-                    self.flow_run_rows(ui, (index, run), &mut act);
-                    ui.add_space(4.0);
-                }
+                self.needs_you_section(ui, &shown, &mut act);
+                self.runs_section(ui, &shown, &mut act);
+                self.flow_files_section(ui, &mut act);
             });
         }
         // Taken only to draw without a clone; nothing changes them meanwhile.
@@ -179,9 +233,67 @@ impl App {
         }
     }
 
+    /// Cancel run and Clear ended runs ask first, in a confirmation.
+    fn flow_confirmations(
+        &mut self,
+        ctx: &egui::Context,
+        ended: Vec<PathBuf>,
+        act: &mut Option<Act>,
+    ) {
+        if let Some(dir) = self.flows.confirm_cancel.clone() {
+            let window = self.popups.window(ctx, "Cancel flow run?");
+            let dialog = appearance::Confirm::new(
+                "Cancel this run?",
+                "No new step starts. Running terminals continue.",
+            )
+            .cancel(appearance::ConfirmButton::new("Keep"))
+            .destructive(appearance::ConfirmButton::new("Cancel run"));
+            match appearance::confirm(ctx, window, dialog, |_| {}) {
+                Some(appearance::ConfirmAnswer::Destructive) => *act = Some(Act::Cancel(dir)),
+                Some(_) => *act = Some(Act::KeepRun),
+                None => {}
+            }
+        }
+        if !self.flows.confirm_clear {
+            return;
+        }
+        if ended.is_empty() {
+            *act = Some(Act::KeepRuns);
+            return;
+        }
+        let window = self.popups.window(ctx, "Clear ended runs?");
+        let runs = appearance::count_noun(ended.len(), "ended run");
+        let dialog = appearance::Confirm::new(
+            format!("Remove {runs} from the list?"),
+            "Their terminals stay open.",
+        )
+        .cancel(appearance::ConfirmButton::new("Keep"))
+        .destructive(appearance::ConfirmButton::new("Clear"));
+        match appearance::confirm(ctx, window, dialog, |_| {}) {
+            Some(appearance::ConfirmAnswer::Destructive) => *act = Some(Act::Clear(ended)),
+            Some(_) => *act = Some(Act::KeepRuns),
+            None => {}
+        }
+    }
+
     pub(super) fn apply_flow_act(&mut self, act: Act) {
         match act {
-            Act::RunFlow => self.open_flow_picker(),
+            Act::RunFlow | Act::NewFlow => self.open_flow_picker(),
+            Act::Edit(file) => {
+                if let Some(loaded) = self.tool_flows().cloned() {
+                    self.open_flow_tab(&loaded.project, &loaded.root, &file);
+                }
+            }
+            Act::Run(file) => {
+                if let Some(loaded) = self.tool_flows().cloned() {
+                    self.run_flow_in_editor(&loaded, &file);
+                }
+            }
+            Act::Trust(trusted) => {
+                if let Some(root) = self.tool_flows().map(|loaded| loaded.root.clone()) {
+                    self.answer_task_trust(&root, trusted);
+                }
+            }
             Act::Go(session) => self.go_session(&session),
             Act::Gate(dir, step, approve) => {
                 self.flow_act(move || control::answer_gate(&dir, &step, approve));
@@ -225,12 +337,15 @@ impl App {
     }
 }
 
-/// The title, Run flow… and the menu with Clear ended runs.
+/// The title, Run flow… and the menu with New flow and Clear ended runs.
 fn flows_header(ui: &mut egui::Ui, ended: usize, act: &mut Option<Act>) {
     ui.horizontal(|ui| {
         ui.strong("Flows");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let more = appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
+                if appearance::menu_action(ui, true, "New flow…", "Plus").clicked() {
+                    *act = Some(Act::NewFlow);
+                }
                 if appearance::menu_danger_action(ui, ended > 0, "Clear ended runs…", "Trash")
                     .on_hover_text("Remove every ended run of this project from the list")
                     .clicked()
@@ -246,24 +361,56 @@ fn flows_header(ui: &mut egui::Ui, ended: usize, act: &mut Option<Act>) {
     });
 }
 
-/// The confirmation of Clear ended runs.
-fn clear_confirmation(ui: &mut egui::Ui, ended: Vec<PathBuf>, act: &mut Option<Act>) {
-    if ended.is_empty() {
-        *act = Some(Act::KeepRuns);
-        return;
-    }
-    let count = ended.len();
-    let runs = if count == 1 { "run" } else { "runs" };
-    ui.label(format!(
-        "Remove {count} ended {runs} from the list? Their terminals stay open."
-    ));
+/// A section title: small secondary capitals, with a count at the right.
+pub(super) fn section_title(ui: &mut egui::Ui, title: &str, count: usize) {
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
-        if appearance::danger_button(ui, "Clear").clicked() {
-            *act = Some(Act::Clear(ended));
-            return;
-        }
-        if ui.button("Keep").clicked() {
-            *act = Some(Act::KeepRuns);
-        }
+        let text = |text: String| {
+            egui::RichText::new(text)
+                .size(appearance::FONT_CAPTION)
+                .weak()
+        };
+        ui.label(text(title.to_uppercase()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(text(count.to_string()));
+        });
     });
+    ui.add_space(2.0);
+}
+
+/// No flow and no run in this project: what a flow is, New flow, and
+/// where the files are.
+pub(super) fn empty_state(ui: &mut egui::Ui, act: &mut Option<Act>) {
+    ui.add_space(8.0);
+    egui::Frame::new()
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(appearance::RADIUS_LARGE)
+        .inner_margin(egui::Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                ui.strong("No flows in this project");
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "A flow runs agent steps in order, with gates where you approve.",
+                    )
+                    .size(appearance::FONT_SMALL)
+                    .weak(),
+                );
+                ui.add_space(8.0);
+                if appearance::primary_button(ui, "New flow")
+                    .on_hover_text("Name a new flow, then make it in the flow editor")
+                    .clicked()
+                {
+                    *act = Some(Act::NewFlow);
+                }
+            });
+        });
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new("Flows are stored in .terminator/flows/.")
+            .size(appearance::FONT_CAPTION)
+            .weak(),
+    );
 }

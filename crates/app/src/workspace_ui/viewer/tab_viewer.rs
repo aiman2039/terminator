@@ -73,7 +73,14 @@ impl TabViewer for Viewer<'_> {
         self.paint_file_leading(ui, rect, tab);
     }
     fn tab_modified(&self, tab: &Tab) -> bool {
-        matches!(tab, Tab::NativeEditor { path } if self.app.native_dirty(path))
+        match tab {
+            Tab::NativeEditor { path } => self.app.native_dirty(path),
+            Tab::Document {
+                path,
+                kind: crate::document_view::DocumentKind::Flow,
+            } => self.app.flow_tab_dirty(path),
+            _ => false,
+        }
     }
     fn allowed_in_windows(&self, _: &mut Tab) -> bool {
         false

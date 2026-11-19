@@ -66,6 +66,49 @@ pub fn row(input: RowInput<'_>) -> egui::Response {
     )
 }
 
+/// A [`row`] whose status icon has its own color, and spins while its
+/// work runs (a flow step).
+pub(crate) struct StatusRowInput<'a> {
+    pub row: RowInput<'a>,
+    pub icon_tint: Color32,
+    pub spin: bool,
+}
+
+pub fn status_row(input: StatusRowInput<'_>) -> egui::Response {
+    let StatusRowInput {
+        row:
+            RowInput {
+                ui,
+                label,
+                icon,
+                selected,
+                height,
+                trailing,
+                tint,
+            },
+        icon_tint,
+        spin,
+    } = input;
+    row_ext(
+        ui,
+        RowSpec {
+            label,
+            icon,
+            selected,
+            height,
+            trailing,
+            tint,
+            icon_tint: Some(icon_tint),
+            spin,
+            subtitle: None,
+            brand: None,
+            reserve_brand: false,
+            after_label: None,
+            extras: RowExtras::default(),
+        },
+    )
+}
+
 /// Size of the [`RowSpec::after_label`] icon and its gap after the label.
 const AFTER_LABEL_SIZE: f32 = 12.0;
 const AFTER_LABEL_GAP: f32 = 4.0;

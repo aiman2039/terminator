@@ -1,36 +1,26 @@
-//! Paints a flow editor tab: the toolbar, the graph on the whole pane, and
-//! the editor's dialogs (one card's fields, the prompt rules, the preview).
-use super::dialogs::{node_dialog, preview_dialog, rules_dialog};
-use super::model::Node;
-use super::viewer::{self, Colors, Viewer};
-use super::{Dialog, FlowEditor, Slot, Stay};
-use crate::app::{OpenFileInput, OpenFileModeInput};
+//! Paints a flow editor tab: the toolbar, the run strip, the graph, and
+//! the inspector at the right of the graph. The preview of the plan is a
+//! dialog.
+use super::banner::{StripClick, run_strip, starting_strip, still_starting};
+use super::dialogs::preview_dialog;
+use super::inspector::{self, CheckError, check_error};
+use super::style::Colors;
+use super::toolbar::{Click, Keys, toolbar};
+use super::viewer::{self, Viewer};
+use super::{Dialog, FlowEditor, Slot, Stay, canvas, model};
+use crate::app::OpenFileInput;
 use crate::document_view::DocumentKind;
-use crate::flows::panel::run_status;
+use crate::flows::panel::Act;
 use crate::flows::{LoadedFlows, Run};
 use crate::*;
 use egui_snarl::ui::SnarlWidget;
+use std::collections::HashMap;
 use std::path::Path;
-use terminator_core::flow::control;
-
-/// One click in the editor's toolbar or in a dialog.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Click {
-    Save,
-    Run,
-    AddStep,
-    AddGate,
-    Fit,
-    Float,
-    Rules,
-    Preview,
-    CopyPlan,
-    CopyFile,
-    ExportPlan,
-    Discard,
-}
 
 const DIALOG_WIDTH: f32 = 620.0;
+/// Narrower panes show the inspector only for a selected card or the
+/// rules.
+const SPLIT_WIDTH: f32 = 1000.0;
 
 impl App {
     /// The flow editor of the flow file `path`, on the whole pane.
@@ -48,48 +38,13 @@ impl App {
                 ui.ctx().request_repaint();
                 Some(Slot::Loading(receiver))
             }
-            Slot::Failed(error) => self.flow_failed_view(ui, path, error),
+            Slot::Failed(failure) => self.flow_failed_view(ui, path, failure),
             Slot::Ready(mut editor) => self
                 .flow_ready_view(ui, path, &mut editor)
                 .then(|| Slot::Ready(editor)),
         };
         if let Some(slot) = keep {
             self.flows.editors.insert(path.into(), slot);
-        }
-    }
-
-    /// A file that is not a correct flow: its error, and the way to repair
-    /// it as text.
-    fn flow_failed_view(&mut self, ui: &mut egui::Ui, path: &Path, error: String) -> Option<Slot> {
-        ui.add_space(12.0);
-        ui.colored_label(
-            ui.visuals().error_fg_color,
-            format!("This flow has an error: {error}"),
-        );
-        let mut again = false;
-        ui.horizontal(|ui| {
-            if ui.button("Open as text").clicked() {
-                self.open_file_mode(OpenFileModeInput {
-                    path: path.into(),
-                    line: None,
-                    split: None,
-                    external: false,
-                    text: true,
-                });
-            }
-            again = ui.button("Read again").clicked();
-        });
-        (!again).then_some(Slot::Failed(error))
-    }
-
-    fn flow_colors(&self) -> Colors {
-        Colors {
-            canvas: appearance::color(&self.theme.window),
-            node: appearance::color(&self.theme.surface),
-            border: appearance::color(&self.theme.border),
-            step: appearance::color(&self.theme.status_running),
-            gate: appearance::color(&self.theme.status_waiting),
-            failed: appearance::color(&self.theme.status_failed),
         }
     }
 
@@ -118,39 +73,158 @@ impl App {
             .cloned()
     }
 
+    /// The typed answers of `run`'s questions, by step ID.
+    fn run_drafts(&self, run: Option<&Run>) -> HashMap<String, String> {
+        let Some(run) = run else {
+            return HashMap::new();
+        };
+        self.flows
+            .drafts
+            .iter()
+            .filter(|((dir, _), _)| *dir == run.dir)
+            .map(|((_, step), text)| (step.clone(), text.clone()))
+            .collect()
+    }
+
     /// The graph, with the state of `run` on its cards. Does the clicks
-    /// on a card's run row.
+    /// on the cards.
     fn flow_graph(
         &mut self,
         ui: &mut egui::Ui,
         path: &Path,
-        (editor, run): (&mut FlowEditor, Option<&Run>),
+        (editor, run, error): (&mut FlowEditor, Option<&Run>, Option<&CheckError>),
     ) {
-        let colors = self.flow_colors();
-        let fit = std::mem::take(&mut editor.fit).then(|| ui.available_rect_before_wrap());
+        let colors = Colors::of(&self.theme);
+        let canvas = ui.available_rect_before_wrap();
+        // A new canvas size (a resized pane or window) fits the view again.
+        if editor.canvas.is_some_and(|size| {
+            (size.x - canvas.width()).abs() > 1.0 || (size.y - canvas.height()).abs() > 1.0
+        }) {
+            editor.fit = true;
+        }
+        editor.canvas = Some(canvas.size());
+        let fit = editor.fit.then_some(canvas);
+        // The first fit uses estimated sizes: fit again once all are known.
+        editor.fit &= !canvas::measured(&editor.snarl, &editor.sizes);
+        let mut drafts = self.run_drafts(run);
         let mut viewer = Viewer {
             colors,
             run: run.map(|run| &run.state.steps),
-            go: None,
-            answer: None,
+            drafts: &mut drafts,
+            selected: editor.selected,
+            error,
+            sizes: &mut editor.sizes,
             fit,
-            edit: None,
-            refit: false,
+            out: viewer::Out::default(),
         };
-        SnarlWidget::new()
+        let widget = SnarlWidget::new()
             .id_salt(("flow-editor", path))
-            .style(viewer::style(colors))
-            .show(&mut editor.snarl, &mut viewer, ui);
-        if let Some(node) = viewer.edit {
-            editor.dialog = Some(Dialog::Node(node));
+            .style(viewer::style(colors));
+        widget.show(&mut editor.snarl, &mut viewer, ui);
+        let out = viewer.out;
+        editor.marked = widget.get_selected_nodes(ui);
+        if let Some(run) = run {
+            for (step, text) in drafts {
+                self.flows.drafts.insert((run.dir.clone(), step), text);
+            }
         }
-        editor.fit |= viewer.refit;
-        if let Some(session) = viewer.go.take() {
+        self.flow_canvas_out(ui, (editor, run, canvas), out);
+    }
+
+    /// Takes the clicks of the canvas: selection, the run's actions, Fit
+    /// and Tidy layout.
+    fn flow_canvas_out(
+        &mut self,
+        ui: &egui::Ui,
+        (editor, run, canvas): (&mut FlowEditor, Option<&Run>, egui::Rect),
+        out: viewer::Out,
+    ) {
+        if let Some(node) = out.select {
+            editor.selected = Some(node);
+            editor.rules_open = false;
+        } else if viewer::clicked_in(ui, canvas) {
+            editor.selected = None;
+            editor.rules_open = false;
+        }
+        if editor.fit {
+            ui.ctx().request_repaint();
+        }
+        editor.fit |= out.refit;
+        if out.tidy {
+            tidy(editor);
+        }
+        if let Some(session) = out.go {
             self.go_session(&session);
         }
-        if let (Some((step, approve)), Some(run)) = (viewer.answer.take(), run) {
-            let dir = run.dir.clone();
-            self.flow_act(move || control::answer_gate(&dir, &step, approve));
+        let Some(run) = run else {
+            return;
+        };
+        if let Some((step, approve)) = out.answer {
+            self.apply_flow_act(Act::Gate(run.dir.clone(), step, approve));
+        }
+        if let Some(step) = out.send {
+            self.apply_flow_act(Act::Answer(run.dir.clone(), step));
+        }
+    }
+
+    /// The graph and, at its right, the inspector.
+    fn flow_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        path: &Path,
+        (editor, run, error): (&mut FlowEditor, Option<&Run>, Option<&CheckError>),
+    ) {
+        let full = ui.available_rect_before_wrap();
+        let inspect = full.width() >= SPLIT_WIDTH || editor.selected.is_some() || editor.rules_open;
+        let width = inspector::WIDTH.min(full.width() * 0.6);
+        let split = full.right() - if inspect { width } else { 0.0 };
+        let graph = egui::Rect::from_min_max(full.min, egui::pos2(split, full.bottom()));
+        let mut graph_ui = ui.new_child(egui::UiBuilder::new().max_rect(graph));
+        self.flow_graph(&mut graph_ui, path, (editor, run, error));
+        if inspect {
+            let colors = Colors::of(&self.theme);
+            let panel = egui::Rect::from_min_max(egui::pos2(split, full.top()), full.max);
+            ui.painter()
+                .rect_filled(panel, egui::CornerRadius::ZERO, colors.node);
+            ui.painter()
+                .vline(split, full.y_range(), egui::Stroke::new(1.0, colors.border));
+            let mut panel_ui = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(12.0)));
+            let show = inspector::Show {
+                colors,
+                run: run.map(|run| &run.state.steps),
+                error,
+            };
+            if let Some(session) = inspector::show(&mut panel_ui, editor, &show) {
+                self.go_session(&session);
+            }
+        }
+        ui.allocate_rect(full, egui::Sense::hover());
+    }
+
+    /// The run strip of `run`, or "Starting" after a Run click.
+    fn flow_run_strip(&mut self, ui: &mut egui::Ui, editor: &mut FlowEditor, run: Option<&Run>) {
+        let colors = Colors::of(&self.theme);
+        let Some(run) = run else {
+            return;
+        };
+        if self.flows.banner_hidden.contains(&run.dir) {
+            return;
+        }
+        match run_strip(ui, run, colors, &mut self.flows.drafts) {
+            Some(StripClick::Hide) => {
+                self.flows.banner_hidden.insert(run.dir.clone());
+            }
+            Some(StripClick::Gate(step, approve)) => {
+                self.apply_flow_act(Act::Gate(run.dir.clone(), step, approve));
+            }
+            Some(StripClick::Answer(step)) => {
+                self.apply_flow_act(Act::Answer(run.dir.clone(), step));
+            }
+            Some(StripClick::Cancel) => {
+                let at = ui.ctx().input(|input| input.pointer.interact_pos());
+                editor.confirm_cancel = Some(at.unwrap_or_default());
+            }
+            None => {}
         }
     }
 
@@ -175,29 +249,68 @@ impl App {
         if editor.saving.is_some() || editor.exporting.is_some() {
             ui.ctx().request_repaint();
         }
+        self.flow_delete_alias(ui.ctx(), (path, editor));
         let mut run = self.flow_run_of(ui.ctx(), editor);
         // After a Run click, an older run of this flow is not the news.
-        let starting = super::banner::still_starting(&mut self.flows.starting, path, run.as_ref());
+        let starting = still_starting(&mut self.flows.starting, path, run.as_ref());
         if starting {
             run = None;
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
-        let state = run.as_ref().map(run_status);
-        let mut click = toolbar(ui, editor, state);
+        let colors = Colors::of(&self.theme);
+        let keys = Keys {
+            save: self.shortcut_label(Action::EditorSave),
+            fit: self.shortcut_label(Action::FlowFit),
+        };
+        let running = run.as_ref().is_some_and(|run| !run.ended());
+        let mut click = toolbar(ui, editor, (colors, &keys, running));
         if let Some(error) = &editor.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            });
         }
         if starting {
-            super::banner::starting_banner(ui, self.flow_colors());
-        } else if let Some(run) = &run
-            && !self.flows.banner_hidden.contains(&run.dir)
-            && super::banner::run_banner(ui, run, self.flow_colors())
-        {
-            self.flows.banner_hidden.insert(run.dir.clone());
+            starting_strip(ui, colors);
         }
-        self.flow_graph(ui, path, (editor, run.as_ref()));
+        self.flow_run_strip(ui, editor, run.as_ref());
+        let error = check_error(&editor.draft());
+        self.flow_body(ui, path, (editor, run.as_ref(), error.as_ref()));
         click = click.or(self.flow_editor_dialog(ui.ctx(), editor));
+        self.flow_cancel_confirm(ui.ctx(), editor, run.as_ref());
         self.flow_editor_click((ui.ctx(), path), editor, click)
+    }
+
+    /// The confirmation of Cancel run, at the pointer of the click.
+    fn flow_cancel_confirm(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut FlowEditor,
+        run: Option<&Run>,
+    ) {
+        let Some(at) = editor.confirm_cancel else {
+            return;
+        };
+        let Some(run) = run.filter(|run| !run.ended()) else {
+            editor.confirm_cancel = None;
+            return;
+        };
+        let dialog = appearance::Confirm::new(
+            format!("Cancel the run of {}?", run.state.flow),
+            "No new step starts. Running terminals continue.",
+        )
+        .cancel(appearance::ConfirmButton::new("Keep running"))
+        .destructive(appearance::ConfirmButton::new("Cancel run"));
+        let window = egui::Window::new("Cancel run")
+            .id(egui::Id::unique(("flow-cancel", &run.dir)))
+            .default_pos(at);
+        let Some(answer) = appearance::confirm(ctx, window, dialog, |_| {}) else {
+            return;
+        };
+        editor.confirm_cancel = None;
+        if answer == appearance::ConfirmAnswer::Destructive {
+            self.apply_flow_act(Act::Cancel(run.dir.clone()));
+        }
     }
 
     /// Does one click. False for Discard.
@@ -207,27 +320,21 @@ impl App {
         editor: &mut FlowEditor,
         click: Option<Click>,
     ) -> bool {
-        let place = next_place(editor);
         match click {
             Some(Click::Save) => editor.save(),
-            Some(Click::Run) => {
-                if let Some(project) = self.flow_project(editor) {
-                    let loaded = LoadedFlows {
-                        project,
-                        root: editor.root.clone(),
-                        files: Vec::new(),
-                    };
-                    if let Some(runner) = self.run_flow(&loaded, &editor.file) {
-                        // The editor shows the run, so the app stays on it.
-                        self.flows.stay = Some(Stay::after_run(path, runner, &self.flows.runs));
-                        self.flows.starting = Some(super::Starting::now(path));
-                    }
-                }
+            Some(Click::Run) => self.flow_editor_run(path, editor),
+            Some(Click::AddStep | Click::AddGate) => {
+                let place = next_place(editor);
+                let gate = click == Some(Click::AddGate);
+                editor.selected = Some(viewer::add_node(&mut editor.snarl, place, gate));
+                editor.fit = true;
             }
-            Some(Click::AddStep) => drop(viewer::add_node(&mut editor.snarl, place, false)),
-            Some(Click::AddGate) => drop(viewer::add_node(&mut editor.snarl, place, true)),
             Some(Click::Fit) => editor.fit = true,
-            Some(Click::Rules) => editor.dialog = Some(Dialog::Rules),
+            Some(Click::Tidy) => tidy(editor),
+            Some(Click::Rules) => {
+                editor.selected = None;
+                editor.rules_open = true;
+            }
             Some(Click::Preview) => editor.dialog = Some(Dialog::Preview),
             Some(Click::CopyPlan) => {
                 ctx.copy_text(editor.plan());
@@ -254,6 +361,23 @@ impl App {
         true
     }
 
+    /// Run: an explicit click on the saved flow. The editor shows the run,
+    /// so the app stays on it.
+    fn flow_editor_run(&mut self, path: &Path, editor: &FlowEditor) {
+        let Some(project) = self.flow_project(editor) else {
+            return;
+        };
+        let loaded = LoadedFlows {
+            project,
+            root: editor.root.clone(),
+            files: Vec::new(),
+        };
+        if let Some(runner) = self.run_flow(&loaded, &editor.file) {
+            self.flows.stay = Some(Stay::after_run(path, runner, &self.flows.runs));
+            self.flows.starting = Some(super::Starting::now(path));
+        }
+    }
+
     /// The open dialog of the editor: a modal in the center of the window.
     /// It takes the input; a click outside it, Esc or Done closes it.
     fn flow_editor_dialog(
@@ -261,15 +385,7 @@ impl App {
         ctx: &egui::Context,
         editor: &mut FlowEditor,
     ) -> Option<Click> {
-        let dialog = editor.dialog?;
-        let (title, about) = match dialog {
-            Dialog::Node(node) if editor.snarl.get_node(node).is_some_and(Node::is_gate) => {
-                ("Edit gate", "The run stops here until you approve.")
-            }
-            Dialog::Node(_) => ("Edit step", "One new terminal with this command."),
-            Dialog::Rules => ("Flow rules", "Global rules of this flow."),
-            Dialog::Preview => ("Flow plan", "The flow as Markdown text."),
-        };
+        let Dialog::Preview = editor.dialog?;
         let width = DIALOG_WIDTH.min(ctx.content_rect().width() - 80.0);
         let surface = appearance::color(&self.theme.surface);
         let mut click = None;
@@ -283,14 +399,10 @@ impl App {
             )
             .show(ctx, |ui| {
                 ui.set_width(width);
-                ui.heading(title);
-                ui.weak(about);
+                ui.heading("Flow plan");
+                ui.weak("The flow as Markdown text.");
                 ui.add_space(12.0);
-                match dialog {
-                    Dialog::Node(node) => done = !node_dialog(ui, editor, node),
-                    Dialog::Rules => rules_dialog(ui, editor),
-                    Dialog::Preview => click = preview_dialog(ui, editor),
-                }
+                click = preview_dialog(ui, editor);
                 ui.add_space(12.0);
                 appearance::footer_row(ui, |ui| {
                     done |= appearance::primary_button(ui, "Done").clicked();
@@ -303,157 +415,19 @@ impl App {
     }
 }
 
-/// A toolbar button with an icon and a text.
-fn tool(ui: &mut egui::Ui, icon: &str, label: &str, tip: &str) -> bool {
-    appearance::icon_label_button(appearance::IconLabelButtonInput {
-        ui,
-        icon,
-        label,
-        height: appearance::TOOLBAR_BUTTON,
-    })
-    .on_hover_text(tip)
-    .clicked()
+/// Tidy layout: the cards in columns by their order, with no overlap. The
+/// new places are a layout change ("Layout not saved").
+fn tidy(editor: &mut FlowEditor) {
+    let sizes = editor.sizes.clone();
+    model::tidy(&mut editor.snarl, |node| sizes.get(&node).copied());
+    editor.fit = true;
 }
 
-/// The toolbar: the flow's name, add, Save, Rules, Export, the view
-/// buttons and the state of the flow.
-fn toolbar(ui: &mut egui::Ui, editor: &mut FlowEditor, run: Option<&str>) -> Option<Click> {
-    let mut click = None;
-    let mut set = |on: bool, value: Click| {
-        if on {
-            click = Some(value);
-        }
-    };
-    let (dirty, saving) = (editor.dirty(), editor.saving.is_some());
-    // A moved card alone is not a content change: Run stays on.
-    let changed = editor.changed();
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.add(
-            appearance::singleline(&mut editor.title)
-                .desired_width(190.0)
-                .hint_text("Flow name"),
-        )
-        .on_hover_text(format!(
-            "The name of the flow. Its file is {}.toml",
-            editor.file
-        ));
-        ui.separator();
-        set(
-            tool(
-                ui,
-                "Plus",
-                "Step",
-                "Add a step: a command in a new terminal",
-            ),
-            Click::AddStep,
-        );
-        set(
-            tool(
-                ui,
-                "Plus",
-                "Gate",
-                "Add a gate: the run waits for your approval",
-            ),
-            Click::AddGate,
-        );
-        ui.separator();
-        ui.add_enabled_ui(dirty && !saving, |ui| {
-            set(
-                tool(ui, "Save", "Save", "Check the flow and write its file"),
-                Click::Save,
-            );
-        });
-        ui.add_enabled_ui(!changed && run != Some("running"), |ui| {
-            let tip = "Run the saved flow: one new terminal per step. The cards show the run.";
-            set(tool(ui, "Play", "Run", tip), Click::Run);
-        });
-        set(
-            tool(ui, "Settings2", "Rules", "Global rules of this flow"),
-            Click::Rules,
-        );
-        set(
-            tool(ui, "Eye", "Preview", "The plan as text"),
-            Click::Preview,
-        );
-        if let Some(value) = view_tools(ui, editor, dirty) {
-            set(true, value);
-        }
-        let state = save_state(editor, (dirty, changed, saving));
-        let run = run.map(|run| format!(" · Run: {run}")).unwrap_or_default();
-        let steps = editor.snarl.nodes().count();
-        ui.weak(format!("{steps} steps · {state}{run}"));
-    });
-    ui.add_space(4.0);
-    click
-}
-
-/// The save state in the toolbar. A moved card alone is "Layout not
-/// saved", a lighter state than a content change.
-fn save_state(editor: &FlowEditor, (dirty, changed, saving): (bool, bool, bool)) -> &'static str {
-    if saving {
-        "Saving…"
-    } else if !editor.on_disk {
-        "New flow, not saved"
-    } else if changed {
-        "Changes not saved"
-    } else if dirty {
-        "Layout not saved"
-    } else {
-        "Saved"
-    }
-}
-
-/// The right part of the toolbar: Export, Fit to view, Float window and
-/// the "more" menu.
-fn view_tools(ui: &mut egui::Ui, editor: &FlowEditor, dirty: bool) -> Option<Click> {
-    let mut click = None;
-    let mut set = |on: bool, value: Click| {
-        if on {
-            click = Some(value);
-        }
-    };
-    appearance::text_menu_button(ui, "Export", |ui| {
-        set(
-            appearance::menu_action(ui, true, "Copy plan as Markdown", "Copy").clicked(),
-            Click::CopyPlan,
-        );
-        set(
-            appearance::menu_action(ui, true, "Copy flow file text", "Copy").clicked(),
-            Click::CopyFile,
-        );
-        let label = format!("Save plan as {}.md", editor.file);
-        set(
-            appearance::menu_action(ui, true, &label, "Download").clicked(),
-            Click::ExportPlan,
-        );
-    });
-    ui.separator();
-    set(
-        appearance::sidebar_action(ui, "Maximize", "Fit to view").clicked(),
-        Click::Fit,
-    );
-    set(
-        appearance::sidebar_action(ui, "ExternalLink", "Float window").clicked(),
-        Click::Float,
-    );
-    appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
-        let discard = appearance::menu_danger_action(ui, dirty, "Discard changes", "Trash");
-        set(discard.clicked(), Click::Discard);
-    });
-    click
-}
-
-/// Where a node from the toolbar goes: below the lowest node.
+/// Where a node from the toolbar goes: below the lowest card.
 fn next_place(editor: &FlowEditor) -> egui::Pos2 {
-    let lowest = editor
-        .snarl
-        .nodes_pos()
-        .map(|(position, _)| position.y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    if lowest.is_finite() {
-        egui::pos2(0.0, lowest + 280.0)
+    let all = canvas::bounds(&editor.snarl, &editor.sizes);
+    if all.is_finite() {
+        egui::pos2(all.left(), all.bottom() + 40.0)
     } else {
         egui::Pos2::ZERO
     }

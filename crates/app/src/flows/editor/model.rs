@@ -56,9 +56,14 @@ impl Node {
     }
 }
 
-/// Distance between the columns and the rows of an automatic layout.
-const COLUMN: i32 = 380;
-const ROW: i32 = 260;
+/// Distance between the columns of an automatic layout: a card is about
+/// 220 wide.
+pub(crate) const COLUMN: i32 = 320;
+/// Distance between the rows of an automatic layout when the card heights
+/// are not known yet: more than the tallest card (see `cards`).
+pub(crate) const ROW: i32 = 300;
+/// Space between two cards of one column in a tidy layout.
+const GAP: f32 = 40.0;
 
 /// The pin of a node's `needs` side and of its "then" side.
 pub(crate) fn input(node: NodeId) -> InPinId {
@@ -79,25 +84,18 @@ fn auto_places(flow: &Flow) -> Vec<[i32; 2]> {
         .enumerate()
         .map(|(at, step)| (step.id.as_str(), at))
         .collect();
-    let mut depth = vec![0_i32; flow.steps.len()];
-    // A checked flow has no cycle, so one pass per step is sufficient.
-    for _ in 0..flow.steps.len() {
-        for (at, step) in flow.steps.iter().enumerate() {
-            let after = step
-                .needs
+    let needs: Vec<Vec<usize>> = flow
+        .steps
+        .iter()
+        .map(|step| {
+            step.needs
                 .iter()
-                .filter_map(|needs| index.get(needs.as_str()))
-                .filter_map(|needs| depth.get(*needs))
-                .map(|depth| depth.saturating_add(1))
-                .max()
-                .unwrap_or(0);
-            if let Some(slot) = depth.get_mut(at) {
-                *slot = after;
-            }
-        }
-    }
+                .filter_map(|needs| index.get(needs.as_str()).copied())
+                .collect()
+        })
+        .collect();
     let mut rows: HashMap<i32, i32> = HashMap::new();
-    depth
+    depths(&needs)
         .into_iter()
         .map(|column| {
             let row = rows.entry(column).or_insert(0);
@@ -106,6 +104,85 @@ fn auto_places(flow: &Flow) -> Vec<[i32; 2]> {
             place
         })
         .collect()
+}
+
+/// The column of each step: one after the last step that it needs. A
+/// step of a cycle stops growing after one pass per step.
+fn depths(needs: &[Vec<usize>]) -> Vec<i32> {
+    let mut depth = vec![0_i32; needs.len()];
+    for _ in 0..needs.len() {
+        for (at, before) in needs.iter().enumerate() {
+            let after = before
+                .iter()
+                .filter_map(|needs| depth.get(*needs))
+                .map(|depth| depth.saturating_add(1).min(1_000))
+                .max()
+                .unwrap_or(0);
+            if let Some(slot) = depth.get_mut(at) {
+                *slot = after;
+            }
+        }
+    }
+    depth
+}
+
+/// Tidy layout: a column per depth, and in each column the cards in their
+/// order from top to bottom, each `GAP` below the card above it. `size`
+/// gives a card's measured size; a card with none counts as `ROW` high.
+pub(crate) fn tidy(snarl: &mut Snarl<Node>, size: impl Fn(NodeId) -> Option<egui::Vec2>) {
+    let nodes: Vec<(NodeId, egui::Pos2)> = snarl
+        .nodes_pos_ids()
+        .map(|(node, position, _)| (node, position))
+        .collect();
+    let at = |node: NodeId| nodes.iter().position(|(other, _)| *other == node);
+    let needs: Vec<Vec<usize>> = nodes
+        .iter()
+        .map(|(node, _)| {
+            let remotes = snarl.in_pin(input(*node)).remotes;
+            remotes.iter().filter_map(|from| at(from.node)).collect()
+        })
+        .collect();
+    let depth = depths(&needs);
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by(|a, b| {
+        let key = |index: &usize| {
+            let column = depth.get(*index).copied().unwrap_or(0);
+            let y = nodes.get(*index).map_or(0.0, |(_, pos)| pos.y);
+            (column, y)
+        };
+        let ((left, top), (right, bottom)) = (key(a), key(b));
+        left.cmp(&right).then(top.total_cmp(&bottom))
+    });
+    let mut tops: HashMap<i32, f32> = HashMap::new();
+    for index in order {
+        let (Some((node, _)), Some(column)) = (nodes.get(index), depth.get(index)) else {
+            continue;
+        };
+        let top = tops.entry(*column).or_insert(0.0);
+        let height = size(*node).map_or(position([0, ROW]).y, |size| size.y);
+        let place = egui::pos2(position([column.saturating_mul(COLUMN), 0]).x, *top);
+        *top += height + GAP;
+        if let Some(info) = snarl.get_node_info_mut(*node) {
+            info.pos = place;
+        }
+    }
+}
+
+/// True when `to` may not run after `from`: the same step, or `from`
+/// already runs after `to` (the wire would close a cycle).
+pub(crate) fn would_cycle(snarl: &Snarl<Node>, from: NodeId, to: NodeId) -> bool {
+    let mut stack = vec![to];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(node) = stack.pop() {
+        if node == from {
+            return true;
+        }
+        if seen.insert(node) {
+            let next = snarl.out_pin(output(node)).remotes;
+            stack.extend(next.iter().map(|pin| pin.node));
+        }
+    }
+    false
 }
 
 /// A graph position from a saved place.

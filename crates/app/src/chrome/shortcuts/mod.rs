@@ -151,7 +151,11 @@ actions! {
     SaveLaunchLayout => "save_launch_layout", "Save layout as launch file", "Save";
     // `.terminator/flows/NAME.toml`: runs only on the Run click, after the
     // trust answer.
-    RunFlow => "run_flow", "Run flow…", "Split";
+    RunFlow => "run_flow", "Run flow…", "Workflow";
+    // Flow editor canvas keys: only while its canvas has the keyboard.
+    FlowRemove => "flow_remove", "Flow: Remove selected cards", "Trash";
+    FlowDuplicate => "flow_duplicate", "Flow: Duplicate card", "Copy";
+    FlowFit => "flow_fit", "Flow: Fit to view", "Maximize";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

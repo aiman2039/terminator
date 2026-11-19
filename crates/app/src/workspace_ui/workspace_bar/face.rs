@@ -64,6 +64,11 @@ impl App {
         match primary {
             Some(Tab::Terminal(sid)) => self.terminal_tab_face(sid),
             Some(Tab::Diff { path, .. }) => TabFace::plain(TabFace::file_name(path), "FileDiff"),
+            // A flow editor shows the flow's name and the flow glyph.
+            Some(Tab::Document {
+                path,
+                kind: crate::document_view::DocumentKind::Flow,
+            }) => TabFace::plain(self.flow_tab_title(path), crate::flows::FLOW_TAB_ICON),
             Some(Tab::Image { path } | Tab::NativeEditor { path } | Tab::Document { path, .. }) => {
                 TabFace::plain(TabFace::file_name(path), icons::file_icon(path))
             }

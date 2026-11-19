@@ -99,6 +99,10 @@ impl App {
             if action == Action::SelectAll && self.text_input_focused(ctx) {
                 continue;
             }
+            // Flow editor keys need its canvas to have the keyboard.
+            if crate::flows::FLOW_ACTIONS.contains(&action) && !self.flow_editor_has_keyboard(ctx) {
+                continue;
+            }
             let key = shortcuts::binding(&self.state.settings.keybindings, action.id());
             if editor_focus && shortcuts::editor_owns(&key, jetbrains) {
                 continue;
