@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed: Replace in Files wrote a file that changed since the search when the change was not on a hit line (for example a new line at the end). Any change to the file now stops the replace before any write.
+- Fixed: Replace in Files stops as soon as a file has more matches than the limit, and counts columns in one pass per line, so a long line with many matches no longer takes a long time.
 
 - Flow editor: a card that grows (a run's note, Retry, a badge) moves the cards it would cover down, so cards never overlap; the move is a layout change only. With more than one failed step, the run strip has one "Retry STEP" button for each. The flow plan (Preview, Export) lists the run inputs.
 

@@ -21,20 +21,24 @@ pub(crate) struct LineReplace<'a> {
 
 /// The non-empty matches of `line` (byte ranges), each with its new text.
 pub(crate) fn line_replacements(line: &str, how: &LineReplace<'_>) -> Vec<(Range<usize>, String)> {
-    let mut out = Vec::new();
-    for captures in how.regex.captures_iter(line) {
-        let Some(found) = captures.get(0).filter(|found| !found.is_empty()) else {
-            continue;
-        };
+    replacements(line, how).collect()
+}
+
+/// [`line_replacements`] one at a time, so a caller can stop early.
+fn replacements<'a>(
+    line: &'a str,
+    how: &'a LineReplace<'_>,
+) -> impl Iterator<Item = (Range<usize>, String)> + 'a {
+    how.regex.captures_iter(line).filter_map(move |captures| {
+        let found = captures.get(0).filter(|found| !found.is_empty())?;
         let mut text = String::new();
         if how.expand {
             captures.expand(how.replacement, &mut text);
         } else {
             text.push_str(how.replacement);
         }
-        out.push((found.range(), text));
-    }
-    out
+        Some((found.range(), text))
+    })
 }
 
 /// One line after the replace, with the char ranges of the matches in
@@ -141,14 +145,18 @@ pub(crate) fn prepare_replace(plan: &ReplacePlan) -> anyhow::Result<PreparedRena
         }
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| anyhow::anyhow!("{name} is not UTF-8 text. Uncheck it and try again."))?;
-        let file_edits = file_edits(text, &file.lines, &how)
-            .ok_or_else(|| Stale(format!("{name} changed since the search.")))?;
+        let room = MAX_RENAME_EDITS.saturating_sub(total_edits);
+        let file_edits = match file_edits(text, &file.lines, &how, room) {
+            Ok(edits) => edits,
+            Err(Refusal::Stale) => {
+                return Err(Stale(format!("{name} changed since the search.")).into());
+            }
+            Err(Refusal::TooMany) => anyhow::bail!(
+                "Replace in Files changes at most {MAX_RENAME_EDITS} matches at once. \
+                 Uncheck some results and try again."
+            ),
+        };
         total_edits = total_edits.saturating_add(file_edits.len());
-        anyhow::ensure!(
-            total_edits <= MAX_RENAME_EDITS,
-            "Replace in Files changes at most {MAX_RENAME_EDITS} matches at once. \
-             Uncheck some results and try again."
-        );
         if file_edits.is_empty() {
             continue;
         }
@@ -179,15 +187,26 @@ pub(crate) fn prepare_replace(plan: &ReplacePlan) -> anyhow::Result<PreparedRena
     Ok(prepared)
 }
 
+/// Why [`file_edits`] made no edits.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Refusal {
+    /// A planned line is gone or reads otherwise than the search saw it.
+    Stale,
+    /// The file has more matches than the room left.
+    TooMany,
+}
+
 /// Edits that replace the matches on `lines` (sorted) of `text`, as
-/// language-server ranges. `None` when a planned line is gone or reads
-/// otherwise than the search saw it, past the cut preview too (the whole
-/// line's fingerprint). Line breaks split as `str::lines`.
-fn file_edits(
+/// language-server ranges. [`Refusal::Stale`] when a planned line is gone
+/// or reads otherwise than the search saw it, past the cut preview too
+/// (the whole line's fingerprint); [`Refusal::TooMany`] as soon as there
+/// are more than `room` edits. Line breaks split as `str::lines`.
+pub(super) fn file_edits(
     text: &str,
     lines: &[PlannedLine],
     how: &LineReplace<'_>,
-) -> Option<Vec<native_lsp::RenameTextEdit>> {
+    room: usize,
+) -> Result<Vec<native_lsp::RenameTextEdit>, Refusal> {
     let mut wanted = lines.iter().peekable();
     let mut edits = Vec::new();
     for (index, piece) in text.split_inclusive('\n').enumerate() {
@@ -202,17 +221,24 @@ fn file_edits(
         if !body.chars().take(MAX_PREVIEW_CHARS).eq(seen.chars())
             || line_fingerprint(body) != *fingerprint
         {
-            return None;
+            return Err(Refusal::Stale);
         }
-        for (range, new_text) in line_replacements(body, how) {
-            let at = |byte: usize| native_lsp::Position {
+        // UTF-16 columns in one forward pass: matches come in order.
+        let mut column = Utf16Column::new(body);
+        for (range, new_text) in replacements(body, how) {
+            if edits.len() >= room {
+                return Err(Refusal::TooMany);
+            }
+            let start = column.at(range.start);
+            let end = column.at(range.end);
+            let at = |character| native_lsp::Position {
                 line: *line,
-                character: utf16_len(body.get(..byte).unwrap_or_default()),
+                character,
             };
             edits.push(native_lsp::RenameTextEdit {
                 range: native_lsp::Range {
-                    start: at(range.start),
-                    end: at(range.end),
+                    start: at(start),
+                    end: at(end),
                 },
                 new_text,
             });
@@ -221,9 +247,35 @@ fn file_edits(
             break;
         }
     }
-    wanted.peek().is_none().then_some(edits)
+    if wanted.peek().is_some() {
+        return Err(Refusal::Stale);
+    }
+    Ok(edits)
 }
 
-fn utf16_len(text: &str) -> u32 {
-    u32::try_from(text.encode_utf16().count()).unwrap_or(u32::MAX)
+/// UTF-16 columns of growing byte offsets in one line, counted from the
+/// previous offset instead of from the line start.
+struct Utf16Column<'a> {
+    line: &'a str,
+    byte: usize,
+    column: u32,
+}
+
+impl<'a> Utf16Column<'a> {
+    fn new(line: &'a str) -> Self {
+        Self {
+            line,
+            byte: 0,
+            column: 0,
+        }
+    }
+
+    /// The column of `byte`, which is not before the last one asked.
+    fn at(&mut self, byte: usize) -> u32 {
+        let step = self.line.get(self.byte..byte).unwrap_or_default();
+        let step = u32::try_from(step.encode_utf16().count()).unwrap_or(u32::MAX);
+        self.column = self.column.saturating_add(step);
+        self.byte = self.byte.max(byte);
+        self.column
+    }
 }
