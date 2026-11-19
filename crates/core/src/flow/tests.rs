@@ -44,7 +44,8 @@ fn valid_file_keeps_steps_in_file_order() {
     assert_eq!(
         flow.step("approve").unwrap().kind,
         StepKind::Gate {
-            message: "Is the plan correct?".into()
+            message: "Is the plan correct?".into(),
+            options: Vec::new(),
         }
     );
     assert_eq!(
@@ -283,7 +284,7 @@ fn cancel_and_answers_are_refused_for_an_ended_run() {
         Err(control::RunError::Ended)
     ));
     assert!(matches!(
-        control::answer_gate(&ended, "approve", true),
+        control::answer_gate(&ended, "approve", control::GateAnswer::Approve),
         Err(control::RunError::Ended)
     ));
     assert!(!ended.join(control::CANCEL).exists());
@@ -380,7 +381,11 @@ fn a_run_whose_runner_is_gone_takes_no_answer_and_can_be_removed() {
         matches!(result, Err(control::RunError::RunnerGone))
     };
     assert!(gone(control::cancel(&dir)));
-    assert!(gone(control::answer_gate(&dir, "approve", true)));
+    assert!(gone(control::answer_gate(
+        &dir,
+        "approve",
+        control::GateAnswer::Approve
+    )));
     std::fs::create_dir_all(dir.join(control::QUESTIONS)).unwrap();
     std::fs::write(dir.join(control::QUESTIONS).join("plan"), "A?").unwrap();
     assert!(gone(control::answer_question(&dir, "plan", "A")));

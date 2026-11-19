@@ -35,13 +35,17 @@ pub(super) fn take_retries(dir: &Path, state: &mut RunState) -> Vec<String> {
         if next.is_none() || next != wanted || !state.retry(id) {
             continue;
         }
-        // The earlier attempt's report, gate answer and question are not
-        // this attempt's.
-        for folder in [REPORTS, ANSWERS, QUESTIONS, REPLIES] {
-            let _ = std::fs::remove_file(dir.join(folder).join(id));
-        }
+        clear_answers(dir, id);
         retried.push(id.to_owned());
     }
     retried.sort_unstable();
     retried
+}
+
+/// Removes the report, gate answer and question of step `id`: an earlier
+/// attempt's or round's are not the next one's.
+pub(super) fn clear_answers(dir: &Path, id: &str) {
+    for folder in [REPORTS, ANSWERS, QUESTIONS, REPLIES] {
+        let _ = std::fs::remove_file(dir.join(folder).join(id));
+    }
 }

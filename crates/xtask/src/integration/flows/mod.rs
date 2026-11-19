@@ -3,6 +3,7 @@
 //! handoff note, a question with its answer, and a fixture agent whose
 //! prompt waits for the first hook report. The agent is `terminator-hook
 //! emit` with normalized hook events; no real agent runs.
+mod branches;
 mod retry;
 mod stops;
 
@@ -62,9 +63,11 @@ pub fn flows() -> Result<()> {
     case.worktree_step_runs_twice()?;
     case.inputs_refuse_a_run_without_a_required_value()?;
     case.retry_runs_a_new_attempt_with_inputs()?;
+    case.gate_option_and_loop()?;
+    case.loop_ends_after_its_last_round()?;
     println!(
         "{}",
-        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true,"flow_rules_before_prompt":true,"flow_signals_end_run":true,"flow_killed_runner_gone":true,"flow_failure_and_reject":true,"flow_cancel":true,"flow_worktree_second_run":true,"flow_inputs_set":true,"flow_retry":true})
+        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true,"flow_rules_before_prompt":true,"flow_signals_end_run":true,"flow_killed_runner_gone":true,"flow_failure_and_reject":true,"flow_cancel":true,"flow_worktree_second_run":true,"flow_inputs_set":true,"flow_retry":true,"flow_gate_option":true,"flow_loop_rounds":true})
     );
     Ok(())
 }

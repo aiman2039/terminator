@@ -36,7 +36,7 @@ pub(super) enum Act {
     /// The trust answer for the tool window's project.
     Trust(bool),
     Go(String),
-    Gate(PathBuf, String, bool),
+    Gate(PathBuf, String, super::gates::GateChoice),
     Answer(PathBuf, String),
     /// Start this failed step of this run again (explicit click).
     Retry(PathBuf, String),
@@ -307,8 +307,8 @@ impl App {
                 }
             }
             Act::Go(session) => self.go_session(&session),
-            Act::Gate(dir, step, approve) => {
-                self.flow_act(move || control::answer_gate(&dir, &step, approve));
+            Act::Gate(dir, step, choice) => {
+                self.flow_act(move || control::answer_gate(&dir, &step, choice.answer()));
             }
             Act::Answer(dir, step) => {
                 let text = self

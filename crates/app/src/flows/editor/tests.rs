@@ -27,7 +27,7 @@ needs = ["approve"]
 at = [900, 40]
 "#;
 
-type Painted = Vec<(egui::Pos2, String)>;
+pub(super) type Painted = Vec<(egui::Pos2, String)>;
 
 /// One frame of the editor tab of `path` in a wide pane, with pointer
 /// `events`; gives the painted text with its place.
@@ -47,7 +47,7 @@ fn frame(app: &mut App, ctx: &egui::Context, path: &Path, events: Vec<egui::Even
     crate::app::tests::support::painted_text(&output.shapes)
 }
 
-fn flow_path(root: &Path, name: &str) -> PathBuf {
+pub(super) fn flow_path(root: &Path, name: &str) -> PathBuf {
     files::path_of(root, name).unwrap()
 }
 
@@ -60,7 +60,7 @@ fn ready<'a>(app: &'a mut App, path: &Path) -> &'a mut FlowEditor {
 
 /// Frames until the worker thread gave the flow, then a few more so the
 /// graph has its sizes.
-fn settle(app: &mut App, ctx: &egui::Context, path: &Path) -> Painted {
+pub(super) fn settle(app: &mut App, ctx: &egui::Context, path: &Path) -> Painted {
     let started = Instant::now();
     while matches!(app.flows.editors.get(path), None | Some(Slot::Loading(_))) {
         assert!(started.elapsed() < Duration::from_secs(10), "worker thread");
@@ -100,7 +100,7 @@ fn click(
     frame(app, ctx, path, vec![event(false)]);
 }
 
-fn count(text: &Painted, label: &str) -> usize {
+pub(super) fn count(text: &Painted, label: &str) -> usize {
     text.iter().filter(|(_, line)| line == label).count()
 }
 

@@ -108,6 +108,10 @@ pub(crate) fn step_style(step: &StepRun) -> StepStyle {
             reached: false,
             ..style("CircleStop", Tone::Dim, "Cancelled", "cancelled")
         },
+        StepStatus::Skipped => StepStyle {
+            reached: false,
+            ..style("SkipForward", Tone::Dim, "Skipped", "skipped")
+        },
     }
 }
 

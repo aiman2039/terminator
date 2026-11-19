@@ -11,6 +11,8 @@ pub const ANSWERS: &str = "answers";
 pub const CANCEL: &str = "cancel";
 pub const APPROVE: &str = "approve";
 pub const REJECT: &str = "reject";
+/// Start of an answer file that chooses a gate option: `option:NAME`.
+pub const CHOOSE: &str = "option:";
 /// Folder of open questions (`flow ask`): one file per step.
 pub const QUESTIONS: &str = "questions";
 /// Folder of the user's answers to questions: one file per step.
@@ -36,6 +38,12 @@ pub enum RunError {
     RunnerGone,
     #[error("This step is not a gate that waits for an answer")]
     NotGate,
+    #[error("This gate needs one of its options: {0} (--option NAME)")]
+    NeedsOption(String),
+    #[error("This gate has no options; approve it without --option")]
+    NoOptions,
+    #[error("This gate has no option \"{0}\"")]
+    UnknownOption(String),
     #[error("Unknown step")]
     UnknownStep,
     #[error("This step has no open question")]
@@ -92,10 +100,7 @@ pub enum RunStatus {
 impl RunStatus {
     /// The status of `state` whose runner is `alive` or not.
     pub fn of(state: &RunState, alive: bool) -> Self {
-        let done = state
-            .steps
-            .values()
-            .all(|step| step.status == StepStatus::Done);
+        let done = state.steps.values().all(|step| step.status.passed());
         match (state.ended, alive, done) {
             (true, _, true) => Self::Done,
             (true, _, false) => Self::Stopped,
@@ -244,18 +249,59 @@ fn open(dir: &Path) -> Result<RunState, RunError> {
     }
 }
 
-/// Approve or reject a gate step that waits now. A step ID of the run is
-/// a safe file name, so only such an ID is written.
-pub fn answer_gate(dir: &Path, step: &str, approve: bool) -> Result<(), RunError> {
-    let waits = open(dir)?
+/// The user's answer to a gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GateAnswer<'a> {
+    /// Approve a gate with no options.
+    Approve,
+    /// Approve a gate with options, with this option.
+    Choose(&'a str),
+    Reject,
+}
+
+impl<'a> GateAnswer<'a> {
+    /// The text of the answer file.
+    pub fn text(self) -> String {
+        match self {
+            Self::Approve => APPROVE.to_owned(),
+            Self::Choose(option) => format!("{CHOOSE}{option}"),
+            Self::Reject => REJECT.to_owned(),
+        }
+    }
+
+    /// The answer in an answer file's text.
+    pub fn parse(text: &'a str) -> Option<Self> {
+        match text.trim() {
+            APPROVE => Some(Self::Approve),
+            REJECT => Some(Self::Reject),
+            text => text.strip_prefix(CHOOSE).map(Self::Choose),
+        }
+    }
+}
+
+/// Approve or reject a gate step that waits now. A gate with options takes
+/// only one of its options; a gate without takes only Approve. A step ID
+/// of the run is a safe file name, so only such an ID is written.
+pub fn answer_gate(dir: &Path, step: &str, answer: GateAnswer<'_>) -> Result<(), RunError> {
+    let state = open(dir)?;
+    let Some(run) = state
         .steps
         .get(step)
-        .is_some_and(|run| run.gate.is_some() && run.status == StepStatus::Running);
-    if !waits {
+        .filter(|run| run.gate.is_some() && run.status == StepStatus::Running)
+    else {
         return Err(RunError::NotGate);
+    };
+    match answer {
+        GateAnswer::Approve if !run.options.is_empty() => {
+            return Err(RunError::NeedsOption(run.options.join(", ")));
+        }
+        GateAnswer::Choose(_) if run.options.is_empty() => return Err(RunError::NoOptions),
+        GateAnswer::Choose(option) if !run.options.iter().any(|name| name == option) => {
+            return Err(RunError::UnknownOption(option.to_owned()));
+        }
+        _ => {}
     }
-    let answer = if approve { APPROVE } else { REJECT };
-    write(dir, ANSWERS, step, answer.as_bytes())
+    write(dir, ANSWERS, step, answer.text().as_bytes())
 }
 
 /// The open question of a step, if any.

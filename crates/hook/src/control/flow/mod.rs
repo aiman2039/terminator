@@ -10,10 +10,16 @@
 //! stays), and `flow cancel` ends the run. `--set NAME=VALUE` gives the
 //! flow's inputs.
 //!
+//! A gate with options takes `flow approve --option NAME`; the steps whose
+//! `when` names another option are skipped, and a loop step runs its loop
+//! again up to `max_rounds` (see `terminator_core::flow`).
+//!
 //! A step's own agent uses `flow context`, `flow report` and `flow ask`
 //! (also MCP tools); the user answers with `flow answer`. The MCP server
 //! has no tool for the user's side or for `flow run`.
 mod agent;
+mod cancel;
+mod gates;
 mod progress;
 mod retry;
 mod runner;
@@ -27,7 +33,7 @@ use std::path::{Path, PathBuf};
 use terminator_core::{
     flow::{
         Outcome, RUN_DIR, STATE_FILE,
-        control::{self, ANSWERS, APPROVE, CANCEL, REJECT},
+        control::{self, ANSWERS, APPROVE, CANCEL, GateAnswer, REJECT},
         files::{self, plain_name},
     },
     *,
@@ -74,8 +80,14 @@ enum Command {
     /// Print the state of a run, with its status ("stopped (runner gone)"
     /// when its runner is gone).
     Status { run: String },
-    /// Approve a gate step that waits.
-    Approve { run: String, step: String },
+    /// Approve a gate step that waits. A gate with options needs one.
+    Approve {
+        run: String,
+        step: String,
+        /// The chosen option of a gate with options.
+        #[arg(long, value_name = "NAME")]
+        option: Option<String>,
+    },
     /// Reject a gate step that waits; the steps after it do not start.
     Reject { run: String, step: String },
     /// Stop a run: no new step starts; running sessions continue.
@@ -181,12 +193,19 @@ fn execute(cli: Cli) -> Result<Value> {
             json!({"flow": flow.name, "steps": flow.steps.len(), "valid": true})
         }
         Command::Status { run } => status(&run_dir(&paths, &run)?)?,
-        Command::Approve { run, step } => {
-            control::answer_gate(&run_dir(&paths, &run)?, &step, true)?;
-            json!({"step": step, "answer": APPROVE})
+        Command::Approve { run, step, option } => {
+            let answer = match option.as_deref() {
+                Some(option) => GateAnswer::Choose(option),
+                None => GateAnswer::Approve,
+            };
+            control::answer_gate(&run_dir(&paths, &run)?, &step, answer)?;
+            match option {
+                Some(option) => json!({"step": step, "answer": APPROVE, "option": option}),
+                None => json!({"step": step, "answer": APPROVE}),
+            }
         }
         Command::Reject { run, step } => {
-            control::answer_gate(&run_dir(&paths, &run)?, &step, false)?;
+            control::answer_gate(&run_dir(&paths, &run)?, &step, GateAnswer::Reject)?;
             json!({"step": step, "answer": REJECT})
         }
         Command::Cancel { run } => {
@@ -348,6 +367,10 @@ fn run_dir(paths: &Paths, run: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+#[cfg(test)]
+mod cancel_tests;
+#[cfg(test)]
+mod gates_tests;
 #[cfg(test)]
 mod retry_tests;
 #[cfg(test)]
