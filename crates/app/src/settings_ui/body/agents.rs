@@ -15,6 +15,20 @@ impl App {
         if self.field_visible("Presets", "preset program arguments") {
             self.agent_preset_grid(ui);
         }
+        if self.field_visible("Flow stall badge", "flow step no activity stalled") {
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Flow stall badge",
+                description: "Show \"no activity N min\" on a running flow step whose agent sent no hook report for this long. Display only. 0 turns it off.",
+                add_control: |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.preferences.flow_stall_minutes)
+                            .range(0..=1440)
+                            .suffix(" min"),
+                    );
+                },
+            });
+        }
         if self.field_visible("Installed agents", "path detected") {
             ui.add_space(12.0);
             ui.strong("Installed agents");

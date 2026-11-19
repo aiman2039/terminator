@@ -7,7 +7,8 @@ use super::{
         lookup::{Ctl, NewSession},
     },
     ANSWERS, APPROVE, CANCEL, REJECT, agent,
-    progress::{Phase, Progress, Wait, progress, with_results},
+    progress::{ENDED, Phase, Progress, Wait, progress, with_results},
+    retry::take_retries,
 };
 use crate::output::Output;
 use anyhow::{Result, bail};
@@ -21,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 use terminator_core::{
-    flow::{Flow, Outcome, RunState, STATE_FILE, Step, StepKind, StepStatus, control},
+    flow::{Flow, Outcome, RunState, STATE_FILE, Step, StepKind, StepRun, StepStatus, control},
     *,
 };
 
@@ -53,6 +54,8 @@ pub(super) struct Runner {
     changed: bool,
     /// Ctrl-C, SIGTERM or SIGHUP (its terminal closed): cancel the run.
     interrupted: Arc<AtomicBool>,
+    /// After a failure, wait for Retry or Cancel instead of ending.
+    hold: bool,
 }
 
 /// The flag that SIGINT, SIGTERM and SIGHUP set. Register it before the run
@@ -89,7 +92,20 @@ impl Runner {
             saved: Vec::new(),
             changed: true,
             interrupted,
+            hold: true,
         }
+    }
+
+    /// The run's input values, for its state file (the flow has them in
+    /// its texts already), and whether it waits for Retry after a failure.
+    pub(super) fn with_inputs(
+        mut self,
+        values: std::collections::BTreeMap<String, String>,
+        hold: bool,
+    ) -> Self {
+        self.state.inputs = values;
+        self.hold = hold;
+        self
     }
 
     /// Runs until every step is done, a step stops the run, or the user
@@ -116,32 +132,44 @@ impl Runner {
 
     fn run_loop(&mut self) -> Result<()> {
         self.save()?;
-        let mut ready = self.ready();
         loop {
             if self.interrupted.load(Ordering::Relaxed) || self.dir.join(CANCEL).exists() {
                 self.state.cancel();
                 self.changed = true;
                 break;
             }
-            for step in &ready {
-                self.start(step);
+            self.retries();
+            for step in self.ready() {
+                self.start(&step);
             }
             self.poll_running();
             self.sync_questions();
             self.save()?;
-            // The run is active while a step runs or can start.
-            ready = self.ready();
+            // The run is active while a step runs or can start, and, with
+            // `hold`, while a failed step can be retried.
             let running = self
                 .state
                 .steps
                 .values()
                 .any(|run| run.status == StepStatus::Running);
-            if ready.is_empty() && !running {
+            let held = self.hold && self.state.steps.values().any(StepRun::retryable);
+            if self.ready().is_empty() && !running && !held {
                 break;
             }
             std::thread::sleep(POLL);
         }
         Ok(())
+    }
+
+    /// Takes the Retry requests: each retried step waits again and starts
+    /// with the other steps that can start.
+    pub(super) fn retries(&mut self) {
+        for id in take_retries(&self.dir, &mut self.state) {
+            self.phases.remove(&id);
+            self.changed = true;
+            let attempt = self.state.steps.get(&id).map_or(1, StepRun::attempt);
+            Output::line_or_drop(format_args!("{id}: retry, attempt {attempt}"));
+        }
     }
 
     fn ready(&self) -> Vec<Step> {
@@ -173,6 +201,9 @@ impl Runner {
         match started {
             Ok(phase) => {
                 self.state.set(&step.id, StepStatus::Running);
+                if let Some(run) = self.state.steps.get_mut(&step.id) {
+                    run.started.get_or_insert_with(now);
+                }
                 self.changed = true;
                 self.phases.insert(step.id.clone(), (phase, Instant::now()));
                 Output::line_or_drop(format_args!("{}: started", step.id));
@@ -208,6 +239,7 @@ impl Runner {
         // it before the command can run.
         if let Some(run) = self.state.steps.get_mut(&step.id) {
             run.session = Some(session.id.clone());
+            run.started = Some(now());
         }
         self.state.set(&step.id, StepStatus::Running);
         self.changed = true;
@@ -360,7 +392,15 @@ impl Runner {
         };
         match progress(snapshot, &session, wait) {
             Progress::Done => Some(Ok(())),
-            Progress::Failed(note) => Some(Err(note.to_owned())),
+            Progress::Failed(note) => {
+                // The terminal ended with no report: the stall badge says so.
+                if note == ENDED
+                    && let Some(run) = self.state.steps.get_mut(id)
+                {
+                    run.exited = true;
+                }
+                Some(Err(note.to_owned()))
+            }
             Progress::SendPrompt => {
                 let Wait::Starting { prompt } = wait else {
                     return None;

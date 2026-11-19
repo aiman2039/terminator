@@ -11,8 +11,11 @@
 //! on worker threads.
 mod editor;
 pub(crate) use editor::{FLOW_ACTIONS, FLOW_TAB_ICON};
+mod inputs_form;
 mod panel;
 mod picker;
+#[cfg(test)]
+mod retry_tests;
 mod runs_view;
 mod status;
 #[cfg(test)]
@@ -22,7 +25,7 @@ use crate::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
-use terminator_core::flow::{RunState, control, files};
+use terminator_core::flow::{Input, RunState, control, files};
 
 /// One flow file of a project: its name and step count, or why it is
 /// refused.
@@ -31,6 +34,8 @@ pub(crate) struct FlowFile {
     /// The file name without `.toml`.
     pub(crate) file: String,
     pub(crate) flow: Result<(String, usize), String>,
+    /// The flow's run inputs (none for a refused file): Run asks for them.
+    pub(crate) inputs: Vec<(String, Input)>,
 }
 
 /// The flow files of one project.
@@ -127,6 +132,8 @@ pub(crate) struct FlowsState {
     tool_read_at: Option<Instant>,
     /// Where the Run flow window moves next frame, so its list fits.
     picker_top: Option<egui::Pos2>,
+    /// The Run inputs form of a flow with inputs, after a Run click.
+    inputs_form: Option<inputs_form::InputsForm>,
 }
 
 impl FlowsState {
@@ -145,11 +152,19 @@ impl FlowsState {
 pub(crate) fn load_flows(project: String, root: PathBuf) -> LoadedFlows {
     let files = files::names(&root)
         .into_iter()
-        .map(|file| FlowFile {
-            flow: files::load(&root, &file)
-                .map(|flow| (flow.name, flow.steps.len()))
-                .map_err(|error| error.to_string()),
-            file,
+        .map(|file| {
+            let loaded = files::load(&root, &file);
+            let inputs = loaded
+                .as_ref()
+                .map(|flow| flow.inputs.clone().into_iter().collect())
+                .unwrap_or_default();
+            FlowFile {
+                flow: loaded
+                    .map(|flow| (flow.name, flow.steps.len()))
+                    .map_err(|error| error.to_string()),
+                inputs,
+                file,
+            }
         })
         .collect();
     LoadedFlows {
@@ -160,14 +175,24 @@ pub(crate) fn load_flows(project: String, root: PathBuf) -> LoadedFlows {
 }
 
 /// The line typed in the new terminal: the helper beside this program,
-/// the project ID and the flow file name, each as one shell word.
-pub(crate) fn run_command(helper: &std::path::Path, project: &str, file: &str) -> String {
-    format!(
+/// the project ID, the flow file name and one `--set NAME=VALUE` per input
+/// value, each as one shell word.
+pub(crate) fn run_command(
+    helper: &std::path::Path,
+    (project, file): (&str, &str),
+    values: &[(String, String)],
+) -> String {
+    let mut line = format!(
         "{} flow run {} {}",
         terminator_core::quote(&helper.to_string_lossy()),
         terminator_core::quote(project),
         terminator_core::quote(file)
-    )
+    );
+    for (name, value) in values {
+        let set = terminator_core::quote(&format!("{name}={value}"));
+        line.push_str(&format!(" --set {set}"));
+    }
+    line
 }
 
 impl App {
@@ -250,7 +275,26 @@ impl App {
     /// The Flows tool window then shows, so the run is in view. Gives the
     /// runner line that the new terminal types, or `None` when the run did
     /// not start.
+    #[cfg(test)]
     pub(crate) fn run_flow(&mut self, loaded: &LoadedFlows, file: &str) -> Option<String> {
+        self.run_flow_with(loaded, file, &[])
+    }
+
+    /// [`App::run_flow`] with the run's input values (`--set`). A value with
+    /// a control character is refused: it would be a key in the terminal.
+    pub(crate) fn run_flow_with(
+        &mut self,
+        loaded: &LoadedFlows,
+        file: &str,
+        values: &[(String, String)],
+    ) -> Option<String> {
+        if values
+            .iter()
+            .any(|(_, value)| !terminator_core::flow::inputs::value_ok(value))
+        {
+            self.info = Some("An input value has a control character or is too long.".into());
+            return None;
+        }
         if self.flow_run_waits_for_save(loaded, file) {
             return None;
         }
@@ -277,7 +321,7 @@ impl App {
         if self.selected.as_deref() != Some(loaded.project.as_str()) {
             self.select_project(loaded.project.clone());
         }
-        let line = run_command(&helper, &loaded.project, file);
+        let line = run_command(&helper, (&loaded.project, file), values);
         let post = PostCreate {
             input: line.clone(),
             enter: true,

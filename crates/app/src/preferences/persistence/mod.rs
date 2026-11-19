@@ -163,6 +163,9 @@ pub struct UiPreferences {
     /// without focus raises a terminal notice. 0 is off.
     #[serde(default)]
     pub long_command_notice_secs: u32,
+    /// A running flow step shows "no activity N min" after this many
+    /// minutes with no hook report. 0 is off. Display only.
+    pub flow_stall_minutes: u32,
     /// The quick terminal's project and scratch session.
     #[serde(default)]
     pub quick_terminal: QuickTerminalPrefs,

@@ -38,6 +38,8 @@ pub(super) enum Act {
     Go(String),
     Gate(PathBuf, String, bool),
     Answer(PathBuf, String),
+    /// Start this failed step of this run again (explicit click).
+    Retry(PathBuf, String),
     AskCancel(PathBuf),
     KeepRun,
     Cancel(PathBuf),
@@ -289,7 +291,14 @@ impl App {
             }
             Act::Run(file) => {
                 if let Some(loaded) = self.tool_flows().cloned() {
-                    self.run_flow_in_editor(&loaded, &file);
+                    let inputs = loaded
+                        .files
+                        .iter()
+                        .find(|flow| flow.file == file)
+                        .map(|flow| flow.inputs.clone())
+                        .unwrap_or_default();
+                    let origin = super::inputs_form::Origin::Window;
+                    self.request_flow_run(&loaded, &file, (&inputs, origin));
                 }
             }
             Act::Trust(trusted) => {
@@ -308,6 +317,9 @@ impl App {
                     .remove(&(dir.clone(), step.clone()))
                     .unwrap_or_default();
                 self.flow_act(move || control::answer_question(&dir, &step, &text));
+            }
+            Act::Retry(dir, step) => {
+                self.flow_act(move || control::retry(&dir, &step));
             }
             Act::AskCancel(dir) => self.flows.confirm_cancel = Some(dir),
             Act::KeepRun => self.flows.confirm_cancel = None,

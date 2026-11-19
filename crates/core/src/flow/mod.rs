@@ -6,10 +6,14 @@
 //! version = 1
 //! name = "Plan and build"
 //!
+//! [inputs.issue]                # optional run inputs (see `inputs`)
+//! description = "Issue number"
+//! default = ""                  # optional; no default: required
+//!
 //! [[step]]
 //! id = "plan"
 //! command = "claude"            # typed in a new terminal
-//! prompt = "Write the plan."    # optional, sent when the agent waits
+//! prompt = "Plan issue {{inputs.issue}}." # optional, sent when the agent waits
 //! worktree = "plan"             # optional, worktree terminator/plan (made
 //!                               # on the first run, used again later)
 //!
@@ -41,8 +45,10 @@ use std::{
 pub mod control;
 pub mod files;
 mod graph;
+pub mod inputs;
 mod run;
 pub use graph::Ordered;
+pub use inputs::{Input, InputError};
 pub use run::{Outcome, RUN_DIR, RunState, STATE_FILE, StepRun, StepStatus};
 
 /// Flow files of a project, relative to the project folder.
@@ -96,6 +102,27 @@ pub enum FlowError {
     UnknownNeed { step: String, needs: String },
     #[error("Step \"{0}\" is part of a cycle")]
     Cycle(String),
+    #[error("Input name \"{0}\" must be 1 to {MAX_ID} characters of a-z, 0-9, - or _")]
+    BadInput(String),
+    #[error("Input \"{0}\": {1} is too long or has a control character")]
+    InputText(String, &'static str),
+    #[error("A flow has at most {} inputs", inputs::MAX_INPUTS)]
+    TooManyInputs,
+    /// A `{{…}}` in a text that is not a declared input at a good place.
+    #[error("{}: {problem}", place_name(.step.as_deref(), .field))]
+    Placeholder {
+        step: Option<String>,
+        field: &'static str,
+        problem: String,
+    },
+}
+
+/// "Step \"build\": command", or "rules" for the flow's rules.
+fn place_name(step: Option<&str>, field: &str) -> String {
+    match step {
+        Some(step) => format!("Step \"{step}\": {field}"),
+        None => field.to_owned(),
+    }
 }
 
 /// What a step does.
@@ -135,6 +162,8 @@ pub struct Flow {
     /// The flow's rules: one text for the whole flow, which every step's
     /// agent gets before its prompt.
     pub rules: Option<String>,
+    /// The run inputs by name: `{{inputs.NAME}}` in the texts.
+    pub inputs: BTreeMap<String, Input>,
     /// In file order.
     pub steps: Vec<Step>,
 }
@@ -148,6 +177,8 @@ pub struct Draft {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, Input>,
     #[serde(default, rename = "step")]
     pub steps: Vec<DraftStep>,
 }
@@ -187,6 +218,7 @@ impl Draft {
             version: VERSION,
             name: name.to_owned(),
             rules: None,
+            inputs: BTreeMap::new(),
             steps,
         }
     }
@@ -211,14 +243,29 @@ impl Draft {
             Some(text) if !text_ok(text, true) => return Err(FlowError::Rules),
             Some(text) => Some(text.to_owned()),
         };
+        inputs::checked(&self.inputs)?;
         let steps = self.steps.iter().map(step).collect::<Result<_, _>>()?;
+        let inputs = self
+            .inputs
+            .iter()
+            .map(|(name, input)| {
+                let description = input.description.as_deref().map(str::trim);
+                let input = Input {
+                    description: description.filter(|text| !text.is_empty()).map(Into::into),
+                    default: input.default.clone(),
+                };
+                (name.clone(), input)
+            })
+            .collect();
         let flow = Flow {
             name: name.to_owned(),
             rules,
+            inputs,
             steps,
         };
         flow.check_graph()?;
         flow.check_worktrees()?;
+        flow.check_placeholders()?;
         Ok(flow)
     }
 
@@ -257,6 +304,7 @@ impl From<&Flow> for Draft {
         });
         Self {
             rules: flow.rules.clone(),
+            inputs: flow.inputs.clone(),
             ..Self::new(&flow.name, steps.collect())
         }
     }
@@ -397,5 +445,7 @@ impl Flow {
     }
 }
 
+#[cfg(test)]
+mod inputs_tests;
 #[cfg(test)]
 mod tests;

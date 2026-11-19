@@ -10,6 +10,9 @@ use crate::*;
 use std::path::{Path, PathBuf};
 use terminator_core::flow::{StepRun, StepStatus};
 
+/// Widest run inputs line in the strip.
+const INPUTS_WIDTH: f32 = 180.0;
+
 /// One click in the run strip.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum StripClick {
@@ -19,6 +22,8 @@ pub(super) enum StripClick {
     Gate(String, bool),
     /// Send the typed answer of this step's question.
     Answer(String),
+    /// Start this failed step again.
+    Retry(String),
     /// Ask to cancel the run.
     Cancel,
 }
@@ -71,6 +76,9 @@ pub(super) fn now_text(run: &Run) -> Option<String> {
     }
     let (id, step) = steps(run).find(|(_, step)| step.status == StepStatus::Failed)?;
     let note = step.note.as_deref().unwrap_or("No reason given.");
+    if run.state.held() && !run.ended() {
+        return Some(format!("{id} failed: {note} Retry it, or cancel the run."));
+    }
     Some(format!("{id} failed: {note}"))
 }
 
@@ -139,6 +147,18 @@ pub(super) fn run_strip(
             chip(ui, &state, color);
             progress(ui, run, colors);
             ui.weak(format!("{done} of {total} done"));
+            if !run.state.inputs.is_empty() {
+                let line = crate::flows::inputs_form::inputs_line(&run.state.inputs);
+                let text = egui::RichText::new(&line)
+                    .size(appearance::FONT_CAPTION)
+                    .weak();
+                // At most a fixed width: the action at the right keeps its place.
+                let size = egui::vec2(INPUTS_WIDTH, ui.spacing().interact_size.y);
+                ui.allocate_ui(size, |ui| {
+                    ui.add(egui::Label::new(text).truncate())
+                        .on_hover_text(format!("Inputs: {line}"));
+                });
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 click = strip_action(ui, run, drafts);
                 let now = now_text(run).unwrap_or_default();
@@ -191,7 +211,24 @@ fn strip_action(
     let cancel = ui
         .button("Cancel run…")
         .on_hover_text("No new step starts. Running terminals continue.");
-    cancel.clicked().then_some(StripClick::Cancel)
+    if cancel.clicked() {
+        return Some(StripClick::Cancel);
+    }
+    // One Retry per failed step, each with its step: right to left, so the
+    // first failed step is at the left.
+    let failed: Vec<&String> = steps(run)
+        .filter(|(_, step)| status::can_retry(run, step))
+        .map(|(id, _)| id)
+        .collect();
+    let mut click = None;
+    for id in failed.into_iter().rev() {
+        let retry = appearance::primary_button(ui, &format!("Retry {id}"))
+            .on_hover_text(format!("Start {id} again in a new terminal"));
+        if retry.clicked() {
+            click = Some(StripClick::Retry(id.clone()));
+        }
+    }
+    click
 }
 
 /// A Run click whose new run does not show yet.

@@ -19,6 +19,8 @@ pub const REPLIES: &str = "replies";
 pub const MAX_TEXT: usize = 16 * 1024;
 /// File in a run folder that the runner keeps locked while it lives.
 pub const RUNNER_LOCK: &str = "runner.lock";
+/// Folder of Retry requests: one file per step, with the attempt to start.
+pub const RETRIES: &str = "retries";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -38,6 +40,8 @@ pub enum RunError {
     UnknownStep,
     #[error("This step has no open question")]
     NoQuestion,
+    #[error("Only a failed or cancelled step can start again")]
+    NotRetryable,
     #[error("The text is empty or longer than 16 KiB")]
     Text,
     #[error(
@@ -268,6 +272,19 @@ pub fn answer_question(dir: &Path, step: &str, text: &str) -> Result<(), RunErro
         return Err(RunError::NoQuestion);
     }
     write(dir, REPLIES, step, bounded(text)?.as_bytes())
+}
+
+/// Ask the runner to start a failed or cancelled step again, as its next
+/// attempt, in a new terminal. Refused for a run that ended or whose
+/// runner is gone. The old terminal stays as it is.
+pub fn retry(dir: &Path, step: &str) -> Result<(), RunError> {
+    let state = open(dir)?;
+    let run = state.steps.get(step).ok_or(RunError::UnknownStep)?;
+    if !run.retryable() {
+        return Err(RunError::NotRetryable);
+    }
+    let next = run.attempt().saturating_add(1);
+    write(dir, RETRIES, step, next.to_string().as_bytes())
 }
 
 /// Stop a run: the runner starts no new step and leaves sessions alone.

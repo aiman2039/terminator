@@ -100,10 +100,86 @@ fn flows_window_has_run_edit_and_new_flow() {
 
 #[test]
 fn run_command_quotes_each_word() {
-    let line = run_command(Path::new("/Apps/My App/terminator-hook"), "p'1", "build");
+    let line = run_command(
+        Path::new("/Apps/My App/terminator-hook"),
+        ("p'1", "build"),
+        &[],
+    );
     assert_eq!(
         line,
         "'/Apps/My App/terminator-hook' flow run 'p'\\''1' 'build'"
+    );
+    let values = [("issue".to_owned(), "4'; rm -rf x".to_owned())];
+    let line = run_command(Path::new("/h"), ("p", "fix"), &values);
+    assert_eq!(
+        line,
+        "'/h' flow run 'p' 'fix' --set 'issue=4'\\''; rm -rf x'"
+    );
+}
+
+const WITH_INPUT: &str = "version = 1\nname = \"Fix\"\n[inputs.issue]\ndescription = \"Issue number\"\n[inputs.branch]\ndefault = \"main\"\n[[step]]\nid = \"one\"\ncommand = \"echo {{inputs.issue}}\"\n";
+
+#[test]
+fn run_of_a_flow_with_inputs_opens_the_form_and_types_nothing_before_its_run() {
+    let project = project_with_flows();
+    let flows = project.path().join(FLOW_DIR);
+    std::fs::write(flows.join("fix.toml"), WITH_INPUT).expect("flow");
+    let (mut app, received, _data) = app_with_project(project.path());
+    let loaded = load_flows("p".into(), project.path().into());
+    let fix = loaded.files.iter().find(|file| file.file == "fix").unwrap();
+    assert_eq!(fix.inputs.len(), 2);
+    app.answer_task_trust(project.path(), true);
+    let origin = inputs_form::Origin::Window;
+    app.request_flow_run(&loaded, "fix", (&fix.inputs, origin));
+    assert!(received.try_recv().is_err(), "the form comes first");
+    let form = app.flows.inputs_form.as_mut().expect("the inputs form");
+    assert_eq!(form.problem().as_deref(), Some("issue is required"));
+    form.fields
+        .iter_mut()
+        .find(|field| field.name == "issue")
+        .unwrap()
+        .value = "4\u{3}".into();
+    assert!(form.problem().is_some(), "a control character is refused");
+    let issue = form.fields.iter_mut().find(|field| field.name == "issue");
+    issue.unwrap().value = "4; rm -rf x".into();
+    assert_eq!(form.problem(), None);
+    let values = form.values();
+    assert_eq!(values[0], ("branch".into(), "main".into()));
+    // Run in the form starts the run with the values.
+    assert!(app.run_flow_with(&loaded, "fix", &values).is_some());
+    let Ok(Job::Control(_, After::Workspace(tab, _))) = received.try_recv() else {
+        panic!("expected a new terminal");
+    };
+    let post = app.post_create.by_tab.get(&tab).expect("typed text");
+    assert!(
+        post.input
+            .ends_with("'fix' --set 'branch=main' --set 'issue=4; rm -rf x'"),
+        "{}",
+        post.input
+    );
+    // A value with a control character types nothing.
+    let bad = [("issue".to_owned(), "4\n".to_owned())];
+    assert!(app.run_flow_with(&loaded, "fix", &bad).is_none());
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn run_of_a_flow_without_inputs_starts_without_the_form() {
+    let project = project_with_flows();
+    let (mut app, received, _data) = app_with_project(project.path());
+    let loaded = load_flows("p".into(), project.path().into());
+    app.answer_task_trust(project.path(), true);
+    app.request_flow_run(&loaded, "build", (&[], inputs_form::Origin::Window));
+    assert!(app.flows.inputs_form.is_none());
+    assert!(received.try_recv().is_ok(), "the run started");
+}
+
+#[test]
+fn run_inputs_show_as_one_line() {
+    let values = [("a".to_owned(), "1".to_owned()), ("b".into(), "x y".into())];
+    assert_eq!(
+        inputs_form::inputs_line(&values.into_iter().collect()),
+        "a=1 · b=x y"
     );
 }
 

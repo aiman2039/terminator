@@ -11,7 +11,9 @@ mod banner;
 mod canvas;
 mod cards;
 mod dialogs;
+mod export;
 mod failed;
+mod inputs;
 mod inspector;
 mod keys;
 mod model;
@@ -52,6 +54,8 @@ pub(crate) struct FlowEditor {
     title: String,
     /// The flow's rules: one text that every step gets before its prompt.
     rules: String,
+    /// The flow's run inputs.
+    inputs: Vec<inputs::InputRow>,
     /// False for a new flow that has no file yet.
     on_disk: bool,
     snarl: Snarl<Node>,
@@ -126,6 +130,7 @@ impl FlowEditor {
             file: file.to_owned(),
             title: file.to_owned(),
             rules: String::new(),
+            inputs: Vec::new(),
             on_disk: false,
             snarl,
             error: None,
@@ -153,6 +158,7 @@ impl FlowEditor {
         let mut editor = Self::with(root, file, model::graph_of(flow));
         editor.title.clone_from(&flow.name);
         editor.rules = flow.rules.clone().unwrap_or_default();
+        editor.inputs = inputs::rows_of(&flow.inputs);
         editor.on_disk = true;
         editor.saved = editor.draft();
         editor
@@ -161,6 +167,7 @@ impl FlowEditor {
     fn draft(&self) -> Draft {
         Draft {
             rules: Some(self.rules.trim().to_owned()).filter(|text| !text.is_empty()),
+            inputs: inputs::inputs_of(&self.inputs),
             ..model::draft_of(&self.title, &self.snarl)
         }
     }
@@ -190,6 +197,10 @@ impl FlowEditor {
             return;
         }
         let draft = self.draft();
+        if let Some(error) = inputs::duplicate(&self.inputs) {
+            self.error = Some(error);
+            return;
+        }
         if let Err(error) = draft.check() {
             self.error = Some(error.to_string());
             return;
@@ -208,54 +219,6 @@ impl FlowEditor {
             self.saving = Some((draft, receiver));
         } else {
             self.error = Some("Could not start the save.".into());
-        }
-    }
-
-    /// Export: a worker thread writes the plan as `NAME.md` beside the
-    /// flow file. It replaces only that plan file.
-    fn export_plan(&mut self) {
-        if self.exporting.is_some() {
-            return;
-        }
-        let text = self.plan();
-        let Ok(flow) = files::path_of(&self.root, &self.file) else {
-            return;
-        };
-        let path = flow.with_extension("md");
-        let (sender, receiver) = channel();
-        let spawned = std::thread::Builder::new()
-            .name("flow-export".into())
-            .spawn(move || {
-                let written = path
-                    .parent()
-                    .map_or(Ok(()), std::fs::create_dir_all)
-                    .and_then(|()| std::fs::write(&path, text));
-                let _ = sender.send(written.map(|()| path).map_err(|error| error.to_string()));
-            });
-        if spawned.is_ok() {
-            self.exporting = Some(receiver);
-        } else {
-            self.error = Some("Could not start the export.".into());
-        }
-    }
-
-    /// Takes the result of an export: the written plan file.
-    fn poll_export(&mut self) -> Option<PathBuf> {
-        match self.exporting.as_ref()?.try_recv() {
-            Ok(Ok(path)) => {
-                self.exporting = None;
-                Some(path)
-            }
-            Ok(Err(error)) => {
-                self.error = Some(format!("Export: {error}"));
-                self.exporting = None;
-                None
-            }
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.exporting = None;
-                None
-            }
         }
     }
 
@@ -394,8 +357,35 @@ impl App {
     /// Run from the Flows window: opens the flow's editor tab, starts the
     /// run and stays on that tab, because its cards show the run. False
     /// when the run did not start.
+    #[cfg(test)]
     pub(crate) fn run_flow_in_editor(&mut self, loaded: &super::LoadedFlows, file: &str) -> bool {
-        let Some(runner) = self.run_flow(loaded, file) else {
+        self.run_flow_in_editor_with(loaded, file, &[])
+    }
+
+    /// Run from the editor of `path`: the editor shows the run, so the app
+    /// stays on it. False when the run did not start.
+    pub(crate) fn run_flow_from_editor(
+        &mut self,
+        path: &Path,
+        loaded: &super::LoadedFlows,
+        (file, values): (&str, &[(String, String)]),
+    ) -> bool {
+        let Some(runner) = self.run_flow_with(loaded, file, values) else {
+            return false;
+        };
+        self.flows.stay = Some(Stay::after_run(path, runner, &self.flows.runs));
+        self.flows.starting = Some(Starting::now(path));
+        true
+    }
+
+    /// [`App::run_flow_in_editor`] with the run's input values.
+    pub(crate) fn run_flow_in_editor_with(
+        &mut self,
+        loaded: &super::LoadedFlows,
+        file: &str,
+        values: &[(String, String)],
+    ) -> bool {
+        let Some(runner) = self.run_flow_with(loaded, file, values) else {
             return false;
         };
         if self.open_flow_tab(&loaded.project, &loaded.root, file)

@@ -29,6 +29,8 @@ pub(super) struct Out {
     pub(super) answer: Option<(String, bool)>,
     /// The question step whose typed answer the user sent.
     pub(super) send: Option<String>,
+    /// The failed step that the user asked to start again.
+    pub(super) retry: Option<String>,
     /// The card that the user clicked or asked to edit.
     pub(super) select: Option<NodeId>,
     /// A primary click landed on a card.
@@ -44,6 +46,10 @@ pub(super) struct Viewer<'a> {
     /// The steps of the newest run of this flow, by step ID: each card
     /// shows its step's state.
     pub(super) run: Option<&'a BTreeMap<String, StepRun>>,
+    /// The shown run's runner lives: a failed step has Retry.
+    pub(super) live: bool,
+    /// The stall badge of each step that has one, by step ID.
+    pub(super) stalls: HashMap<String, String>,
     /// Typed answers of the shown run's questions, by step ID.
     pub(super) drafts: &'a mut HashMap<String, String>,
     pub(super) selected: Option<NodeId>,

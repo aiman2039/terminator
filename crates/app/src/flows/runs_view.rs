@@ -197,11 +197,15 @@ impl App {
         for (index, run) in runs.iter().enumerate() {
             let open = self.run_expanded(index, run);
             self.flow_run_header(ui, (run, open, now), act);
+            if !run.state.inputs.is_empty() {
+                let line = super::inputs_form::inputs_line(&run.state.inputs);
+                clipped_note(ui, &line);
+            }
             status::progress_bar(ui, run, &self.theme);
             if open {
                 for id in &run.state.order {
                     if let Some(step) = run.state.steps.get(id) {
-                        self.flow_step_row(ui, (id, step), act);
+                        self.flow_step_row(ui, (run, id, step), act);
                     }
                 }
             }
@@ -261,22 +265,61 @@ impl App {
         });
     }
 
-    /// One step: its colored state icon (the loader turns), its ID and
-    /// what it waits for. A click shows its terminal.
+    /// One step: its colored state icon (the loader turns), its ID, what it
+    /// waits for and its attempt, and Retry for a failed step of a live
+    /// run. A click shows its terminal. Under it, the stall badge.
     fn flow_step_row(
         &mut self,
         ui: &mut egui::Ui,
-        (id, step): (&String, &StepRun),
+        (run, id, step): (&Run, &String, &StepRun),
         act: &mut Option<Act>,
     ) {
         let style = status::step_style(step);
         // A step that waits shows what it waits for; the others their state.
-        let state = match step.status {
+        let mut state = match step.status {
             StepStatus::Waiting if !step.needs.is_empty() => {
                 format!("after {}", step.needs.join(", "))
             }
             _ => style.label.to_lowercase(),
         };
+        if let Some(attempt) = status::attempt_label(step) {
+            state.push_str(&format!(" · {attempt}"));
+        }
+        let minutes = self.preferences.flow_stall_minutes;
+        let stall = status::stall(step, &self.state, terminator_core::now(), minutes);
+        if status::can_retry(run, step) {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let tip = "Retry: start this step again in a new terminal";
+                    if appearance::sidebar_action(ui, "RotateCw", tip).clicked() {
+                        *act = Some(Act::Retry(run.dir.clone(), id.clone()));
+                    }
+                    self.flow_step_line(ui, (id, step, &state), act);
+                });
+            });
+        } else {
+            self.flow_step_line(ui, (id, step, &state), act);
+        }
+        if let Some(stall) = stall {
+            clipped_note(ui, &stall);
+        }
+        // What a running step waits for, and the note of a failed one.
+        if matches!(step.status, StepStatus::Running | StepStatus::Failed) {
+            for text in [&step.waits_for, &step.note].into_iter().flatten() {
+                clipped_note(ui, text);
+            }
+        }
+    }
+
+    /// The row of one step: icon, ID and `state`. A click shows its
+    /// terminal.
+    fn flow_step_line(
+        &self,
+        ui: &mut egui::Ui,
+        (id, step, state): (&String, &StepRun, &str),
+        act: &mut Option<Act>,
+    ) {
+        let style = status::step_style(step);
         let hover = if step.session.is_some() {
             format!("{}. Click to show the terminal of this step.", style.label)
         } else {
@@ -289,7 +332,7 @@ impl App {
                 icon: style.icon,
                 selected: false,
                 height: ROW_HEIGHT,
-                trailing: &state,
+                trailing: state,
                 tint: appearance::color(&self.theme.text),
             },
             icon_tint: style.color(&self.theme),
@@ -300,12 +343,6 @@ impl App {
             && let Some(session) = &step.session
         {
             *act = Some(Act::Go(session.clone()));
-        }
-        // What a running step waits for, and the note of a failed one.
-        if matches!(step.status, StepStatus::Running | StepStatus::Failed) {
-            for text in [&step.waits_for, &step.note].into_iter().flatten() {
-                clipped_note(ui, text);
-            }
         }
     }
 }

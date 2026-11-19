@@ -1,5 +1,26 @@
 # Validation evidence — 2026-09-08
 
+## Flow run inputs, Retry and stall badge — 2026-11-19
+
+- Unit tests: input parsing, placeholders and shell quoting
+  (`terminator-core` `flow::inputs_tests`; one real `sh` run checks that
+  values with quotes, `$(…)`, backticks and globs stay one plain word in
+  plain, double-quoted, single-quoted and `$(…)` places); retry state and
+  refusals (`retry_starts_a_new_attempt_and_resets_the_steps_after_it`,
+  `retry_is_refused_unless_the_runner_lives_and_the_step_failed`); the held
+  runner (`terminator-hook` `control::flow::retry_tests`); the GUI form,
+  Retry and the stall badge (`terminator` `flows::retry_tests`,
+  `run_of_a_flow_with_inputs_opens_the_form_and_types_nothing_before_its_run`).
+- `cargo run -p xtask -- integration --only flows` (real PTYs, isolated
+  daemon): a missing or unknown `--set` refuses the run with no run folder
+  and no terminal; a failed step waits, `flow retry` starts attempt 2 in a
+  new terminal, the old terminal stays, a value with shell syntax arrives
+  as text and runs nothing, and the run ends as done.
+- Native screenshots (isolated data dir, real `flow run --set issue=42`):
+  the Run inputs form, the run row and strip with `branch=main · issue=42`,
+  Retry on failed cards and rows with "attempt 2", "exited (no report)" and
+  "no activity 2 min".
+
 ## Flows (agent orchestration) — 2026-11-18
 
 - Unit tests: the strict file format, the step order and the run state

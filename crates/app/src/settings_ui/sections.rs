@@ -144,7 +144,7 @@ impl SettingsSection {
                 "agents presets preset launcher program arguments new agent session terminal \
                  installed path detected hooks claude codex opencode muse grok cursor gemini \
                  copilot droid factory qwen install hook \
-                 hello test verify notification"
+                 hello test verify notification flow stall badge no activity stalled step"
             }
             Self::Remote => {
                 "ssh remote host keep-alive keepalive serveraliveinterval idle drop keep shared \

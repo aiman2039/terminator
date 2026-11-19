@@ -7,7 +7,7 @@ use super::inspector::{self, CheckError, check_error};
 use super::style::Colors;
 use super::toolbar::{Click, Keys, toolbar};
 use super::viewer::{self, Viewer};
-use super::{Dialog, FlowEditor, Slot, Stay, canvas, model};
+use super::{Dialog, FlowEditor, Slot, canvas, model};
 use crate::app::OpenFileInput;
 use crate::document_view::DocumentKind;
 use crate::flows::panel::Act;
@@ -109,9 +109,21 @@ impl App {
         // The first fit uses estimated sizes: fit again once all are known.
         editor.fit &= !canvas::measured(&editor.snarl, &editor.sizes);
         let mut drafts = self.run_drafts(run);
+        let (now, minutes) = (terminator_core::now(), self.preferences.flow_stall_minutes);
+        let stalls = run
+            .map(|run| &run.state.steps)
+            .into_iter()
+            .flatten()
+            .filter_map(|(id, step)| {
+                let stall = crate::flows::status::stall(step, &self.state, now, minutes)?;
+                Some((id.clone(), stall))
+            })
+            .collect();
         let mut viewer = Viewer {
             colors,
             run: run.map(|run| &run.state.steps),
+            live: run.is_some_and(|run| !run.ended()),
+            stalls,
             drafts: &mut drafts,
             selected: editor.selected,
             error,
@@ -122,8 +134,10 @@ impl App {
         let widget = SnarlWidget::new()
             .id_salt(("flow-editor", path))
             .style(viewer::style(colors));
+        let before = viewer.sizes.clone();
         widget.show(&mut editor.snarl, &mut viewer, ui);
         let out = viewer.out;
+        grown_apart(editor, &before, ui.ctx());
         editor.marked = widget.get_selected_nodes(ui);
         if let Some(run) = run {
             for (step, text) in drafts {
@@ -166,6 +180,9 @@ impl App {
         }
         if let Some(step) = out.send {
             self.apply_flow_act(Act::Answer(run.dir.clone(), step));
+        }
+        if let Some(step) = out.retry {
+            self.apply_flow_act(Act::Retry(run.dir.clone(), step));
         }
     }
 
@@ -222,6 +239,9 @@ impl App {
             }
             Some(StripClick::Answer(step)) => {
                 self.apply_flow_act(Act::Answer(run.dir.clone(), step));
+            }
+            Some(StripClick::Retry(step)) => {
+                self.apply_flow_act(Act::Retry(run.dir.clone(), step));
             }
             Some(StripClick::Cancel) => {
                 let at = ui.ctx().input(|input| input.pointer.interact_pos());
@@ -375,10 +395,9 @@ impl App {
             root: editor.root.clone(),
             files: Vec::new(),
         };
-        if let Some(runner) = self.run_flow(&loaded, &editor.file) {
-            self.flows.stay = Some(Stay::after_run(path, runner, &self.flows.runs));
-            self.flows.starting = Some(super::Starting::now(path));
-        }
+        let inputs: Vec<_> = editor.saved.inputs.clone().into_iter().collect();
+        let origin = crate::flows::inputs_form::Origin::Editor(path.into());
+        self.request_flow_run(&loaded, &editor.file, (&inputs, origin));
     }
 
     /// The open dialog of the editor: a modal in the center of the window.
@@ -424,6 +443,21 @@ fn tidy(editor: &mut FlowEditor) {
     let sizes = editor.sizes.clone();
     model::tidy(&mut editor.snarl, |node| sizes.get(&node).copied());
     editor.fit = true;
+}
+
+/// A card whose height changed this frame (a run's note, Retry or a badge
+/// came or went) moves the cards it now covers down, so no card hides
+/// another. A drag changes no height, so it moves nothing.
+fn grown_apart(editor: &mut FlowEditor, before: &canvas::Sizes, ctx: &egui::Context) {
+    let grown = editor.sizes.iter().any(|(node, size)| {
+        before
+            .get(node)
+            .is_none_or(|old| (old.y - size.y).abs() > 1.0)
+    });
+    let sizes = &editor.sizes;
+    if grown && model::push_apart(&mut editor.snarl, |node| sizes.get(&node).copied()) {
+        ctx.request_repaint();
+    }
 }
 
 /// Where a node from the toolbar goes: below the lowest card.

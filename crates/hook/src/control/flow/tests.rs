@@ -216,7 +216,7 @@ fn ask_without_an_answer_ends_with_an_error_and_removes_the_question() {
 
 /// A runner of [`FLOW`] in a new run folder of a data folder with no
 /// daemon, and the flag that a signal sets.
-fn runner_without_daemon() -> (
+pub(super) fn runner_without_daemon() -> (
     tempfile::TempDir,
     PathBuf,
     runner::Runner,
@@ -285,12 +285,19 @@ fn mcp_has_no_flow_tool_for_the_users_side() {
         &["reject", "n-1", "ok"],
         &["cancel", "n-1"],
         &["answer", "n-1", "build", "yes"],
+        &["retry", "n-1", "build"],
         &["skill"],
     ] {
         let error = execute_args(&args(words)).err().unwrap();
         assert!(error.to_string().contains("not available"), "{error:#}");
     }
-    for tool in ["flow_run", "flow_approve", "flow_answer", "flow_cancel"] {
+    for tool in [
+        "flow_run",
+        "flow_approve",
+        "flow_answer",
+        "flow_cancel",
+        "flow_retry",
+    ] {
         assert!(crate::mcp::tool_argv(tool, &serde_json::Map::new()).is_none());
     }
     let argv = crate::mcp::tool_argv(

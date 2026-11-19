@@ -47,6 +47,37 @@ pub struct StepRun {
     /// example the agent's first hook report. Display only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waits_for: Option<String>,
+    /// The attempt of this step: 1 (also 0, in older files) is the first,
+    /// and each Retry adds one.
+    #[serde(default, skip_serializing_if = "first_attempt")]
+    pub attempt: u32,
+    /// When this attempt started, in seconds since 1970. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<u64>,
+    /// The step failed because its terminal ended with no report (no hook
+    /// state and no `flow report`). Display only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exited: bool,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference."
+)]
+fn first_attempt(attempt: &u32) -> bool {
+    *attempt <= 1
+}
+
+impl StepRun {
+    /// The attempt number, 1 for the first.
+    pub fn attempt(&self) -> u32 {
+        self.attempt.max(1)
+    }
+
+    /// A failed or cancelled step: a live runner can start it again.
+    pub fn retryable(&self) -> bool {
+        matches!(self.status, StepStatus::Failed | StepStatus::Cancelled)
+    }
 }
 
 /// Where a run is.
@@ -74,6 +105,9 @@ pub struct RunState {
     /// The runner ended; nothing changes after this.
     #[serde(default)]
     pub ended: bool,
+    /// The run's input values by name (`flow run --set`, and defaults).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, String>,
     /// Step IDs in file order.
     pub order: Vec<String>,
     pub steps: BTreeMap<String, StepRun>,
@@ -97,6 +131,7 @@ impl RunState {
             file: file.to_owned(),
             project: project.to_owned(),
             ended: false,
+            inputs: BTreeMap::new(),
             order: flow.steps.iter().map(|step| step.id.clone()).collect(),
             steps: flow
                 .steps
@@ -150,6 +185,62 @@ impl RunState {
             }
         }
         self.cancel();
+    }
+
+    /// Retry a failed or cancelled step: it waits again as its next
+    /// attempt, with no session (the old terminal stays, and nothing uses
+    /// it again). The steps after it that did not start wait again. False
+    /// for a step that is not failed or cancelled.
+    pub fn retry(&mut self, id: &str) -> bool {
+        let Some(step) = self.steps.get_mut(id).filter(|step| step.retryable()) else {
+            return false;
+        };
+        *step = StepRun {
+            needs: std::mem::take(&mut step.needs),
+            gate: step.gate.take(),
+            attempt: step.attempt().saturating_add(1),
+            ..StepRun::default()
+        };
+        for after in self.after(id) {
+            if let Some(step) = self.steps.get_mut(&after)
+                && matches!(step.status, StepStatus::Waiting | StepStatus::Cancelled)
+            {
+                step.status = StepStatus::Waiting;
+                step.waits_for = None;
+                step.question = None;
+            }
+        }
+        true
+    }
+
+    /// The steps that need `id`, also through other steps.
+    fn after(&self, id: &str) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        let mut next = vec![id.to_owned()];
+        while let Some(from) = next.pop() {
+            for (other, step) in &self.steps {
+                if step.needs.contains(&from) && !found.contains(other) {
+                    found.push(other.clone());
+                    next.push(other.clone());
+                }
+            }
+        }
+        found
+    }
+
+    /// A step failed and the run's runner waits for Retry or Cancel: no
+    /// step runs and no step can start.
+    pub fn held(&self) -> bool {
+        let status = |id: &String| self.status(id);
+        let running = self
+            .steps
+            .values()
+            .any(|step| step.status == StepStatus::Running);
+        let ready = self.steps.values().any(|step| {
+            step.status == StepStatus::Waiting
+                && step.needs.iter().all(|id| status(id) == StepStatus::Done)
+        });
+        !self.ended && !running && !ready && self.steps.values().any(StepRun::retryable)
     }
 }
 

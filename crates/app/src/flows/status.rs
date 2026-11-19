@@ -117,11 +117,13 @@ pub(crate) fn waits_for_user(step: &StepRun) -> bool {
 }
 
 /// The run's chip: one word and its tone. A running run with a gate or a
-/// question "waits"; a stopped run with a failed step "failed".
+/// question "waits"; a stopped run with a failed step, or a live run that
+/// waits for Retry, "failed".
 pub(crate) fn run_chip(run: &Run) -> (&'static str, Tone) {
     let steps = || run.state.steps.values();
     match run.status() {
         RunStatus::Running if steps().any(waits_for_user) => ("waits", Tone::Waits),
+        RunStatus::Running if run.state.held() => ("failed", Tone::Failed),
         RunStatus::Running => ("running", Tone::Running),
         RunStatus::Done => ("done", Tone::Done),
         RunStatus::Stopped if steps().any(|step| step.status == StepStatus::Failed) => {
@@ -130,6 +132,54 @@ pub(crate) fn run_chip(run: &Run) -> (&'static str, Tone) {
         RunStatus::Stopped => ("stopped", Tone::Dim),
         RunStatus::RunnerGone => ("runner gone", Tone::Dim),
     }
+}
+
+/// Retry applies: the step failed (or was cancelled) and the run's runner
+/// lives, so it can start the step again.
+pub(crate) fn can_retry(run: &Run, step: &StepRun) -> bool {
+    !run.ended() && step.retryable()
+}
+
+/// "attempt 2" for a retried step; nothing for the first attempt.
+pub(crate) fn attempt_label(step: &StepRun) -> Option<String> {
+    (step.attempt() > 1).then(|| format!("attempt {}", step.attempt()))
+}
+
+/// The stall badge of a step, from the daemon snapshot and the run state
+/// only (never terminal text). Display only: it never changes the run.
+/// "exited (no report)": the step's terminal ended with no hook end and no
+/// `flow report`. "no activity N min": a running agent step whose newest
+/// hook report (or the step's start) is at least `minutes` old; 0 is off.
+pub(crate) fn stall(
+    step: &StepRun,
+    snapshot: &terminator_core::State,
+    now: u64,
+    minutes: u32,
+) -> Option<String> {
+    let session = step.session.as_deref()?;
+    let found = snapshot.sessions.iter().find(|s| s.id == session);
+    if step.exited
+        || (step.status == StepStatus::Running && found.is_some_and(|s| !s.lifecycle.live()))
+    {
+        return Some("exited (no report)".into());
+    }
+    if minutes == 0
+        || step.status != StepStatus::Running
+        || step.gate.is_some()
+        || step.question.is_some()
+        || found.is_none()
+    {
+        return None;
+    }
+    let reported = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.session_id == session)
+        .map(|agent| agent.updated)
+        .max();
+    let last = reported.max(step.started)?;
+    let quiet = now.saturating_sub(last) / 60;
+    (quiet >= u64::from(minutes)).then(|| format!("no activity {quiet} min"))
 }
 
 /// The tone of each step of a run, in flow order: one progress segment
