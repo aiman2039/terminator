@@ -225,7 +225,11 @@ impl Shared {
             .find(|s| s.id == session)
             .cloned()
             .context("Unknown session")?;
-        let text = if let Ok(rt) = self.runtime(session) {
+        // Exit publishes the ended record before it removes the runtime.
+        // An ended session must flush and read saved history in that interval.
+        let text = if record.lifecycle.live()
+            && let Ok(rt) = self.runtime(session)
+        {
             // Copy under the lock; walk scrollback after releasing it (#237).
             let screen = relock(&rt).parser.screen().clone();
             storage::screen_text(screen, 10_000)
