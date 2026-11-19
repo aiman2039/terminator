@@ -1,7 +1,6 @@
 //! SSH hosts: the Hosts sidebar lists saved SSH projects in collapsible
 //! groups with live connection dots; the SSH page in the main pane (like
 //! the VNC page) finds, adds, edits and imports hosts.
-pub(crate) mod import;
 mod page;
 mod rows;
 mod sidebar;
@@ -207,7 +206,7 @@ impl App {
                 .any(|c| c == terminator_core::remote::HOSTS_CAPABILITY)
     }
 
-    fn load_config_hosts(&mut self) {
+    pub(crate) fn load_config_hosts(&mut self) {
         let generation = self.remote_ui.next_config_generation();
         self.remote_ui.hosts.config_generation = generation;
         let _ = self.jobs.send(Job::SshConfigHosts(generation));

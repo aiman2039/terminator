@@ -12,6 +12,8 @@ impl Request {
         Duration::from_secs(match self {
             // Above the longest SSH command timeout the daemon allows.
             Self::RemoteProject { .. } | Self::ProbeRemoteProject { .. } => 130,
+            // A person types each answer; the daemon stops at 5 minutes.
+            Self::SshSignIn { .. } => 310,
             Self::ScanHostKey { .. }
             | Self::TrustHostKey { .. }
             | Self::StartForward { .. }
@@ -79,6 +81,9 @@ impl Request {
             Self::ForwardStatus => "ForwardStatus",
             Self::ScanHostKey { .. } => "ScanHostKey",
             Self::TrustHostKey { .. } => "TrustHostKey",
+            Self::SshSignIn { .. } => "SshSignIn",
+            Self::SshSignInStatus { .. } => "SshSignInStatus",
+            Self::AnswerSshPrompt { .. } => "AnswerSshPrompt",
             Self::SaveLayout { .. } => "SaveLayout",
             Self::SelectProject { .. } => "SelectProject",
             Self::SetInitCommand { .. } => "SetInitCommand",

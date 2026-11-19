@@ -4,6 +4,7 @@ mod forwards;
 mod git;
 mod host_keys;
 mod projects;
+mod sign_in;
 pub(crate) mod terminal;
 pub(crate) mod transfer;
 mod transfers;
@@ -27,13 +28,23 @@ pub(crate) fn command(
     ssh: &terminator_core::ssh::SshOptions,
     control: Option<&Path>,
 ) -> Result<Command> {
+    Ok(command_with_args(
+        ssh,
+        terminator_core::ssh::arguments(ssh, false, control)?,
+    ))
+}
+/// `ssh ARGS -- HOST` without Terminator's private environment.
+fn command_with_args(
+    ssh: &terminator_core::ssh::SshOptions,
+    args: Vec<std::ffi::OsString>,
+) -> Command {
     let mut command = Command::new("ssh");
-    command.args(terminator_core::ssh::arguments(ssh, false, control)?);
+    command.args(args);
     for key in terminator_core::ssh::private_environment_keys() {
         command.env_remove(key);
     }
     command.arg("--").arg(&ssh.host);
-    Ok(command)
+    command
 }
 pub(super) struct ExecuteInput<'a> {
     pub(super) project: &'a RemoteProject,
@@ -361,20 +372,27 @@ impl Shared {
         };
         let project = &project;
         project.validate()?;
+        // The tool check only reads; it never fails the probe.
+        let script = format!(
+            "{script} && {{ {} true; }}",
+            terminator_core::remote::host_check::script()
+        );
         let bytes = execute(ExecuteInput {
             project,
             control: self.ssh_control(&project.ssh).as_deref(),
             script: &script,
             limit: 8192,
         })?;
-        let root = std::str::from_utf8(&bytes)?
-            .trim_end_matches('\n')
-            .to_owned();
+        let text = std::str::from_utf8(&bytes)?;
+        let (root, rest) = text.split_once('\n').unwrap_or((text, ""));
         ensure!(
-            root.starts_with('/') && !root.contains('\n'),
+            root.starts_with('/'),
             "SSH server returned an invalid project root"
         );
-        Ok(Reply::Probe { root })
+        Ok(Reply::Probe {
+            root: root.to_owned(),
+            tools: Some(terminator_core::remote::host_check::parse(rest)),
+        })
     }
 }
 

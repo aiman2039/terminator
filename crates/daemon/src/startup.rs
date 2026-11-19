@@ -164,6 +164,7 @@ fn advertise(state: &mut State, catalog: bool) -> Result<()> {
         VNC_REGIONS_CAPABILITY.into(),
         terminator_core::remote::CAPABILITY.into(),
         terminator_core::ssh::HOST_KEYS_CAPABILITY.into(),
+        terminator_core::ssh::sign_in::SIGN_IN_CAPABILITY.into(),
         terminator_core::remote::HOSTS_CAPABILITY.into(),
         terminator_core::remote::FORWARDING_CAPABILITY.into(),
         terminator_core::remote::TRANSFER_CAPABILITY.into(),
