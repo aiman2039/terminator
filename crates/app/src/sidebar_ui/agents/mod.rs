@@ -21,7 +21,6 @@ use terminator_core::{Request, Session, TERMINAL_NOTICES_CAPABILITY, now};
 struct NoticeCardInput<'a> {
     session: Option<&'a Session>,
     highlight: bool,
-    show_read: bool,
 }
 
 impl App {
@@ -175,7 +174,6 @@ impl App {
                             .get(&notice.session_id)
                             .map(std::convert::AsRef::as_ref),
                         highlight,
-                        show_read: false,
                     },
                 );
             }
@@ -195,11 +193,7 @@ impl App {
         group: &NoticeGroup,
         input: NoticeCardInput<'_>,
     ) {
-        let NoticeCardInput {
-            session,
-            highlight,
-            show_read,
-        } = input;
+        let NoticeCardInput { session, highlight } = input;
         let Some(notice) = group.notices.first() else {
             return;
         };
@@ -232,7 +226,6 @@ impl App {
                 highlight,
                 brand_icon,
                 brand_label,
-                show_read,
                 pinned: self.session_pinned(&notice.session_id),
                 triage: self.triage_available(),
                 usage: &usage,
@@ -350,7 +343,6 @@ impl App {
                             .get(&notice.session_id)
                             .map(std::convert::AsRef::as_ref),
                         highlight,
-                        show_read: true,
                     },
                 );
             }

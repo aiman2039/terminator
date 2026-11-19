@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod cursor;
+mod filters;
 mod open;
 mod preview;
 mod replace;

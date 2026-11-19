@@ -2,25 +2,47 @@ use super::state::SettingsSection;
 use crate::*;
 
 impl App {
-    /// Narrow cards put section choices above the form instead of beside it.
+    /// Narrow cards put one section menu above the form instead of the
+    /// list beside it. The menu rows keep the `settings-section:` ids.
     pub(super) fn paint_settings_tabs(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            for section in SettingsSection::ALL {
-                if !self.section_visible(section) {
-                    continue;
+        let current = self.settings_section.canonical();
+        let title = format!("{} ▾", current.title());
+        let mut picked = None;
+        ui.horizontal(|ui| {
+            ui.weak("Section");
+            let shown = appearance::text_menu_button(ui, &title, |ui| {
+                ui.set_min_width(180.0);
+                for section in SettingsSection::ALL {
+                    if !self.section_shown(section) {
+                        continue;
+                    }
+                    let row = appearance::row(appearance::RowInput {
+                        tint: ui.visuals().weak_text_color(),
+                        ui,
+                        label: section.title(),
+                        icon: section.icon(),
+                        selected: current == section,
+                        height: 28.0,
+                        trailing: "",
+                    });
+                    #[cfg(feature = "test-support")]
+                    if !ui.is_sizing_pass() {
+                        record_section(ui, section, row.rect);
+                    }
+                    if row.clicked() {
+                        picked = Some(section);
+                        ui.close();
+                    }
                 }
-                let row = appearance::text_tab(
-                    ui,
-                    section.title(),
-                    self.settings_section.canonical() == section,
-                );
-                #[cfg(feature = "test-support")]
-                record_section(ui, section, row.rect);
-                if row.clicked() {
-                    self.request_settings_section(section);
-                }
-            }
+            });
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "settings-section-menu", shown.response.rect);
+            #[cfg(not(feature = "test-support"))]
+            let _ = shown;
         });
+        if let Some(section) = picked {
+            self.request_settings_section(section);
+        }
     }
 
     pub(super) fn ensure_visible_section(&mut self) {
@@ -37,7 +59,7 @@ impl App {
     pub(super) fn settings_search_empty(&self) -> bool {
         !SettingsSection::ALL
             .into_iter()
-            .any(|section| self.section_visible(section))
+            .any(|section| self.section_shown(section))
     }
 
     pub(super) fn paint_settings_nav(&mut self, ui: &mut egui::Ui, height: f32) {
@@ -47,7 +69,7 @@ impl App {
             ui.spacing_mut().item_spacing.y = 4.0;
             let searching = !self.settings_search.trim().is_empty();
             for section in SettingsSection::ALL {
-                if !self.section_visible(section) {
+                if !self.section_shown(section) {
                     continue;
                 }
                 // While searching, each section shows how many rows match.

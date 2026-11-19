@@ -147,6 +147,11 @@ fn workspace_tabs_hug_their_labels_and_underline_inside() {
             && underline[0] + underline[2] <= one[0] + one[2] + 0.5,
         "underline must sit inside the tab, tab={one:?} bar={underline:?}"
     );
+    // Thicker than a 2 px status or color line, so it never reads as one.
+    assert!(
+        underline[3] >= 3.0,
+        "active underline is thick: {underline:?}"
+    );
     assert!(
         app.fixture_rect(&ctx, "pane-caption:one").is_some(),
         "a lone pane row stays addressable for its menu"

@@ -18,6 +18,7 @@ impl App {
         self.theme_import_row(ui);
         self.accent_row(ui);
         self.density_row(ui);
+        self.interface_size_row(ui);
         self.font_rows(ui);
         if ui.button("Reset appearance").clicked() {
             self.theme_draft = AppearanceConfig::default();
@@ -128,11 +129,10 @@ impl App {
                 );
             },
         });
-        self.interface_size_row(ui);
     }
 
     fn interface_size_row(&mut self, ui: &mut egui::Ui) {
-        if !self.field_visible("Interface size", "zoom scale text ui larger smaller") {
+        if !self.field_visible("Interface size", "zoom scale text font ui larger smaller") {
             return;
         }
         settings_controls::settings_row(settings_controls::SettingsRowInput {

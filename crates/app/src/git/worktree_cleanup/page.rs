@@ -15,6 +15,29 @@ struct RowFacts {
     apply_blocked: Option<&'static str>,
 }
 
+/// The Remove list's height before it scrolls.
+const REMOVAL_LIST_HEIGHT: f32 = 160.0;
+
+/// Branch and checkout path of each worktree a Remove takes, scrolling
+/// when long. Nothing for Apply.
+fn removal_list_ui(ui: &mut egui::Ui, listed: &[(String, String)]) {
+    if listed.is_empty() {
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("worktree-removal-list")
+        .max_height(REMOVAL_LIST_HEIGHT)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (branch, path) in listed {
+                ui.horizontal(|ui| {
+                    ui.label(branch);
+                    ui.weak(path);
+                });
+            }
+        });
+}
+
 /// `3h ago`, `2d ago`, or `just now`.
 fn age(then: u64, now: u64) -> String {
     let age = now.saturating_sub(then);
@@ -267,7 +290,7 @@ impl App {
             Ask::Remove(projects) => (
                 "Remove worktrees",
                 format!("Remove {}?", appearance::count_noun(projects.len(), "worktree")),
-                "Git refuses a checkout with changes, ignored files or a lock, and live sessions block it. Branches are kept.".to_owned(),
+                "Git refuses a checkout with changes, ignored files or a lock, and live sessions block it. Nothing is forced, every refusal is shown, and branches are kept.".to_owned(),
                 "Remove",
             ),
         };
@@ -286,7 +309,12 @@ impl App {
             Ask::Remove(_) => appearance::Confirm::new(body, detail).destructive(confirm),
             Ask::Apply { .. } => appearance::Confirm::new(body, detail).default_action(confirm),
         };
-        match appearance::confirm(ctx, window, dialog, |_| {}) {
+        let listed = match &ask {
+            Ask::Remove(projects) => self.removal_list(projects),
+            Ask::Apply { .. } => Vec::new(),
+        };
+        let shown = |ui: &mut egui::Ui| removal_list_ui(ui, &listed);
+        match appearance::confirm(ctx, window, dialog, shown) {
             Some(appearance::ConfirmAnswer::Cancel) => self.git_extras.cleanup.ask = None,
             Some(_) => {
                 self.git_extras.cleanup.ask = None;
@@ -297,6 +325,24 @@ impl App {
             }
             None => {}
         }
+    }
+
+    /// Each worktree a Remove takes: its branch (else the project name)
+    /// and its checkout path.
+    pub(super) fn removal_list(&self, projects: &[String]) -> Vec<(String, String)> {
+        projects
+            .iter()
+            .map(|project| {
+                let path = self.managed_worktree(project).map(|w| w.path.clone());
+                let branch = path
+                    .as_ref()
+                    .and_then(|path| self.worktree_stats.get(path))
+                    .and_then(|git| git.branch.clone())
+                    .unwrap_or_else(|| self.project_display_name(project));
+                let path = path.map_or_else(String::new, |path| path.display().to_string());
+                (branch, path)
+            })
+            .collect()
     }
 
     fn project_display_name(&self, project: &str) -> String {

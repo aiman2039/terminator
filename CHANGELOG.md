@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Narrow Settings show one Section menu above the form in place of the wrapped section tabs.
+- Settings search never shows a section heading without a matching row. "font size" now finds Appearance → Interface size, and Interface size no longer hides when the search misses Density.
+- Git panel: when something is staged but Commit cannot run, the readiness line says why (for example "Write a commit message").
+- The active workspace tab has a thicker accent underline and a semibold title, so a red accent does not look like an error mark.
+- Agents inbox card: a labeled Peek action opens the read-only screen peek (same as Space). Pin, Mark read/unread and Snooze moved to the card menu (right click); the keys Space, P and U stay. On a narrow sidebar Peek shows only its icon.
+- Find in Files: the File mask / Exclude row folds behind a filter toggle on the query row. When it is folded, the set filters show as a short chip beside the query; a click opens the row. The app keeps the open state while it runs.
+- Close tab names the running sessions (the first 8, then "and N more").
+- Remove worktrees lists the branch and checkout path of each worktree (the list scrolls when long).
+
 - Flow editor: a card that grows (a run's note, Retry, a badge) moves the cards it would cover down, so cards never overlap; the move is a layout change only. With more than one failed step, the run strip has one "Retry STEP" button for each. The flow plan (Preview, Export) lists the run inputs.
 
 - Flow Retry and stall badge. After a step fails, the flow runner waits instead of ending: Retry (the Flows tool window, the failed card and the run strip of the editor, or `terminator-hook flow retry RUN STEP`) starts the step again as its next attempt in a new terminal, the steps after it wait again, and the run goes on. The old terminal stays. Cancel ends the run; `flow run --end-on-failure` ends it at the first failure as before. Retry is refused when the run's runner is gone. A retried step shows "attempt 2". A display-only badge shows "no activity N min" on a running step whose agent sent no hook report for a set time (Settings → Agents → Flow stall badge, default 10 min, 0 is off) and "exited (no report)" on a step whose terminal ended with no report. Both read only hook and session state, never terminal text.

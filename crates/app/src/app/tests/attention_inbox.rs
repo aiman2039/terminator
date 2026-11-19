@@ -261,7 +261,7 @@ fn attention_actions_fit_minimum_sidebar_widths() {
                 let bounds = ui.max_rect();
                 app.agents_view(ui);
                 let mut action_rects = Vec::new();
-                for action in ["go", "snooze", "dismiss"] {
+                for action in ["go", "peek", "dismiss"] {
                     let rect = agent_target(&ctx, &format!("agent-{action}:live-shell")).unwrap();
                     assert!(
                         bounds.contains_rect(rect),
@@ -529,7 +529,7 @@ fn agents_inbox_lists_pending_notices_not_stopped_agents() {
     assert!(agent_target(&ctx, "agent-row:stopped-shell").is_none());
     assert!(agent_target(&ctx, "agent-row:live-shell").is_some());
     assert!(agent_target(&ctx, "agent-go:live-shell").is_some());
-    assert!(agent_target(&ctx, "agent-snooze:live-shell").is_some());
+    assert!(agent_target(&ctx, "agent-peek:live-shell").is_some());
     assert!(agent_target(&ctx, "agent-dismiss:live-shell").is_some());
 }
 
@@ -1106,12 +1106,37 @@ fn dismiss_click_does_not_focus_the_agent() {
 #[cfg(feature = "test-support")]
 fn snooze_click_does_not_focus_the_agent() {
     let (mut app, ctx, _dir, received) = waiting_inbox();
-    click_agent_target(&mut app, &ctx, "agent-snooze:live-shell");
+    // Snooze is in the card menu (a right click on the card).
+    render_agents(&mut app, &ctx, vec![]);
+    let pos = agent_target(&ctx, "agent-row:live-shell").unwrap().center();
+    let right = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    render_agents(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]);
+    render_agents(&mut app, &ctx, vec![right(true)]);
+    render_agents(&mut app, &ctx, vec![right(false)]);
+    render_agents(&mut app, &ctx, vec![]);
+    click_agent_target(&mut app, &ctx, "Snooze 10 minutes");
     assert!(app.state.notifications[0].snoozed_until > now());
     assert!(!app.state.notifications[0].dismissed);
     assert!(app.active_session.is_none());
     let actions = control_actions(&received);
     assert!(actions.iter().any(|action| action == "snooze"));
+    assert!(!actions.iter().any(|action| action == "focus"));
+}
+
+#[test]
+#[cfg(feature = "test-support")]
+fn peek_click_opens_the_read_only_peek_and_keeps_focus() {
+    let (mut app, ctx, _dir, received) = waiting_inbox();
+    click_agent_target(&mut app, &ctx, "agent-peek:live-shell");
+    assert_eq!(app.triage.peek.as_deref(), Some("live-shell"));
+    assert!(app.active_session.is_none());
+    assert!(!app.terminal_input_enabled("live-shell"));
+    let actions = control_actions(&received);
     assert!(!actions.iter().any(|action| action == "focus"));
 }
 

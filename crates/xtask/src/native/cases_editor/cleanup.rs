@@ -80,13 +80,19 @@ fn overflow(h: &Harness, o: &Options) -> Result<Value> {
 }
 
 fn editor_settings_draft(h: &Harness, o: &Options) -> Result<()> {
+    // Git opens from the right stripe; Settings stays in the header. A
+    // narrow card picks the section from its Section menu.
+    let actions = if o.narrow {
+        json!([{"at_ms":900,"target":"stripe-tool-Git"},{"at_ms":1700,"target":"settings"},{"at_ms":2200,"target":"settings-section-menu"},{"at_ms":2700,"target":"settings-section:Editor"},{"at_ms":3000,"target":"external-program"},{"at_ms":3300,"target":"external-program","text":"/draft/editor with spaces"}])
+    } else {
+        json!([{"at_ms":900,"target":"stripe-tool-Git"},{"at_ms":1700,"target":"settings"},{"at_ms":2300,"target":"settings-section:Editor"},{"at_ms":2600,"target":"external-program"},{"at_ms":2900,"target":"external-program","text":"/draft/editor with spaces"}])
+    };
     plain(CaptureInput {
         h,
         opts: o,
         name: "editor-settings",
-        // Git opens from the right stripe; Settings stays in the header.
-        actions: json!([{"at_ms":900,"target":"stripe-tool-Git"},{"at_ms":1700,"target":"settings"},{"at_ms":2300,"target":"settings-section:Editor"},{"at_ms":2600,"target":"external-program"},{"at_ms":2900,"target":"external-program","text":"/draft/editor with spaces"}]),
-        after: 4600,
+        actions,
+        after: 5000,
     })?;
     ensure!(
         h.state()?

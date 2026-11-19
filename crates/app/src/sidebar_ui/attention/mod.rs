@@ -310,8 +310,6 @@ pub(crate) struct AttentionCard<'a> {
     /// Stable agent brand beside the status glyph, from the shared model.
     pub brand_icon: Option<&'static str>,
     pub brand_label: Option<&'a str>,
-    /// Show the mark-read button (Unread view only).
-    pub show_read: bool,
     /// The session is pinned to the top.
     pub pinned: bool,
     /// The daemon takes the triage verbs (`notice-triage-v1`).

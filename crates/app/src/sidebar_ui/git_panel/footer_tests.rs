@@ -151,7 +151,8 @@ fn the_readiness_line_counts_the_staged_set_only() {
     let ctx = egui::Context::default();
     crate::appearance::install(&ctx);
     let (_, texts) = paint(&ctx, &context, vec![]);
-    for text in ["1 of 3 files staged", "+2", "−1"] {
+    // An empty message blocks Commit; the line says why.
+    for text in ["1 of 3 files staged", "+2", "−1", "Write a commit message"] {
         assert!(has(&texts, text), "{text}: {texts:?}");
     }
     // A file with staged and unstaged edits has summed counts: files only.
@@ -174,6 +175,7 @@ fn nothing_staged_offers_stage_all() {
     let context = context(&root, &[("b.rs", " M"), ("c.rs", "??"), ("d.rs", "UU")]);
     let (_, texts) = paint(&ctx, &context, vec![]);
     assert!(has(&texts, "Nothing staged"), "{texts:?}");
+    assert!(!has(&texts, "Write a commit message"), "{texts:?}");
     // Conflicts stay out of Stage all.
     assert!(has(&texts, "Stage all (2)"), "{texts:?}");
     assert!(click(&ctx, &context, "git-stage-all-link").stage_all);

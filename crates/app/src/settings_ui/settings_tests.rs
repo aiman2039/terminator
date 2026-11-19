@@ -36,11 +36,21 @@ mod tests {
                 output.textures_delta.clear();
             }
             let card = appearance::center_card_rect(screen);
-            for name in [
-                "settings-section:Appearance",
-                "settings-section:Terminal & Editor",
-                "settings-cancel",
-            ] {
+            // Narrow cards show one section menu, wide cards the list.
+            let names: &[&str] = if width < 1000.0 {
+                assert!(
+                    diagnostics::current_rect(&ctx, "settings-section:Appearance").is_none(),
+                    "width={width}: closed menu hides its rows"
+                );
+                &["settings-section-menu", "settings-cancel"]
+            } else {
+                &[
+                    "settings-section:Appearance",
+                    "settings-section:Terminal & Editor",
+                    "settings-cancel",
+                ]
+            };
+            for &name in names {
                 let rect = diagnostics::current_rect(&ctx, name).unwrap();
                 assert!(card.contains_rect(rect), "width={width}: {name}: {rect:?}");
             }
@@ -218,6 +228,51 @@ mod tests {
         paint(&mut app, vec![press(true)]);
         paint(&mut app, vec![press(false)]);
         assert!(app.settings_search.is_empty());
+    }
+
+    /// "cjk smaller" matches the Appearance keywords, but no one row.
+    #[test]
+    fn a_section_heading_never_shows_without_a_matching_row() {
+        let (mut app, ctx, _dir) = app();
+        let paint = |app: &mut App, query: &str| {
+            app.settings_search = query.into();
+            let mut texts = Vec::new();
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 820.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.settings_center(ui),
+                );
+                output.textures_delta.clear();
+                texts = crate::app::painted_text(&output.shapes);
+            }
+            texts
+        };
+        let texts = paint(&mut app, "cjk smaller");
+        assert!(app.section_visible(SettingsSection::Appearance));
+        assert!(!app.section_shown(SettingsSection::Appearance));
+        assert!(
+            !texts.iter().any(|(_, text)| text == "Appearance"),
+            "{texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|(_, text)| text == "No settings match “cjk smaller”."),
+            "{texts:?}"
+        );
+        // "font size" shows Appearance with the interface size row.
+        let texts = paint(&mut app, "font size");
+        assert!(app.section_shown(SettingsSection::Appearance));
+        assert!(
+            texts.iter().any(|(_, text)| text == "Interface size"),
+            "{texts:?}"
+        );
     }
 
     #[test]

@@ -47,7 +47,7 @@ pub const WIDGET_RADIUS: u8 = RADIUS_MEDIUM;
 pub const MENU_RADIUS: u8 = RADIUS_LARGE;
 
 /// The bundled Inter Semibold family that headings use.
-pub(super) fn semibold() -> FontFamily {
+pub(crate) fn semibold() -> FontFamily {
     FontFamily::Name("Semibold".into())
 }
 

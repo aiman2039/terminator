@@ -196,15 +196,32 @@ impl App {
             &self.settings_search,
             &[self.settings_section.title(), label, keywords],
         );
-        if shown && !self.settings_search.trim().is_empty() {
+        if !self.settings_search.trim().is_empty() {
+            let title = self.settings_section.canonical().title();
             let mut probes = self.settings_probes.borrow_mut();
-            let count = probes
-                .matches
-                .entry(self.settings_section.canonical().title())
-                .or_default();
-            *count = count.saturating_add(1);
+            let asked = probes.asked.entry(title).or_default();
+            *asked = asked.saturating_add(1);
+            if shown {
+                let count = probes.matches.entry(title).or_default();
+                *count = count.saturating_add(1);
+            }
         }
         shown
+    }
+
+    /// The last painted search asked `section` about its rows and none
+    /// matched: its keywords match, but it would show only a heading.
+    pub(super) fn section_rows_empty(&self, section: SettingsSection) -> bool {
+        let probes = self.settings_probes.borrow();
+        probes.query == self.settings_search.trim()
+            && probes.asked.get(section.title()).is_some_and(|n| *n > 0)
+            && !probes.matches.contains_key(section.title())
+    }
+
+    /// A section the nav and the search list show: it matches and, while
+    /// searching, has at least one matching row.
+    pub(super) fn section_shown(&self, section: SettingsSection) -> bool {
+        self.section_visible(section) && !self.section_rows_empty(section)
     }
 
     /// Rows of `section` the search matched when the body last painted.
@@ -219,7 +236,10 @@ impl App {
 
     /// Start a new count of matched rows for this frame's body.
     pub(super) fn reset_section_matches(&self) {
-        self.settings_probes.borrow_mut().matches.clear();
+        let mut probes = self.settings_probes.borrow_mut();
+        probes.matches.clear();
+        probes.asked.clear();
+        self.settings_search.trim().clone_into(&mut probes.query);
     }
 
     pub(super) fn settings_validation(&self) -> Result<(), String> {
@@ -279,6 +299,10 @@ pub(crate) struct Probes {
     )>,
     /// Search matches per section title, from the last painted body.
     matches: std::collections::HashMap<&'static str, usize>,
+    /// Rows asked about per section title, from the last painted body.
+    asked: std::collections::HashMap<&'static str, usize>,
+    /// The search the counts above belong to.
+    query: String,
 }
 
 impl Probes {

@@ -4,10 +4,13 @@ use super::*;
 /// One card button: icon, tip, test name, action.
 pub(super) type CardButton = (&'static str, &'static str, &'static str, AttentionAction);
 
-/// The card's buttons, left to right. With `notice-triage-v1` the Moon
-/// button opens the snooze durations; without it, it snoozes 10 minutes.
-pub(super) fn action_buttons(input: &AttentionCard<'_>) -> Vec<CardButton> {
-    let mut buttons = vec![
+/// The labeled Peek slot's text.
+const PEEK_LABEL: &str = "Peek";
+
+/// The card's buttons, left to right: Go, Review, the labeled Peek and
+/// Dismiss. Pin, Read/Unread (keys P, U) and Snooze are in the card menu.
+pub(super) fn action_buttons() -> Vec<CardButton> {
+    vec![
         ("ArrowRight", "Go to context", "go", AttentionAction::Go),
         (
             "GitCompareArrows",
@@ -15,44 +18,14 @@ pub(super) fn action_buttons(input: &AttentionCard<'_>) -> Vec<CardButton> {
             "review",
             AttentionAction::Review,
         ),
-    ];
-    if input.show_read && !input.notice.read {
-        buttons.push((
-            "CircleCheck",
-            "Mark read (keeps agent state) (U)",
-            "read",
-            AttentionAction::Read,
-        ));
-    } else if input.triage && input.notice.read {
-        buttons.push((
-            "Circle",
-            "Mark unread (U)",
-            "unread",
-            AttentionAction::Unread,
-        ));
-    }
-    buttons.push((
-        "Pin",
-        if input.pinned {
-            "Unpin session (P)"
-        } else {
-            "Pin session to the top (P)"
-        },
-        "pin",
-        AttentionAction::Pin,
-    ));
-    buttons.push(if input.triage {
-        ("Moon", "Snooze…", "snooze", AttentionAction::None)
-    } else {
         (
-            "Moon",
-            "Snooze 10 minutes",
-            "snooze",
-            AttentionAction::Snooze,
-        )
-    });
-    buttons.push(("X", "Dismiss", "dismiss", AttentionAction::Dismiss));
-    buttons
+            "Eye",
+            "Peek at the screen, read only (Space)",
+            "peek",
+            AttentionAction::Peek,
+        ),
+        ("X", "Dismiss", "dismiss", AttentionAction::Dismiss),
+    ]
 }
 
 /// Keys on a focused card: Space peeks, U toggles read, P pins.
@@ -120,21 +93,6 @@ pub(super) fn card_menu(card: &egui::Response, input: &AttentionCard<'_>) -> Att
     action
 }
 
-/// The snooze durations under the Moon button.
-fn snooze_menu(response: &egui::Response) -> AttentionAction {
-    let mut action = AttentionAction::None;
-    egui::Popup::menu(response)
-        .style(appearance::menu_style)
-        .show(|ui| {
-            for (label, secs) in super::SNOOZE_CHOICES {
-                if appearance::menu_action(ui, true, label, "Moon").clicked() {
-                    action = AttentionAction::SnoozeFor(secs(now()));
-                }
-            }
-        });
-    action
-}
-
 pub(super) struct ActionsInput<'a> {
     pub card: egui::Id,
     pub rect: egui::Rect,
@@ -144,6 +102,8 @@ pub(super) struct ActionsInput<'a> {
     pub buttons: Vec<CardButton>,
     /// Paint the buttons; hidden ones still take a click or the keyboard.
     pub show: bool,
+    /// Text beside the labeled buttons (Peek); off on a narrow card.
+    pub labels: bool,
 }
 
 /// The action buttons in `rect`. They always take input, so a pointer
@@ -156,15 +116,17 @@ pub(super) fn attention_actions(ui: &egui::Ui, input: ActionsInput<'_>) -> Atten
         session_id,
         buttons,
         show,
+        labels,
     } = input;
     let mut action = AttentionAction::None;
     let mut left = rect.left();
     for (icon, tip, name, next) in buttons {
+        let width = slot_width(ui, name, labels);
         let slot = egui::Rect::from_min_size(
             egui::pos2(left, rect.top()),
-            egui::Vec2::splat(ATTENTION_ACTION_SIZE),
+            egui::vec2(width, ATTENTION_ACTION_SIZE),
         );
-        left += ATTENTION_ACTION_SIZE;
+        left += width;
         let response = ui
             .interact(slot, card.with(name), egui::Sense::click())
             .on_hover_text(tip);
@@ -177,13 +139,24 @@ pub(super) fn attention_actions(ui: &egui::Ui, input: ActionsInput<'_>) -> Atten
                     ui.visuals().widgets.active.bg_fill,
                 );
             }
+            let glyph =
+                egui::Rect::from_min_size(slot.min, egui::Vec2::splat(ATTENTION_ACTION_SIZE));
             appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
                 ui,
-                rect: slot,
+                rect: glyph,
                 icon,
                 size: appearance::TOOLBAR_ICON,
                 tint: appearance::icon_color(),
             });
+            if let Some(label) = slot_label(name, labels) {
+                ui.painter().text(
+                    egui::pos2(glyph.right(), slot.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    label,
+                    egui::FontId::proportional(appearance::FONT_SMALL),
+                    ui.visuals().text_color(),
+                );
+            }
             appearance::paint_focus(ui, &response);
         }
         #[cfg(feature = "test-support")]
@@ -194,14 +167,39 @@ pub(super) fn attention_actions(ui: &egui::Ui, input: ActionsInput<'_>) -> Atten
         );
         #[cfg(not(feature = "test-support"))]
         let _ = (target, session_id);
-        if name == "snooze" && next == AttentionAction::None {
-            let picked = snooze_menu(&response);
-            if picked != AttentionAction::None {
-                action = picked;
-            }
-        } else if response.clicked() {
+        if response.clicked() {
             action = next;
         }
     }
     action
+}
+
+/// The text beside a slot's glyph: only Peek has one, and only while
+/// the card has room for `labels`.
+fn slot_label(name: &str, labels: bool) -> Option<&'static str> {
+    (labels && name == "peek").then_some(PEEK_LABEL)
+}
+
+/// A slot's width: the glyph square, plus its label and a margin.
+fn slot_width(ui: &egui::Ui, name: &str, labels: bool) -> f32 {
+    slot_label(name, labels).map_or(ATTENTION_ACTION_SIZE, |label| {
+        let text = ui
+            .painter()
+            .layout_no_wrap(
+                label.to_owned(),
+                egui::FontId::proportional(appearance::FONT_SMALL),
+                ui.visuals().text_color(),
+            )
+            .size()
+            .x;
+        ATTENTION_ACTION_SIZE + text + 6.0
+    })
+}
+
+/// The buttons' total width.
+pub(super) fn buttons_width(ui: &egui::Ui, buttons: &[CardButton], labels: bool) -> f32 {
+    buttons
+        .iter()
+        .map(|(_, _, name, _)| slot_width(ui, name, labels))
+        .sum()
 }

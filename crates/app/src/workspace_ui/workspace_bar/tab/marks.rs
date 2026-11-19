@@ -2,6 +2,9 @@
 use super::super::super::super::*;
 use super::TabPaint;
 
+/// Height of the active tab's accent underline.
+pub(super) const ACTIVE_UNDERLINE: f32 = 3.0;
+
 impl App {
     /// Aggregate attention across the tab's terminals.
     pub(super) fn paint_strip_tab_badge(&self, ui: &egui::Ui, paint: &TabPaint<'_>) {
@@ -37,7 +40,9 @@ impl App {
         );
     }
 
-    /// The accent underline: the mark of the active tab only.
+    /// The accent underline: the mark of the active tab only. It is
+    /// thicker than any status line, so a red accent never reads as an
+    /// error mark.
     pub(super) fn paint_strip_tab_underline(&self, ui: &egui::Ui, paint: &TabPaint<'_>) {
         if !paint.active {
             return;
@@ -46,8 +51,8 @@ impl App {
         // Inset from the bottom edge. A stroke centered on rect.bottom() is
         // clipped away by the strip.
         let underline = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 8.0, rect.bottom() - 3.0),
-            egui::pos2(rect.right() - 8.0, rect.bottom() - 1.0),
+            egui::pos2(rect.left() + 6.0, rect.bottom() - 1.0 - ACTIVE_UNDERLINE),
+            egui::pos2(rect.right() - 6.0, rect.bottom() - 1.0),
         );
         ui.painter().rect_filled(
             underline,

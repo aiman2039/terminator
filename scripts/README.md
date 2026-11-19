@@ -292,6 +292,7 @@ New cases: `cargo xtask gui images`, `cargo xtask gui browser`, `cargo xtask gui
 `cargo xtask gui native-rename` opens an isolated native editor, previews a
 real rust-analyzer rename without writing, then applies it across two files.
 `cargo xtask gui project-sidebar` covers project sort, removal and restoration.
+`cargo xtask gui ui-review` captures the reviewed screens (add `--narrow` for the narrow Settings section menu); it checks nothing.
 `cargo xtask gui agent-sidebar` covers the bell, waiting/unread counts, left Agents navigation, restart persistence, and live status updates.
 `cargo xtask gui all` runs the ordinary native fixture suite. All GUI cases accept
 `--scale 1|2`, `--narrow`, and `--output PATH`. Captures default to the Cargo target
