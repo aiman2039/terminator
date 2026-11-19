@@ -214,10 +214,21 @@ fn strip_action(
     if cancel.clicked() {
         return Some(StripClick::Cancel);
     }
-    let (id, _) = steps(run).find(|(_, step)| status::can_retry(run, step))?;
-    let retry = appearance::primary_button(ui, "Retry")
-        .on_hover_text(format!("Start {id} again in a new terminal"));
-    retry.clicked().then(|| StripClick::Retry(id.clone()))
+    // One Retry per failed step, each with its step: right to left, so the
+    // first failed step is at the left.
+    let failed: Vec<&String> = steps(run)
+        .filter(|(_, step)| status::can_retry(run, step))
+        .map(|(id, _)| id)
+        .collect();
+    let mut click = None;
+    for id in failed.into_iter().rev() {
+        let retry = appearance::primary_button(ui, &format!("Retry {id}"))
+            .on_hover_text(format!("Start {id} again in a new terminal"));
+        if retry.clicked() {
+            click = Some(StripClick::Retry(id.clone()));
+        }
+    }
+    click
 }
 
 /// A Run click whose new run does not show yet.

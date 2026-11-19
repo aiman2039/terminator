@@ -563,3 +563,57 @@ fn editor_keys_act_on_the_focused_flow_canvas_only() {
         "Save ran"
     );
 }
+
+/// Two steps in one column, close together, as a hand-made file can have.
+const CLOSE: &str = "version = 1\nname = \"Close\"\n\n[inputs.issue]\ndescription = \"Issue number\"\n\n[[step]]\nid = \"flaky\"\ncommand = \"make test {{inputs.issue}}\"\nat = [0, 0]\n\n[[step]]\nid = \"exits\"\ncommand = \"exit\"\nat = [0, 160]\n";
+
+#[test]
+fn a_card_that_grows_with_retry_never_covers_the_card_below() {
+    use terminator_core::flow::RunState;
+    let project = project_with_flows();
+    let path = files::path_of(project.path(), "close").unwrap();
+    std::fs::write(&path, CLOSE).unwrap();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    settle(&mut app, &ctx, (&path, 1600.0));
+    assert_no_overlap(&card_rects(ready(&mut app, &path)));
+    let flow = flow::files::load(project.path(), "close").unwrap();
+    let mut state = RunState::new(&flow, "close", "p");
+    for id in ["flaky", "exits"] {
+        state.fail(
+            id,
+            "The tests failed in three files; see the log for each one.",
+        );
+        let step = state.steps.get_mut(id).unwrap();
+        step.session = Some(format!("s-{id}"));
+        step.attempt = 2;
+        step.exited = true;
+    }
+    app.flows.runs = vec![crate::flows::Run {
+        dir: project.path().join("close-1"),
+        state,
+        gone: false,
+    }];
+    app.flows.read_at = Some(Instant::now());
+    let text = settle(&mut app, &ctx, (&path, 1600.0));
+    // The cards grew (note, attempt, badge, Retry) and moved apart.
+    assert_no_overlap(&card_rects(ready(&mut app, &path)));
+    // The strip names the step of each Retry.
+    for label in ["Retry flaky", "Retry exits"] {
+        assert_eq!(count(&text, label), 1, "{label}: {text:?}");
+    }
+    assert_eq!(count(&text, "Retry"), 2, "one on each card: {text:?}");
+    // The moved cards are a layout change only.
+    let editor = ready(&mut app, &path);
+    assert!(!editor.changed());
+}
+
+#[test]
+fn plan_lists_the_flow_inputs() {
+    let flow = flow::parse(CLOSE).unwrap();
+    let text = model::plan_text(&Draft::from(&flow), "close");
+    assert!(
+        text.contains("## Inputs\n\n- `issue`: Issue number (required)"),
+        "{text}"
+    );
+}

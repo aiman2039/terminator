@@ -168,6 +168,39 @@ pub(crate) fn tidy(snarl: &mut Snarl<Node>, size: impl Fn(NodeId) -> Option<egui
     }
 }
 
+/// Moves cards down until no card covers another: a card that a card
+/// above it (by its measured size) reaches moves to `GAP` below that card.
+/// Cards with no measured size stay. True when a card moved.
+pub(crate) fn push_apart(
+    snarl: &mut Snarl<Node>,
+    size: impl Fn(NodeId) -> Option<egui::Vec2>,
+) -> bool {
+    let mut cards: Vec<(NodeId, egui::Rect)> = snarl
+        .nodes_pos_ids()
+        .filter_map(|(node, position, _)| {
+            Some((node, egui::Rect::from_min_size(position, size(node)?)))
+        })
+        .collect();
+    cards.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+    let mut placed: Vec<egui::Rect> = Vec::with_capacity(cards.len());
+    let mut moved = false;
+    for (node, mut rect) in cards {
+        // Each move goes down only, so one pass per placed card ends it.
+        for _ in 0..=placed.len() {
+            let Some(above) = placed.iter().find(|above| above.intersects(rect)) else {
+                break;
+            };
+            rect = rect.translate(egui::vec2(0.0, above.bottom() + GAP - rect.top()));
+            moved = true;
+            if let Some(info) = snarl.get_node_info_mut(node) {
+                info.pos = rect.min;
+            }
+        }
+        placed.push(rect);
+    }
+    moved
+}
+
 /// True when `to` may not run after `from`: the same step, or `from`
 /// already runs after `to` (the wire would close a cycle).
 pub(crate) fn would_cycle(snarl: &Snarl<Node>, from: NodeId, to: NodeId) -> bool {
@@ -346,6 +379,17 @@ pub(crate) fn plan_text(draft: &Draft, file: &str) -> String {
          \n```mermaid\n{}```\n",
         mermaid(&steps)
     );
+    if !draft.inputs.is_empty() {
+        text.push_str("\n## Inputs\n\n");
+        for (name, input) in &draft.inputs {
+            let about = input.description.as_deref().unwrap_or("No description");
+            let value = match &input.default {
+                Some(value) => format!("default `{value}`"),
+                None => "required".to_owned(),
+            };
+            let _ = writeln!(text, "- `{name}`: {about} ({value})");
+        }
+    }
     if let Some(rules) = &draft.rules {
         let _ = write!(text, "\n## Rules\n\n{rules}\n");
     }

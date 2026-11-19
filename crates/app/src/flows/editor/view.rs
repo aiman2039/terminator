@@ -134,8 +134,10 @@ impl App {
         let widget = SnarlWidget::new()
             .id_salt(("flow-editor", path))
             .style(viewer::style(colors));
+        let before = viewer.sizes.clone();
         widget.show(&mut editor.snarl, &mut viewer, ui);
         let out = viewer.out;
+        grown_apart(editor, &before, ui.ctx());
         editor.marked = widget.get_selected_nodes(ui);
         if let Some(run) = run {
             for (step, text) in drafts {
@@ -441,6 +443,21 @@ fn tidy(editor: &mut FlowEditor) {
     let sizes = editor.sizes.clone();
     model::tidy(&mut editor.snarl, |node| sizes.get(&node).copied());
     editor.fit = true;
+}
+
+/// A card whose height changed this frame (a run's note, Retry or a badge
+/// came or went) moves the cards it now covers down, so no card hides
+/// another. A drag changes no height, so it moves nothing.
+fn grown_apart(editor: &mut FlowEditor, before: &canvas::Sizes, ctx: &egui::Context) {
+    let grown = editor.sizes.iter().any(|(node, size)| {
+        before
+            .get(node)
+            .is_none_or(|old| (old.y - size.y).abs() > 1.0)
+    });
+    let sizes = &editor.sizes;
+    if grown && model::push_apart(&mut editor.snarl, |node| sizes.get(&node).copied()) {
+        ctx.request_repaint();
+    }
 }
 
 /// Where a node from the toolbar goes: below the lowest card.
