@@ -6,29 +6,22 @@
 //! `TERMINATOR_ASKPASS_SOCKET`; `terminator-hook` in askpass mode asks
 //! there. The prompt waits in memory until the GUI answers or cancels, the
 //! sign-in ends, or five minutes pass. Answers are never saved or logged.
-use super::checked;
 use crate::server::{Shared, relock};
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{
-        Arc, LazyLock, Mutex,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::{Arc, LazyLock, Mutex, mpsc},
     time::{Duration, Instant},
 };
 use terminator_core::ssh::{
     SshOptions,
-    sign_in::{AskpassAnswer, AskpassQuestion, MAX_ASKPASS_TEXT, Secret, SignInPrompt},
+    sign_in::{Secret, SignInPrompt},
 };
 
 /// The longest a sign-in runs, prompts included.
+#[cfg(any(unix, test))]
 const LIMIT: Duration = Duration::from_mins(5);
-
-/// One question line: a JSON-escaped prompt plus its frame.
-const QUESTION_LIMIT: u64 = 2 * MAX_ASKPASS_TEXT as u64 + 64;
 
 fn after(duration: Duration) -> Instant {
     Instant::now()
@@ -40,7 +33,8 @@ fn after(duration: Duration) -> Instant {
 #[derive(Default)]
 struct SignIn {
     waiting: Mutex<Option<(SignInPrompt, mpsc::Sender<Option<Secret>>)>>,
-    next_id: AtomicU64,
+    #[cfg(any(unix, test))]
+    next_id: std::sync::atomic::AtomicU64,
 }
 
 /// Running sign-ins by control socket path.
@@ -55,7 +49,9 @@ impl Drop for Registered {
 }
 
 /// Removes the sign-in's socket and log files.
+#[cfg(unix)]
 struct Files(Vec<PathBuf>);
+#[cfg(unix)]
 impl Drop for Files {
     fn drop(&mut self) {
         for path in &self.0 {
@@ -85,12 +81,17 @@ impl Shared {
             active.insert(control.clone(), Arc::clone(&sign_in));
         }
         let _registered = Registered(control.clone());
-        run(RunInput {
-            ssh,
-            control: &control,
-            helper: &self.helper.executable,
-            sign_in: &sign_in,
-        })
+        #[cfg(unix)]
+        {
+            run(RunInput {
+                ssh,
+                control: &control,
+                helper: &self.helper.executable,
+                sign_in: &sign_in,
+            })
+        }
+        #[cfg(not(unix))]
+        bail!("SSH sign-in in the app needs macOS or Linux")
     }
 
     /// The prompt the sign-in for `ssh` waits on, if any.
@@ -151,6 +152,7 @@ fn master_alive(control: &Path) -> bool {
     }
 }
 
+#[cfg(unix)]
 struct RunInput<'a> {
     ssh: &'a SshOptions,
     control: &'a Path,
@@ -220,18 +222,15 @@ fn run(input: RunInput<'_>) -> Result<()> {
     relock(&sign_in.waiting).take();
     let stderr = std::fs::read(&log).unwrap_or_default();
     let stderr = stderr.get(..super::STDERR_LIMIT).unwrap_or(&stderr);
-    checked(status, stderr)
-}
-
-#[cfg(not(unix))]
-fn run(_input: RunInput<'_>) -> Result<()> {
-    bail!("SSH sign-in in the app needs macOS or Linux")
+    super::checked(status, stderr)
 }
 
 /// One askpass question: show it, wait for the GUI, reply.
 #[cfg(unix)]
 fn serve(sign_in: &SignIn, stream: std::os::unix::net::UnixStream, deadline: Instant) {
     use std::io::{BufRead, BufReader, Read, Write};
+    use terminator_core::ssh::sign_in::{AskpassAnswer, AskpassQuestion, MAX_ASKPASS_TEXT};
+    const QUESTION_LIMIT: u64 = 2 * MAX_ASKPASS_TEXT as u64 + 64;
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let mut line = String::new();
@@ -248,7 +247,10 @@ fn serve(sign_in: &SignIn, stream: std::os::unix::net::UnixStream, deadline: Ins
 }
 
 /// Shows `prompt` and waits for its answer; `None` on cancel or timeout.
+#[cfg(any(unix, test))]
 fn wait_for_answer(sign_in: &SignIn, prompt: &str, deadline: Instant) -> Option<Secret> {
+    use std::sync::atomic::Ordering;
+    use terminator_core::ssh::sign_in::MAX_ASKPASS_TEXT;
     let text: String = prompt
         .chars()
         .filter(|c| !c.is_control())

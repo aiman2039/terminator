@@ -67,6 +67,7 @@ pub(super) fn interrupt_flag() -> Result<Arc<AtomicBool>> {
     for signal in [
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGTERM,
+        #[cfg(unix)]
         signal_hook::consts::SIGHUP,
     ] {
         signal_hook::flag::register(signal, Arc::clone(&interrupted))?;

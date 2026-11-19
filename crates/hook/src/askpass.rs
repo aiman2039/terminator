@@ -3,20 +3,8 @@
 //! `TERMINATOR_ASKPASS_SOCKET`. The prompt goes to that private socket; the
 //! answer typed in the GUI comes back and is printed for OpenSSH. A cancel
 //! exits non-zero, so OpenSSH stops. Nothing is saved or logged.
-use anyhow::{Context, Result, bail};
-use std::{
-    io::{BufRead, BufReader, Read, Write},
-    path::Path,
-    time::Duration,
-};
-use terminator_core::ssh::sign_in::{AskpassAnswer, AskpassQuestion, MAX_ASKPASS_TEXT};
-
-/// Longer than the daemon's five-minute sign-in limit.
-const WAIT: Duration = Duration::from_secs(310);
-
-/// The reply line: a JSON-escaped answer of at most `MAX_ASKPASS_TEXT`
-/// bytes plus its frame.
-const REPLY_LIMIT: u64 = 2 * MAX_ASKPASS_TEXT as u64 + 64;
+use anyhow::{Result, bail};
+use std::path::Path;
 
 /// Askpass mode when the daemon's sign-in named its socket in the
 /// environment (OpenSSH passes only the prompt); `None` otherwise.
@@ -28,6 +16,15 @@ pub(crate) fn from_env(args: &[String]) -> Option<Result<()>> {
 
 #[cfg(unix)]
 fn run(socket: &Path, prompt: &str) -> Result<()> {
+    use anyhow::Context;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::time::Duration;
+    use terminator_core::ssh::sign_in::{AskpassAnswer, AskpassQuestion, MAX_ASKPASS_TEXT};
+
+    // Longer than the daemon's five-minute sign-in limit.
+    const WAIT: Duration = Duration::from_secs(310);
+    const REPLY_LIMIT: u64 = 2 * MAX_ASKPASS_TEXT as u64 + 64;
+
     let stream = std::os::unix::net::UnixStream::connect(socket)
         .context("Terminator's SSH sign-in is no longer running")?;
     stream.set_read_timeout(Some(WAIT))?;

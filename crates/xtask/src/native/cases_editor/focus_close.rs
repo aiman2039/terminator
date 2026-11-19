@@ -60,7 +60,10 @@ fn close_focused_editor(f: &Fixture, o: &Options) -> Result<()> {
         h,
         opts: o,
         name: "editor-closed",
-        actions: json!([{"at_ms":1100,"target":format!("editor-close:{}",id(editor))}]),
+        actions: json!([
+            {"wait":{}, "target":format!("terminal:{}",id(editor))},
+            {"wait":{}, "target":format!("editor-close:{}",id(editor))}
+        ]),
         after: 3500,
     })?;
     h.wait(|st| session_closed(st, id(editor)), 5)?;
