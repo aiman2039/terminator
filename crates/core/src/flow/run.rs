@@ -22,6 +22,16 @@ pub enum StepStatus {
     Failed,
     /// The user cancelled the run before this step ended.
     Cancelled,
+    /// Never started: its `when` option was not chosen, or every step it
+    /// needs was skipped. The steps after it count it as ended.
+    Skipped,
+}
+
+impl StepStatus {
+    /// Done or skipped: the steps that need it can go on.
+    pub fn passed(self) -> bool {
+        matches!(self, Self::Done | Self::Skipped)
+    }
 }
 
 /// One step of a run, with the display data of its flow step.
@@ -58,6 +68,28 @@ pub struct StepRun {
     /// state and no `flow report`). Display only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exited: bool,
+    /// The options of a gate step (empty: a plain Approve).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// The option the user chose at this gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<String>,
+    /// The step's `when` condition, "GATE.OPTION". Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    /// The step that this loop step runs again from. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_to: Option<String>,
+    /// The round of a step in a loop: 1 (also 0) is the first.
+    #[serde(default, skip_serializing_if = "first_attempt")]
+    pub round: u32,
+    /// The most rounds of the loop this step is in; 0 when it is in none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub max_rounds: u32,
+    /// The loop step's note at the end of the previous round, which the
+    /// first step of the loop gets with its prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_note: Option<String>,
 }
 
 #[expect(
@@ -68,10 +100,45 @@ fn first_attempt(attempt: &u32) -> bool {
     *attempt <= 1
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference."
+)]
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 impl StepRun {
     /// The attempt number, 1 for the first.
     pub fn attempt(&self) -> u32 {
         self.attempt.max(1)
+    }
+
+    /// The round number, 1 for the first.
+    pub fn round(&self) -> u32 {
+        self.round.max(1)
+    }
+
+    /// "round 2 of 3" for a step in a loop.
+    pub fn round_label(&self) -> Option<String> {
+        (self.max_rounds > 0).then(|| format!("round {} of {}", self.round(), self.max_rounds))
+    }
+
+    /// This step as a new attempt that waits: the flow's data, the round
+    /// and the loop note stay; the rest (session, notes, choice) goes.
+    pub(super) fn again(&mut self, attempt: u32) {
+        *self = Self {
+            needs: std::mem::take(&mut self.needs),
+            gate: self.gate.take(),
+            options: std::mem::take(&mut self.options),
+            when: self.when.take(),
+            loop_to: self.loop_to.take(),
+            round: self.round,
+            max_rounds: self.max_rounds,
+            loop_note: self.loop_note.take(),
+            attempt,
+            ..Self::default()
+        };
     }
 
     /// A failed or cancelled step: a live runner can start it again.
@@ -117,13 +184,21 @@ impl RunState {
     /// A run of flow file `file` (without `.toml`) of `project`, in which
     /// every step waits.
     pub fn new(flow: &Flow, file: &str, project: &str) -> Self {
-        let step_run = |step: &Step| StepRun {
-            needs: step.needs.clone(),
-            gate: match &step.kind {
-                StepKind::Gate { message } => Some(message.clone()),
-                StepKind::Command { .. } => None,
-            },
-            ..StepRun::default()
+        let rounds = flow.loop_rounds();
+        let step_run = |step: &Step| {
+            let (gate, options) = match &step.kind {
+                StepKind::Gate { message, options } => (Some(message.clone()), options.clone()),
+                StepKind::Command { .. } => (None, Vec::new()),
+            };
+            StepRun {
+                needs: step.needs.clone(),
+                gate,
+                options,
+                when: step.when.as_ref().map(ToString::to_string),
+                loop_to: step.loop_back.as_ref().map(|back| back.to.clone()),
+                max_rounds: rounds.get(&step.id).copied().unwrap_or(0),
+                ..StepRun::default()
+            }
         };
         Self {
             version: super::VERSION,
@@ -195,12 +270,8 @@ impl RunState {
         let Some(step) = self.steps.get_mut(id).filter(|step| step.retryable()) else {
             return false;
         };
-        *step = StepRun {
-            needs: std::mem::take(&mut step.needs),
-            gate: step.gate.take(),
-            attempt: step.attempt().saturating_add(1),
-            ..StepRun::default()
-        };
+        let attempt = step.attempt().saturating_add(1);
+        step.again(attempt);
         for after in self.after(id) {
             if let Some(step) = self.steps.get_mut(&after)
                 && matches!(step.status, StepStatus::Waiting | StepStatus::Cancelled)
@@ -214,7 +285,7 @@ impl RunState {
     }
 
     /// The steps that need `id`, also through other steps.
-    fn after(&self, id: &str) -> Vec<String> {
+    pub(super) fn after(&self, id: &str) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();
         let mut next = vec![id.to_owned()];
         while let Some(from) = next.pop() {
@@ -237,34 +308,25 @@ impl RunState {
             .values()
             .any(|step| step.status == StepStatus::Running);
         let ready = self.steps.values().any(|step| {
-            step.status == StepStatus::Waiting
-                && step.needs.iter().all(|id| status(id) == StepStatus::Done)
+            step.status == StepStatus::Waiting && step.needs.iter().all(|id| status(id).passed())
         });
         !self.ended && !running && !ready && self.steps.values().any(StepRun::retryable)
     }
 }
 
 impl Flow {
-    /// Steps that can start now: waiting, with every needed step done.
+    /// Steps that can start now: waiting, with every needed step done or
+    /// skipped, and not a step to skip (see [`Flow::skip`]).
     pub fn ready(&self, state: &RunState) -> Vec<&Step> {
         self.steps
             .iter()
-            .filter(|step| state.status(&step.id) == StepStatus::Waiting)
-            .filter(|step| {
-                step.needs
-                    .iter()
-                    .all(|needs| state.status(needs) == StepStatus::Done)
-            })
+            .filter(|step| self.decide(step, state) == Some(false))
             .collect()
     }
 
     pub fn outcome(&self, state: &RunState) -> Outcome {
         let status = |step: &Step| state.status(&step.id);
-        if self
-            .steps
-            .iter()
-            .all(|step| status(step) == StepStatus::Done)
-        {
+        if self.steps.iter().all(|step| status(step).passed()) {
             Outcome::Done
         } else if self
             .steps

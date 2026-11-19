@@ -29,6 +29,10 @@ pub(crate) enum Field {
     Folder,
     Worktree,
     RunsAfter,
+    /// A gate's options, a step's condition, a step's loop.
+    Options,
+    When,
+    Loop,
     /// The flow's run inputs.
     Inputs,
     /// The whole step or the whole flow.
@@ -69,6 +73,9 @@ pub(crate) fn error_place(error: &FlowError) -> (Option<String>, Field) {
             at(step, Field::Worktree)
         }
         FlowError::UnknownNeed { step, .. } | FlowError::Cycle(step) => at(step, Field::RunsAfter),
+        FlowError::Options(step) => at(step, Field::Options),
+        FlowError::When { step, .. } => at(step, Field::When),
+        FlowError::Loop { step, .. } => at(step, Field::Loop),
         FlowError::Kind(step) | FlowError::GateField(step) | FlowError::Text(step, _) => {
             at(step, Field::Other)
         }
@@ -97,7 +104,7 @@ pub(super) struct Show<'a> {
 }
 
 /// A labeled text field on the panel width, and the error of `field`.
-fn field(
+pub(super) fn field(
     ui: &mut egui::Ui,
     (label, hint, rows): (&str, &str, usize),
     text: &mut String,
@@ -217,7 +224,7 @@ fn node_fields(
         });
     });
     ui.weak(if gate {
-        "The run stops here until you approve."
+        "The run stops here until you approve, with one option when it has options."
     } else {
         "One new terminal with this command."
     });
@@ -259,6 +266,7 @@ fn node_fields(
     }
     runs_after(ui, editor, node);
     error_line(ui, error(Field::RunsAfter).or(error(Field::Other)));
+    super::branching::fields(ui, editor, node, error);
     let step = show.run.and_then(|run| run.get(&id))?;
     this_run(ui, step, show.colors)
 }
@@ -316,8 +324,9 @@ fn this_run(ui: &mut egui::Ui, step: &StepRun, colors: Colors) -> Option<String>
     ui.horizontal(|ui| {
         status_icon(ui, style, color);
         ui.label(egui::RichText::new(style.label).color(color));
-        if let Some(attempt) = crate::flows::status::attempt_label(step) {
-            ui.weak(attempt);
+        let labels = crate::flows::gates::branch_labels(step).into_iter();
+        for label in labels.chain(crate::flows::status::attempt_label(step)) {
+            ui.weak(label);
         }
     });
     for text in [&step.waits_for, &step.note].into_iter().flatten() {

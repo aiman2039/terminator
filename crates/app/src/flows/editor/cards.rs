@@ -33,7 +33,8 @@ fn galley(ui: &egui::Ui, text: &str, rows: usize, color: egui::Color32) -> Arc<e
     ui.painter().layout_job(job)
 }
 
-/// A chip with an icon and a caption, for a worktree or a folder.
+/// A chip with an icon (none when empty) and a caption, for a worktree, a
+/// folder, a gate option, a condition or a loop.
 fn icon_chip(ui: &mut egui::Ui, (icon, text, tip): (&str, &str, &str), colors: Colors) {
     egui::Frame::new()
         .stroke(egui::Stroke::new(1.0, colors.border))
@@ -41,11 +42,13 @@ fn icon_chip(ui: &mut egui::Ui, (icon, text, tip): (&str, &str, &str), colors: C
         .inner_margin(egui::Margin::symmetric(5, 1))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            let size = egui::Vec2::splat(appearance::FONT_CAPTION);
-            let image = egui::Image::new(crate::icons::source(icon))
-                .tint(colors.weak)
-                .fit_to_exact_size(size);
-            ui.add(image);
+            if !icon.is_empty() {
+                let size = egui::Vec2::splat(appearance::FONT_CAPTION);
+                let image = egui::Image::new(crate::icons::source(icon))
+                    .tint(colors.weak)
+                    .fit_to_exact_size(size);
+                ui.add(image);
+            }
             let label = egui::RichText::new(text)
                 .size(appearance::FONT_CAPTION)
                 .color(colors.weak);
@@ -93,14 +96,7 @@ pub(super) fn summary(ui: &mut egui::Ui, value: &Node, colors: Colors) {
                 ("GitBranch", worktree.trim(), "The worktree of this step"),
                 ("Folder", cwd.trim(), "The folder of this step"),
             ];
-            if chips.iter().any(|(_, text, _)| !text.is_empty()) {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(CARD_WIDTH);
-                    for chip in chips.into_iter().filter(|(_, text, _)| !text.is_empty()) {
-                        icon_chip(ui, chip, colors);
-                    }
-                });
-            }
+            chip_row(ui, &chips, colors);
         }
         Node::Gate { message, .. } => {
             if message.trim().is_empty() {
@@ -108,8 +104,49 @@ pub(super) fn summary(ui: &mut egui::Ui, value: &Node, colors: Colors) {
             } else {
                 clipped(ui, message, ROWS, text);
             }
+            let options = value.options();
+            let tip = "An option of this gate: one Approve button each";
+            let chips: Vec<_> = options
+                .iter()
+                .map(|option| ("", option.as_str(), tip))
+                .collect();
+            chip_row(ui, &chips, colors);
         }
     }
+    branch_chips(ui, value, colors);
+}
+
+/// The condition and the loop of a card as chips.
+fn branch_chips(ui: &mut egui::Ui, value: &Node, colors: Colors) {
+    let branch = value.branch();
+    let when = format!("when {}", branch.when.trim());
+    let back = format!(
+        "loop to {} · {} rounds",
+        branch.loop_to.trim(),
+        branch.max_rounds
+    );
+    // One row each: a long chip never squeezes the other.
+    if !branch.when.trim().is_empty() {
+        let tip = "Runs only when this gate option is chosen; else it is skipped";
+        chip_row(ui, &[("Split", when.as_str(), tip)], colors);
+    }
+    if !branch.loop_to.trim().is_empty() {
+        let tip = "When this step is done, the run starts again from that step";
+        chip_row(ui, &[("Repeat", back.as_str(), tip)], colors);
+    }
+}
+
+/// The chips with text, in a row that wraps at the card width.
+fn chip_row(ui: &mut egui::Ui, chips: &[(&str, &str, &str)], colors: Colors) {
+    if chips.iter().all(|(_, text, _)| text.is_empty()) {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.set_max_width(CARD_WIDTH);
+        for chip in chips.iter().filter(|(_, text, _)| !text.is_empty()) {
+            icon_chip(ui, *chip, colors);
+        }
+    });
 }
 
 impl Viewer<'_> {
@@ -118,14 +155,9 @@ impl Viewer<'_> {
         ui.add_space(2.0);
         ui.separator();
         if gate_waits(step) {
-            appearance::footer_row(ui, |ui| {
-                if appearance::primary_button(ui, "Approve").clicked() {
-                    self.out.answer = Some((id.to_owned(), true));
-                }
-                if appearance::danger_button(ui, "Reject").clicked() {
-                    self.out.answer = Some((id.to_owned(), false));
-                }
-            });
+            if let Some(choice) = crate::flows::gates::gate_buttons(ui, &step.options) {
+                self.out.answer = Some((id.to_owned(), choice));
+            }
             return;
         }
         if let Some(question) = &step.question {
@@ -141,9 +173,12 @@ impl Viewer<'_> {
         if let Some(text) = text {
             clipped(ui, text, ROWS, color);
         }
-        // The attempt and the stall badge: display only.
-        let badges: Vec<String> = crate::flows::status::attempt_label(step)
+        // The choice, round, attempt and stall: display only. The card's
+        // chip shows the condition already.
+        let badges: Vec<String> = crate::flows::gates::branch_labels(step)
             .into_iter()
+            .filter(|label| !label.starts_with("when "))
+            .chain(crate::flows::status::attempt_label(step))
             .chain(self.stalls.get(id).cloned())
             .collect();
         if !badges.is_empty() {

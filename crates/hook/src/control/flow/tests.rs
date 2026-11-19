@@ -5,9 +5,19 @@ const FLOW: &str = "version = 1\nname = \"n\"\n[[step]]\nid = \"build\"\ncommand
 
 /// A run folder whose runner (this test) holds the lock.
 fn run_folder(gate: StepStatus) -> (tempfile::TempDir, control::RunnerLock) {
+    run_folder_of(FLOW, "ok", gate)
+}
+
+/// A run folder of flow `text` whose step `gate` has status `status`, and
+/// whose runner (this test) holds the lock.
+pub(super) fn run_folder_of(
+    text: &str,
+    gate: &str,
+    status: StepStatus,
+) -> (tempfile::TempDir, control::RunnerLock) {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = RunState::new(&flow::parse(FLOW).unwrap(), "n", "p");
-    state.set("ok", gate);
+    let mut state = RunState::new(&flow::parse(text).unwrap(), "n", "p");
+    state.set(gate, status);
     std::fs::write(
         dir.path().join(STATE_FILE),
         serde_json::to_vec(&state).unwrap(),
@@ -20,21 +30,23 @@ fn run_folder(gate: StepStatus) -> (tempfile::TempDir, control::RunnerLock) {
 #[test]
 fn approve_is_written_only_for_a_gate_that_waits() {
     let (dir, _runner) = run_folder(StepStatus::Running);
-    control::answer_gate(dir.path(), "ok", true).unwrap();
+    control::answer_gate(dir.path(), "ok", GateAnswer::Approve).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join(ANSWERS).join("ok")).unwrap(),
         APPROVE
     );
-    control::answer_gate(dir.path(), "ok", false).unwrap();
+    control::answer_gate(dir.path(), "ok", GateAnswer::Reject).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join(ANSWERS).join("ok")).unwrap(),
         REJECT
     );
+    // A gate without options takes no option.
+    assert!(control::answer_gate(dir.path(), "ok", GateAnswer::Choose("ship")).is_err());
     // A command step, an unknown step, and a gate that does not wait.
-    assert!(control::answer_gate(dir.path(), "build", true).is_err());
-    assert!(control::answer_gate(dir.path(), "../x", true).is_err());
+    assert!(control::answer_gate(dir.path(), "build", GateAnswer::Approve).is_err());
+    assert!(control::answer_gate(dir.path(), "../x", GateAnswer::Approve).is_err());
     let (waiting, _waiting_runner) = run_folder(StepStatus::Waiting);
-    assert!(control::answer_gate(waiting.path(), "ok", true).is_err());
+    assert!(control::answer_gate(waiting.path(), "ok", GateAnswer::Approve).is_err());
     assert!(!waiting.path().join(ANSWERS).exists());
 }
 
@@ -222,6 +234,18 @@ pub(super) fn runner_without_daemon() -> (
     runner::Runner,
     std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
+    runner_of(FLOW)
+}
+
+/// A runner of flow `text`, as [`runner_without_daemon`].
+pub(super) fn runner_of(
+    text: &str,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    runner::Runner,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     let data = tempfile::tempdir().unwrap();
     let dir = new_run_dir(data.path(), "n-1").unwrap();
     let project = Project {
@@ -234,7 +258,7 @@ pub(super) fn runner_without_daemon() -> (
     let runner = runner::Runner::new(
         Paths::at(data.path().into()),
         project,
-        (flow::parse(FLOW).unwrap(), "n"),
+        (flow::parse(text).unwrap(), "n"),
         (dir.clone(), std::sync::Arc::clone(&interrupted)),
     );
     (data, dir, runner, interrupted)

@@ -8,6 +8,9 @@
 //! A flow with changes that are not saved stays in GUI memory when its
 //! tab closes: the same flow opens again with those changes.
 mod banner;
+#[cfg(test)]
+mod branch_tests;
+mod branching;
 mod canvas;
 mod cards;
 mod dialogs;
@@ -17,6 +20,7 @@ mod inputs;
 mod inspector;
 mod keys;
 mod model;
+mod plan;
 mod quit;
 mod stay;
 mod style;

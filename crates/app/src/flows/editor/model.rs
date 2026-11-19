@@ -5,6 +5,29 @@ use egui_snarl::{InPinId, NodeId, OutPinId, Snarl};
 use std::collections::HashMap;
 use terminator_core::flow::{Draft, DraftStep, Flow, StepKind};
 
+pub(crate) use super::plan::plan_text;
+
+/// The condition and the loop of a step or a gate, as the user typed them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Branch {
+    /// `GATE.OPTION`, or empty: the step always runs.
+    pub(crate) when: String,
+    /// The step that this one runs again from, or empty: no loop.
+    pub(crate) loop_to: String,
+    /// The most rounds of the loop; written only with `loop_to`.
+    pub(crate) max_rounds: u32,
+}
+
+impl Default for Branch {
+    fn default() -> Self {
+        Self {
+            when: String::new(),
+            loop_to: String::new(),
+            max_rounds: 3,
+        }
+    }
+}
+
 /// One node of the editor. Text fields hold what the user typed; an empty
 /// optional field is left out of the file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,9 +39,16 @@ pub(crate) enum Node {
         prompt: String,
         cwd: String,
         worktree: String,
+        branch: Branch,
     },
-    /// A gate: the run waits for the user's approval of `message`.
-    Gate { id: String, message: String },
+    /// A gate: the run waits for the user's approval of `message`, with
+    /// one of `options` (comma-separated, as typed) when it has some.
+    Gate {
+        id: String,
+        message: String,
+        options: String,
+        branch: Branch,
+    },
 }
 
 impl Node {
@@ -29,6 +59,7 @@ impl Node {
             prompt: prompt.to_owned(),
             cwd: String::new(),
             worktree: String::new(),
+            branch: Branch::default(),
         }
     }
 
@@ -36,6 +67,28 @@ impl Node {
         Self::Gate {
             id: id.to_owned(),
             message: message.to_owned(),
+            options: String::new(),
+            branch: Branch::default(),
+        }
+    }
+
+    pub(crate) fn branch(&self) -> &Branch {
+        match self {
+            Self::Step { branch, .. } | Self::Gate { branch, .. } => branch,
+        }
+    }
+
+    pub(crate) fn branch_mut(&mut self) -> &mut Branch {
+        match self {
+            Self::Step { branch, .. } | Self::Gate { branch, .. } => branch,
+        }
+    }
+
+    /// The options of a gate, as the file has them; none for a step.
+    pub(crate) fn options(&self) -> Vec<String> {
+        match self {
+            Self::Gate { options, .. } => split_options(options),
+            Self::Step { .. } => Vec::new(),
         }
     }
 
@@ -238,11 +291,33 @@ fn place(position: egui::Pos2) -> [i32; 2] {
     [whole(position.x), whole(position.y)]
 }
 
+/// The options typed in a gate's field: comma-separated names.
+pub(crate) fn split_options(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|option| !option.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The graph of a checked flow.
 pub(crate) fn graph_of(flow: &Flow) -> Snarl<Node> {
     let mut snarl = Snarl::new();
     let mut ids = HashMap::new();
     for (step, auto) in flow.steps.iter().zip(auto_places(flow)) {
+        let branch = Branch {
+            when: step
+                .when
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            loop_to: step
+                .loop_back
+                .as_ref()
+                .map(|back| back.to.clone())
+                .unwrap_or_default(),
+            max_rounds: step.loop_back.as_ref().map_or(3, |back| back.max_rounds),
+        };
         let node = match &step.kind {
             StepKind::Command {
                 command,
@@ -255,8 +330,14 @@ pub(crate) fn graph_of(flow: &Flow) -> Snarl<Node> {
                 prompt: prompt.clone().unwrap_or_default(),
                 cwd: cwd.clone().unwrap_or_default(),
                 worktree: worktree.clone().unwrap_or_default(),
+                branch,
             },
-            StepKind::Gate { message } => Node::gate(&step.id, message),
+            StepKind::Gate { message, options } => Node::Gate {
+                id: step.id.clone(),
+                message: message.clone(),
+                options: options.join(", "),
+                branch,
+            },
         };
         let id = snarl.insert_node(position(step.at.unwrap_or(auto)), node);
         ids.insert(step.id.as_str(), id);
@@ -295,10 +376,16 @@ pub(crate) fn draft_of(name: &str, snarl: &Snarl<Node>) -> Draft {
             .collect();
         needs.sort_unstable();
         needs.dedup();
+        let branch = value.branch();
+        let loop_to = optional(&branch.loop_to);
         let mut step = DraftStep {
             id: value.id().trim().to_owned(),
             needs,
             at: Some(place(position)),
+            options: value.options(),
+            when: optional(&branch.when),
+            max_rounds: loop_to.is_some().then_some(branch.max_rounds),
+            loop_to,
             ..DraftStep::default()
         };
         match value {
@@ -319,106 +406,6 @@ pub(crate) fn draft_of(name: &str, snarl: &Snarl<Node>) -> Draft {
         step
     });
     Draft::new(name.trim(), steps.collect())
-}
-
-/// The steps in the order that they can run: a step comes after the
-/// steps that it needs. Steps of a cycle come last, in file order.
-fn run_order(draft: &Draft) -> Vec<&DraftStep> {
-    let mut done: Vec<&DraftStep> = Vec::new();
-    let mut left: Vec<&DraftStep> = draft.steps.iter().collect();
-    while !left.is_empty() {
-        let ready = |step: &DraftStep| {
-            step.needs
-                .iter()
-                .all(|needs| done.iter().any(|done| done.id == *needs))
-        };
-        let (now, later): (Vec<_>, Vec<_>) = left.iter().copied().partition(|step| ready(step));
-        if now.is_empty() {
-            done.extend(later);
-            break;
-        }
-        done.extend(now);
-        left = later;
-    }
-    done
-}
-
-/// The order of the steps as a Mermaid flowchart: a box is a step, a
-/// diamond is a gate, an arrow is "then".
-fn mermaid(steps: &[&DraftStep]) -> String {
-    use std::fmt::Write as _;
-    let node = |id: &str| steps.iter().position(|step| step.id == id);
-    let mut text = String::from("flowchart LR\n");
-    for (index, step) in steps.iter().enumerate() {
-        let label = step.id.replace('"', "'");
-        let shape = if step.gate.is_some() {
-            format!("{{\"{label}\"}}")
-        } else {
-            format!("[\"{label}\"]")
-        };
-        let _ = writeln!(text, "    n{index}{shape}");
-    }
-    for (index, step) in steps.iter().enumerate() {
-        for from in step.needs.iter().filter_map(|needs| node(needs)) {
-            let _ = writeln!(text, "    n{from} --> n{index}");
-        }
-    }
-    text
-}
-
-/// The flow as a plan in Markdown, for the preview and the export: the
-/// flow file's place, the order as a Mermaid flowchart, the rules, and
-/// each step in the order that it can run.
-pub(crate) fn plan_text(draft: &Draft, file: &str) -> String {
-    use std::fmt::Write as _;
-    let steps = run_order(draft);
-    let mut text = format!("# {}\n", draft.name);
-    let _ = write!(
-        text,
-        "\nFlow file: `.terminator/flows/{file}.toml` (the source; this plan is a copy).\n\
-         \n```mermaid\n{}```\n",
-        mermaid(&steps)
-    );
-    if !draft.inputs.is_empty() {
-        text.push_str("\n## Inputs\n\n");
-        for (name, input) in &draft.inputs {
-            let about = input.description.as_deref().unwrap_or("No description");
-            let value = match &input.default {
-                Some(value) => format!("default `{value}`"),
-                None => "required".to_owned(),
-            };
-            let _ = writeln!(text, "- `{name}`: {about} ({value})");
-        }
-    }
-    if let Some(rules) = &draft.rules {
-        let _ = write!(text, "\n## Rules\n\n{rules}\n");
-    }
-    for (index, step) in steps.into_iter().enumerate() {
-        let kind = if step.gate.is_some() { "gate" } else { "step" };
-        let number = index.saturating_add(1);
-        let _ = write!(text, "\n## {number}. {} ({kind})\n\n", step.id);
-        if !step.needs.is_empty() {
-            let _ = writeln!(text, "- After: {}", step.needs.join(", "));
-        }
-        let lines = [
-            (
-                "Command",
-                step.command.as_ref().map(|line| format!("`{line}`")),
-            ),
-            ("Folder", step.cwd.clone()),
-            ("Worktree", step.worktree.clone()),
-            ("You approve", step.gate.clone()),
-        ];
-        for (label, value) in lines {
-            if let Some(value) = value {
-                let _ = writeln!(text, "- {label}: {value}");
-            }
-        }
-        if let Some(prompt) = &step.prompt {
-            let _ = write!(text, "\n{prompt}\n");
-        }
-    }
-    text
 }
 
 /// An ID that no node has: `base`, then `base-2`, `base-3`, …

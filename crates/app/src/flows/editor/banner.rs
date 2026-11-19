@@ -18,8 +18,8 @@ const INPUTS_WIDTH: f32 = 180.0;
 pub(super) enum StripClick {
     /// Hide the strip of an ended run.
     Hide,
-    /// Approve (true) or reject the gate of this step.
-    Gate(String, bool),
+    /// Answer the gate of this step.
+    Gate(String, crate::flows::gates::GateChoice),
     /// Send the typed answer of this step's question.
     Answer(String),
     /// Start this failed step again.
@@ -189,13 +189,8 @@ fn strip_action(
     }
     if let Some((id, step)) = waits_for_user(run) {
         if step.question.is_none() {
-            if appearance::primary_button(ui, "Approve").clicked() {
-                return Some(StripClick::Gate(id.clone(), true));
-            }
-            if appearance::danger_button(ui, "Reject").clicked() {
-                return Some(StripClick::Gate(id.clone(), false));
-            }
-            return None;
+            let choice = crate::flows::gates::gate_buttons_right_to_left(ui, &step.options);
+            return choice.map(|choice| StripClick::Gate(id.clone(), choice));
         }
         let draft = drafts.entry((run.dir.clone(), id.clone())).or_default();
         let filled = !draft.trim().is_empty();
