@@ -10,8 +10,10 @@ use terminator_core::flow::{StepRun, StepStatus, control::RunStatus};
 /// The color role of a state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tone {
-    /// Done, or running: green.
-    Good,
+    /// Running: green, with a spin.
+    Running,
+    /// Done: a quieter green, between green and the secondary text color.
+    Done,
     /// A gate or a question waits for the user: amber.
     Waits,
     /// Failed: red.
@@ -22,13 +24,30 @@ pub(crate) enum Tone {
 
 impl Tone {
     pub(crate) fn color(self, theme: &AppearanceConfig) -> egui::Color32 {
-        appearance::color(match self {
-            Self::Good => &theme.status_running,
-            Self::Waits => &theme.status_waiting,
-            Self::Failed => &theme.status_failed,
-            Self::Dim => &theme.secondary,
-        })
+        match self {
+            Self::Running => appearance::color(&theme.status_running),
+            Self::Done => appearance::color(&theme.status_running)
+                .lerp_to_gamma(appearance::color(&theme.secondary), DONE_QUIET),
+            Self::Waits => appearance::color(&theme.status_waiting),
+            Self::Failed => appearance::color(&theme.status_failed),
+            Self::Dim => appearance::color(&theme.secondary),
+        }
     }
+}
+
+/// How far the done green goes toward the secondary text color: a done
+/// step is still green, but quieter than a running one.
+const DONE_QUIET: f32 = 0.5;
+
+#[cfg(test)]
+impl Tone {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Running,
+        Self::Done,
+        Self::Waits,
+        Self::Failed,
+        Self::Dim,
+    ];
 }
 
 /// How a step shows.
@@ -81,9 +100,9 @@ pub(crate) fn step_style(step: &StepRun) -> StepStyle {
         },
         StepStatus::Running => StepStyle {
             spin: true,
-            ..style("LoaderCircle", Tone::Good, "Running", "running")
+            ..style("LoaderCircle", Tone::Running, "Running", "running")
         },
-        StepStatus::Done => style("CircleCheck", Tone::Good, "Done", "done"),
+        StepStatus::Done => style("CircleCheck", Tone::Done, "Done", "done"),
         StepStatus::Failed => style("CircleAlert", Tone::Failed, "Failed", "failed"),
         StepStatus::Cancelled => StepStyle {
             reached: false,
@@ -103,8 +122,8 @@ pub(crate) fn run_chip(run: &Run) -> (&'static str, Tone) {
     let steps = || run.state.steps.values();
     match run.status() {
         RunStatus::Running if steps().any(waits_for_user) => ("waits", Tone::Waits),
-        RunStatus::Running => ("running", Tone::Good),
-        RunStatus::Done => ("done", Tone::Good),
+        RunStatus::Running => ("running", Tone::Running),
+        RunStatus::Done => ("done", Tone::Done),
         RunStatus::Stopped if steps().any(|step| step.status == StepStatus::Failed) => {
             ("failed", Tone::Failed)
         }
@@ -125,7 +144,7 @@ pub(crate) fn segments(run: &Run) -> Vec<Tone> {
 }
 
 /// Paint the progress bar of a run: one segment per step, in its state's
-/// color. A running step is a lighter green than a done one.
+/// color. A done step is a quieter green than a running one.
 pub(crate) fn progress_bar(ui: &mut egui::Ui, run: &Run, theme: &AppearanceConfig) {
     const HEIGHT: f32 = 4.0;
     const GAP: f32 = 2.0;
@@ -136,27 +155,19 @@ pub(crate) fn progress_bar(ui: &mut egui::Ui, run: &Run, theme: &AppearanceConfi
         egui::pos2(rect.left() + LEFT, rect.top()),
         egui::pos2(rect.right() - 6.0, rect.bottom()),
     );
-    let steps: Vec<&StepRun> = run
-        .state
-        .order
-        .iter()
-        .filter_map(|id| run.state.steps.get(id))
-        .collect();
-    if steps.is_empty() || bar.width() <= 0.0 || !ui.is_rect_visible(bar) {
+    let tones = segments(run);
+    if tones.is_empty() || bar.width() <= 0.0 || !ui.is_rect_visible(bar) {
         return;
     }
-    let count = steps.len() as f32;
+    let count = tones.len() as f32;
     let each = (bar.width() - GAP * (count - 1.0)) / count;
     let border = appearance::color(&theme.border);
-    for (index, (step, tone)) in steps.iter().zip(segments(run)).enumerate() {
+    for (index, tone) in tones.into_iter().enumerate() {
         let left = bar.left() + index as f32 * (each + GAP);
         let segment =
             egui::Rect::from_min_size(egui::pos2(left, bar.top()), egui::vec2(each, HEIGHT));
         let fill = match tone {
             Tone::Dim => border,
-            _ if step.status == StepStatus::Running && tone == Tone::Good => {
-                tone.color(theme).gamma_multiply(0.45)
-            }
             _ => tone.color(theme),
         };
         ui.painter()

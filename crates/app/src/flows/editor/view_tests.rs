@@ -158,7 +158,7 @@ fn fit_uses_the_measured_card_sizes() {
     // A canvas where the measured cards fit at 0.9, above the zoom floor.
     let all = super::canvas::bounds(&snarl, &sizes).expand(40.0);
     let canvas = egui::Rect::from_min_size(egui::pos2(300.0, 200.0), all.size() * 0.9);
-    let view = fit_view(&snarl, &sizes, canvas).unwrap();
+    let view = fit_view(&snarl, &sizes, (canvas, 0.0)).unwrap();
     assert!((view.scaling - 0.9).abs() < 0.01, "{}", view.scaling);
     for (node, position, _) in snarl.nodes_pos_ids() {
         let card = egui::Rect::from_min_size(position, sizes[&node]);
@@ -168,16 +168,59 @@ fn fit_uses_the_measured_card_sizes() {
         );
     }
     // The estimate alone would cut these cards off.
-    let guess = fit_view(&snarl, &Sizes::new(), canvas).unwrap();
+    let guess = fit_view(&snarl, &Sizes::new(), (canvas, 0.0)).unwrap();
     assert!(guess.scaling > view.scaling);
-    assert!(fit_view(&Snarl::new(), &Sizes::new(), canvas).is_none());
+    assert!(fit_view(&Snarl::new(), &Sizes::new(), (canvas, 0.0)).is_none());
+}
+
+#[test]
+fn fit_beside_the_inspector_shows_every_card_of_a_flow_that_fits_the_pane() {
+    let snarl = graph_of(&flow::parse(FIVE).unwrap());
+    let all = super::canvas::bounds(&snarl, &Sizes::new()).expand(40.0);
+    // A pane where the flow fits at the zoom floor, less the inspector.
+    let pane = all.width() * super::canvas::FIT_MIN_ZOOM + 20.0;
+    let inspector = super::inspector::WIDTH;
+    let canvas =
+        egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(pane - inspector, 800.0));
+    let view = fit_view(&snarl, &Sizes::new(), (canvas, inspector)).unwrap();
+    assert!(view.scaling < super::canvas::FIT_MIN_ZOOM);
+    for (_, position, _) in snarl.nodes_pos_ids() {
+        let card = view.mul_rect(egui::Rect::from_min_size(position, NODE_SIZE));
+        assert!(canvas.contains_rect(card), "{card:?} in {canvas:?}");
+    }
+    // Without the inspector the same canvas keeps the zoom floor.
+    let alone = fit_view(&snarl, &Sizes::new(), (canvas, 0.0)).unwrap();
+    assert!((alone.scaling - super::canvas::FIT_MIN_ZOOM).abs() < f32::EPSILON);
+    // A flow too wide for the whole pane keeps the floor and its first card.
+    let narrow = egui::Rect::from_min_size(canvas.min, egui::vec2(400.0, 800.0));
+    let wide = fit_view(&snarl, &Sizes::new(), (narrow, inspector)).unwrap();
+    assert!((wide.scaling - super::canvas::FIT_MIN_ZOOM).abs() < f32::EPSILON);
+}
+
+#[test]
+fn opening_the_inspector_fits_the_cards_beside_it() {
+    let project = project_with_flows();
+    let path = five(&project);
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    // Narrower than SPLIT_WIDTH: no inspector until the rules open.
+    let width = 1250.0;
+    settle(&mut app, &ctx, (&path, width));
+    ready(&mut app, &path).rules_open = true;
+    let text = settle(&mut app, &ctx, (&path, width));
+    assert!(count(&text, "Flow rules") >= 1, "{text:?}");
+    let split = width - super::inspector::WIDTH;
+    for id in ["plan", "approve-plan", "build", "docs", "review"] {
+        let pos = at(&text, id, egui::Pos2::ZERO);
+        assert!(pos.x > 0.0 && pos.x < split - 60.0, "{id}: {pos:?}");
+    }
 }
 
 #[test]
 fn fit_keeps_cards_readable_and_shows_the_first_card_of_a_large_flow() {
     let snarl = graph_of(&flow::parse(FIVE).unwrap());
     let canvas = egui::Rect::from_min_size(egui::pos2(300.0, 200.0), egui::vec2(600.0, 400.0));
-    let view = fit_view(&snarl, &Sizes::new(), canvas).unwrap();
+    let view = fit_view(&snarl, &Sizes::new(), (canvas, 0.0)).unwrap();
     assert!((view.scaling - super::canvas::FIT_MIN_ZOOM).abs() < f32::EPSILON);
     // The leftmost card starts inside the canvas; the user pans to the rest.
     let first = super::canvas::bounds(&snarl, &Sizes::new());

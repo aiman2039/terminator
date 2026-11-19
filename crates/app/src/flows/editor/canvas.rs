@@ -55,20 +55,30 @@ pub(super) fn bounds(snarl: &Snarl<Node>, sizes: &Sizes) -> egui::Rect {
 }
 
 /// The view in which all cards show in `canvas`, at most at full size and
-/// at least at [`FIT_MIN_ZOOM`].
+/// at least at [`FIT_MIN_ZOOM`]. `inspector` is the width of the inspector
+/// at the right of the canvas: a flow that fits the whole pane at
+/// [`FIT_MIN_ZOOM`] also fits the canvas beside the inspector, with a
+/// smaller zoom, so no card is cut off behind the inspector.
 pub(super) fn fit_view(
     snarl: &Snarl<Node>,
     sizes: &Sizes,
-    canvas: egui::Rect,
+    (canvas, inspector): (egui::Rect, f32),
 ) -> Option<egui::emath::TSTransform> {
     let all = bounds(snarl, sizes);
     if !all.is_finite() || !canvas.is_finite() || canvas.width() < 1.0 || canvas.height() < 1.0 {
         return None;
     }
     let all = all.expand(FIT_MARGIN);
+    let pane = canvas.width() + inspector.max(0.0);
+    let floor_x = if all.width() * FIT_MIN_ZOOM <= pane {
+        FIT_MIN_ZOOM * canvas.width() / pane
+    } else {
+        FIT_MIN_ZOOM
+    };
     let scaling = (canvas.width() / all.width())
-        .min(canvas.height() / all.height())
-        .clamp(FIT_MIN_ZOOM, 1.0);
+        .max(floor_x)
+        .min((canvas.height() / all.height()).max(FIT_MIN_ZOOM))
+        .min(1.0);
     // Centered on each axis that fits; else the first cards (left, top)
     // show and the user pans to the rest.
     let place = |from: egui::Rangef, to: egui::Rangef| {

@@ -108,6 +108,8 @@ pub(crate) struct FlowsState {
     runs: Vec<Run>,
     reading: Option<Receiver<Vec<Run>>>,
     read_at: Option<Instant>,
+    /// Older ended run folders that the reads skip (one read at a time).
+    ended_runs: std::sync::Arc<std::sync::Mutex<control::EndedRuns>>,
     /// Answers that a worker thread writes now.
     acting: Vec<Receiver<Result<(), String>>>,
     /// Typed answers to open questions, by run folder and step.

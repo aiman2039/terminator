@@ -87,23 +87,25 @@ impl App {
     }
 
     /// The graph, with the state of `run` on its cards. Does the clicks
-    /// on the cards.
+    /// on the cards. `inspector` is the width of the inspector at the
+    /// right of the canvas (0 when it is hidden).
     fn flow_graph(
         &mut self,
-        ui: &mut egui::Ui,
+        (ui, inspector): (&mut egui::Ui, f32),
         path: &Path,
         (editor, run, error): (&mut FlowEditor, Option<&Run>, Option<&CheckError>),
     ) {
         let colors = Colors::of(&self.theme);
         let canvas = ui.available_rect_before_wrap();
-        // A new canvas size (a resized pane or window) fits the view again.
+        // A new canvas size (a resized pane or window, or the inspector
+        // that opens or closes) fits the view again.
         if editor.canvas.is_some_and(|size| {
             (size.x - canvas.width()).abs() > 1.0 || (size.y - canvas.height()).abs() > 1.0
         }) {
             editor.fit = true;
         }
         editor.canvas = Some(canvas.size());
-        let fit = editor.fit.then_some(canvas);
+        let fit = editor.fit.then_some((canvas, inspector));
         // The first fit uses estimated sizes: fit again once all are known.
         editor.fit &= !canvas::measured(&editor.snarl, &editor.sizes);
         let mut drafts = self.run_drafts(run);
@@ -177,10 +179,11 @@ impl App {
         let full = ui.available_rect_before_wrap();
         let inspect = full.width() >= SPLIT_WIDTH || editor.selected.is_some() || editor.rules_open;
         let width = inspector::WIDTH.min(full.width() * 0.6);
-        let split = full.right() - if inspect { width } else { 0.0 };
+        let beside = if inspect { width } else { 0.0 };
+        let split = full.right() - beside;
         let graph = egui::Rect::from_min_max(full.min, egui::pos2(split, full.bottom()));
         let mut graph_ui = ui.new_child(egui::UiBuilder::new().max_rect(graph));
-        self.flow_graph(&mut graph_ui, path, (editor, run, error));
+        self.flow_graph((&mut graph_ui, beside), path, (editor, run, error));
         if inspect {
             let colors = Colors::of(&self.theme);
             let panel = egui::Rect::from_min_max(egui::pos2(split, full.top()), full.max);

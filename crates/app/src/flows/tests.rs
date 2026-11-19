@@ -652,11 +652,11 @@ fn step_style_colors_each_state_and_spins_only_while_running() {
     };
     assert_eq!(
         style(step(StepStatus::Done, None, None)),
-        ("CircleCheck", Tone::Good, false)
+        ("CircleCheck", Tone::Done, false)
     );
     assert_eq!(
         style(step(StepStatus::Running, None, None)),
-        ("LoaderCircle", Tone::Good, true)
+        ("LoaderCircle", Tone::Running, true)
     );
     assert_eq!(
         style(step(StepStatus::Running, Some("ok?"), None)),
@@ -675,13 +675,23 @@ fn step_style_colors_each_state_and_spins_only_while_running() {
         style(step(StepStatus::Waiting, Some("ok?"), None)).1,
         Tone::Dim
     );
-    // Each tone has its own theme color.
+    // Each tone has its own theme color; done is a quieter green than
+    // running, nearer to the secondary text color.
     let theme = terminator_core::appearance::AppearanceConfig::default();
-    let colors: std::collections::HashSet<_> = [Tone::Good, Tone::Waits, Tone::Failed, Tone::Dim]
+    let colors: std::collections::HashSet<_> = Tone::ALL
         .into_iter()
         .map(|tone| tone.color(&theme))
         .collect();
-    assert_eq!(colors.len(), 4);
+    assert_eq!(colors.len(), Tone::ALL.len());
+    let dim = Tone::Dim.color(&theme);
+    let far = |color: egui::Color32| {
+        let [r, g, b, _] = color.to_array();
+        let [dr, dg, db, _] = dim.to_array();
+        u32::from(r.abs_diff(dr)) + u32::from(g.abs_diff(dg)) + u32::from(b.abs_diff(db))
+    };
+    assert!(far(Tone::Done.color(&theme)) < far(Tone::Running.color(&theme)));
+    let [r, g, b, _] = Tone::Done.color(&theme).to_array();
+    assert!(g > r && g > b, "done stays green");
     assert!(crate::icons::is_ui_icon("Workflow"));
     assert!(crate::icons::is_ui_icon("Square"));
 }
@@ -690,7 +700,7 @@ fn step_style_colors_each_state_and_spins_only_while_running() {
 fn run_chip_and_time_show_the_state_of_a_run() {
     let data = Path::new("/data");
     let mut run = run_of(data, "build-1700000000", None);
-    assert_eq!(status::run_chip(&run), ("running", status::Tone::Good));
+    assert_eq!(status::run_chip(&run), ("running", status::Tone::Running));
     assert_eq!(runs_view::run_trailing(&run, 1_700_007_200), "0/2");
     run.state.set("ok", StepStatus::Running);
     assert_eq!(status::run_chip(&run).0, "waits");
@@ -699,7 +709,7 @@ fn run_chip_and_time_show_the_state_of_a_run() {
     assert_eq!(status::run_chip(&run), ("failed", status::Tone::Failed));
     assert_eq!(runs_view::run_trailing(&run, 1_700_007_200), "2h ago");
     let done = run_of(data, "build-2", Some(2));
-    assert_eq!(status::run_chip(&done).0, "done");
+    assert_eq!(status::run_chip(&done), ("done", status::Tone::Done));
     assert_eq!(runs_view::run_trailing(&done, 1_700_007_200), "");
     assert_eq!(
         status::segments(&run),

@@ -41,7 +41,8 @@ pub(super) fn own_step(data: &Path, session: Option<String>) -> Result<Own> {
         None => std::env::var("TERMINATOR_SESSION_ID")
             .context("This is not a Terminator terminal; give --session")?,
     };
-    for (dir, state) in control::recent_runs(data, usize::MAX) {
+    // Limit 0: only the runs that did not end.
+    for (dir, state) in control::recent_runs(data, 0, &mut control::EndedRuns::new()) {
         // An ended run, or one whose runner is gone, reads no report and
         // no answer.
         let view = control::run_view(&dir, state);

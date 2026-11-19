@@ -240,9 +240,12 @@ fn run_flow(paths: Paths, project: &str, name: &str, run: Option<String>) -> Res
     }
     let flow = files::load(&project.path, name)?;
     let run = run.unwrap_or_else(|| format!("{name}-{}", now()));
+    // Before the folder exists: a signal from now on ends the run with a
+    // state file, never an empty folder.
+    let interrupted = runner::interrupt_flag()?;
     let dir = new_run_dir(&paths.data, &run)?;
-    Output::line(format_args!("Run {run}: {}", flow.name));
-    let outcome = runner::Runner::new(paths, project, (flow, name), dir)?.run()?;
+    Output::line_or_drop(format_args!("Run {run}: {}", flow.name));
+    let outcome = runner::Runner::new(paths, project, (flow, name), (dir, interrupted)).run()?;
     let outcome = match outcome {
         Outcome::Done => "done",
         Outcome::Active | Outcome::Stopped => "stopped",

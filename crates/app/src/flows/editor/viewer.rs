@@ -53,8 +53,9 @@ pub(super) struct Viewer<'a> {
     pub(super) sizes: &'a mut Sizes,
     /// The canvas rectangle when the view must move and zoom until all
     /// cards show: on the first frames of a flow, on Fit to view and after
-    /// a resize of the canvas.
-    pub(super) fit: Option<egui::Rect>,
+    /// a resize of the canvas. With it, the width of the inspector at the
+    /// right of the canvas (see [`fit_view`]).
+    pub(super) fit: Option<(egui::Rect, f32)>,
     pub(super) out: Out,
 }
 
@@ -122,7 +123,7 @@ impl SnarlViewer<Node> for Viewer<'_> {
         if let Some(view) = self
             .fit
             .take()
-            .and_then(|canvas| fit_view(snarl, self.sizes, canvas))
+            .and_then(|area| fit_view(snarl, self.sizes, area))
         {
             *to_global = view;
         }

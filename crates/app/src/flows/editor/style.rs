@@ -14,6 +14,8 @@ pub(crate) struct Colors {
     pub(crate) weak: egui::Color32,
     /// A running step, and the label of a step card.
     pub(crate) step: egui::Color32,
+    /// A done step: a quieter green than a running one.
+    pub(crate) done: egui::Color32,
     /// A gate or a question that waits for the user.
     pub(crate) gate: egui::Color32,
     /// A step that failed, and a check error.
@@ -29,7 +31,8 @@ impl Colors {
             node: appearance::color(&theme.surface),
             border: appearance::color(&theme.border),
             weak: Tone::Dim.color(theme),
-            step: Tone::Good.color(theme),
+            step: Tone::Running.color(theme),
+            done: Tone::Done.color(theme),
             gate: Tone::Waits.color(theme),
             failed: Tone::Failed.color(theme),
             accent: appearance::color(&theme.accent),
@@ -39,7 +42,8 @@ impl Colors {
     /// The color of a shared tone in this palette.
     pub(crate) fn tone(self, tone: Tone) -> egui::Color32 {
         match tone {
-            Tone::Good => self.step,
+            Tone::Running => self.step,
+            Tone::Done => self.done,
             Tone::Waits => self.gate,
             Tone::Failed => self.failed,
             Tone::Dim => self.weak,

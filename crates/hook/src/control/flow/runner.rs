@@ -55,24 +55,31 @@ pub(super) struct Runner {
     interrupted: Arc<AtomicBool>,
 }
 
+/// The flag that SIGINT, SIGTERM and SIGHUP set. Register it before the run
+/// folder exists: a signal that comes before the first state file write
+/// then still ends the run as cancelled, so no empty run folder stays.
+pub(super) fn interrupt_flag() -> Result<Arc<AtomicBool>> {
+    let interrupted = Arc::new(AtomicBool::new(false));
+    for signal in [
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGHUP,
+    ] {
+        signal_hook::flag::register(signal, Arc::clone(&interrupted))?;
+    }
+    Ok(interrupted)
+}
+
 impl Runner {
     /// The runner of flow file `file` (`flow` is its content) in the new
-    /// run folder `dir`.
+    /// run folder `dir`. `interrupted` is the [`interrupt_flag`].
     pub(super) fn new(
         paths: Paths,
         project: Project,
         (flow, file): (Flow, &str),
-        dir: PathBuf,
-    ) -> Result<Self> {
-        let interrupted = Arc::new(AtomicBool::new(false));
-        for signal in [
-            signal_hook::consts::SIGINT,
-            signal_hook::consts::SIGTERM,
-            signal_hook::consts::SIGHUP,
-        ] {
-            signal_hook::flag::register(signal, Arc::clone(&interrupted))?;
-        }
-        Ok(Self {
+        (dir, interrupted): (PathBuf, Arc<AtomicBool>),
+    ) -> Self {
+        Self {
             state: RunState::new(&flow, file, &project.id),
             paths,
             project,
@@ -82,7 +89,7 @@ impl Runner {
             saved: Vec::new(),
             changed: true,
             interrupted,
-        })
+        }
     }
 
     /// Runs until every step is done, a step stops the run, or the user
@@ -298,9 +305,10 @@ impl Runner {
         }
     }
 
-    /// Polls each running step. Only a command step needs the daemon's
-    /// snapshot; a gate needs only its answer file.
-    fn poll_running(&mut self) {
+    /// Polls each running step. Only the hook state of a command step needs
+    /// the daemon's snapshot; a gate's answer and a step's own report are
+    /// files, read also when the daemon does not answer.
+    pub(super) fn poll_running(&mut self) {
         let commands = self
             .phases
             .values()
@@ -318,23 +326,29 @@ impl Runner {
         if matches!(self.phases.get(id)?.0, Phase::Gate) {
             return self.gate_answer(id);
         }
-        let snapshot = snapshot?;
         // The step's own report (`flow report`) is explicit, so it comes
-        // before the hook state and before an ended terminal.
-        if let Some(report) = agent::read_report(&self.dir, id) {
-            return Some(if report.done {
-                // The note of a done step is its result for later steps.
-                if let Some(run) = self.state.steps.get_mut(id) {
-                    run.note = report.note;
-                }
-                Ok(())
-            } else {
-                Err(report
-                    .note
-                    .unwrap_or_else(|| "The step reported a failure".to_owned()))
-            });
+        // before the hook state and before an ended terminal. It needs no
+        // snapshot.
+        if let Some(end) = self.report_end(id) {
+            return Some(end);
         }
-        self.poll_command(id, snapshot)
+        self.poll_command(id, snapshot?)
+    }
+
+    /// The end that the step's own report (`flow report`) gives, if any.
+    fn report_end(&mut self, id: &str) -> End {
+        let report = agent::read_report(&self.dir, id)?;
+        Some(if report.done {
+            // The note of a done step is its result for later steps.
+            if let Some(run) = self.state.steps.get_mut(id) {
+                run.note = report.note;
+            }
+            Ok(())
+        } else {
+            Err(report
+                .note
+                .unwrap_or_else(|| "The step reported a failure".to_owned()))
+        })
     }
 
     /// One poll of a command step by its hook state. Sends the prompt when
@@ -413,5 +427,22 @@ impl Runner {
         if let Some(run) = self.state.steps.get_mut(id) {
             run.waits_for = None;
         }
+    }
+}
+
+#[cfg(test)]
+impl Runner {
+    /// Command step `id` runs in `session`, past its prompt.
+    pub(super) fn running_command(&mut self, id: &str, session: &str) {
+        self.state.set(id, StepStatus::Running);
+        if let Some(run) = self.state.steps.get_mut(id) {
+            run.session = Some(session.to_owned());
+        }
+        let phase = Phase::Command(Wait::Working { since: None });
+        self.phases.insert(id.to_owned(), (phase, Instant::now()));
+    }
+
+    pub(super) fn state(&self) -> &RunState {
+        &self.state
     }
 }

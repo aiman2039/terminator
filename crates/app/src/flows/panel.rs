@@ -19,7 +19,8 @@ const READ_FLOWS_EVERY: Duration = Duration::from_secs(3);
 /// Most ended runs shown for one project, newest first. Runs that did
 /// not end always show.
 const SHOWN_RUNS: usize = 10;
-/// Most run folders read each second, newest first, of all projects.
+/// Most run folders read each second, newest first, of all projects. Older
+/// runs that did not end are read too.
 const READ_RUNS: usize = 100;
 pub(super) const ROW_HEIGHT: f32 = 26.0;
 
@@ -109,11 +110,13 @@ impl App {
             .is_none_or(|at| at.elapsed() >= READ_EVERY);
         if self.flows.reading.is_none() && due {
             let data = self.paths.data.clone();
+            let ended = std::sync::Arc::clone(&self.flows.ended_runs);
             let (sender, receiver) = channel();
             let spawned = std::thread::Builder::new()
                 .name("flow-runs".into())
                 .spawn(move || {
-                    let runs = control::recent_runs(&data, READ_RUNS)
+                    let mut ended = ended.lock().unwrap_or_else(|poison| poison.into_inner());
+                    let runs = control::recent_runs(&data, READ_RUNS, &mut ended)
                         .into_iter()
                         .map(|(dir, state)| Run::read(dir, state))
                         .collect();
