@@ -87,6 +87,7 @@ fn file_with_hits(path: &str, lines: &[u32]) -> FileHits {
             .iter()
             .map(|&line| (line, format!("hit {line}")))
             .collect(),
+        fingerprint: 0,
     }
 }
 

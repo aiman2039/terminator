@@ -6,7 +6,8 @@ use super::{
         agents::latest_mark,
         lookup::{Ctl, NewSession},
     },
-    ANSWERS, APPROVE, CANCEL, REJECT, agent,
+    ANSWERS, CANCEL, agent,
+    cancel::Cancelled,
     progress::{ENDED, Phase, Progress, Wait, progress, with_results},
     retry::take_retries,
 };
@@ -37,21 +38,21 @@ const WAITS_FOR_HOOK: &str = "Waits for the agent's first hook report (2 minutes
      The agent's hooks must be installed for this Terminator.";
 
 /// How a running step ended, or `None` while it runs.
-type End = Option<Result<(), String>>;
+pub(super) type End = Option<Result<(), String>>;
 
 pub(super) struct Runner {
     paths: Paths,
     project: Project,
-    flow: Flow,
+    pub(super) flow: Flow,
     /// The run folder.
-    dir: PathBuf,
-    state: RunState,
+    pub(super) dir: PathBuf,
+    pub(super) state: RunState,
     /// Running steps, with the time the phase started.
-    phases: BTreeMap<String, (Phase, Instant)>,
+    pub(super) phases: BTreeMap<String, (Phase, Instant)>,
     /// The last state file text.
     saved: Vec<u8>,
     /// The state changed after the last save.
-    changed: bool,
+    pub(super) changed: bool,
     /// Ctrl-C, SIGTERM or SIGHUP (its terminal closed): cancel the run.
     interrupted: Arc<AtomicBool>,
     /// After a failure, wait for Retry or Cancel instead of ending.
@@ -133,15 +134,14 @@ impl Runner {
     fn run_loop(&mut self) -> Result<()> {
         self.save()?;
         loop {
-            if self.interrupted.load(Ordering::Relaxed) || self.dir.join(CANCEL).exists() {
+            if self.cancelled() {
                 self.state.cancel();
                 self.changed = true;
                 break;
             }
             self.retries();
-            for step in self.ready() {
-                self.start(&step);
-            }
+            self.skips();
+            self.start_ready();
             self.poll_running();
             self.sync_questions();
             self.save()?;
@@ -172,10 +172,6 @@ impl Runner {
         }
     }
 
-    fn ready(&self) -> Vec<Step> {
-        self.flow.ready(&self.state).into_iter().cloned().collect()
-    }
-
     /// Writes the state file when the state changed.
     fn save(&mut self) -> Result<()> {
         if !self.changed {
@@ -190,15 +186,31 @@ impl Runner {
         Ok(())
     }
 
-    fn start(&mut self, step: &Step) {
+    /// Cancel or a signal (SIGINT, SIGTERM, SIGHUP) came: no step starts.
+    pub(super) fn cancelled(&self) -> bool {
+        self.interrupted.load(Ordering::Relaxed) || self.dir.join(CANCEL).exists()
+    }
+
+    pub(super) fn ready(&self) -> Vec<Step> {
+        self.flow.ready(&self.state).into_iter().cloned().collect()
+    }
+
+    pub(super) fn start(&mut self, step: &Step) {
         let started = match &step.kind {
-            StepKind::Gate { message } => {
-                self.announce_gate(step, message);
+            StepKind::Gate { message, options } => {
+                self.announce_gate(step, message, options);
                 Ok(Phase::Gate)
             }
             StepKind::Command { .. } => self.start_command(step),
         };
+        self.started(step, started);
+    }
+
+    /// Records the result of a launch. A launch that Cancel stopped leaves
+    /// its step waiting: the run's cancel marks it cancelled, not failed.
+    pub(super) fn started(&mut self, step: &Step, started: Result<Phase>) {
         match started {
+            Err(error) if error.is::<Cancelled>() => {}
             Ok(phase) => {
                 self.state.set(&step.id, StepStatus::Running);
                 if let Some(run) = self.state.steps.get_mut(&step.id) {
@@ -228,6 +240,11 @@ impl Runner {
         let mut project = self.project.clone();
         if let Some(name) = worktree {
             project = ctl.step_worktree(&project, name)?;
+        }
+        // The worktree can take seconds: Cancel during it starts no
+        // terminal.
+        if self.cancelled() {
+            return Err(Cancelled.into());
         }
         let session = ctl.create_session(NewSession {
             project: &project,
@@ -262,6 +279,7 @@ impl Runner {
             let note = self.state.steps.get(needs)?.note.as_deref()?;
             Some((needs.as_str(), note))
         });
+        let results = results.chain(self.loop_note(&step.id));
         let prompt = with_results(&self.flow.full_prompt(prompt), results);
         self.set_waits(&step.id, Some(WAITS_FOR_HOOK));
         Ok(Phase::Command(Wait::Starting { prompt }))
@@ -284,23 +302,8 @@ impl Runner {
         Ctl::connect(&self.paths)?.type_and_enter(session, line.as_bytes().to_vec())
     }
 
-    fn announce_gate(&self, step: &Step, message: &str) {
-        let run = control::run_name(&self.dir);
-        Output::line_or_drop(format_args!(
-            "{id}: gate: {message}\n  terminator-hook flow approve {run} {id}\n  terminator-hook flow reject {run} {id}",
-            id = step.id
-        ));
-        let session = step
-            .needs
-            .iter()
-            .find_map(|needs| self.state.steps.get(needs)?.session.clone());
-        if let Some(session) = session {
-            self.notify(session, "Flow gate", message);
-        }
-    }
-
     /// A terminal notice is a help only; an older daemon has none.
-    fn notify(&self, session: String, what: &str, body: &str) {
+    pub(super) fn notify(&self, session: String, what: &str, body: &str) {
         let _ = rpc(
             &self.paths,
             Request::TerminalNotify {
@@ -440,22 +443,17 @@ impl Runner {
             .unwrap_or_default()
     }
 
-    /// The answer that `flow approve` or `flow reject` wrote.
-    fn gate_answer(&self, id: &str) -> End {
-        let answer = std::fs::read_to_string(self.dir.join(ANSWERS).join(id)).ok()?;
-        match answer.trim() {
-            APPROVE => Some(Ok(())),
-            REJECT => Some(Err("Rejected".to_owned())),
-            _ => None,
-        }
-    }
-
     fn finish(&mut self, id: &str, end: End) {
         match end {
             None => return,
             Some(Ok(())) => {
                 self.state.set(id, StepStatus::Done);
-                Output::line_or_drop(format_args!("{id}: done"));
+                let choice = self.state.steps.get(id).and_then(|run| run.choice.clone());
+                match choice {
+                    Some(option) => Output::line_or_drop(format_args!("{id}: done: {option}")),
+                    None => Output::line_or_drop(format_args!("{id}: done")),
+                }
+                self.loop_back(id);
             }
             Some(Err(note)) => {
                 Output::line_or_drop(format_args!("{id}: failed: {note}"));
@@ -480,6 +478,13 @@ impl Runner {
         }
         let phase = Phase::Command(Wait::Working { since: None });
         self.phases.insert(id.to_owned(), (phase, Instant::now()));
+    }
+
+    /// Gate step `id` waits for its answer.
+    pub(super) fn running_gate(&mut self, id: &str) {
+        self.state.set(id, StepStatus::Running);
+        self.phases
+            .insert(id.to_owned(), (Phase::Gate, Instant::now()));
     }
 
     pub(super) fn state(&self) -> &RunState {

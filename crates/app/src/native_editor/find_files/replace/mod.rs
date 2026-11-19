@@ -139,6 +139,7 @@ impl ReplaceState {
         (!lines.is_empty()).then(|| edits::PlannedFile {
             path: file.path.clone(),
             lines,
+            fingerprint: file.fingerprint,
         })
     }
 

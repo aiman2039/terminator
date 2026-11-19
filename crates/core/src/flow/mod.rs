@@ -22,7 +22,11 @@
 //! gate = "Is the plan correct?" # waits for Approve in the Agents inbox
 //! needs = ["plan"]
 //! at = [320, 40]                # optional, the step's place in the editor
+//! options = ["ship", "rework"]  # optional: one Approve button per option
 //! ```
+//!
+//! A step after a gate with options can set `when = "GATE.OPTION"`, and a
+//! step can set `loop_to = "STEP"` with `max_rounds = N` (see `branch`).
 //!
 //! [`Draft`] is the same file as plain data. The native flow editor makes
 //! one, and [`Draft::to_toml`] writes the file after [`Draft::check`].
@@ -42,11 +46,13 @@ use std::{
     path::{Component, Path},
 };
 
+mod branch;
 pub mod control;
 pub mod files;
 mod graph;
 pub mod inputs;
 mod run;
+pub use branch::{LoopBack, MAX_OPTIONS, MAX_ROUNDS, MIN_OPTIONS, MIN_ROUNDS, When};
 pub use graph::Ordered;
 pub use inputs::{Input, InputError};
 pub use run::{Outcome, RUN_DIR, RunState, STATE_FILE, StepRun, StepStatus};
@@ -84,6 +90,14 @@ pub enum FlowError {
     Kind(String),
     #[error("Step \"{0}\": prompt, cwd and worktree apply only to a command step")]
     GateField(String),
+    #[error(
+        "Step \"{0}\": options must be {MIN_OPTIONS} to {MAX_OPTIONS} different names of a-z, 0-9, - or _, on a gate step"
+    )]
+    Options(String),
+    #[error("Step \"{step}\": when {problem}")]
+    When { step: String, problem: String },
+    #[error("Step \"{step}\": loop_to {problem}")]
+    Loop { step: String, problem: String },
     #[error("Step \"{0}\": {1} is empty, too long or has a control character")]
     Text(String, &'static str),
     #[error("Step \"{0}\": cwd must stay inside the project")]
@@ -140,8 +154,12 @@ pub enum StepKind {
         /// a flow.
         worktree: Option<String>,
     },
-    /// Stop until the user approves `message`.
-    Gate { message: String },
+    /// Stop until the user approves `message`, with one of `options` when
+    /// it has options (empty: a plain Approve).
+    Gate {
+        message: String,
+        options: Vec<String>,
+    },
 }
 
 /// One validated step.
@@ -153,6 +171,10 @@ pub struct Step {
     pub kind: StepKind,
     /// The step's place in the flow editor. Display only.
     pub at: Option<[i32; 2]>,
+    /// Run only when this gate option was chosen; else the step is skipped.
+    pub when: Option<When>,
+    /// When the step is done, run again from an earlier step.
+    pub loop_back: Option<LoopBack>,
 }
 
 /// A validated flow: unique IDs, known `needs`, no cycle.
@@ -202,6 +224,14 @@ pub struct DraftStep {
     pub worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<[i32; 2]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rounds: Option<u32>,
 }
 
 /// Read and validate one flow file's text.
@@ -264,6 +294,7 @@ impl Draft {
             steps,
         };
         flow.check_graph()?;
+        flow.check_branches()?;
         flow.check_worktrees()?;
         flow.check_placeholders()?;
         Ok(flow)
@@ -284,6 +315,9 @@ impl From<&Flow> for Draft {
                 id: step.id.clone(),
                 needs: step.needs.clone(),
                 at: step.at,
+                when: step.when.as_ref().map(When::to_string),
+                loop_to: step.loop_back.as_ref().map(|back| back.to.clone()),
+                max_rounds: step.loop_back.as_ref().map(|back| back.max_rounds),
                 ..DraftStep::default()
             };
             match &step.kind {
@@ -298,7 +332,10 @@ impl From<&Flow> for Draft {
                     draft.cwd.clone_from(cwd);
                     draft.worktree.clone_from(worktree);
                 }
-                StepKind::Gate { message } => draft.gate = Some(message.clone()),
+                StepKind::Gate { message, options } => {
+                    draft.gate = Some(message.clone());
+                    draft.options.clone_from(options);
+                }
             }
             draft
         });
@@ -316,6 +353,9 @@ fn step(raw: &DraftStep) -> Result<Step, FlowError> {
         return Err(FlowError::BadId(id.to_owned()));
     }
     let kind = match (&raw.command, &raw.gate) {
+        (Some(_), None) if !raw.options.is_empty() => {
+            return Err(FlowError::Options(id.to_owned()));
+        }
         (Some(command), None) => StepKind::Command {
             command: checked(id, "command", command, false)?,
             prompt: raw
@@ -340,6 +380,7 @@ fn step(raw: &DraftStep) -> Result<Step, FlowError> {
             }
             StepKind::Gate {
                 message: checked(id, "gate", message, true)?,
+                options: branch::options(id, &raw.options)?,
             }
         }
         _ => return Err(FlowError::Kind(id.to_owned())),
@@ -349,6 +390,12 @@ fn step(raw: &DraftStep) -> Result<Step, FlowError> {
         needs: raw.needs.clone(),
         kind,
         at: raw.at,
+        when: raw
+            .when
+            .as_deref()
+            .map(|text| branch::when(id, text))
+            .transpose()?,
+        loop_back: branch::loop_back(id, raw.loop_to.as_deref(), raw.max_rounds)?,
     })
 }
 
@@ -445,6 +492,8 @@ impl Flow {
     }
 }
 
+#[cfg(test)]
+mod branch_tests;
 #[cfg(test)]
 mod inputs_tests;
 #[cfg(test)]
