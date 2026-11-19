@@ -15,7 +15,7 @@ use terminator_core::flow::{
 };
 
 /// Folder of step reports in a run folder: one file per step.
-const REPORTS: &str = "reports";
+pub(super) const REPORTS: &str = "reports";
 const POLL: Duration = Duration::from_millis(500);
 
 /// The running step of one terminal.
@@ -89,6 +89,7 @@ pub(super) fn context(own: &Own) -> Value {
         "run": control::run_name(&own.dir),
         "flow": own.state.flow,
         "step": own.step,
+        "inputs": own.state.inputs,
         "needs": needs,
     })
 }

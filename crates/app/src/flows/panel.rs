@@ -289,7 +289,14 @@ impl App {
             }
             Act::Run(file) => {
                 if let Some(loaded) = self.tool_flows().cloned() {
-                    self.run_flow_in_editor(&loaded, &file);
+                    let inputs = loaded
+                        .files
+                        .iter()
+                        .find(|flow| flow.file == file)
+                        .map(|flow| flow.inputs.clone())
+                        .unwrap_or_default();
+                    let origin = super::inputs_form::Origin::Window;
+                    self.request_flow_run(&loaded, &file, (&inputs, origin));
                 }
             }
             Act::Trust(trusted) => {

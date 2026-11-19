@@ -34,7 +34,7 @@ pub(super) enum Progress {
 
 /// The daemon removes an ended shell with its exit code, so an ended
 /// terminal cannot show that its step was good: only a hook report can.
-const ENDED: &str = "The terminal ended before the agent reported that it was done";
+pub(super) const ENDED: &str = "The terminal ended before the agent reported that it was done";
 
 /// One poll of a command step.
 pub(super) fn progress(state: &State, session: &str, wait: &Wait) -> Progress {

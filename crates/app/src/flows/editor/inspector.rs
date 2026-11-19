@@ -29,6 +29,8 @@ pub(crate) enum Field {
     Folder,
     Worktree,
     RunsAfter,
+    /// The flow's run inputs.
+    Inputs,
     /// The whole step or the whole flow.
     Other,
 }
@@ -69,6 +71,19 @@ pub(crate) fn error_place(error: &FlowError) -> (Option<String>, Field) {
         FlowError::UnknownNeed { step, .. } | FlowError::Cycle(step) => at(step, Field::RunsAfter),
         FlowError::Kind(step) | FlowError::GateField(step) | FlowError::Text(step, _) => {
             at(step, Field::Other)
+        }
+        FlowError::BadInput(_) | FlowError::InputText(..) | FlowError::TooManyInputs => {
+            (None, Field::Inputs)
+        }
+        FlowError::Placeholder { step, field, .. } => {
+            let field = match *field {
+                "command" => Field::Command,
+                "prompt" => Field::Prompt,
+                "gate" => Field::Message,
+                "rules" => Field::Rules,
+                _ => Field::Other,
+            };
+            (step.clone(), field)
         }
         _ => (None, Field::Other),
     }
@@ -164,6 +179,7 @@ fn rules(ui: &mut egui::Ui, editor: &mut FlowEditor, error: Option<&CheckError>)
         concerns(Field::Rules),
     );
     error_line(ui, concerns(Field::Name));
+    super::inputs::inputs_section(ui, editor, concerns(Field::Inputs));
     ui.add_space(8.0);
     ui.weak("Select a card to edit its step. An agent with no prompt, or with its prompt in the command, does not get the rules.");
 }

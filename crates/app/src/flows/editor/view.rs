@@ -7,7 +7,7 @@ use super::inspector::{self, CheckError, check_error};
 use super::style::Colors;
 use super::toolbar::{Click, Keys, toolbar};
 use super::viewer::{self, Viewer};
-use super::{Dialog, FlowEditor, Slot, Stay, canvas, model};
+use super::{Dialog, FlowEditor, Slot, canvas, model};
 use crate::app::OpenFileInput;
 use crate::document_view::DocumentKind;
 use crate::flows::panel::Act;
@@ -375,10 +375,9 @@ impl App {
             root: editor.root.clone(),
             files: Vec::new(),
         };
-        if let Some(runner) = self.run_flow(&loaded, &editor.file) {
-            self.flows.stay = Some(Stay::after_run(path, runner, &self.flows.runs));
-            self.flows.starting = Some(super::Starting::now(path));
-        }
+        let inputs: Vec<_> = editor.saved.inputs.clone().into_iter().collect();
+        let origin = crate::flows::inputs_form::Origin::Editor(path.into());
+        self.request_flow_run(&loaded, &editor.file, (&inputs, origin));
     }
 
     /// The open dialog of the editor: a modal in the center of the window.

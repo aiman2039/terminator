@@ -41,7 +41,9 @@ command = "{hook} flow report done"
 "#
         );
         fs::write(self.root.join(FLOW_DIR).join("stops.toml"), text)?;
-        let (mut runner, dir) = self.spawn_run("stops", "stops-1", |state| {
+        // `--end-on-failure`: no wait for Retry (see `retry`).
+        let more = ["--end-on-failure"];
+        let (mut runner, dir) = self.spawn_run_with("stops", ("stops-1", &more), |state| {
             is(state, "/steps/gate/status", "running")
                 && is(state, "/steps/bad/status", "failed")
                 && is(state, "/steps/free/status", "done")

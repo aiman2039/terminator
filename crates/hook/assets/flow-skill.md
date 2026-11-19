@@ -33,6 +33,8 @@ Run these in your terminal. The same commands are MCP tools of `terminator-hook 
 - Claude Code reports its start, so a step can have a separate `prompt`.
 - Codex reports only after its first prompt. Put the prompt in the command: `command = "codex 'Write the plan.'"`.
 - A step ends as done when the agent ends its turn (hook), or when the step runs `flow report done`.
+- Run inputs: declare `[inputs.NAME]` with an optional `description` and `default` (no default: required). Use `{{inputs.NAME}}` in a command, prompt, gate or `rules`. Run with `terminator-hook flow run PROJECT FLOW --set NAME=VALUE`; Terminator asks for the values in its Run form. In a command, Terminator quotes each value as one shell word, so do not put quotes around the placeholder for safety (quotes are allowed). A placeholder in `$'…'`, `${…}` or backticks is an error. `flow context` shows the run's values.
+- After a step fails, the runner waits. `terminator-hook flow retry RUN STEP` (or Retry in Terminator) starts it again as the next attempt in a new terminal; `flow cancel` ends the run. `flow run --end-on-failure` ends the run at the first failure.
 
 ## Rules
 

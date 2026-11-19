@@ -130,6 +130,7 @@ impl App {
     pub(crate) fn flow_dialog(&mut self, ctx: &egui::Context) {
         #[cfg(feature = "test-support")]
         self.fixture_flow_editor();
+        self.flow_inputs_dialog(ctx);
         if !self.flows.open {
             return;
         }
@@ -149,7 +150,8 @@ impl App {
             Some(Pick::Trust(trusted)) => self.answer_task_trust(&loaded.root, trusted),
             Some(Pick::Run(index)) => {
                 if let Some(file) = loaded.files.get(index) {
-                    self.run_flow_in_editor(&loaded, &file.file);
+                    let origin = super::inputs_form::Origin::Window;
+                    self.request_flow_run(&loaded, &file.file, (&file.inputs, origin));
                     open = false;
                 }
             }

@@ -3,6 +3,7 @@
 //! handoff note, a question with its answer, and a fixture agent whose
 //! prompt waits for the first hook report. The agent is `terminator-hook
 //! emit` with normalized hook events; no real agent runs.
+mod retry;
 mod stops;
 
 use super::super::harness::{Harness, Process, bin, git, id, output, wait_child};
@@ -59,9 +60,11 @@ pub fn flows() -> Result<()> {
     case.failure_and_reject_stop_only_the_steps_after_them()?;
     case.cancel_starts_nothing_and_leaves_sessions()?;
     case.worktree_step_runs_twice()?;
+    case.inputs_refuse_a_run_without_a_required_value()?;
+    case.retry_runs_a_new_attempt_with_inputs()?;
     println!(
         "{}",
-        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true,"flow_rules_before_prompt":true,"flow_signals_end_run":true,"flow_killed_runner_gone":true,"flow_failure_and_reject":true,"flow_cancel":true,"flow_worktree_second_run":true})
+        json!({"flow_trust_gate":true,"flow_shell_report":true,"flow_gate":true,"flow_handoff_note":true,"flow_ask_answer":true,"flow_fixture_agent_prompt":true,"flow_rules_before_prompt":true,"flow_signals_end_run":true,"flow_killed_runner_gone":true,"flow_failure_and_reject":true,"flow_cancel":true,"flow_worktree_second_run":true,"flow_inputs_set":true,"flow_retry":true})
     );
     Ok(())
 }
@@ -117,9 +120,20 @@ impl Case<'_> {
         run: &str,
         ready: impl Fn(&Value) -> bool,
     ) -> Result<(Process, PathBuf)> {
+        self.spawn_run_with(file, (run, &[]), ready)
+    }
+
+    /// [`Case::spawn_run`] with more `flow run` arguments.
+    fn spawn_run_with(
+        &self,
+        file: &str,
+        (run, more): (&str, &[&str]),
+        ready: impl Fn(&Value) -> bool,
+    ) -> Result<(Process, PathBuf)> {
         let mut command = self.h.command("terminator-hook");
         command
             .args(["flow", "run", id(&self.project), file, "--run", run])
+            .args(more)
             .stdin(Stdio::null())
             .stdout(Stdio::null());
         let runner = Process(command.spawn().context("flow run did not start")?);
@@ -217,8 +231,10 @@ impl Case<'_> {
         );
         let run = control::run_name(&dir);
         ensure!(
-            self.flow(&["cancel", &run]).is_err() && self.flow(&["approve", &run, "wait"]).is_err(),
-            "A run without a runner took an answer"
+            self.flow(&["cancel", &run]).is_err()
+                && self.flow(&["approve", &run, "wait"]).is_err()
+                && self.flow(&["retry", &run, "wait"]).is_err(),
+            "A run without a runner took an answer or a retry"
         );
         let status: Value = serde_json::from_slice(&self.flow(&["status", &run])?)?;
         ensure!(
@@ -274,8 +290,15 @@ impl Case<'_> {
         // resets or forces it back.
         git(&checkout, &["switch", "-q", "-c", "elsewhere"])?;
         ensure!(
-            self.flow(&["run", id(&self.project), "tree", "--run", "tree-moved"])
-                .is_err(),
+            self.flow(&[
+                "run",
+                id(&self.project),
+                "tree",
+                "--run",
+                "tree-moved",
+                "--end-on-failure"
+            ])
+            .is_err(),
             "A step ran in a worktree that is not on terminator/flowtree"
         );
         let branch = git(&checkout, &["branch", "--show-current"])?;

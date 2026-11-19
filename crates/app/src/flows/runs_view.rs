@@ -197,6 +197,10 @@ impl App {
         for (index, run) in runs.iter().enumerate() {
             let open = self.run_expanded(index, run);
             self.flow_run_header(ui, (run, open, now), act);
+            if !run.state.inputs.is_empty() {
+                let line = super::inputs_form::inputs_line(&run.state.inputs);
+                clipped_note(ui, &line);
+            }
             status::progress_bar(ui, run, &self.theme);
             if open {
                 for id in &run.state.order {

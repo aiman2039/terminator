@@ -10,6 +10,9 @@ use crate::*;
 use std::path::{Path, PathBuf};
 use terminator_core::flow::{StepRun, StepStatus};
 
+/// Widest run inputs line in the strip.
+const INPUTS_WIDTH: f32 = 180.0;
+
 /// One click in the run strip.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum StripClick {
@@ -139,6 +142,18 @@ pub(super) fn run_strip(
             chip(ui, &state, color);
             progress(ui, run, colors);
             ui.weak(format!("{done} of {total} done"));
+            if !run.state.inputs.is_empty() {
+                let line = crate::flows::inputs_form::inputs_line(&run.state.inputs);
+                let text = egui::RichText::new(&line)
+                    .size(appearance::FONT_CAPTION)
+                    .weak();
+                // At most a fixed width: the action at the right keeps its place.
+                let size = egui::vec2(INPUTS_WIDTH, ui.spacing().interact_size.y);
+                ui.allocate_ui(size, |ui| {
+                    ui.add(egui::Label::new(text).truncate())
+                        .on_hover_text(format!("Inputs: {line}"));
+                });
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 click = strip_action(ui, run, drafts);
                 let now = now_text(run).unwrap_or_default();

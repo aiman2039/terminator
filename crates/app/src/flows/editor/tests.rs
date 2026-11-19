@@ -809,3 +809,37 @@ fn quit_does_not_ask_about_a_moved_card() {
     app.accept_app_quit(&ctx);
     assert!(app.exit.active(), "a card's place is display only");
 }
+
+#[test]
+fn editor_keeps_inputs_and_save_refuses_a_name_used_two_times() {
+    let text = "version = 1\nname = \"Fix\"\n[inputs.issue]\ndescription = \"Issue\"\n[inputs.branch]\ndefault = \"\"\n[[step]]\nid = \"s\"\ncommand = \"echo {{inputs.issue}} {{inputs.branch}}\"\n";
+    let flow = flow::parse(text).unwrap();
+    let mut editor = FlowEditor::of_flow("/p".into(), "fix", &flow);
+    assert!(!editor.dirty(), "the inputs round trip");
+    assert_eq!(editor.draft().inputs, flow.inputs);
+    let branch = editor
+        .inputs
+        .iter()
+        .find(|row| row.name == "branch")
+        .unwrap();
+    assert!(!branch.required, "an empty default is a default");
+    // A placeholder of a removed input is a check error on its command.
+    editor.inputs.retain(|row| row.name != "issue");
+    let error = inspector::check_error(&editor.draft()).expect("an error");
+    assert_eq!(
+        (error.step.as_deref(), error.field),
+        (Some("s"), inspector::Field::Command)
+    );
+    editor.inputs = inputs::rows_of(&flow.inputs);
+    editor.inputs.push(editor.inputs[0].clone());
+    editor.save();
+    assert!(editor.saving.is_none(), "nothing is written");
+    assert!(
+        editor
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("two times")),
+        "{:?}",
+        editor.error
+    );
+}

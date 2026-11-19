@@ -5,13 +5,17 @@
 //! project the user trusted in the GUI. It opens one new terminal per
 //! command step and presses Enter on the step's command and prompt. A
 //! gate step waits for `flow approve`. `flow cancel` starts no new step
-//! and leaves running sessions alone.
+//! and leaves running sessions alone. After a failure the runner waits:
+//! `flow retry` starts the failed step again in a new terminal (the old one
+//! stays), and `flow cancel` ends the run. `--set NAME=VALUE` gives the
+//! flow's inputs.
 //!
 //! A step's own agent uses `flow context`, `flow report` and `flow ask`
 //! (also MCP tools); the user answers with `flow answer`. The MCP server
 //! has no tool for the user's side or for `flow run`.
 mod agent;
 mod progress;
+mod retry;
 mod runner;
 
 use super::{cli_paths, lookup::Ctl};
@@ -55,7 +59,18 @@ enum Command {
         /// Default: NAME-SECONDS. A run with that name must not exist.
         #[arg(long = "run", value_name = "ID")]
         run_id: Option<String>,
+        /// The value of one input of the flow (repeat for more). A required
+        /// input with no value refuses the run before anything starts.
+        #[arg(long = "set", value_name = "NAME=VALUE")]
+        set: Vec<String>,
+        /// End the run when a step fails and nothing else can start. By
+        /// default the runner waits for Retry or Cancel.
+        #[arg(long)]
+        end_on_failure: bool,
     },
+    /// Start a failed step again as its next attempt, in a new terminal.
+    /// The run's runner must live; the old terminal stays.
+    Retry { run: String, step: String },
     /// Print the state of a run, with its status ("stopped (runner gone)"
     /// when its runner is gone).
     Status { run: String },
@@ -114,9 +129,18 @@ pub fn run(args: &[String]) -> Result<()> {
             project,
             name,
             run_id,
+            set,
+            end_on_failure,
         } => {
             let paths = workspace(cli.data_dir, cli.runtime_dir)?;
-            return run_flow(paths, &project, &name, run_id);
+            let start = Start {
+                project,
+                name,
+                run: run_id,
+                set,
+                hold: !end_on_failure,
+            };
+            return run_flow(paths, start);
         }
         _ => Output::line(serde_json::to_string_pretty(&execute(cli)?)?),
     }
@@ -168,6 +192,10 @@ fn execute(cli: Cli) -> Result<Value> {
         Command::Cancel { run } => {
             control::cancel(&run_dir(&paths, &run)?)?;
             json!({"cancelled": true})
+        }
+        Command::Retry { run, step } => {
+            control::retry(&run_dir(&paths, &run)?, &step)?;
+            json!({"step": step, "retry": true})
         }
         Command::Answer { run, step, text } => {
             control::answer_question(&run_dir(&paths, &run)?, &step, &text)?;
@@ -225,12 +253,43 @@ fn status(dir: &Path) -> Result<Value> {
     let mut value = serde_json::to_value(&view.state)?;
     if let Some(fields) = value.as_object_mut() {
         fields.insert("status".to_owned(), view.status.label().into());
+        let held = view.status == control::RunStatus::Running && view.state.held();
+        fields.insert("waits_for_retry".to_owned(), held.into());
     }
     Ok(value)
 }
 
-fn run_flow(paths: Paths, project: &str, name: &str, run: Option<String>) -> Result<()> {
-    let project = project_of(&paths, project)?;
+/// What `flow run` starts.
+struct Start {
+    project: String,
+    name: String,
+    run: Option<String>,
+    /// `--set NAME=VALUE`, as typed.
+    set: Vec<String>,
+    /// Wait for Retry or Cancel after a failure.
+    hold: bool,
+}
+
+/// The flow `name` of `project` with the run's input values in its texts,
+/// and those values. A missing or wrong value refuses the run here,
+/// before any folder or terminal exists.
+fn flow_with_inputs(
+    project: &Project,
+    name: &str,
+    set: &[String],
+) -> Result<(flow::Flow, std::collections::BTreeMap<String, String>)> {
+    let flow = files::load(&project.path, name)?;
+    let sets = set
+        .iter()
+        .map(|text| flow::inputs::parse_set(text))
+        .collect::<Result<Vec<_>, _>>()?;
+    let values = flow.input_values(&sets)?;
+    Ok((flow.with_values(&values)?, values))
+}
+
+fn run_flow(paths: Paths, start: Start) -> Result<()> {
+    let name = start.name.as_str();
+    let project = project_of(&paths, &start.project)?;
     match ui_preferences::trust_answer(&paths.data, &project.path) {
         Some(true) => {}
         Some(false) => bail!("This project is not trusted; its flows stay off"),
@@ -238,14 +297,16 @@ fn run_flow(paths: Paths, project: &str, name: &str, run: Option<String>) -> Res
             "This project has no trust answer. Answer the trust question in Terminator (Run task…), then run the flow again"
         ),
     }
-    let flow = files::load(&project.path, name)?;
-    let run = run.unwrap_or_else(|| format!("{name}-{}", now()));
+    let (flow, values) = flow_with_inputs(&project, name, &start.set)?;
+    let run = start.run.unwrap_or_else(|| format!("{name}-{}", now()));
     // Before the folder exists: a signal from now on ends the run with a
     // state file, never an empty folder.
     let interrupted = runner::interrupt_flag()?;
     let dir = new_run_dir(&paths.data, &run)?;
     Output::line_or_drop(format_args!("Run {run}: {}", flow.name));
-    let outcome = runner::Runner::new(paths, project, (flow, name), (dir, interrupted)).run()?;
+    let outcome = runner::Runner::new(paths, project, (flow, name), (dir, interrupted))
+        .with_inputs(values, start.hold)
+        .run()?;
     let outcome = match outcome {
         Outcome::Done => "done",
         Outcome::Active | Outcome::Stopped => "stopped",
@@ -287,5 +348,7 @@ fn run_dir(paths: &Paths, run: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+#[cfg(test)]
+mod retry_tests;
 #[cfg(test)]
 mod tests;
