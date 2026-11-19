@@ -203,6 +203,9 @@ impl App {
     /// runner line that the new terminal types, or `None` when the run did
     /// not start.
     pub(crate) fn run_flow(&mut self, loaded: &LoadedFlows, file: &str) -> Option<String> {
+        if self.flow_run_waits_for_save(loaded, file) {
+            return None;
+        }
         match self.lsp.trust_answer(&loaded.root) {
             Some(true) => {}
             Some(false) => {

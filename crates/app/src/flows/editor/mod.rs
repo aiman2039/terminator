@@ -328,6 +328,27 @@ impl App {
         true
     }
 
+    /// A run reads the flow file on disk. When an open editor of that file
+    /// has content that is not saved, the run does not start: the editor's
+    /// tab shows with a note. A moved card alone does not stop a run.
+    pub(crate) fn flow_run_waits_for_save(
+        &mut self,
+        loaded: &super::LoadedFlows,
+        file: &str,
+    ) -> bool {
+        let Ok(path) = files::path_of(&loaded.root, file) else {
+            return false;
+        };
+        if !matches!(self.flows.editors.get(&path), Some(Slot::Ready(editor)) if editor.changed()) {
+            return false;
+        }
+        self.open_flow_tab(&loaded.project, &loaded.root, file);
+        self.info = Some(format!(
+            "The flow {file} has changes that are not saved. Save it, then run."
+        ));
+        true
+    }
+
     /// Run from the Flows window: opens the flow's editor tab, starts the
     /// run and stays on that tab, because its cards show the run. False
     /// when the run did not start.

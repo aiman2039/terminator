@@ -791,3 +791,42 @@ fn moved_card_is_a_layout_change_that_keeps_run_on() {
     assert!(flow.steps.iter().any(|step| step.at.is_some()));
     assert!(received.try_recv().is_err(), "nothing starts by itself");
 }
+
+#[test]
+fn run_from_the_flows_window_waits_for_unsaved_editor_content() {
+    use crate::app::tests::support::drain_updates;
+    let project = project_with_flows();
+    let (mut app, received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let path = flow_path(project.path(), "build");
+    app.answer_task_trust(project.path(), true);
+    let loaded = crate::flows::load_flows("p".into(), project.path().into());
+    settle(&mut app, &ctx, &path);
+
+    // Content that is not saved: no terminal, the editor's tab and a note.
+    ready(&mut app, &path).title = "Build 2".into();
+    app.flows.starting = None;
+    assert!(!app.run_flow_in_editor(&loaded, "build"));
+    assert!(received.try_recv().is_err(), "the run does not start");
+    assert!(app.post_create.by_tab.is_empty());
+    assert!(app.flows.stay.is_none() && app.flows.starting.is_none());
+    assert_eq!(
+        app.info.as_deref(),
+        Some("The flow build has changes that are not saved. Save it, then run.")
+    );
+    drain_updates(&mut app, &ctx);
+    let tab = app.layouts.get("p").map(|dock| dock.active.clone());
+    assert!(tab.is_some(), "the editor's tab shows");
+
+    // A moved card alone does not stop the run.
+    ready(&mut app, &path).title = "Build".into();
+    move_card(&mut app, &path, egui::vec2(60.0, 0.0));
+    while received.try_recv().is_ok() {}
+    assert!(app.run_flow_in_editor(&loaded, "build"));
+    assert!(
+        received
+            .try_iter()
+            .any(|job| matches!(job, Job::Control(_, After::Workspace(..)))),
+        "the runner's terminal"
+    );
+}
