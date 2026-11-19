@@ -56,6 +56,8 @@ pub(crate) struct FlowsState {
     /// The flow editors by flow file path: one per editor tab, and each
     /// flow with changes that are not saved (also when its tab is closed).
     pub(crate) editors: HashMap<PathBuf, editor::Slot>,
+    /// Where the current quit is with editors whose content is not saved.
+    quit: editor::Quit,
     /// The editors that a pane painted this frame.
     visible: std::collections::HashSet<PathBuf>,
     /// The editor whose Run keeps the app on its tab.

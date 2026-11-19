@@ -737,6 +737,79 @@ fn quit_without_a_dirty_native_buffer_starts_the_checkpoint() {
     assert!(!app.pending_app_quit);
     assert!(matches!(app.exit, Exit::Waiting(_)));
 }
+/// One frame of the flow quit question; gives the painted text.
+fn flow_quit_frame(app: &mut App, ctx: &egui::Context) -> Vec<String> {
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.flow_quit_dialog(ui.ctx());
+    });
+    output.textures_delta.clear();
+    crate::app::tests::support::painted_strings(&output.shapes)
+}
+#[test]
+fn unsaved_flow_asks_before_quit_and_cancel_keeps_it() {
+    let (mut app, ctx, dir, _requests) = fixture();
+    app.unsaved_flow_for_test(dir.path(), "feature", true);
+    app.accept_app_quit(&ctx);
+    assert!(app.pending_app_quit);
+    assert!(!app.exit.active(), "the quit waits for the answer");
+    for _ in 0..3 {
+        flow_quit_frame(&mut app, &ctx);
+    }
+    let text = flow_quit_frame(&mut app, &ctx);
+    for label in [
+        "The flow feature has changes that are not saved.",
+        "Save and quit",
+        "Discard and quit",
+        "Cancel",
+    ] {
+        assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    app.answer_flow_quit(&ctx, appearance::ConfirmAnswer::Cancel);
+    assert!(!app.pending_app_quit && !app.exit.active());
+    assert_eq!(app.unsaved_flows(), ["feature"], "the changes stay");
+    // The next quit asks again.
+    app.accept_app_quit(&ctx);
+    assert!(app.pending_app_quit && !app.exit.active());
+}
+#[test]
+fn discard_and_quit_writes_no_flow() {
+    let (mut app, ctx, dir, _requests) = fixture();
+    app.unsaved_flow_for_test(dir.path(), "feature", true);
+    app.accept_app_quit(&ctx);
+    app.answer_flow_quit(&ctx, appearance::ConfirmAnswer::Destructive);
+    assert!(matches!(app.exit, Exit::Waiting(_)));
+    assert!(!dir.path().join(".terminator/flows/feature.toml").exists());
+}
+#[test]
+fn save_and_quit_writes_the_flow_then_quits() {
+    let (mut app, ctx, dir, _requests) = fixture();
+    app.unsaved_flow_for_test(dir.path(), "feature", true);
+    app.accept_app_quit(&ctx);
+    app.answer_flow_quit(&ctx, appearance::ConfirmAnswer::Default);
+    let started = Instant::now();
+    while !app.exit.active() {
+        assert!(started.elapsed() < Duration::from_secs(10), "worker thread");
+        assert!(app.pending_app_quit, "the quit waits for the save");
+        std::thread::sleep(Duration::from_millis(5));
+        app.continue_app_quit(&ctx);
+    }
+    let flow = terminator_core::flow::files::load(dir.path(), "feature").unwrap();
+    assert_eq!(flow.steps.len(), 3);
+    assert!(app.unsaved_flows().is_empty());
+}
+#[test]
+fn flow_that_cannot_be_saved_stops_the_quit() {
+    let (mut app, ctx, dir, _requests) = fixture();
+    app.unsaved_flow_for_test(dir.path(), "feature", false);
+    app.accept_app_quit(&ctx);
+    app.answer_flow_quit(&ctx, appearance::ConfirmAnswer::Default);
+    assert!(!app.pending_app_quit && !app.exit.active());
+    let note = app.info.clone().unwrap_or_default();
+    assert!(note.contains("Could not save the flow feature"), "{note}");
+    assert!(note.contains("Terminator did not quit"), "{note}");
+    assert!(!dir.path().join(".terminator/flows/feature.toml").exists());
+    assert_eq!(app.unsaved_flows(), ["feature"]);
+}
 #[test]
 fn cancelled_exit_keeps_the_player_loaded() {
     let (mut app, _ctx, _dir, _) = fixture();

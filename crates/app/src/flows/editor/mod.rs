@@ -11,6 +11,7 @@ mod banner;
 mod canvas;
 mod dialogs;
 mod model;
+mod quit;
 mod stay;
 #[cfg(test)]
 mod tests;
@@ -22,6 +23,7 @@ use crate::*;
 pub(crate) use banner::Starting;
 use egui_snarl::{NodeId, Snarl};
 use model::Node;
+pub(crate) use quit::Quit;
 #[cfg(test)]
 use stay::STAY_GRACE;
 pub(crate) use stay::Stay;

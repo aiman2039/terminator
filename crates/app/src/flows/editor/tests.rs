@@ -830,3 +830,16 @@ fn run_from_the_flows_window_waits_for_unsaved_editor_content() {
         "the runner's terminal"
     );
 }
+
+#[test]
+fn quit_does_not_ask_about_a_moved_card() {
+    let project = project_with_flows();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let path = flow_path(project.path(), "build");
+    settle(&mut app, &ctx, &path);
+    move_card(&mut app, &path, egui::vec2(60.0, 0.0));
+    assert!(app.unsaved_flows().is_empty());
+    app.accept_app_quit(&ctx);
+    assert!(app.exit.active(), "a card's place is display only");
+}
