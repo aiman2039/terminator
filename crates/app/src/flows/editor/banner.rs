@@ -22,6 +22,8 @@ pub(super) enum StripClick {
     Gate(String, bool),
     /// Send the typed answer of this step's question.
     Answer(String),
+    /// Start this failed step again.
+    Retry(String),
     /// Ask to cancel the run.
     Cancel,
 }
@@ -74,6 +76,9 @@ pub(super) fn now_text(run: &Run) -> Option<String> {
     }
     let (id, step) = steps(run).find(|(_, step)| step.status == StepStatus::Failed)?;
     let note = step.note.as_deref().unwrap_or("No reason given.");
+    if run.state.held() && !run.ended() {
+        return Some(format!("{id} failed: {note} Retry it, or cancel the run."));
+    }
     Some(format!("{id} failed: {note}"))
 }
 
@@ -206,7 +211,13 @@ fn strip_action(
     let cancel = ui
         .button("Cancel run…")
         .on_hover_text("No new step starts. Running terminals continue.");
-    cancel.clicked().then_some(StripClick::Cancel)
+    if cancel.clicked() {
+        return Some(StripClick::Cancel);
+    }
+    let (id, _) = steps(run).find(|(_, step)| status::can_retry(run, step))?;
+    let retry = appearance::primary_button(ui, "Retry")
+        .on_hover_text(format!("Start {id} again in a new terminal"));
+    retry.clicked().then(|| StripClick::Retry(id.clone()))
 }
 
 /// A Run click whose new run does not show yet.

@@ -109,9 +109,21 @@ impl App {
         // The first fit uses estimated sizes: fit again once all are known.
         editor.fit &= !canvas::measured(&editor.snarl, &editor.sizes);
         let mut drafts = self.run_drafts(run);
+        let (now, minutes) = (terminator_core::now(), self.preferences.flow_stall_minutes);
+        let stalls = run
+            .map(|run| &run.state.steps)
+            .into_iter()
+            .flatten()
+            .filter_map(|(id, step)| {
+                let stall = crate::flows::status::stall(step, &self.state, now, minutes)?;
+                Some((id.clone(), stall))
+            })
+            .collect();
         let mut viewer = Viewer {
             colors,
             run: run.map(|run| &run.state.steps),
+            live: run.is_some_and(|run| !run.ended()),
+            stalls,
             drafts: &mut drafts,
             selected: editor.selected,
             error,
@@ -166,6 +178,9 @@ impl App {
         }
         if let Some(step) = out.send {
             self.apply_flow_act(Act::Answer(run.dir.clone(), step));
+        }
+        if let Some(step) = out.retry {
+            self.apply_flow_act(Act::Retry(run.dir.clone(), step));
         }
     }
 
@@ -222,6 +237,9 @@ impl App {
             }
             Some(StripClick::Answer(step)) => {
                 self.apply_flow_act(Act::Answer(run.dir.clone(), step));
+            }
+            Some(StripClick::Retry(step)) => {
+                self.apply_flow_act(Act::Retry(run.dir.clone(), step));
             }
             Some(StripClick::Cancel) => {
                 let at = ui.ctx().input(|input| input.pointer.interact_pos());

@@ -248,6 +248,21 @@ impl App {
         if std::env::var_os("TERMINATOR_FIXTURE_FLOW_WINDOW").is_some() {
             self.open_flow_picker();
         }
+        // `TERMINATOR_FIXTURE_FLOW_INPUTS` opens the Run inputs form of the
+        // flow, as a Run click does. It runs nothing.
+        if std::env::var_os("TERMINATOR_FIXTURE_FLOW_INPUTS").is_some() {
+            let loaded = super::load_flows(id, root);
+            if let Some(flow) = loaded.files.iter().find(|file| file.file == name) {
+                let origin = super::inputs_form::Origin::Window;
+                let form = super::inputs_form::InputsForm::new(
+                    loaded.clone(),
+                    &name,
+                    &flow.inputs,
+                    origin,
+                );
+                self.flows.inputs_form = Some(form);
+            }
+        }
     }
 }
 

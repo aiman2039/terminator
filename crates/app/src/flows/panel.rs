@@ -38,6 +38,8 @@ pub(super) enum Act {
     Go(String),
     Gate(PathBuf, String, bool),
     Answer(PathBuf, String),
+    /// Start this failed step of this run again (explicit click).
+    Retry(PathBuf, String),
     AskCancel(PathBuf),
     KeepRun,
     Cancel(PathBuf),
@@ -315,6 +317,9 @@ impl App {
                     .remove(&(dir.clone(), step.clone()))
                     .unwrap_or_default();
                 self.flow_act(move || control::answer_question(&dir, &step, &text));
+            }
+            Act::Retry(dir, step) => {
+                self.flow_act(move || control::retry(&dir, &step));
             }
             Act::AskCancel(dir) => self.flows.confirm_cancel = Some(dir),
             Act::KeepRun => self.flows.confirm_cancel = None,

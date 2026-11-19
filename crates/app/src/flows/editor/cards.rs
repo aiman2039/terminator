@@ -141,6 +141,24 @@ impl Viewer<'_> {
         if let Some(text) = text {
             clipped(ui, text, ROWS, color);
         }
+        // The attempt and the stall badge: display only.
+        let badges: Vec<String> = crate::flows::status::attempt_label(step)
+            .into_iter()
+            .chain(self.stalls.get(id).cloned())
+            .collect();
+        if !badges.is_empty() {
+            clipped(ui, &badges.join(" · "), 1, self.colors.weak);
+        }
+        if self.live && step.retryable() {
+            appearance::footer_row(ui, |ui| {
+                if appearance::primary_button(ui, "Retry")
+                    .on_hover_text("Start this step again in a new terminal")
+                    .clicked()
+                {
+                    self.out.retry = Some(id.to_owned());
+                }
+            });
+        }
         if let Some(session) = &step.session {
             let label = egui::RichText::new("Open terminal").size(appearance::FONT_CAPTION);
             if appearance::link(ui, label)

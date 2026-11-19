@@ -14,6 +14,8 @@ pub(crate) use editor::{FLOW_ACTIONS, FLOW_TAB_ICON};
 mod inputs_form;
 mod panel;
 mod picker;
+#[cfg(test)]
+mod retry_tests;
 mod runs_view;
 mod status;
 #[cfg(test)]

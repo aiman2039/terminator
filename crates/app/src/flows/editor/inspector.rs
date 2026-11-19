@@ -316,6 +316,9 @@ fn this_run(ui: &mut egui::Ui, step: &StepRun, colors: Colors) -> Option<String>
     ui.horizontal(|ui| {
         status_icon(ui, style, color);
         ui.label(egui::RichText::new(style.label).color(color));
+        if let Some(attempt) = crate::flows::status::attempt_label(step) {
+            ui.weak(attempt);
+        }
     });
     for text in [&step.waits_for, &step.note].into_iter().flatten() {
         ui.weak(text);
