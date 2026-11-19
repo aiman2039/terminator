@@ -329,6 +329,8 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut FlowEditor, run: Option<&str>) -> Opt
         }
     };
     let (dirty, saving) = (editor.dirty(), editor.saving.is_some());
+    // A moved card alone is not a content change: Run stays on.
+    let changed = editor.changed();
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
@@ -367,7 +369,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut FlowEditor, run: Option<&str>) -> Opt
                 Click::Save,
             );
         });
-        ui.add_enabled_ui(!dirty && run != Some("running"), |ui| {
+        ui.add_enabled_ui(!changed && run != Some("running"), |ui| {
             let tip = "Run the saved flow: one new terminal per step. The cards show the run.";
             set(tool(ui, "Play", "Run", tip), Click::Run);
         });
@@ -382,21 +384,29 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut FlowEditor, run: Option<&str>) -> Opt
         if let Some(value) = view_tools(ui, editor, dirty) {
             set(true, value);
         }
-        let state = if saving {
-            "Saving…"
-        } else if !editor.on_disk {
-            "New flow, not saved"
-        } else if dirty {
-            "Changes not saved"
-        } else {
-            "Saved"
-        };
+        let state = save_state(editor, (dirty, changed, saving));
         let run = run.map(|run| format!(" · Run: {run}")).unwrap_or_default();
         let steps = editor.snarl.nodes().count();
         ui.weak(format!("{steps} steps · {state}{run}"));
     });
     ui.add_space(4.0);
     click
+}
+
+/// The save state in the toolbar. A moved card alone is "Layout not
+/// saved", a lighter state than a content change.
+fn save_state(editor: &FlowEditor, (dirty, changed, saving): (bool, bool, bool)) -> &'static str {
+    if saving {
+        "Saving…"
+    } else if !editor.on_disk {
+        "New flow, not saved"
+    } else if changed {
+        "Changes not saved"
+    } else if dirty {
+        "Layout not saved"
+    } else {
+        "Saved"
+    }
 }
 
 /// The right part of the toolbar: Export, Fit to view, Float window and

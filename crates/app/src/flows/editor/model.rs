@@ -165,6 +165,14 @@ fn optional(text: &str) -> Option<String> {
     Some(text.trim().to_owned()).filter(|text| !text.is_empty())
 }
 
+/// A draft without the cards' places: what a run of the flow does.
+pub(crate) fn content_of(mut draft: Draft) -> Draft {
+    for step in &mut draft.steps {
+        step.at = None;
+    }
+    draft
+}
+
 /// The draft of the graph: what Save checks and writes.
 pub(crate) fn draft_of(name: &str, snarl: &Snarl<Node>) -> Draft {
     let steps = snarl.nodes_pos_ids().map(|(node, position, value)| {

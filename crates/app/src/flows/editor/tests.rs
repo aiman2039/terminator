@@ -737,3 +737,57 @@ fn first_view_shows_all_nodes_in_a_small_canvas() {
     }
     assert!(viewer::fit_view(&Snarl::new(), canvas).is_none());
 }
+
+/// Moves the first card of the editor of `path` by `by`.
+fn move_card(app: &mut App, path: &Path, by: egui::Vec2) {
+    let editor = ready(app, path);
+    let node = editor.snarl.node_ids().next().unwrap().0;
+    let card = editor.snarl.get_node_info_mut(node).unwrap();
+    card.pos = egui::pos2(card.pos.x + by.x, card.pos.y + by.y);
+}
+
+/// Clicks the toolbar's Run. Gives the status note of the click: the
+/// project is not trusted, so a Run that is on only says so.
+fn click_run(app: &mut App, ctx: &egui::Context, path: &Path) -> Option<String> {
+    let text = frame(app, ctx, path, Vec::new());
+    app.info = None;
+    click(
+        app,
+        ctx,
+        path,
+        (at(&text, "Run"), egui::PointerButton::Primary),
+    );
+    app.info.take()
+}
+
+#[test]
+fn moved_card_is_a_layout_change_that_keeps_run_on() {
+    let project = project_with_flows();
+    let (mut app, received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let path = flow_path(project.path(), "build");
+    settle(&mut app, &ctx, &path);
+    move_card(&mut app, &path, egui::vec2(120.0, 40.0));
+    let editor = ready(&mut app, &path);
+    assert!(editor.dirty(), "Save is on for the new place");
+    assert!(!editor.changed(), "a place is display only");
+    let text = frame(&mut app, &ctx, &path, Vec::new());
+    assert_eq!(count(&text, "2 steps · Layout not saved"), 1, "{text:?}");
+    let trust = Some("Trust the project before running its flows.".to_owned());
+    assert_eq!(click_run(&mut app, &ctx, &path), trust, "Run is on");
+
+    // A content change turns Run off until Save.
+    ready(&mut app, &path).title = "Build 2".into();
+    let text = frame(&mut app, &ctx, &path, Vec::new());
+    assert_eq!(count(&text, "2 steps · Changes not saved"), 1, "{text:?}");
+    assert_eq!(click_run(&mut app, &ctx, &path), None, "Run is off");
+
+    // Save of a moved card writes its place; the flow is saved again.
+    ready(&mut app, &path).title = "Build".into();
+    ready(&mut app, &path).save();
+    saved(&mut app, &ctx, &path);
+    assert!(!ready(&mut app, &path).dirty());
+    let flow = flow::files::load(project.path(), "build").unwrap();
+    assert!(flow.steps.iter().any(|step| step.at.is_some()));
+    assert!(received.try_recv().is_err(), "nothing starts by itself");
+}

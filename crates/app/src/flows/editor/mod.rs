@@ -128,9 +128,17 @@ impl FlowEditor {
         model::plan_text(&self.draft(), &self.file)
     }
 
-    /// A new flow, or a flow with a change since the last save.
+    /// A new flow, or a flow with a change since the last save: content or
+    /// a card's place. Save is on for both.
     pub(crate) fn dirty(&self) -> bool {
         !self.on_disk || self.draft() != self.saved
+    }
+
+    /// A new flow, or a flow whose content differs from the saved file.
+    /// A card's place (`at`) is display only: a moved card alone is not a
+    /// change here, so it does not stop Run or a quit.
+    pub(crate) fn changed(&self) -> bool {
+        !self.on_disk || model::content_of(self.draft()) != model::content_of(self.saved.clone())
     }
 
     /// Save: the graph must be a correct flow, then a worker thread writes
@@ -380,7 +388,7 @@ impl App {
                 self.info = Some(note);
             }
             let closed = !open.contains(&path);
-            if closed && editor.dirty() && !editor.warned {
+            if closed && editor.changed() && !editor.warned {
                 editor.warned = true;
                 self.info = Some(format!(
                     "The flow {} has changes that are not saved. Edit it again to save them.",
