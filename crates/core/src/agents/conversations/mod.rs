@@ -248,7 +248,7 @@ fn modified(file: &File) -> u64 {
 
 /// One line of text, at most [`TITLE_CHARS`] characters.
 fn clean(text: &str) -> Option<String> {
-    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let words = crate::one_line(text);
     if words.is_empty() {
         return None;
     }

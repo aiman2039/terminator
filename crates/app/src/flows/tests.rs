@@ -202,7 +202,7 @@ fn new_tab_menu_has_the_flow_rows() {
 fn flows_panel_shows_a_gate_with_approve_and_a_question_with_send() {
     let project = project_with_flows();
     let (mut app, _received, data) = app_with_project(project.path());
-    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "build", "p");
     state.set("one", StepStatus::Running);
     state.steps.get_mut("one").expect("step").question = Some("A or B?".into());
     state.set("ok", StepStatus::Running);
@@ -273,7 +273,7 @@ fn step_icon_shows_what_waits_for_the_user() {
 
 #[test]
 fn run_status_is_done_only_when_every_step_is_done() {
-    let state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    let state = RunState::new(&flow::parse(FLOW).expect("flow"), "build", "p");
     let mut run = Run {
         dir: PathBuf::from("/data/flows/build-1"),
         state,
@@ -295,7 +295,7 @@ fn run_status_is_done_only_when_every_step_is_done() {
 fn a_run_whose_runner_is_gone_is_stopped_with_no_answer_buttons() {
     let project = project_with_flows();
     let (mut app, received, data) = app_with_project(project.path());
-    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "build", "p");
     state.set("one", StepStatus::Done);
     state.set("ok", StepStatus::Running);
     let dir = data.path().join("flows").join("build-1");
@@ -357,7 +357,7 @@ fn panel_buttons_write_only_the_users_answers() {
     let (mut app, received, data) = app_with_project(project.path());
     let dir = data.path().join("flows").join("build-1");
     std::fs::create_dir_all(dir.join("questions")).expect("dir");
-    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "build", "p");
     state.set("one", StepStatus::Running);
     state.set("ok", StepStatus::Running);
     std::fs::write(
@@ -396,7 +396,7 @@ fn panel_buttons_write_only_the_users_answers() {
 
 /// A run of FLOW in folder `name`: running, or ended with `done` steps done.
 fn run_of(data: &Path, name: &str, ended: Option<usize>) -> Run {
-    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "p");
+    let mut state = RunState::new(&flow::parse(FLOW).expect("flow"), "build", "p");
     if let Some(done) = ended {
         for id in ["one", "ok"].into_iter().take(done) {
             state.set(id, StepStatus::Done);

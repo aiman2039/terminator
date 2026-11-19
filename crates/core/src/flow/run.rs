@@ -67,9 +67,8 @@ pub struct RunState {
     /// The flow's name, for display.
     pub flow: String,
     /// The flow file name without `.toml`: what finds the runs of one flow
-    /// file. A run from an older build has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
+    /// file. A state file without it is not readable.
+    pub file: String,
     /// The project's ID.
     pub project: String,
     /// The runner ended; nothing changes after this.
@@ -81,8 +80,9 @@ pub struct RunState {
 }
 
 impl RunState {
-    /// A run in which every step waits.
-    pub fn new(flow: &Flow, project: &str) -> Self {
+    /// A run of flow file `file` (without `.toml`) of `project`, in which
+    /// every step waits.
+    pub fn new(flow: &Flow, file: &str, project: &str) -> Self {
         let step_run = |step: &Step| StepRun {
             needs: step.needs.clone(),
             gate: match &step.kind {
@@ -94,7 +94,7 @@ impl RunState {
         Self {
             version: super::VERSION,
             flow: flow.name.clone(),
-            file: None,
+            file: file.to_owned(),
             project: project.to_owned(),
             ended: false,
             order: flow.steps.iter().map(|step| step.id.clone()).collect(),

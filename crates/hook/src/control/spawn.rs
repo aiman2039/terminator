@@ -27,13 +27,8 @@ pub(super) fn agent_input(agent: Option<&str>) -> Result<Option<Vec<u8>>> {
 /// Branch and folder for `--worktree NAME`, as New task names them.
 pub(super) fn worktree_target(source: &Path, name: &str) -> Result<(String, PathBuf)> {
     ensure!(
-        !name.is_empty()
-            && name.len() <= 64
-            && !name.starts_with(['-', '.'])
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')),
-        "--worktree must be letters, digits, '-', '_' or '.'"
+        worktrees::name_ok(name),
+        "--worktree must be letters, digits, '-', '_' or '.', without \"..\""
     );
     let parent = source.parent().unwrap_or(source);
     Ok((
@@ -220,7 +215,7 @@ mod tests {
         let (branch, path) = worktree_target(Path::new("/src/app"), "fix-1").unwrap();
         assert_eq!(branch, "terminator/fix-1");
         assert_eq!(path, PathBuf::from("/src/terminator-fix-1"));
-        for bad in ["", "-x", ".x", "a/b", "a b", "../x"] {
+        for bad in ["", "-x", ".x", "a/b", "a b", "../x", "a..b"] {
             assert!(
                 worktree_target(Path::new("/src/app"), bad).is_err(),
                 "{bad}"

@@ -150,7 +150,7 @@ impl FlowEditor {
             return;
         }
         let draft = self.draft();
-        if let Err(error) = draft.clone().check() {
+        if let Err(error) = draft.check() {
             self.error = Some(error.to_string());
             return;
         }

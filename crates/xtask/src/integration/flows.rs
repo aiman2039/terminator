@@ -13,7 +13,12 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use terminator_core::{quote, signals::ProcSignal};
+use terminator_core::{
+    flow::{FLOW_DIR, RUN_DIR, STATE_FILE, control},
+    quote,
+    signals::ProcSignal,
+    ui_preferences,
+};
 
 pub fn flows() -> Result<()> {
     let h = Harness::new()?;
@@ -32,18 +37,20 @@ pub fn flows() -> Result<()> {
         root,
     };
     case.refused_without_trust()?;
-    let (mut runner, dir) = case.start()?;
-    let run = dir
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .context("run name")?;
-    case.gate_and_question(&dir, &run)?;
+    let run = "demo-1";
+    let (mut runner, dir) = case.spawn_run("demo", run, |_| true)?;
+    case.gate_and_question(&dir, run)?;
     let status = wait_child(&mut runner.0, Duration::from_mins(1))?;
     ensure!(status.success(), "The flow did not end as done: {status}");
     case.results(&dir)?;
     ensure!(
-        case.flow(&["cancel", &run]).is_err(),
+        case.flow(&["cancel", run]).is_err(),
         "An ended run took a cancel"
+    );
+    ensure!(
+        case.flow(&["run", id(&case.project), "demo", "--run", run])
+            .is_err(),
+        "A second run took the folder of an earlier run"
     );
     case.hangup_ends_the_run()?;
     case.killed_runner_is_gone()?;
@@ -89,30 +96,34 @@ impl Case<'_> {
         );
         let preferences = json!({
             "version": 2, "ide_mode": false,
-            "lsp_trust": {(self.root.to_string_lossy()): true},
+            (ui_preferences::TRUST_KEY): {(self.root.to_string_lossy()): true},
         });
         fs::write(
-            self.h.root.join("ui-preferences.json"),
+            self.h.root.join(ui_preferences::FILE),
             serde_json::to_vec(&preferences)?,
         )?;
         Ok(())
     }
 
-    /// Starts `flow run` and gives its process and run folder.
-    fn start(&self) -> Result<(Process, PathBuf)> {
+    /// Starts `flow run` of flow file `file` as run `run`, and gives its
+    /// process and its run folder once its state passes `ready`.
+    fn spawn_run(
+        &self,
+        file: &str,
+        run: &str,
+        ready: impl Fn(&Value) -> bool,
+    ) -> Result<(Process, PathBuf)> {
         let mut command = self.h.command("terminator-hook");
         command
-            .args(["flow", "run", id(&self.project), "demo"])
+            .args(["flow", "run", id(&self.project), file, "--run", run])
             .stdin(Stdio::null())
             .stdout(Stdio::null());
         let runner = Process(command.spawn().context("flow run did not start")?);
-        let dir = until(20, "the run folder", || {
-            Ok(fs::read_dir(self.h.root.join("flows"))
-                .ok()
-                .and_then(|mut entries| entries.next())
-                .and_then(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|dir| dir.join("state.json").is_file()))
+        let dir = self.h.root.join(RUN_DIR).join(run);
+        // The state file is replaced in one step: a read error means it
+        // is not there yet.
+        until(20, &format!("run {run}"), || {
+            Ok(read_state(&dir).ok().filter(|state| ready(state)).map(drop))
         })?;
         Ok((runner, dir))
     }
@@ -148,34 +159,16 @@ impl Case<'_> {
         Ok(())
     }
 
-    /// Starts `flow run` of flow file `file` and gives its process and its
-    /// run folder (`flows/FILE-SECOND`), once the gate step waits.
+    /// Starts `flow run` of a new flow file `file` whose only step is a
+    /// gate, as run `FILE-1`, and gives its process and its run folder
+    /// once the gate waits.
     fn start_hold(&self, file: &str) -> Result<(Process, PathBuf)> {
-        let flows = self.root.join(".terminator/flows");
+        let flows = self.root.join(FLOW_DIR);
         fs::write(flows.join(format!("{file}.toml")), HOLD)?;
-        let mut command = self.h.command("terminator-hook");
-        command
-            .args(["flow", "run", id(&self.project), file])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null());
-        let runner = Process(command.spawn().context("flow run did not start")?);
-        let prefix = format!("{file}-");
-        let dir = until(20, "the waiting gate", || {
-            let found = fs::read_dir(self.h.root.join("flows"))?
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .find(|dir| {
-                    dir.file_name()
-                        .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
-                });
-            Ok(found.filter(|dir| {
-                read_state(dir).is_ok_and(|state| is(&state, "/steps/wait/status", "running"))
-            }))
+        let (runner, dir) = self.spawn_run(file, &format!("{file}-1"), |state| {
+            is(state, "/steps/wait/status", "running")
         })?;
-        ensure!(
-            terminator_core::flow::control::alive(&dir),
-            "A live runner holds no lock"
-        );
+        ensure!(control::alive(&dir), "A live runner holds no lock");
         Ok((runner, dir))
     }
 
@@ -205,18 +198,21 @@ impl Case<'_> {
         let state = read_state(&dir)?;
         ensure!(state.get("ended") != Some(&Value::Bool(true)), "{state}");
         ensure!(
-            !terminator_core::flow::control::alive(&dir),
+            !control::alive(&dir),
             "A killed runner still holds its lock"
         );
-        let run = dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .context("run name")?;
+        let run = control::run_name(&dir);
         ensure!(
             self.flow(&["cancel", &run]).is_err() && self.flow(&["approve", &run, "wait"]).is_err(),
             "A run without a runner took an answer"
         );
-        terminator_core::flow::control::remove(&self.h.root, &dir)?;
+        let status: Value = serde_json::from_slice(&self.flow(&["status", &run])?)?;
+        ensure!(
+            is(&status, "/status", "stopped (runner gone)")
+                && is(&status, "/steps/wait/status", "cancelled"),
+            "flow status shows a killed runner's run as running: {status}"
+        );
+        control::remove(&self.h.root, &dir)?;
         ensure!(!dir.exists(), "The run of a killed runner stayed");
         Ok(())
     }
@@ -242,11 +238,12 @@ impl Case<'_> {
         let text = format!(
             "version = 1\nname = \"Tree\"\n\n[[step]]\nid = \"work\"\nworktree = \"flowtree\"\ncommand = \"{hook} flow report done\"\n"
         );
-        fs::write(self.root.join(".terminator/flows/tree.toml"), text)?;
-        for round in ["first", "second"] {
-            // Run folders are named by the second; two runs need two.
-            thread::sleep(Duration::from_millis(1100));
-            self.flow(&["run", id(&self.project), "tree"])
+        fs::write(self.root.join(FLOW_DIR).join("tree.toml"), text)?;
+        // The first run has the default name, the second its own.
+        for (round, run) in [("first", None), ("second", Some("tree-again"))] {
+            let mut args = vec!["run", id(&self.project), "tree"];
+            args.extend(run.map(|run| ["--run", run]).into_iter().flatten());
+            self.flow(&args)
                 .with_context(|| format!("The {round} run of a worktree step failed"))?;
         }
         let checkout = self
@@ -331,12 +328,12 @@ command = "{hook} emit < {start}"
 prompt = "sleep 3; {hook} emit < {done}"
 "#
     );
-    fs::create_dir_all(root.join(".terminator/flows"))?;
-    Ok(fs::write(root.join(".terminator/flows/demo.toml"), text)?)
+    fs::create_dir_all(root.join(FLOW_DIR))?;
+    Ok(fs::write(root.join(FLOW_DIR).join("demo.toml"), text)?)
 }
 
 fn read_state(dir: &Path) -> Result<Value> {
-    Ok(serde_json::from_slice(&fs::read(dir.join("state.json"))?)?)
+    Ok(serde_json::from_slice(&fs::read(dir.join(STATE_FILE))?)?)
 }
 
 /// Whether the string at a JSON pointer is `want`.

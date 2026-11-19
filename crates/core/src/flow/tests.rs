@@ -171,7 +171,7 @@ fn ready_ids(flow: &Flow, state: &RunState) -> Vec<String> {
 #[test]
 fn step_is_ready_only_when_every_needed_step_is_done() {
     let flow = flow();
-    let mut state = RunState::new(&flow, "p");
+    let mut state = RunState::new(&flow, "plan", "p");
     assert_eq!(ready_ids(&flow, &state), ["plan"]);
     state.set("plan", StepStatus::Running);
     assert!(ready_ids(&flow, &state).is_empty());
@@ -185,7 +185,7 @@ fn step_is_ready_only_when_every_needed_step_is_done() {
 #[test]
 fn rejected_gate_stops_the_steps_after_it() {
     let flow = flow();
-    let mut state = RunState::new(&flow, "p");
+    let mut state = RunState::new(&flow, "plan", "p");
     state.set("plan", StepStatus::Done);
     state.set("approve", StepStatus::Failed);
     assert!(ready_ids(&flow, &state).is_empty());
@@ -196,7 +196,7 @@ fn rejected_gate_stops_the_steps_after_it() {
 #[test]
 fn run_is_done_when_every_step_is_done() {
     let flow = flow();
-    let mut state = RunState::new(&flow, "p");
+    let mut state = RunState::new(&flow, "plan", "p");
     for step in &flow.steps {
         state.set(&step.id, StepStatus::Done);
     }
@@ -206,7 +206,7 @@ fn run_is_done_when_every_step_is_done() {
 #[test]
 fn cancel_keeps_ended_steps_and_ends_the_run() {
     let flow = flow();
-    let mut state = RunState::new(&flow, "p");
+    let mut state = RunState::new(&flow, "plan", "p");
     state.set("plan", StepStatus::Done);
     state.set("approve", StepStatus::Running);
     state.cancel();
@@ -218,7 +218,7 @@ fn cancel_keeps_ended_steps_and_ends_the_run() {
 
 #[test]
 fn a_cancelled_step_waits_for_nothing() {
-    let mut state = RunState::new(&flow(), "p");
+    let mut state = RunState::new(&flow(), "plan", "p");
     state.set("plan", StepStatus::Running);
     let waits = Some("The agent's first hook report".to_owned());
     state.steps.get_mut("plan").unwrap().waits_for = waits.clone();
@@ -235,7 +235,7 @@ fn a_cancelled_step_waits_for_nothing() {
 #[test]
 fn run_state_round_trips_as_json_and_keeps_the_session() {
     let flow = flow();
-    let mut state = RunState::new(&flow, "p");
+    let mut state = RunState::new(&flow, "plan", "p");
     state.steps.get_mut("plan").unwrap().session = Some("s1".into());
     state.set("plan", StepStatus::Running);
     let text = serde_json::to_string(&state).unwrap();
@@ -256,7 +256,7 @@ fn save_run(data: &std::path::Path, name: &str, state: &RunState) -> std::path::
 fn runs_lists_readable_runs_and_skips_damaged_ones() {
     let data = tempfile::tempdir().unwrap();
     assert!(control::runs(data.path()).is_empty());
-    let state = RunState::new(&flow(), "p");
+    let state = RunState::new(&flow(), "plan", "p");
     let good = save_run(data.path(), "a-1", &state);
     let damaged = data.path().join(RUN_DIR).join("b-2");
     std::fs::create_dir_all(&damaged).unwrap();
@@ -270,7 +270,7 @@ fn runs_lists_readable_runs_and_skips_damaged_ones() {
 #[test]
 fn cancel_and_answers_are_refused_for_an_ended_run() {
     let data = tempfile::tempdir().unwrap();
-    let mut state = RunState::new(&flow(), "p");
+    let mut state = RunState::new(&flow(), "plan", "p");
     state.set("approve", StepStatus::Running);
     let dir = save_run(data.path(), "a-1", &state);
     let _runner = control::hold_runner(&dir).unwrap();
@@ -292,7 +292,7 @@ fn cancel_and_answers_are_refused_for_an_ended_run() {
 #[test]
 fn recent_runs_reads_only_the_newest_folders() {
     let data = tempfile::tempdir().unwrap();
-    let state = RunState::new(&flow(), "p");
+    let state = RunState::new(&flow(), "plan", "p");
     let old = save_run(data.path(), "a-1", &state);
     let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
     std::fs::File::options()
@@ -311,7 +311,7 @@ fn recent_runs_reads_only_the_newest_folders() {
 #[test]
 fn remove_deletes_only_an_ended_run_folder() {
     let data = tempfile::tempdir().unwrap();
-    let mut state = RunState::new(&flow(), "p");
+    let mut state = RunState::new(&flow(), "plan", "p");
     let running = save_run(data.path(), "a-1", &state);
     let runner = control::hold_runner(&running).unwrap();
     assert!(matches!(
@@ -333,19 +333,28 @@ fn remove_deletes_only_an_ended_run_folder() {
 #[test]
 fn a_run_whose_runner_is_gone_takes_no_answer_and_can_be_removed() {
     let data = tempfile::tempdir().unwrap();
-    let mut state = RunState::new(&flow(), "p");
+    let mut state = RunState::new(&flow(), "plan", "p");
     state.set("approve", StepStatus::Running);
     let dir = save_run(data.path(), "a-1", &state);
-    // A run from an older build has no lock file: no runner can be seen.
+    let status = || control::read_run(&dir).unwrap().status;
+    // No lock file: no runner can be seen.
     assert!(!control::alive(&dir));
-    assert!(control::runner_gone(&dir, &state));
+    assert_eq!(status(), control::RunStatus::RunnerGone);
     let runner = control::hold_runner(&dir).unwrap();
     assert!(control::alive(&dir), "the runner holds its lock");
     assert!(control::alive(&dir), "a check does not take the lock away");
-    assert!(!control::runner_gone(&dir, &state));
+    assert_eq!(status(), control::RunStatus::Running);
     // The OS lets the lock go when the runner ends in any way.
     drop(runner);
-    assert!(control::runner_gone(&dir, &state));
+    let view = control::read_run(&dir).unwrap();
+    assert_eq!(view.status, control::RunStatus::RunnerGone);
+    assert_eq!(view.status.label(), "stopped (runner gone)");
+    // Its steps that did not end show as cancelled; the file keeps them.
+    assert_eq!(view.state.status("approve"), StepStatus::Cancelled);
+    assert_eq!(
+        control::read_state(&dir).unwrap().status("approve"),
+        StepStatus::Running
+    );
     let gone = |result: Result<(), control::RunError>| {
         matches!(result, Err(control::RunError::RunnerGone))
     };
@@ -360,12 +369,23 @@ fn a_run_whose_runner_is_gone_takes_no_answer_and_can_be_removed() {
     assert!(!dir.exists());
     // An ended run is never gone: it ended.
     state.ended = true;
-    assert!(!control::runner_gone(&dir, &state));
+    let ended = save_run(data.path(), "a-2", &state);
+    assert_eq!(
+        control::read_run(&ended).unwrap().status,
+        control::RunStatus::Stopped
+    );
+    for step in &flow().steps {
+        state.set(&step.id, StepStatus::Done);
+    }
+    assert_eq!(
+        control::RunStatus::of(&state, false),
+        control::RunStatus::Done
+    );
 }
 
 #[test]
 fn abort_fails_running_steps_and_cancels_the_rest() {
-    let mut state = RunState::new(&flow(), "p");
+    let mut state = RunState::new(&flow(), "plan", "p");
     state.set("plan", StepStatus::Done);
     state.set("approve", StepStatus::Running);
     state.steps.get_mut("approve").unwrap().question = Some("A?".into());
@@ -382,15 +402,83 @@ fn abort_fails_running_steps_and_cancels_the_rest() {
 }
 
 #[test]
-fn run_state_keeps_its_flow_file_and_reads_older_files_without_one() {
-    let mut state = RunState::new(&flow(), "p");
-    let older = serde_json::to_string(&state).unwrap();
-    assert!(!older.contains("\"file\""), "{older}");
-    state.file = Some("plan".into());
+fn run_state_keeps_its_flow_file_and_a_state_without_one_is_unreadable() {
+    let state = RunState::new(&flow(), "plan", "p");
     let text = serde_json::to_string(&state).unwrap();
+    assert!(text.contains("\"file\":\"plan\""), "{text}");
     assert_eq!(serde_json::from_str::<RunState>(&text).unwrap(), state);
-    let back: RunState = serde_json::from_str(&older).unwrap();
-    assert_eq!(back.file, None);
+    let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    value.as_object_mut().unwrap().remove("file");
+    assert!(serde_json::from_value::<RunState>(value).is_err());
+}
+
+#[test]
+fn run_order_goes_one_depth_at_a_time_in_file_order() {
+    let at = |order: Vec<Ordered>| -> Vec<(usize, Option<usize>)> {
+        order.into_iter().map(|o| (o.index, o.depth)).collect()
+    };
+    // plan, approve, build, docs: build and docs both need approve.
+    assert_eq!(
+        at(flow().run_order()),
+        [(0, Some(0)), (1, Some(1)), (2, Some(2)), (3, Some(2))]
+    );
+    // File order differs from run order; a step that needs two steps
+    // waits for the deeper one.
+    let draft = Draft::new(
+        "n",
+        vec![
+            draft_step("c", &["b", "a"]),
+            draft_step("b", &["a"]),
+            draft_step("a", &[]),
+            draft_step("d", &[]),
+        ],
+    );
+    assert_eq!(
+        at(draft.run_order()),
+        [(2, Some(0)), (3, Some(0)), (1, Some(1)), (0, Some(2))]
+    );
+    // A cycle, a step after it and an unknown need come last, in file order.
+    let draft = Draft::new(
+        "n",
+        vec![
+            draft_step("x", &["y"]),
+            draft_step("a", &[]),
+            draft_step("y", &["x"]),
+            draft_step("z", &["y"]),
+            draft_step("u", &["missing"]),
+            draft_step("s", &["s"]),
+        ],
+    );
+    assert_eq!(
+        at(draft.run_order()),
+        [
+            (1, Some(0)),
+            (0, None),
+            (2, None),
+            (3, None),
+            (4, None),
+            (5, None)
+        ]
+    );
+}
+
+fn draft_step(id: &str, needs: &[&str]) -> DraftStep {
+    DraftStep {
+        id: id.into(),
+        needs: needs.iter().map(|&needs| needs.to_owned()).collect(),
+        command: Some("x".into()),
+        ..DraftStep::default()
+    }
+}
+
+#[test]
+fn project_folders_stay_inside_the_project() {
+    for inside in ["", ".", "a", "a/b", "./a/./b"] {
+        assert!(inside_project(Path::new(inside)), "{inside}");
+    }
+    for outside in ["..", "../a", "a/../b", "/etc"] {
+        assert!(!inside_project(Path::new(outside)), "{outside}");
+    }
 }
 
 #[test]
@@ -415,7 +503,7 @@ fn two_steps_with_one_worktree_name_are_refused() {
 #[test]
 fn remove_refuses_folders_outside_the_run_folder() {
     let data = tempfile::tempdir().unwrap();
-    let mut state = RunState::new(&flow(), "p");
+    let mut state = RunState::new(&flow(), "plan", "p");
     state.ended = true;
     save_run(data.path(), "a-1", &state);
     let not_run = |dir: &std::path::Path| {
@@ -448,7 +536,7 @@ fn remove_refuses_folders_outside_the_run_folder() {
 fn remove_never_follows_a_link_out_of_the_run_folder() {
     let data = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
-    let mut state = RunState::new(&flow(), "p");
+    let mut state = RunState::new(&flow(), "plan", "p");
     state.ended = true;
     let target = save_run(outside.path(), "t-1", &state);
     std::fs::create_dir_all(data.path().join(RUN_DIR)).unwrap();
@@ -470,7 +558,7 @@ fn remove_never_follows_a_link_out_of_the_run_folder() {
 #[test]
 fn question_answer_needs_an_open_question_and_bounded_text() {
     let data = tempfile::tempdir().unwrap();
-    let dir = save_run(data.path(), "a-1", &RunState::new(&flow(), "p"));
+    let dir = save_run(data.path(), "a-1", &RunState::new(&flow(), "plan", "p"));
     let _runner = control::hold_runner(&dir).unwrap();
     assert!(matches!(
         control::answer_question(&dir, "plan", "yes"),

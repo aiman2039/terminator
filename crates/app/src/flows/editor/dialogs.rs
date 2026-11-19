@@ -81,8 +81,7 @@ pub(super) fn rules_dialog(ui: &mut egui::Ui, editor: &mut FlowEditor) {
 /// The saved plan file opens in a Markdown tab, where the Mermaid block
 /// shows as a diagram.
 pub(super) fn preview_dialog(ui: &mut egui::Ui, editor: &mut FlowEditor) -> Option<Click> {
-    let draft = editor.draft();
-    if let Err(error) = draft.clone().check() {
+    if let Err(error) = editor.draft().check() {
         ui.colored_label(
             ui.visuals().error_fg_color,
             format!("Not a correct flow yet: {error}"),

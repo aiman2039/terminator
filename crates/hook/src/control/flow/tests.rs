@@ -1,12 +1,12 @@
 use super::*;
-use terminator_core::flow::StepStatus;
+use terminator_core::flow::{RunState, StepStatus};
 
 const FLOW: &str = "version = 1\nname = \"n\"\n[[step]]\nid = \"build\"\ncommand = \"x\"\n[[step]]\nid = \"ok\"\ngate = \"Good?\"\nneeds = [\"build\"]\n";
 
 /// A run folder whose runner (this test) holds the lock.
 fn run_folder(gate: StepStatus) -> (tempfile::TempDir, control::RunnerLock) {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = RunState::new(&flow::parse(FLOW).unwrap(), "p");
+    let mut state = RunState::new(&flow::parse(FLOW).unwrap(), "n", "p");
     state.set("ok", gate);
     std::fs::write(
         dir.path().join(STATE_FILE),
@@ -39,29 +39,54 @@ fn approve_is_written_only_for_a_gate_that_waits() {
 }
 
 #[test]
-fn flow_run_needs_a_saved_trust_answer_of_true() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = Path::new("/src/app");
-    assert_eq!(trust_answer(dir.path(), root), None);
-    std::fs::write(
-        dir.path().join("ui-preferences.json"),
-        r#"{"lsp_trust":{"/src/app":true,"/src/other":false}}"#,
-    )
-    .unwrap();
-    assert_eq!(trust_answer(dir.path(), root), Some(true));
-    assert_eq!(
-        trust_answer(dir.path(), Path::new("/src/other")),
-        Some(false)
-    );
-    assert_eq!(trust_answer(dir.path(), Path::new("/src/new")), None);
+fn run_names_cannot_be_paths_and_a_run_folder_is_made_once() {
+    let data = tempfile::tempdir().unwrap();
+    for bad in ["", "../x", "a/b", "a.toml", "-x y"] {
+        assert!(new_run_dir(data.path(), bad).is_err(), "{bad}");
+    }
+    assert!(!data.path().join(RUN_DIR).join("a").exists());
+    let dir = new_run_dir(data.path(), "plan-and_build1").unwrap();
+    assert_eq!(dir, data.path().join(RUN_DIR).join("plan-and_build1"));
+    assert!(dir.is_dir());
+    // A second run with the same name is refused, so two runners never
+    // share a folder.
+    let error = new_run_dir(data.path(), "plan-and_build1").unwrap_err();
+    assert!(error.to_string().contains("exists"), "{error:#}");
 }
 
 #[test]
-fn flow_and_run_names_cannot_be_paths() {
-    for bad in ["", "../x", "a/b", "a.toml", "-x y"] {
-        assert!(plain_name(bad).is_err(), "{bad}");
+fn flow_run_takes_an_optional_run_name() {
+    let parse = |args: &[&str]| {
+        Cli::try_parse_from(std::iter::once("flow").chain(args.iter().copied()))
+            .map(|cli| cli.command)
+    };
+    assert!(matches!(
+        parse(&["run", "p", "n"]),
+        Ok(Command::Run { run_id: None, .. })
+    ));
+    let Ok(Command::Run { run_id, .. }) = parse(&["run", "p", "n", "--run", "n-7"]) else {
+        panic!("--run is refused");
+    };
+    assert_eq!(run_id.as_deref(), Some("n-7"));
+}
+
+#[test]
+fn status_shows_a_run_whose_runner_is_gone_as_stopped() {
+    let (_data, dir, runner) = data_with_run(false);
+    let value = status(&dir).unwrap();
+    assert_eq!(value["status"], "running");
+    assert_eq!(value["steps"]["build"]["status"], "running");
+    drop(runner);
+    // A process that another test forks holds an inherited lock until its
+    // exec: wait a moment for it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut value = status(&dir).unwrap();
+    while value["status"] == "running" && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        value = status(&dir).unwrap();
     }
-    assert_eq!(plain_name("plan-and_build1").unwrap(), "plan-and_build1");
+    assert_eq!(value["status"], "stopped (runner gone)");
+    assert_eq!(value["steps"]["build"]["status"], "cancelled");
 }
 
 #[test]
@@ -85,7 +110,7 @@ fn data_with_run(ended: bool) -> (tempfile::TempDir, PathBuf, control::RunnerLoc
     let data = tempfile::tempdir().unwrap();
     let dir = data.path().join(RUN_DIR).join("n-1");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut state = RunState::new(&flow::parse(FLOW).unwrap(), "p");
+    let mut state = RunState::new(&flow::parse(FLOW).unwrap(), "n", "p");
     state.set("build", StepStatus::Running);
     state.steps.get_mut("build").unwrap().session = Some("s1".into());
     state.ended = ended;
@@ -123,7 +148,7 @@ fn ask_ends_when_the_runner_is_gone() {
 #[test]
 fn context_names_the_run_the_step_and_the_needed_steps() {
     let (data, dir, _runner) = data_with_run(false);
-    let mut state = read_state(&dir).unwrap();
+    let mut state = control::read_state(&dir).unwrap();
     state.set("build", StepStatus::Done);
     state.set("ok", StepStatus::Running);
     state.steps.get_mut("ok").unwrap().session = Some("s2".into());
@@ -150,7 +175,7 @@ fn report_is_recorded_for_the_runner_and_starts_nothing() {
     assert!(agent::read_report(&dir, "build").unwrap().done);
     // The state file is the runner's: a report does not change it.
     assert_eq!(
-        read_state(&dir).unwrap().status("build"),
+        control::read_state(&dir).unwrap().status("build"),
         StepStatus::Running
     );
 }

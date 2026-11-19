@@ -28,10 +28,10 @@ pub(super) const STAY_GRACE: Duration = Duration::from_secs(3);
 const STAY_PENDING: Duration = Duration::from_secs(10);
 
 /// The number of step terminals in the runs of flow file `file` of
-/// `project`. A run from an older build (no file) does not count.
+/// `project`.
 pub(super) fn step_sessions(runs: &[crate::flows::Run], project: &str, file: &str) -> usize {
     runs.iter()
-        .filter(|run| run.of_flow(project, file, None))
+        .filter(|run| run.of_flow(project, file))
         .flat_map(|run| run.state.steps.values())
         .filter(|step| step.session.is_some())
         .count()

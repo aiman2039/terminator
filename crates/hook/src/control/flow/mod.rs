@@ -22,8 +22,9 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use terminator_core::{
     flow::{
-        Flow, Outcome, RUN_DIR, RunState, STATE_FILE,
+        Outcome, RUN_DIR, STATE_FILE,
         control::{self, ANSWERS, APPROVE, CANCEL, REJECT},
+        files::{self, plain_name},
     },
     *,
 };
@@ -47,8 +48,16 @@ enum Command {
     Check { project: String, name: String },
     /// Run a flow: one new terminal per step, Enter on each command and
     /// prompt. The project must be trusted in Terminator.
-    Run { project: String, name: String },
-    /// Print the state of a run.
+    Run {
+        project: String,
+        name: String,
+        /// The run's name (its folder): letters, digits, '-' or '_'.
+        /// Default: NAME-SECONDS. A run with that name must not exist.
+        #[arg(long = "run", value_name = "ID")]
+        run_id: Option<String>,
+    },
+    /// Print the state of a run, with its status ("stopped (runner gone)"
+    /// when its runner is gone).
     Status { run: String },
     /// Approve a gate step that waits.
     Approve { run: String, step: String },
@@ -101,9 +110,13 @@ pub fn run(args: &[String]) -> Result<()> {
     let cli = Cli::parse_from(program_args(args));
     match cli.command {
         Command::Skill => Output::text(SKILL),
-        Command::Run { project, name } => {
+        Command::Run {
+            project,
+            name,
+            run_id,
+        } => {
             let paths = workspace(cli.data_dir, cli.runtime_dir)?;
-            return run_flow(paths, &project, &name);
+            return run_flow(paths, &project, &name, run_id);
         }
         _ => Output::line(serde_json::to_string_pretty(&execute(cli)?)?),
     }
@@ -140,10 +153,10 @@ fn execute(cli: Cli) -> Result<Value> {
     Ok(match cli.command {
         Command::List { project } => list(&project_of(&paths, &project)?),
         Command::Check { project, name } => {
-            let flow = load(&project_of(&paths, &project)?, &name)?;
+            let flow = files::load(&project_of(&paths, &project)?.path, &name)?;
             json!({"flow": flow.name, "steps": flow.steps.len(), "valid": true})
         }
-        Command::Status { run } => serde_json::to_value(read_state(&run_dir(&paths, &run)?)?)?,
+        Command::Status { run } => status(&run_dir(&paths, &run)?)?,
         Command::Approve { run, step } => {
             control::answer_gate(&run_dir(&paths, &run)?, &step, true)?;
             json!({"step": step, "answer": APPROVE})
@@ -193,58 +206,44 @@ fn project_of(paths: &Paths, name: &str) -> Result<Project> {
     Ok(project)
 }
 
-/// Flow and run names are plain file names, never a path.
-fn plain_name(name: &str) -> Result<&str> {
-    ensure!(
-        flow::files::plain_name(name),
-        "A name must be letters, digits, '-' or '_'"
-    );
-    Ok(name)
-}
-
-/// The flow `name` of the project.
-fn load(project: &Project, name: &str) -> Result<Flow> {
-    Ok(flow::files::load(&project.path, name)?)
-}
-
 /// Each flow file with its name, or the reason it is refused.
 fn list(project: &Project) -> Value {
-    let names = flow::files::names(&project.path);
-    let rows = names.into_iter().map(|file| match load(project, &file) {
-        Ok(flow) => json!({"file": file, "flow": flow.name, "steps": flow.steps.len()}),
-        Err(error) => json!({"file": file, "error": format!("{error:#}")}),
-    });
+    let names = files::names(&project.path);
+    let rows = names
+        .into_iter()
+        .map(|file| match files::load(&project.path, &file) {
+            Ok(flow) => json!({"file": file, "flow": flow.name, "steps": flow.steps.len()}),
+            Err(error) => json!({"file": file, "error": format!("{error:#}")}),
+        });
     Value::Array(rows.collect())
 }
 
-/// The trust answer the user gave in the GUI for this project folder
-/// (`lsp_trust` in `ui-preferences.json`), shared with project tasks.
-fn trust_answer(data: &Path, root: &Path) -> Option<bool> {
-    let text = std::fs::read(data.join("ui-preferences.json")).ok()?;
-    let preferences: Value = serde_json::from_slice(&text).ok()?;
-    preferences
-        .get("lsp_trust")?
-        .get(root.to_string_lossy().as_ref())?
-        .as_bool()
+/// The state of a run with its status: a run whose runner is gone shows
+/// as "stopped (runner gone)", with its open steps cancelled.
+fn status(dir: &Path) -> Result<Value> {
+    let view = control::read_run(dir)?;
+    let mut value = serde_json::to_value(&view.state)?;
+    if let Some(fields) = value.as_object_mut() {
+        fields.insert("status".to_owned(), view.status.label().into());
+    }
+    Ok(value)
 }
 
-fn run_flow(paths: Paths, project: &str, name: &str) -> Result<()> {
+fn run_flow(paths: Paths, project: &str, name: &str, run: Option<String>) -> Result<()> {
     let project = project_of(&paths, project)?;
-    match trust_answer(&paths.data, &project.path) {
+    match ui_preferences::trust_answer(&paths.data, &project.path) {
         Some(true) => {}
         Some(false) => bail!("This project is not trusted; its flows stay off"),
         None => bail!(
             "This project has no trust answer. Answer the trust question in Terminator (Run task…), then run the flow again"
         ),
     }
-    let flow = load(&project, name)?;
-    let run = format!("{name}-{}", now());
-    let dir = paths.data.join(RUN_DIR).join(&run);
-    ensure!(!dir.exists(), "Run {run} exists; try again");
+    let flow = files::load(&project.path, name)?;
+    let run = run.unwrap_or_else(|| format!("{name}-{}", now()));
+    let dir = new_run_dir(&paths.data, &run)?;
     Output::line(format_args!("Run {run}: {}", flow.name));
-    let outcome_of = flow.clone();
-    let state = runner::Runner::new(paths, project, (flow, name), dir)?.run()?;
-    let outcome = match outcome_of.outcome(&state) {
+    let outcome = runner::Runner::new(paths, project, (flow, name), dir)?.run()?;
+    let outcome = match outcome {
         Outcome::Done => "done",
         Outcome::Active | Outcome::Stopped => "stopped",
     };
@@ -256,14 +255,33 @@ fn run_flow(paths: Paths, project: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_dir(paths: &Paths, run: &str) -> Result<PathBuf> {
-    let dir = paths.data.join(RUN_DIR).join(plain_name(run)?);
-    ensure!(dir.join(STATE_FILE).is_file(), "Unknown run");
-    Ok(dir)
+/// Makes the folder of the new run `run` in the data folder. A run with
+/// that name is never used again: the folder must not exist.
+fn new_run_dir(data: &Path, run: &str) -> Result<PathBuf> {
+    ensure!(
+        plain_name(run),
+        "A run name must be letters, digits, '-' or '_'"
+    );
+    let runs = data.join(RUN_DIR);
+    std::fs::create_dir_all(&runs)?;
+    let dir = runs.join(run);
+    match std::fs::create_dir(&dir) {
+        Ok(()) => Ok(dir),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            bail!("Run {run} exists; try again")
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
-fn read_state(dir: &Path) -> Result<RunState> {
-    Ok(control::read_state(dir)?)
+fn run_dir(paths: &Paths, run: &str) -> Result<PathBuf> {
+    ensure!(
+        plain_name(run),
+        "A run name must be letters, digits, '-' or '_'"
+    );
+    let dir = paths.data.join(RUN_DIR).join(run);
+    ensure!(dir.join(STATE_FILE).is_file(), "Unknown run");
+    Ok(dir)
 }
 
 #[cfg(test)]

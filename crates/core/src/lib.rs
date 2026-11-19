@@ -33,6 +33,7 @@ pub mod ssh;
 pub mod terminal_title;
 pub mod transport;
 pub mod ui_control;
+pub mod ui_preferences;
 pub mod vnc;
 pub mod worktrees;
 
@@ -71,6 +72,12 @@ pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// a resize is clamped to it.
 pub const MAX_TERMINAL_ROWS: u16 = 500;
 pub const MAX_TERMINAL_COLS: u16 = 1000;
+
+/// `text` as one line: each run of white space, line breaks included,
+/// becomes one space, and the ends are trimmed.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
 
 /// `(rows, cols)` inside `1..=MAX_TERMINAL_ROWS` and `1..=MAX_TERMINAL_COLS`.
 pub fn clamp_terminal_size(rows: u16, cols: u16) -> (u16, u16) {

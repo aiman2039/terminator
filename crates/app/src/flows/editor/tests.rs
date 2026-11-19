@@ -528,7 +528,7 @@ fn banner_says_starting_after_run_and_an_ended_run_banner_can_be_hidden() {
     settle(&mut app, &ctx, &path);
     let flow = flow::files::load(project.path(), "build").unwrap();
     let run = |name: &str, ended: bool| {
-        let mut state = RunState::new(&flow, "p");
+        let mut state = RunState::new(&flow, "build", "p");
         state.ended = ended;
         crate::flows::Run {
             dir: project.path().join(name),
@@ -582,7 +582,7 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     assert_eq!(count(&text, "Approve"), 0, "no run: {text:?}");
 
     let flow = flow::files::load(project.path(), "build").unwrap();
-    let mut state = RunState::new(&flow, "p");
+    let mut state = RunState::new(&flow, "build", "p");
     state.steps.get_mut("one").unwrap().status = StepStatus::Done;
     state.steps.get_mut("one").unwrap().session = Some("s1".into());
     state.steps.get_mut("one").unwrap().waits_for = Some("Waits for the hook report".into());
@@ -623,8 +623,7 @@ fn cards_show_only_the_runs_of_their_own_flow_file() {
     settle(&mut app, &ctx, &path);
     let flow = flow::files::load(project.path(), "build").unwrap();
     let run = |file: &str, gone: bool| {
-        let mut state = RunState::new(&flow, "p");
-        state.file = Some(file.to_owned());
+        let mut state = RunState::new(&flow, file, "p");
         state.set("one", StepStatus::Done);
         state.set("ok", StepStatus::Running);
         if gone {

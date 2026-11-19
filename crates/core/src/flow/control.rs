@@ -63,8 +63,85 @@ pub fn read_state(dir: &Path) -> Result<RunState, RunError> {
     serde_json::from_slice(&std::fs::read(dir.join(STATE_FILE))?).map_err(|_| RunError::State)
 }
 
+/// The name of a run: its folder name, which `terminator-hook flow`
+/// commands take.
+pub fn run_name(dir: &Path) -> String {
+    dir.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Where a run is, from its state file and its runner's lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunStatus {
+    /// Not ended, and its runner lives.
+    Running,
+    /// Ended with every step done.
+    Done,
+    /// Ended with a step that is not done.
+    Stopped,
+    /// Not ended, but its runner is gone (its terminal closed, the process
+    /// was killed, or the computer restarted): nothing changes it again.
+    RunnerGone,
+}
+
+impl RunStatus {
+    /// The status of `state` whose runner is `alive` or not.
+    pub fn of(state: &RunState, alive: bool) -> Self {
+        let done = state
+            .steps
+            .values()
+            .all(|step| step.status == StepStatus::Done);
+        match (state.ended, alive, done) {
+            (true, _, true) => Self::Done,
+            (true, _, false) => Self::Stopped,
+            (false, true, _) => Self::Running,
+            (false, false, _) => Self::RunnerGone,
+        }
+    }
+
+    /// "running", "done", "stopped" or "stopped (runner gone)".
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Stopped => "stopped",
+            Self::RunnerGone => "stopped (runner gone)",
+        }
+    }
+
+    /// Ended, or its runner is gone: nothing changes the run again.
+    pub fn ended(self) -> bool {
+        self != Self::Running
+    }
+}
+
+/// A run as its readers show it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunView {
+    /// For a run whose runner is gone, the steps that did not end show as
+    /// cancelled (in memory only): nothing answers them now.
+    pub state: RunState,
+    pub status: RunStatus,
+}
+
+/// The view of a run whose state file `state` was read from `dir`.
+/// Blocking (the runner's lock): call it off the GUI thread.
+pub fn run_view(dir: &Path, mut state: RunState) -> RunView {
+    let status = RunStatus::of(&state, state.ended || alive(dir));
+    if status == RunStatus::RunnerGone {
+        state.cancel();
+    }
+    RunView { state, status }
+}
+
+/// Read the run in `dir`. Blocking: call it off the GUI thread.
+pub fn read_run(dir: &Path) -> Result<RunView, RunError> {
+    Ok(run_view(dir, read_state(dir)?))
+}
+
 /// Every readable run in the data folder, newest first, with its folder.
-/// Blocking: call it off the GUI thread.
+#[cfg(test)]
 pub fn runs(data: &Path) -> Vec<(PathBuf, RunState)> {
     recent_runs(data, usize::MAX)
 }
@@ -91,7 +168,9 @@ pub fn recent_runs(data: &Path, limit: usize) -> Vec<(PathBuf, RunState)> {
         .collect()
 }
 
-fn write(dir: &Path, folder: &str, step: &str, bytes: &[u8]) -> Result<(), RunError> {
+/// Write `bytes` as the file `step` in the folder `folder` of the run in
+/// `dir`, in one step. `step` must be a step ID of the run.
+pub fn write(dir: &Path, folder: &str, step: &str, bytes: &[u8]) -> Result<(), RunError> {
     std::fs::create_dir_all(dir.join(folder))?;
     Ok(crate::atomic_write(&dir.join(folder).join(step), bytes)?)
 }
@@ -116,9 +195,9 @@ pub fn hold_runner(dir: &Path) -> Result<RunnerLock, RunError> {
 }
 
 /// True while a runner holds the lock of the run in `dir`. A run with no
-/// lock file (from an older build) has no runner that can be seen, so it
-/// counts as gone. A lock that cannot be checked counts as held. Blocking:
-/// call it off the GUI thread.
+/// lock file has no runner that can be seen, so it counts as gone. A lock
+/// that cannot be checked counts as held. Blocking: call it off the GUI
+/// thread.
 pub fn alive(dir: &Path) -> bool {
     let file = match std::fs::File::open(dir.join(RUNNER_LOCK)) {
         Ok(file) => file,
@@ -128,22 +207,14 @@ pub fn alive(dir: &Path) -> bool {
     !matches!(file.try_lock_shared(), Ok(()))
 }
 
-/// A run that did not end and whose runner is gone: nothing changes it
-/// again. Blocking: call it off the GUI thread.
-pub fn runner_gone(dir: &Path, state: &RunState) -> bool {
-    !state.ended && !alive(dir)
-}
-
 /// A run that did not end, with its runner.
 fn open(dir: &Path) -> Result<RunState, RunError> {
-    let state = read_state(dir)?;
-    if state.ended {
-        return Err(RunError::Ended);
+    let view = read_run(dir)?;
+    match view.status {
+        RunStatus::Running => Ok(view.state),
+        RunStatus::RunnerGone => Err(RunError::RunnerGone),
+        RunStatus::Done | RunStatus::Stopped => Err(RunError::Ended),
     }
-    if !alive(dir) {
-        return Err(RunError::RunnerGone);
-    }
-    Ok(state)
 }
 
 /// Approve or reject a gate step that waits now. A step ID of the run is
@@ -199,7 +270,7 @@ pub fn remove(data: &Path, dir: &Path) -> Result<(), RunError> {
     if parent.as_deref() != Some(runs.as_path()) {
         return Err(RunError::NotRun);
     }
-    if !read_state(dir)?.ended && alive(dir) {
+    if !read_run(dir)?.status.ended() {
         return Err(RunError::NotEnded);
     }
     // `remove_dir_all` deletes links inside the folder, never their targets.

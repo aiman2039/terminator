@@ -32,7 +32,6 @@
 //! module only reads files and computes which steps can start; it starts
 //! nothing. The runner (`terminator-hook flow run`) starts a flow only on
 //! an explicit Run.
-use petgraph::{algo::toposort, graph::DiGraph};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -41,7 +40,9 @@ use std::{
 
 pub mod control;
 pub mod files;
+mod graph;
 mod run;
+pub use graph::Ordered;
 pub use run::{Outcome, RUN_DIR, RunState, STATE_FILE, StepRun, StepStatus};
 
 /// Flow files of a project, relative to the project folder.
@@ -191,7 +192,7 @@ impl Draft {
     }
 
     /// The checked flow of this draft.
-    pub fn check(self) -> Result<Flow, FlowError> {
+    pub fn check(&self) -> Result<Flow, FlowError> {
         if self.version != VERSION {
             return Err(FlowError::Version(self.version));
         }
@@ -205,12 +206,12 @@ impl Draft {
         if self.steps.len() > MAX_STEPS {
             return Err(FlowError::TooManySteps);
         }
-        let rules = match self.rules.map(|text| text.trim().to_owned()) {
-            Some(text) if text.is_empty() => None,
-            Some(text) if !text_ok(&text, true) => return Err(FlowError::Rules),
-            text => text,
+        let rules = match self.rules.as_deref().map(str::trim) {
+            Some("") | None => None,
+            Some(text) if !text_ok(text, true) => return Err(FlowError::Rules),
+            Some(text) => Some(text.to_owned()),
         };
-        let steps = self.steps.into_iter().map(step).collect::<Result<_, _>>()?;
+        let steps = self.steps.iter().map(step).collect::<Result<_, _>>()?;
         let flow = Flow {
             name: name.to_owned(),
             rules,
@@ -224,7 +225,7 @@ impl Draft {
     /// The file text of a correct draft. A draft that is not a correct
     /// flow gives its error and no text.
     pub fn to_toml(&self) -> Result<String, FlowError> {
-        self.clone().check()?;
+        self.check()?;
         toml_edit::ser::to_string_pretty(self).map_err(|error| FlowError::Syntax(error.to_string()))
     }
 }
@@ -261,37 +262,43 @@ impl From<&Flow> for Draft {
     }
 }
 
-fn step(raw: DraftStep) -> Result<Step, FlowError> {
-    let id = raw.id;
-    if !id_ok(&id) {
-        return Err(FlowError::BadId(id));
+fn step(raw: &DraftStep) -> Result<Step, FlowError> {
+    let id = raw.id.as_str();
+    if !id_ok(id) {
+        return Err(FlowError::BadId(id.to_owned()));
     }
-    let kind = match (raw.command, raw.gate) {
+    let kind = match (&raw.command, &raw.gate) {
         (Some(command), None) => StepKind::Command {
-            command: checked(&id, "command", &command, false)?,
+            command: checked(id, "command", command, false)?,
             prompt: raw
                 .prompt
-                .map(|prompt| checked(&id, "prompt", &prompt, true))
+                .as_deref()
+                .map(|prompt| checked(id, "prompt", prompt, true))
                 .transpose()?,
-            cwd: raw.cwd.map(|cwd| checked_cwd(&id, &cwd)).transpose()?,
+            cwd: raw
+                .cwd
+                .as_deref()
+                .map(|cwd| checked_cwd(id, cwd))
+                .transpose()?,
             worktree: raw
                 .worktree
-                .map(|name| checked_worktree(&id, &name))
+                .as_deref()
+                .map(|name| checked_worktree(id, name))
                 .transpose()?,
         },
         (None, Some(message)) => {
             if raw.prompt.is_some() || raw.cwd.is_some() || raw.worktree.is_some() {
-                return Err(FlowError::GateField(id));
+                return Err(FlowError::GateField(id.to_owned()));
             }
             StepKind::Gate {
-                message: checked(&id, "gate", &message, true)?,
+                message: checked(id, "gate", message, true)?,
             }
         }
-        _ => return Err(FlowError::Kind(id)),
+        _ => return Err(FlowError::Kind(id.to_owned())),
     };
     Ok(Step {
-        id,
-        needs: raw.needs,
+        id: id.to_owned(),
+        needs: raw.needs.clone(),
         kind,
         at: raw.at,
     })
@@ -328,29 +335,25 @@ fn checked(
     }
 }
 
+/// A relative folder that stays inside the project: only plain names and
+/// `.`, never `..`, a root or a prefix. Shared with project tasks.
+pub fn inside_project(path: &Path) -> bool {
+    path.components()
+        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+}
+
 fn checked_cwd(id: &str, cwd: &str) -> Result<String, FlowError> {
     let cwd = checked(id, "cwd", cwd, false)?;
-    let inside = Path::new(&cwd)
-        .components()
-        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir));
-    if inside {
+    if inside_project(Path::new(&cwd)) {
         Ok(cwd)
     } else {
         Err(FlowError::Cwd(id.to_owned()))
     }
 }
 
-/// The same names as `ctl spawn --worktree`: the branch is
-/// `terminator/NAME` in the folder `terminator-NAME` beside the project.
+/// The same names as `ctl spawn --worktree` ([`crate::worktrees::name_ok`]).
 fn checked_worktree(id: &str, name: &str) -> Result<String, FlowError> {
-    let plain = !name.is_empty()
-        && name.len() <= 64
-        && !name.starts_with(['-', '.'])
-        && !name.contains("..")
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    if plain {
+    if crate::worktrees::name_ok(name) {
         Ok(name.to_owned())
     } else {
         Err(FlowError::Worktree(id.to_owned()))
@@ -391,35 +394,6 @@ impl Flow {
             }
         }
         Ok(())
-    }
-
-    /// Unique IDs, known `needs` and no cycle.
-    fn check_graph(&self) -> Result<(), FlowError> {
-        let mut graph = DiGraph::<&str, ()>::new();
-        let mut nodes = BTreeMap::new();
-        for step in &self.steps {
-            let node = graph.add_node(step.id.as_str());
-            if nodes.insert(step.id.as_str(), node).is_some() {
-                return Err(FlowError::DuplicateId(step.id.clone()));
-            }
-        }
-        for step in &self.steps {
-            for needs in &step.needs {
-                let (Some(from), Some(to)) =
-                    (nodes.get(needs.as_str()), nodes.get(step.id.as_str()))
-                else {
-                    return Err(FlowError::UnknownNeed {
-                        step: step.id.clone(),
-                        needs: needs.clone(),
-                    });
-                };
-                graph.add_edge(*from, *to, ());
-            }
-        }
-        toposort(&graph, None).map(|_| ()).map_err(|cycle| {
-            let id = graph.node_weight(cycle.node_id()).copied().unwrap_or("");
-            FlowError::Cycle(id.to_owned())
-        })
     }
 }
 

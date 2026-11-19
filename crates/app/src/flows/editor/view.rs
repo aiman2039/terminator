@@ -111,11 +111,10 @@ impl App {
         }
         self.poll_flow_runs(ctx);
         let project = self.flow_project(editor)?;
-        let name = Some(editor.saved.name.as_str());
         self.flows
             .runs
             .iter()
-            .find(|run| run.of_flow(&project, &editor.file, name))
+            .find(|run| run.of_flow(&project, &editor.file))
             .cloned()
     }
 

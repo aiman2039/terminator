@@ -63,7 +63,7 @@ fn one_line(summary: &str, details: &str) -> String {
     } else {
         format!("{summary}: {details}")
     };
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    terminator_core::one_line(&text)
 }
 
 fn notice_for(state: &State, session: &str, now: u64) -> Option<Notice> {

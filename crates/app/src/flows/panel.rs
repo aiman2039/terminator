@@ -39,24 +39,9 @@ pub(super) enum Act {
     Clear(Vec<PathBuf>),
 }
 
-/// The run status shown for a run whose runner is gone.
-pub(super) const RUNNER_GONE: &str = "stopped (runner gone)";
-
-/// "running", "done", "stopped" or [`RUNNER_GONE`].
+/// "running", "done", "stopped" or "stopped (runner gone)".
 pub(super) fn run_status(run: &Run) -> &'static str {
-    if run.gone {
-        return RUNNER_GONE;
-    }
-    let done = run
-        .state
-        .steps
-        .values()
-        .all(|step| step.status == StepStatus::Done);
-    match (run.state.ended, done) {
-        (false, _) => "running",
-        (true, true) => "done",
-        (true, false) => "stopped",
-    }
+    run.status().label()
 }
 
 /// The icon and the hover text of a step row.

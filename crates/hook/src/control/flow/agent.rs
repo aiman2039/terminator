@@ -2,7 +2,6 @@
 //! report and ask. Each one is a file in the run folder that the runner
 //! reads; nothing here types into a terminal or starts anything. The
 //! user's side is `terminator_core::flow::control`.
-use super::read_state;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,12 +9,9 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use terminator_core::{
-    atomic_write,
-    flow::{
-        RUN_DIR, RunState, StepStatus,
-        control::{self, QUESTIONS, REPLIES, bounded},
-    },
+use terminator_core::flow::{
+    RunState, StepStatus,
+    control::{self, QUESTIONS, REPLIES, RunStatus, bounded, write},
 };
 
 /// Folder of step reports in a run folder: one file per step.
@@ -37,36 +33,31 @@ pub(super) struct Report {
     pub(super) note: Option<String>,
 }
 
-fn write(dir: &Path, folder: &str, step: &str, bytes: &[u8]) -> Result<()> {
-    std::fs::create_dir_all(dir.join(folder))?;
-    Ok(atomic_write(&dir.join(folder).join(step), bytes)?)
-}
-
-/// The step that runs in `session` (default: this terminal).
+/// The step that runs in `session` (default: this terminal), in the
+/// newest run that has one.
 pub(super) fn own_step(data: &Path, session: Option<String>) -> Result<Own> {
     let session = match session {
         Some(session) => session,
         None => std::env::var("TERMINATOR_SESSION_ID")
             .context("This is not a Terminator terminal; give --session")?,
     };
-    let runs = std::fs::read_dir(data.join(RUN_DIR))
-        .into_iter()
-        .flatten()
-        .flatten();
-    for dir in runs.map(|entry| entry.path()) {
-        let Ok(state) = read_state(&dir) else {
+    for (dir, state) in control::recent_runs(data, usize::MAX) {
+        // An ended run, or one whose runner is gone, reads no report and
+        // no answer.
+        let view = control::run_view(&dir, state);
+        if view.status != RunStatus::Running {
             continue;
-        };
-        let step = state
-            .steps
-            .iter()
-            .find(|(_, run)| {
-                run.status == StepStatus::Running && run.session.as_deref() == Some(&session)
-            })
-            .map(|(id, _)| id.clone());
-        // A run whose runner is gone reads no report and no answer.
-        if let Some(step) = step.filter(|_| !state.ended && control::alive(&dir)) {
-            return Ok(Own { dir, step, state });
+        }
+        let step = view.state.steps.iter().find(|(_, run)| {
+            run.status == StepStatus::Running && run.session.as_deref() == Some(&session)
+        });
+        if let Some((step, _)) = step {
+            let step = step.clone();
+            return Ok(Own {
+                dir,
+                step,
+                state: view.state,
+            });
         }
     }
     bail!("This terminal is not a running step of a flow")
@@ -94,7 +85,7 @@ pub(super) fn context(own: &Own) -> Value {
         })
         .collect();
     json!({
-        "run": own.dir.file_name().map(|name| name.to_string_lossy()),
+        "run": control::run_name(&own.dir),
         "flow": own.state.flow,
         "step": own.step,
         "needs": needs,

@@ -6,14 +6,21 @@ use terminator_core::*;
 /// What the runner waits for in a running step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Phase {
+    /// A command step: waits for its agent (see [`progress`]).
+    Command(Wait),
+    /// A gate: waits for the user's answer in the run folder.
+    Gate,
+}
+
+/// What a running command step waits for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Wait {
     /// The command was sent. The prompt waits for the agent's first hook
     /// report, which shows that the agent started.
     Starting { prompt: String },
     /// The agent works. `since` is its newest hook record when the work
     /// started; only a newer record can end the step.
     Working { since: Option<Mark> },
-    /// A gate: waits for the user's answer.
-    Gate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,18 +36,16 @@ pub(super) enum Progress {
 /// terminal cannot show that its step was good: only a hook report can.
 const ENDED: &str = "The terminal ended before the agent reported that it was done";
 
-/// One poll of a command step. A gate is always pending here; its answer
-/// comes from the run folder.
-pub(super) fn progress(state: &State, session: &str, phase: &Phase) -> Progress {
+/// One poll of a command step.
+pub(super) fn progress(state: &State, session: &str, wait: &Wait) -> Progress {
     let Some(found) = state.sessions.iter().find(|s| s.id == session) else {
         return Progress::Failed(ENDED);
     };
-    match phase {
-        Phase::Gate => Progress::Pending,
-        Phase::Starting { .. } if !found.lifecycle.live() => Progress::Failed(ENDED),
-        Phase::Starting { .. } if latest_mark(state, session).is_some() => Progress::SendPrompt,
-        Phase::Starting { .. } => Progress::Pending,
-        Phase::Working { since } => {
+    match wait {
+        Wait::Starting { .. } if !found.lifecycle.live() => Progress::Failed(ENDED),
+        Wait::Starting { .. } if latest_mark(state, session).is_some() => Progress::SendPrompt,
+        Wait::Starting { .. } => Progress::Pending,
+        Wait::Working { since } => {
             match wait_step(state, session, WaitFor::AnyStop, Some(since)) {
                 Ok(WaitStep::Reached(AgentState::Completed | AgentState::WaitingInput)) => {
                     Progress::Done
@@ -53,12 +58,6 @@ pub(super) fn progress(state: &State, session: &str, phase: &Phase) -> Progress 
             }
         }
     }
-}
-
-/// A prompt as one typed line: a line break in typed text is Enter, so
-/// each break becomes a space.
-pub(super) fn one_line(prompt: &str) -> String {
-    prompt.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Most characters of one result note in a prompt.
@@ -129,8 +128,8 @@ mod tests {
         state
     }
 
-    fn starting() -> Phase {
-        Phase::Starting { prompt: "p".into() }
+    fn starting() -> Wait {
+        Wait::Starting { prompt: "p".into() }
     }
 
     #[test]
@@ -158,7 +157,7 @@ mod tests {
     fn old_hook_record_does_not_end_the_step() {
         let done = state(Lifecycle::Running, None, Some(AgentState::Completed));
         let since = latest_mark(&done, "s");
-        let working = Phase::Working { since };
+        let working = Wait::Working { since };
         assert_eq!(progress(&done, "s", &working), Progress::Pending);
         let mut next = done.clone();
         next.agents[0].updated = 105;
@@ -167,7 +166,7 @@ mod tests {
 
     #[test]
     fn step_ends_by_the_new_hook_state() {
-        let working = Phase::Working { since: None };
+        let working = Wait::Working { since: None };
         let case = |agent| progress(&state(Lifecycle::Running, None, Some(agent)), "s", &working);
         assert_eq!(case(AgentState::WaitingInput), Progress::Done);
         assert_eq!(case(AgentState::Completed), Progress::Done);
@@ -179,7 +178,7 @@ mod tests {
 
     #[test]
     fn ended_terminal_never_ends_a_step_as_done() {
-        let working = Phase::Working { since: None };
+        let working = Wait::Working { since: None };
         for exit_code in [Some(0), Some(1), None] {
             let ended = state(Lifecycle::Ended, exit_code, None);
             assert_eq!(progress(&ended, "s", &working), Progress::Failed(ENDED));
