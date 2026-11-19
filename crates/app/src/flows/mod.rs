@@ -10,6 +10,9 @@
 //! Edit open the native flow editor (`editor`). Files are read and written
 //! on worker threads.
 mod editor;
+mod gates;
+#[cfg(test)]
+mod gates_tests;
 pub(crate) use editor::{FLOW_ACTIONS, FLOW_TAB_ICON};
 mod inputs_form;
 mod panel;

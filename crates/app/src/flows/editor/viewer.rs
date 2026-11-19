@@ -25,8 +25,8 @@ pub(super) const CARD_WIDTH: f32 = 196.0;
 pub(super) struct Out {
     /// The session of the step whose terminal the user asked for.
     pub(super) go: Option<String>,
-    /// The gate that the user approved (true) or rejected.
-    pub(super) answer: Option<(String, bool)>,
+    /// The gate that the user answered, with the answer.
+    pub(super) answer: Option<(String, crate::flows::gates::GateChoice)>,
     /// The question step whose typed answer the user sent.
     pub(super) send: Option<String>,
     /// The failed step that the user asked to start again.
@@ -137,6 +137,22 @@ impl SnarlViewer<Node> for Viewer<'_> {
 
     fn menu_style(&mut self) -> fn(&mut egui::Style) {
         appearance::menu_style
+    }
+
+    /// The grid, then each loop as a dashed wire behind the cards.
+    fn draw_background(
+        &mut self,
+        background: Option<&egui_snarl::ui::BackgroundPattern>,
+        viewport: &egui::Rect,
+        snarl_style: &egui_snarl::ui::SnarlStyle,
+        style: &egui::Style,
+        painter: &egui::Painter,
+        snarl: &Snarl<Node>,
+    ) {
+        if let Some(background) = background {
+            background.draw(viewport, snarl_style, style, painter);
+        }
+        super::branching::paint_loops(painter, snarl, self.sizes, self.colors.gate);
     }
 
     fn title(&mut self, node: &Node) -> String {

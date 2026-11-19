@@ -175,14 +175,9 @@ impl App {
             });
         } else if let Some(message) = &need.state.gate {
             ui.label(message);
-            appearance::footer_row(ui, |ui| {
-                if appearance::primary_button(ui, "Approve").clicked() {
-                    *act = Some(Act::Gate(dir.clone(), step.clone(), true));
-                }
-                if appearance::danger_button(ui, "Reject").clicked() {
-                    *act = Some(Act::Gate(dir, step, false));
-                }
-            });
+            if let Some(choice) = super::gates::gate_buttons(ui, &need.state.options) {
+                *act = Some(Act::Gate(dir, step, choice));
+            }
         }
     }
 
@@ -299,6 +294,12 @@ impl App {
             });
         } else {
             self.flow_step_line(ui, (id, step, &state), act);
+        }
+        // The choice, the condition and the round, under the row: the
+        // row's trailing text stays short.
+        let labels = super::gates::branch_labels(step);
+        if !labels.is_empty() {
+            clipped_note(ui, &labels.join(" · "));
         }
         if let Some(stall) = stall {
             clipped_note(ui, &stall);

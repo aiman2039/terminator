@@ -248,7 +248,7 @@ impl Flow {
                         *prompt = fill(prompt, values, false).map_err(place(id, "prompt"))?;
                     }
                 }
-                StepKind::Gate { message } => {
+                StepKind::Gate { message, .. } => {
                     *message = fill(message, values, false).map_err(place(id, "gate"))?;
                 }
             }

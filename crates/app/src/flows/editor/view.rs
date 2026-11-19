@@ -175,8 +175,8 @@ impl App {
         let Some(run) = run else {
             return;
         };
-        if let Some((step, approve)) = out.answer {
-            self.apply_flow_act(Act::Gate(run.dir.clone(), step, approve));
+        if let Some((step, choice)) = out.answer {
+            self.apply_flow_act(Act::Gate(run.dir.clone(), step, choice));
         }
         if let Some(step) = out.send {
             self.apply_flow_act(Act::Answer(run.dir.clone(), step));
@@ -234,8 +234,8 @@ impl App {
             Some(StripClick::Hide) => {
                 self.flows.banner_hidden.insert(run.dir.clone());
             }
-            Some(StripClick::Gate(step, approve)) => {
-                self.apply_flow_act(Act::Gate(run.dir.clone(), step, approve));
+            Some(StripClick::Gate(step, choice)) => {
+                self.apply_flow_act(Act::Gate(run.dir.clone(), step, choice));
             }
             Some(StripClick::Answer(step)) => {
                 self.apply_flow_act(Act::Answer(run.dir.clone(), step));

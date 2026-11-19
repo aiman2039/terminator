@@ -431,7 +431,7 @@ fn a_run_whose_runner_is_gone_is_stopped_with_no_answer_buttons() {
 }
 
 /// Waits for a file that a worker thread writes, and gives its text.
-fn written(file: &Path) -> String {
+pub(super) fn written(file: &Path) -> String {
     let started = Instant::now();
     loop {
         if let Ok(text) = std::fs::read_to_string(file) {
@@ -463,7 +463,11 @@ fn panel_buttons_write_only_the_users_answers() {
     let _runner = flow::control::hold_runner(&dir).expect("lock");
 
     // Approve: the gate's answer file.
-    app.apply_flow_act(panel::Act::Gate(dir.clone(), "ok".into(), true));
+    app.apply_flow_act(panel::Act::Gate(
+        dir.clone(),
+        "ok".into(),
+        gates::GateChoice::Approve,
+    ));
     assert_eq!(written(&dir.join("answers/ok")), "approve");
 
     // Send: the typed answer to the step's open question.

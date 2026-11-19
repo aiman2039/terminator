@@ -1,5 +1,23 @@
 # Validation evidence — 2026-09-08
 
+## Flow gate options, branches and loops — 2026-11-19
+
+- Unit tests: strict `options`, `when`, `loop_to`/`max_rounds` checks,
+  skip propagation, loop rounds and retry in a round (`terminator-core`
+  `flow::branch_tests`); the runner's option answer, skips and loop
+  (`terminator-hook` `control::flow::gates_tests`); option buttons, the
+  written `option:NAME` answer, skipped and round words (`terminator`
+  `flows::gates_tests`); the editor round trip, error fields, plan text and
+  card chips (`flows::editor::branch_tests`).
+- `cargo run -p xtask -- integration --only flows` (real PTYs, isolated
+  daemon): a gate with options refuses a plain approve and an unknown
+  option; "rework" starts `build` round 2 in a new terminal; "ship" runs
+  `release`, skips `fix` and the run ends as done; a loop that always
+  reworks ends after its last round with `release` skipped.
+- Native screenshots (isolated data dir, real `flow run`): option buttons
+  on the gate card, in the run strip and in the Flows tool window; a
+  skipped step; a loop in round 2 of 3 with its dashed wire.
+
 ## Flow run inputs, Retry and stall badge — 2026-11-19
 
 - Unit tests: input parsing, placeholders and shell quoting
