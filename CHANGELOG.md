@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: Replace in Files wrote a file that changed since the search when the change was not on a hit line (for example a new line at the end). Any change to the file now stops the replace before any write.
+
 - Flow editor: a card that grows (a run's note, Retry, a badge) moves the cards it would cover down, so cards never overlap; the move is a layout change only. With more than one failed step, the run strip has one "Retry STEP" button for each. The flow plan (Preview, Export) lists the run inputs.
 
 - Flow Retry and stall badge. After a step fails, the flow runner waits instead of ending: Retry (the Flows tool window, the failed card and the run strip of the editor, or `terminator-hook flow retry RUN STEP`) starts the step again as its next attempt in a new terminal, the steps after it wait again, and the run goes on. The old terminal stays. Cancel ends the run; `flow run --end-on-failure` ends it at the first failure as before. Retry is refused when the run's runner is gone. A retried step shows "attempt 2". A display-only badge shows "no activity N min" on a running step whose agent sent no hook report for a set time (Settings → Agents → Flow stall badge, default 10 min, 0 is off) and "exited (no report)" on a step whose terminal ended with no report. Both read only hook and session state, never terminal text.

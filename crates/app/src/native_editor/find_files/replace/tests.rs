@@ -83,6 +83,7 @@ fn hits(path: &str, lines: &[u32]) -> FileHits {
             .iter()
             .map(|&line| (line, format!("foo {line}")))
             .collect(),
+        fingerprint: 0,
     }
 }
 
@@ -309,6 +310,26 @@ fn a_match_added_past_the_cut_preview_stops_the_replace_before_any_write() {
     assert!(error.to_string().contains("b.txt changed since the search"));
     assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\n");
     assert_eq!(std::fs::read_to_string(&b).unwrap(), changed);
+}
+
+#[test]
+fn a_line_appended_since_the_search_stops_the_replace_before_any_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "a.txt", "foo\nbar\n");
+    let mut find = searched(dir.path(), "foo", false);
+    find.replace.text = "baz".into();
+    let plan = find.replace_plan(false).unwrap();
+    // The hit line is the same; a new match came after it.
+    std::fs::write(&a, "foo\nbar\nfoo\n").unwrap();
+    let error = prepare_replace(&plan).err().unwrap();
+    assert!(error.downcast_ref::<Stale>().is_some(), "{error:#}");
+    assert!(error.to_string().contains("a.txt changed since the search"));
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\nbar\nfoo\n");
+    // A change on a line without a hit stops it too.
+    std::fs::write(&a, "foo\nbaR\n").unwrap();
+    let error = prepare_replace(&plan).err().unwrap();
+    assert!(error.downcast_ref::<Stale>().is_some(), "{error:#}");
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "foo\nbaR\n");
 }
 
 #[test]

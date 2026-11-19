@@ -2,9 +2,10 @@
 //! checked edits. A line's matches are found as the search found them
 //! (empty matches skipped, like the find bar); in regex mode `$1` and
 //! `${name}` expand from the match. The worker re-reads each file, makes
-//! sure every planned line still reads as the search saw it, and hands
+//! sure the whole file and every planned line still read as the search
+//! saw them, and hands
 //! the edits to the rename staging.
-use super::super::search::{MAX_PREVIEW_CHARS, line_fingerprint};
+use super::super::search::{MAX_PREVIEW_CHARS, file_fingerprint, line_fingerprint};
 use super::*;
 use crate::native_editor::rename::{MAX_RENAME_BYTES, MAX_RENAME_EDITS, prepare_rename};
 use anyhow::Context as _;
@@ -74,10 +75,12 @@ pub(crate) fn change_line(line: &str, how: &LineReplace<'_>) -> LineChange {
 /// preview) and the fingerprint of the whole line then.
 pub(crate) type PlannedLine = (u32, String, u64);
 
-/// One file of a replace: its counted lines.
+/// One file of a replace: its counted lines, and the fingerprint of the
+/// whole file as the search read it.
 pub(crate) struct PlannedFile {
     pub path: PathBuf,
     pub lines: Vec<PlannedLine>,
+    pub fingerprint: u64,
 }
 
 /// Everything a replace needs off the GUI thread.
@@ -132,6 +135,10 @@ pub(crate) fn prepare_replace(plan: &ReplacePlan) -> anyhow::Result<PreparedRena
             total_bytes <= MAX_RENAME_BYTES,
             "Replace in Files reads at most 16 MB at once. Uncheck some files and try again."
         );
+        // Any change since the search (a hit line or any other) stops it.
+        if file_fingerprint(&bytes) != file.fingerprint {
+            return Err(Stale(format!("{name} changed since the search.")).into());
+        }
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| anyhow::anyhow!("{name} is not UTF-8 text. Uncheck it and try again."))?;
         let file_edits = file_edits(text, &file.lines, &how)
