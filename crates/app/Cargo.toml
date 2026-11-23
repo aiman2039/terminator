@@ -79,7 +79,7 @@ linkify = "0.11"
 git-url-parse = "0.6"
 biquad = "0.5"
 encoding_rs = "0.8"
-chardetng = "0.1"
+chardetng = "1.0"
 # Agent preset arguments are quoted for the shell (src/agent_launch).
 shlex = "2"
 # Task files (`.terminator/tasks.toml`); the same version core uses.
