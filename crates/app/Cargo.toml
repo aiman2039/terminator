@@ -31,7 +31,7 @@ egui_dock = { version = "0.21", features = ["serde"] }
 egui-snarl = "0.12"
 egui_term = { path = "../../vendor/egui_term" }
 open = "5"
-rfd = "0.17"
+rfd = "0.18"
 fs2 = "0.4"
 notify = "8"
 file-id = "0.2"
