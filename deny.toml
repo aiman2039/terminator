@@ -87,8 +87,6 @@ skip = [
     { crate = "nix", reason = "0.28 via portable-pty vs 0.30 via wprs vs 0.31 via calloop 0.14" },
     { crate = "itertools", reason = "0.14 via ratatui/wprs vs 0.15 via egui/rpm" },
     { crate = "signal-hook", reason = "0.3 via crossterm vs 0.4 via alacritty/terminator-hook" },
-    # rfd 0.17 vs eframe 0.36.
-    { crate = "pollster", reason = "0.4 via rfd vs 1.0 via eframe" },
     { crate = "miniz_oxide", reason = "0.8 via png 0.17 vs 0.9 via flate2" },
     { crate = "png", reason = "0.17 via resvg vs 0.18 via image" },
     { crate = "zune-core", reason = "0.4 via resvg vs 0.5 via image" },
