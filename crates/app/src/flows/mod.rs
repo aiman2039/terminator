@@ -163,6 +163,15 @@ impl FlowsState {
     pub(crate) fn mark_visible(&mut self, path: &std::path::Path) {
         self.visible.insert(path.into());
     }
+
+    /// Tests: show `runs` and drop the read in flight, so that no read of
+    /// the run folders replaces them in the next frames.
+    #[cfg(test)]
+    pub(crate) fn set_runs(&mut self, runs: Vec<Run>) {
+        self.runs = runs;
+        self.reading = None;
+        self.read_at = Some(Instant::now());
+    }
 }
 
 /// Read and check every flow file of a project. Blocking: call it on a

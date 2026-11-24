@@ -90,12 +90,11 @@ fn cards_show_options_conditions_loops_and_option_buttons_in_a_run() {
     let mut state = RunState::new(&flow, "review", "p");
     state.set("build", StepStatus::Done);
     state.set("review", StepStatus::Running);
-    app.flows.runs = vec![crate::flows::Run {
+    app.flows.set_runs(vec![crate::flows::Run {
         dir: project.path().join("review-1"),
         state,
         gone: false,
-    }];
-    app.flows.read_at = Some(Instant::now());
+    }]);
     let text = settle(&mut app, &ctx, &path);
     // The option chip, the card's button and the strip's button.
     for label in ["ship", "rework"] {
@@ -122,12 +121,11 @@ fn run_strip_counts_skipped_steps_as_done_and_duplicate_clears_branch_and_worktr
     state.set("release", StepStatus::Done);
     state.set("fix", StepStatus::Skipped);
     state.ended = true;
-    app.flows.runs = vec![crate::flows::Run {
+    app.flows.set_runs(vec![crate::flows::Run {
         dir: project.path().join("review-1"),
         state,
         gone: false,
-    }];
-    app.flows.read_at = Some(Instant::now());
+    }]);
     let text = settle(&mut app, &ctx, &path);
     assert!(count(&text, "4 of 4 done") >= 1, "{text:?}");
 

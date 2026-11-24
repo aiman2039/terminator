@@ -455,9 +455,7 @@ fn banner_says_starting_after_run_and_an_ended_run_banner_can_be_hidden() {
         }
     };
     let show = |app: &mut App, runs: Vec<crate::flows::Run>| {
-        app.flows.runs = runs;
-        // No read of the run folders replaces these runs in the next frames.
-        app.flows.read_at = Some(Instant::now());
+        app.flows.set_runs(runs);
         settle(app, &ctx, &path)
     };
 
@@ -505,13 +503,11 @@ fn cards_show_the_newest_run_with_approve_on_a_gate_that_waits() {
     state.steps.get_mut("one").unwrap().session = Some("s1".into());
     state.steps.get_mut("one").unwrap().note = Some("Fixed the test.".into());
     state.steps.get_mut("ok").unwrap().status = StepStatus::Running;
-    app.flows.runs = vec![crate::flows::Run {
+    app.flows.set_runs(vec![crate::flows::Run {
         dir: project.path().join("run"),
         state,
         gone: false,
-    }];
-    // No read of the run folders replaces this run in the next frames.
-    app.flows.read_at = Some(Instant::now());
+    }]);
     let text = settle(&mut app, &ctx, &path);
     for label in [
         "done",
@@ -557,8 +553,7 @@ fn cards_show_only_the_runs_of_their_own_flow_file() {
         }
     };
     let show = |app: &mut App, runs: Vec<crate::flows::Run>| {
-        app.flows.runs = runs;
-        app.flows.read_at = Some(Instant::now());
+        app.flows.set_runs(runs);
         settle(app, &ctx, &path)
     };
 

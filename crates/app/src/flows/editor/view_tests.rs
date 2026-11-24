@@ -589,12 +589,11 @@ fn a_card_that_grows_with_retry_never_covers_the_card_below() {
         step.attempt = 2;
         step.exited = true;
     }
-    app.flows.runs = vec![crate::flows::Run {
+    app.flows.set_runs(vec![crate::flows::Run {
         dir: project.path().join("close-1"),
         state,
         gone: false,
-    }];
-    app.flows.read_at = Some(Instant::now());
+    }]);
     let text = settle(&mut app, &ctx, (&path, 1600.0));
     // The cards grew (note, attempt, badge, Retry) and moved apart.
     assert_no_overlap(&card_rects(ready(&mut app, &path)));
