@@ -25,10 +25,16 @@ pub(super) const CARD_WIDTH: f32 = 196.0;
 pub(super) struct Out {
     /// The session of the step whose terminal the user asked for.
     pub(super) go: Option<String>,
+    /// The session of the step whose screen the user asked to peek (read-only).
+    pub(super) peek: Option<String>,
+    /// The racer worktree path whose diff the user asked to open.
+    pub(super) open_diff: Option<std::path::PathBuf>,
     /// The gate that the user answered, with the answer.
     pub(super) answer: Option<(String, crate::flows::gates::GateChoice)>,
     /// The question step whose typed answer the user sent.
     pub(super) send: Option<String>,
+    /// The running step whose typed mailbox note the user sent (`flow send`).
+    pub(super) send_mail: Option<String>,
     /// The failed step that the user asked to start again.
     pub(super) retry: Option<String>,
     /// The card that the user clicked or asked to edit.
@@ -50,8 +56,12 @@ pub(super) struct Viewer<'a> {
     pub(super) live: bool,
     /// The stall badge of each step that has one, by step ID.
     pub(super) stalls: HashMap<String, String>,
+    /// Latest hook-reported update text of each running step, by step ID.
+    pub(super) updates: HashMap<String, String>,
     /// Typed answers of the shown run's questions, by step ID.
     pub(super) drafts: &'a mut HashMap<String, String>,
+    /// Typed mailbox messages of the shown run's running steps, by step ID.
+    pub(super) mail_drafts: &'a mut HashMap<String, String>,
     pub(super) selected: Option<NodeId>,
     /// The first check error of the graph, on the card it concerns.
     pub(super) error: Option<&'a CheckError>,

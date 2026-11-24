@@ -22,6 +22,10 @@ pub(super) enum Click {
     CopyPlan,
     CopyFile,
     ExportPlan,
+    Undo,
+    Redo,
+    Reload,
+    OverwriteSave,
     Discard,
 }
 
@@ -217,6 +221,17 @@ fn right_group(
         if narrow {
             more_tools(ui, keys, click);
             ui.separator();
+        }
+        if appearance::menu_action(ui, editor.history.can_undo(), "Undo", "Undo2").clicked() {
+            *click = Some(Click::Undo);
+        }
+        if appearance::menu_action(ui, editor.history.can_redo(), "Redo", "Redo2").clicked() {
+            *click = Some(Click::Redo);
+        }
+        ui.separator();
+        let can_reload = editor.on_disk && !saving;
+        if appearance::menu_action(ui, can_reload, "Reload from disk", "RefreshCw").clicked() {
+            *click = Some(Click::Reload);
         }
         let discard = appearance::menu_danger_action(ui, dirty, "Discard changes", "Trash");
         if discard.clicked() {

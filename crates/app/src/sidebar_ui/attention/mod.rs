@@ -27,7 +27,7 @@ use eframe::egui::{self, Color32};
 pub(crate) use terminal_card::{TerminalCard, terminal_card};
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{AgentState, Notification, Session, now};
-pub(crate) use triage::{SNOOZE_CHOICES, Triage, TriageUndo};
+pub(crate) use triage::{InboxFilter, SNOOZE_CHOICES, Triage, TriageUndo};
 
 impl App {
     // Inline selection is not a modal and must not take terminal keyboard focus.

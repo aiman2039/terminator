@@ -83,9 +83,9 @@ impl TextEncoding {
             Err(error) => error.into_bytes(),
         };
         anyhow::ensure!(!bytes.contains(&0), "File looks binary");
-        let mut detector = chardetng::EncodingDetector::new();
+        let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
         detector.feed(&bytes, true);
-        let encoding = detector.guess(None, true);
+        let encoding = detector.guess(None, chardetng::Utf8Detection::Allow);
         let (text, had_errors) = encoding.decode_without_bom_handling(&bytes);
         anyhow::ensure!(!had_errors, "File is not valid {}", encoding.name());
         Ok((

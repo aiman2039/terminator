@@ -2,6 +2,10 @@
 //! GUI: read the runs, answer a gate, answer a step's question, cancel.
 //! Each action is one file in the run folder that the runner reads. None
 //! of them starts a step or types into a terminal.
+pub use super::mailbox::{
+    MAILBOX, MAX_MESSAGES, MAX_OUTPUTS, MailMessage, output_path_ok, read_inbox, send_message,
+};
+pub use super::propose::{PROPOSALS, take_proposals, write_proposal};
 use super::{RUN_DIR, RunState, STATE_FILE, StepStatus};
 use std::path::{Path, PathBuf};
 
@@ -13,6 +17,8 @@ pub const APPROVE: &str = "approve";
 pub const REJECT: &str = "reject";
 /// Start of an answer file that chooses a gate option: `option:NAME`.
 pub const CHOOSE: &str = "option:";
+/// Start of an answer file that picks a race winner: `pick:N` (1-based).
+pub const PICK: &str = "pick:";
 /// Folder of open questions (`flow ask`): one file per step.
 pub const QUESTIONS: &str = "questions";
 /// Folder of the user's answers to questions: one file per step.
@@ -44,6 +50,12 @@ pub enum RunError {
     NoOptions,
     #[error("This gate has no option \"{0}\"")]
     UnknownOption(String),
+    #[error("This gate needs a racer pick: 1 to {0} (--pick N)")]
+    NeedsPick(usize),
+    #[error("This gate is not a pick gate; approve it without --pick")]
+    NoPick,
+    #[error("Invalid racer pick {0}; expected 1 to {1}")]
+    InvalidPick(u32, usize),
     #[error("Unknown step")]
     UnknownStep,
     #[error("This step has no open question")]
@@ -52,6 +64,14 @@ pub enum RunError {
     NotRetryable,
     #[error("The text is empty or longer than 16 KiB")]
     Text,
+    #[error("Messages can only be sent to a waiting or running command step")]
+    CannotSend,
+    #[error("This step's mailbox is full")]
+    MailboxFull,
+    #[error("Invalid output path \"{0}\"")]
+    BadOutput(String),
+    #[error("Invalid proposed step: {0}")]
+    Proposal(String),
     #[error(
         "This run has not ended, so it stays in the list. Cancel it and wait until its runner ends it"
     )]
@@ -200,6 +220,25 @@ pub fn recent_runs(data: &Path, limit: usize, ended: &mut EndedRuns) -> Vec<(Pat
     runs
 }
 
+/// Every ended run folder (including runs whose runner is gone) of `project`
+/// directly in `$data/flows`, with no count limit. Blocking: call off the GUI thread.
+pub fn all_ended_runs(data: &Path, project: &str) -> Vec<PathBuf> {
+    std::fs::read_dir(data.join(RUN_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let dir = entry.path();
+            let state = read_state(&dir).ok()?;
+            if state.project != project {
+                return None;
+            }
+            let view = run_view(&dir, state);
+            (view.status != RunStatus::Running).then_some(dir)
+        })
+        .collect()
+}
+
 /// Write `bytes` as the file `step` in the folder `folder` of the run in
 /// `dir`, in one step. `step` must be a step ID of the run.
 pub fn write(dir: &Path, folder: &str, step: &str, bytes: &[u8]) -> Result<(), RunError> {
@@ -240,7 +279,7 @@ pub fn alive(dir: &Path) -> bool {
 }
 
 /// A run that did not end, with its runner.
-fn open(dir: &Path) -> Result<RunState, RunError> {
+pub(super) fn open(dir: &Path) -> Result<RunState, RunError> {
     let view = read_run(dir)?;
     match view.status {
         RunStatus::Running => Ok(view.state),
@@ -256,6 +295,8 @@ pub enum GateAnswer<'a> {
     Approve,
     /// Approve a gate with options, with this option.
     Choose(&'a str),
+    /// Approve a pick gate by selecting 1-based racer index `N`.
+    Pick(u32),
     Reject,
 }
 
@@ -265,6 +306,7 @@ impl<'a> GateAnswer<'a> {
         match self {
             Self::Approve => APPROVE.to_owned(),
             Self::Choose(option) => format!("{CHOOSE}{option}"),
+            Self::Pick(index) => format!("{PICK}{index}"),
             Self::Reject => REJECT.to_owned(),
         }
     }
@@ -274,14 +316,20 @@ impl<'a> GateAnswer<'a> {
         match text.trim() {
             APPROVE => Some(Self::Approve),
             REJECT => Some(Self::Reject),
-            text => text.strip_prefix(CHOOSE).map(Self::Choose),
+            text => text.strip_prefix(CHOOSE).map(Self::Choose).or_else(|| {
+                text.strip_prefix(PICK)
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .filter(|&n| n >= 1)
+                    .map(Self::Pick)
+            }),
         }
     }
 }
 
 /// Approve or reject a gate step that waits now. A gate with options takes
-/// only one of its options; a gate without takes only Approve. A step ID
-/// of the run is a safe file name, so only such an ID is written.
+/// only one of its options; a pick gate takes `--pick N`; a plain gate takes
+/// only Approve. A step ID of the run is a safe file name, so only such an
+/// ID is written.
 pub fn answer_gate(dir: &Path, step: &str, answer: GateAnswer<'_>) -> Result<(), RunError> {
     let state = open(dir)?;
     let Some(run) = state
@@ -291,7 +339,21 @@ pub fn answer_gate(dir: &Path, step: &str, answer: GateAnswer<'_>) -> Result<(),
     else {
         return Err(RunError::NotGate);
     };
+    if let Some(target) = &run.pick {
+        let count = state
+            .steps
+            .get(target)
+            .map_or(0, |race_step| race_step.racers.len());
+        match answer {
+            GateAnswer::Reject => {}
+            GateAnswer::Pick(index) if index >= 1 && (index as usize) <= count => {}
+            GateAnswer::Pick(index) => return Err(RunError::InvalidPick(index, count)),
+            GateAnswer::Approve | GateAnswer::Choose(_) => return Err(RunError::NeedsPick(count)),
+        }
+        return write(dir, ANSWERS, step, answer.text().as_bytes());
+    }
     match answer {
+        GateAnswer::Pick(_) => return Err(RunError::NoPick),
         GateAnswer::Approve if !run.options.is_empty() => {
             return Err(RunError::NeedsOption(run.options.join(", ")));
         }

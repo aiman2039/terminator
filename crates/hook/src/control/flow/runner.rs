@@ -6,9 +6,9 @@ use super::{
         agents::latest_mark,
         lookup::{Ctl, NewSession},
     },
-    ANSWERS, CANCEL, agent,
+    ANSWERS, CANCEL,
     cancel::Cancelled,
-    progress::{ENDED, Phase, Progress, Wait, progress, with_results},
+    progress::{ENDED, Phase, Progress, Wait, progress},
     retry::take_retries,
 };
 use crate::output::Output;
@@ -29,20 +29,20 @@ use terminator_core::{
 
 const POLL: Duration = Duration::from_millis(500);
 /// Longest wait for the agent's first hook report.
-const START_LIMIT: Duration = Duration::from_mins(2);
+pub(super) const START_LIMIT: Duration = Duration::from_mins(2);
 /// Seconds between the agent's first hook report and the prompt, so the
 /// agent's input line is there.
-const SETTLE_SECS: u64 = 2;
+pub(super) const SETTLE_SECS: u64 = 2;
 /// Shown in the Flows views while the prompt waits for the agent to start.
-const WAITS_FOR_HOOK: &str = "Waits for the agent's first hook report (2 minutes at most). \
+pub(super) const WAITS_FOR_HOOK: &str = "Waits for the agent's first hook report (2 minutes at most). \
      The agent's hooks must be installed for this Terminator.";
 
 /// How a running step ended, or `None` while it runs.
 pub(super) type End = Option<Result<(), String>>;
 
 pub(super) struct Runner {
-    paths: Paths,
-    project: Project,
+    pub(super) paths: Paths,
+    pub(super) project: Project,
     pub(super) flow: Flow,
     /// The run folder.
     pub(super) dir: PathBuf,
@@ -119,6 +119,12 @@ impl Runner {
         // Before the first state file write: a reader never sees this run
         // without its runner's lock.
         let _lock = control::hold_runner(&self.dir)?;
+        terminator_core::flow::report::append_event(
+            &self.dir,
+            "run_started",
+            None,
+            Some(&self.flow.name),
+        );
         let looped = self.run_loop();
         if let Err(error) = &looped {
             self.state
@@ -127,9 +133,19 @@ impl Runner {
         self.state.ended = true;
         self.changed = true;
         let saved = self.save();
+        let outcome = self.flow.outcome(&self.state);
+        terminator_core::flow::report::append_event(
+            &self.dir,
+            "run_ended",
+            None,
+            Some(match outcome {
+                Outcome::Done => "done",
+                Outcome::Active | Outcome::Stopped => "stopped",
+            }),
+        );
         looped?;
         saved?;
-        Ok(self.flow.outcome(&self.state))
+        Ok(outcome)
     }
 
     fn run_loop(&mut self) -> Result<()> {
@@ -141,9 +157,12 @@ impl Runner {
                 break;
             }
             self.retries();
+            self.ingest_proposals();
             self.skips();
             self.start_ready();
             self.poll_running();
+            self.ingest_proposals();
+            self.skips();
             self.sync_questions();
             self.save()?;
             // The run is active while a step runs or can start, and, with
@@ -174,7 +193,7 @@ impl Runner {
     }
 
     /// Writes the state file when the state changed.
-    fn save(&mut self) -> Result<()> {
+    pub(super) fn save(&mut self) -> Result<()> {
         if !self.changed {
             return Ok(());
         }
@@ -198,10 +217,17 @@ impl Runner {
 
     pub(super) fn start(&mut self, step: &Step) {
         let started = match &step.kind {
-            StepKind::Gate { message, options } => {
-                self.announce_gate(step, message, options);
+            StepKind::Gate {
+                message,
+                options,
+                pick,
+            } => {
+                self.announce_gate(step, (message, options, pick.as_deref()));
                 Ok(Phase::Gate)
             }
+            StepKind::Command {
+                race: Some(race), ..
+            } => self.start_race(step, race),
             StepKind::Command { .. } => self.start_command(step),
         };
         self.started(step, started);
@@ -219,6 +245,16 @@ impl Runner {
                 }
                 self.changed = true;
                 self.phases.insert(step.id.clone(), (phase, Instant::now()));
+                terminator_core::flow::report::append_event(
+                    &self.dir,
+                    if matches!(step.kind, StepKind::Gate { .. }) {
+                        "gate_waiting"
+                    } else {
+                        "step_started"
+                    },
+                    Some(&step.id),
+                    None,
+                );
                 Output::line_or_drop(format_args!("{}: started", step.id));
             }
             Err(error) => self.finish(&step.id, Some(Err(format!("{error:#}")))),
@@ -233,20 +269,30 @@ impl Runner {
             prompt,
             cwd,
             worktree,
+            ..
         } = &step.kind
         else {
             bail!("Not a command step");
         };
         let ctl = Ctl::connect(&self.paths)?;
         let mut project = self.project.clone();
+        let mut port = None;
         if let Some(name) = worktree {
             project = ctl.step_worktree(&project, name)?;
+            port = Some(terminator_core::flow::worktree_port(
+                &self.project.path,
+                name,
+            ));
+        } else if let Some(picked) = self.picked_worktree_for(step) {
+            project = picked;
         }
         // The worktree can take seconds: Cancel during it starts no
         // terminal.
         if self.cancelled() {
             return Err(Cancelled.into());
         }
+        let command = terminator_core::flow::race::fill_runtime(command, None, port, true)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let session = ctl.create_session(NewSession {
             project: &project,
             cwd: cwd.as_ref().map(|cwd| project.path.join(cwd)),
@@ -258,30 +304,36 @@ impl Runner {
         if let Some(run) = self.state.steps.get_mut(&step.id) {
             run.session = Some(session.id.clone());
             run.started = Some(now());
+            run.port = port;
+            if worktree.is_some() || project.path != self.project.path {
+                run.worktree_path = Some(project.path.clone());
+            }
         }
         self.state.set(&step.id, StepStatus::Running);
         self.changed = true;
         self.save()?;
-        self.type_line(&session.id, command)?;
-        // Without a GUI the session runs in the background.
+        self.type_line(&session.id, &command)?;
+        // Without a GUI the session runs in the background. With a GUI it
+        // opens in a background tab without stealing focus.
         let _ = ui_control::rpc(
             &self.paths,
             ui_control::Request::ShowSession {
                 session: session.id.clone(),
                 anchor: None,
                 split: None,
+                background: true,
             },
         );
         let Some(prompt) = prompt else {
             return Ok(Phase::Command(Wait::Working { since: None }));
         };
-        // Handoff: the result notes of the steps this one needs.
-        let results = step.needs.iter().filter_map(|needs| {
-            let note = self.state.steps.get(needs)?.note.as_deref()?;
-            Some((needs.as_str(), note))
-        });
-        let results = results.chain(self.loop_note(&step.id));
-        let prompt = with_results(&self.flow.full_prompt(prompt), results);
+        let prompt = terminator_core::flow::race::fill_runtime(
+            &self.handoff_prompt(step, prompt),
+            None,
+            port,
+            false,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
         self.set_waits(&step.id, Some(WAITS_FOR_HOOK));
         Ok(Phase::Command(Wait::Starting { prompt }))
     }
@@ -296,51 +348,6 @@ impl Runner {
         let _ = self.save();
     }
 
-    /// Types one line, then presses Enter in a second write (as `ctl send
-    /// --enter` does).
-    fn type_line(&self, session: &str, line: &str) -> Result<()> {
-        // The session can be newer than an older snapshot.
-        Ctl::connect(&self.paths)?.type_and_enter(session, line.as_bytes().to_vec())
-    }
-
-    /// A terminal notice is a help only; an older daemon has none.
-    pub(super) fn notify(&self, session: String, what: &str, body: &str) {
-        let _ = rpc(
-            &self.paths,
-            Request::TerminalNotify {
-                session,
-                title: format!("{what}: {}", self.flow.name),
-                body: body.to_owned(),
-            },
-        );
-    }
-
-    /// Copies each running step's open question (`flow ask`) into the run
-    /// state, and raises a notice for a new one.
-    fn sync_questions(&mut self) {
-        let mut asked = Vec::new();
-        for (id, run) in &mut self.state.steps {
-            let question = (run.status == StepStatus::Running && run.gate.is_none())
-                .then(|| control::question(&self.dir, id))
-                .flatten();
-            if question == run.question {
-                continue;
-            }
-            if let (Some(question), Some(session)) = (&question, &run.session) {
-                asked.push((id.clone(), session.clone(), question.clone()));
-            }
-            run.question = question;
-            self.changed = true;
-        }
-        let run = control::run_name(&self.dir);
-        for (id, session, question) in asked {
-            Output::line_or_drop(format_args!(
-                "{id}: question: {question}\n  terminator-hook flow answer {run} {id} \"...\""
-            ));
-            self.notify(session, "Flow question", &question);
-        }
-    }
-
     /// Polls each running step. Only the hook state of a command step needs
     /// the daemon's snapshot; a gate's answer and a step's own report are
     /// files, read also when the daemon does not answer.
@@ -348,7 +355,7 @@ impl Runner {
         let commands = self
             .phases
             .values()
-            .any(|(phase, _)| matches!(phase, Phase::Command(_)));
+            .any(|(phase, _)| matches!(phase, Phase::Command(_) | Phase::Race(_)));
         // A daemon that does not answer now can answer later.
         let snapshot = commands.then(|| Ctl::snapshot(&self.paths).ok()).flatten();
         let running: Vec<String> = self.phases.keys().cloned().collect();
@@ -359,8 +366,10 @@ impl Runner {
     }
 
     fn poll(&mut self, id: &str, snapshot: Option<&State>) -> End {
-        if matches!(self.phases.get(id)?.0, Phase::Gate) {
-            return self.gate_answer(id);
+        match &self.phases.get(id)?.0 {
+            Phase::Gate => return self.gate_answer(id),
+            Phase::Race(_) => return self.poll_race(id, snapshot),
+            Phase::Command(_) => {}
         }
         // The step's own report (`flow report`) is explicit, so it comes
         // before the hook state and before an ended terminal. It needs no
@@ -369,22 +378,6 @@ impl Runner {
             return Some(end);
         }
         self.poll_command(id, snapshot?)
-    }
-
-    /// The end that the step's own report (`flow report`) gives, if any.
-    fn report_end(&mut self, id: &str) -> End {
-        let report = agent::read_report(&self.dir, id)?;
-        Some(if report.done {
-            // The note of a done step is its result for later steps.
-            if let Some(run) = self.state.steps.get_mut(id) {
-                run.note = report.note;
-            }
-            Ok(())
-        } else {
-            Err(report
-                .note
-                .unwrap_or_else(|| "The step reported a failure".to_owned()))
-        })
     }
 
     /// One poll of a command step by its hook state. Sends the prompt when
@@ -436,20 +429,18 @@ impl Runner {
         }
     }
 
-    fn session_of(&self, id: &str) -> String {
-        self.state
-            .steps
-            .get(id)
-            .and_then(|run| run.session.clone())
-            .unwrap_or_default()
-    }
-
     fn finish(&mut self, id: &str, end: End) {
         match end {
             None => return,
             Some(Ok(())) => {
                 self.state.set(id, StepStatus::Done);
                 let choice = self.state.steps.get(id).and_then(|run| run.choice.clone());
+                terminator_core::flow::report::append_event(
+                    &self.dir,
+                    "step_done",
+                    Some(id),
+                    choice.as_deref(),
+                );
                 match choice {
                     Some(option) => Output::line_or_drop(format_args!("{id}: done: {option}")),
                     None => Output::line_or_drop(format_args!("{id}: done")),
@@ -457,6 +448,12 @@ impl Runner {
                 self.loop_back(id);
             }
             Some(Err(note)) => {
+                terminator_core::flow::report::append_event(
+                    &self.dir,
+                    "step_failed",
+                    Some(id),
+                    Some(&note),
+                );
                 Output::line_or_drop(format_args!("{id}: failed: {note}"));
                 self.state.fail(id, note);
             }
@@ -465,6 +462,7 @@ impl Runner {
         self.phases.remove(id);
         if let Some(run) = self.state.steps.get_mut(id) {
             run.waits_for = None;
+            run.finished = Some(now());
         }
     }
 }

@@ -21,8 +21,10 @@ mod agent;
 mod cancel;
 mod gates;
 mod progress;
+mod race;
 mod retry;
 mod runner;
+mod wait;
 
 use super::{cli_paths, lookup::Ctl};
 use crate::output::Output;
@@ -33,7 +35,7 @@ use std::path::{Path, PathBuf};
 use terminator_core::{
     flow::{
         Outcome, RUN_DIR, STATE_FILE,
-        control::{self, ANSWERS, APPROVE, CANCEL, GateAnswer, REJECT},
+        control::{self, ANSWERS, CANCEL, GateAnswer, REJECT},
         files::{self, plain_name},
     },
     *,
@@ -80,13 +82,35 @@ enum Command {
     /// Print the state of a run, with its status ("stopped (runner gone)"
     /// when its runner is gone).
     Status { run: String },
-    /// Approve a gate step that waits. A gate with options needs one.
+    /// Wait until a flow run reaches a target state (`ended`, `done`, `waiting`, `stopped`).
+    Wait {
+        run: String,
+        #[arg(long, default_value = "ended", value_parser = ["ended", "done", "waiting", "stopped"])]
+        until: String,
+        /// Maximum seconds to wait.
+        #[arg(long, default_value = "3600", value_parser = clap::value_parser!(u64).range(1..=86400))]
+        timeout: u64,
+    },
+    /// Print structured JSONL lifecycle events for a flow run.
+    Events {
+        run: String,
+        /// Keep streaming events until the run ends.
+        #[arg(long)]
+        follow: bool,
+    },
+    /// Write a Markdown summary (`report.md`) of an ended run.
+    ExportReport { run: String },
+    /// Approve a gate step that waits. A gate with options needs `--option`;
+    /// a pick gate needs `--pick N`.
     Approve {
         run: String,
         step: String,
         /// The chosen option of a gate with options.
-        #[arg(long, value_name = "NAME")]
+        #[arg(long, value_name = "NAME", conflicts_with = "pick")]
         option: Option<String>,
+        /// The 1-based racer number chosen for a `pick` gate.
+        #[arg(long, value_name = "N", conflicts_with = "option")]
+        pick: Option<u32>,
     },
     /// Reject a gate step that waits; the steps after it do not start.
     Reject { run: String, step: String },
@@ -97,6 +121,18 @@ enum Command {
         run: String,
         step: String,
         text: String,
+    },
+    /// Store a message in a step's mailbox (never writes to a terminal).
+    Send {
+        run: String,
+        step: String,
+        text: String,
+    },
+    /// For a step's agent: read messages stored in its mailbox (`flow send`).
+    Inbox {
+        /// The step's terminal (default: this terminal).
+        #[arg(long)]
+        session: Option<String>,
     },
     /// For a step's agent: its run, its step and the steps it needs.
     Context {
@@ -110,6 +146,9 @@ enum Command {
         result: String,
         #[arg(long)]
         note: Option<String>,
+        /// Output file path produced by this step (repeat for multiple).
+        #[arg(long = "output", value_name = "PATH")]
+        outputs: Vec<String>,
         #[arg(long)]
         session: Option<String>,
     },
@@ -119,6 +158,22 @@ enum Command {
         /// Seconds to wait for the answer.
         #[arg(long, default_value = "1800", value_parser = clap::value_parser!(u64).range(1..=86400))]
         timeout: u64,
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// For a step's agent: propose a new step to run inside this flow.
+    Propose {
+        id: String,
+        command: String,
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long)]
+        cwd: Option<String>,
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Step ID this proposed step waits for (repeat for multiple; defaults to proposing step).
+        #[arg(long = "needs", value_name = "STEP")]
+        needs: Vec<String>,
         #[arg(long)]
         session: Option<String>,
     },
@@ -137,6 +192,10 @@ pub fn run(args: &[String]) -> Result<()> {
     let cli = Cli::parse_from(program_args(args));
     match cli.command {
         Command::Skill => Output::text(SKILL),
+        Command::Events { run, follow } => {
+            let paths = workspace(cli.data_dir, cli.runtime_dir)?;
+            return wait::stream_events(&run_dir(&paths, &run)?, follow);
+        }
         Command::Run {
             project,
             name,
@@ -168,8 +227,10 @@ pub(crate) fn execute_args(args: &[String]) -> Result<Value> {
         matches!(
             cli.command,
             Command::Context { .. }
+                | Command::Inbox { .. }
                 | Command::Report { .. }
                 | Command::Ask { .. }
+                | Command::Propose { .. }
                 | Command::Status { .. }
         ),
         "This flow command is not available here"
@@ -187,23 +248,31 @@ fn workspace(data_dir: Option<PathBuf>, runtime_dir: Option<PathBuf>) -> Result<
 fn execute(cli: Cli) -> Result<Value> {
     let paths = workspace(cli.data_dir, cli.runtime_dir)?;
     Ok(match cli.command {
-        Command::List { project } => list(&project_of(&paths, &project)?),
+        Command::List { project } => wait::list(&project_of(&paths, &project)?),
         Command::Check { project, name } => {
             let flow = files::load(&project_of(&paths, &project)?.path, &name)?;
             json!({"flow": flow.name, "steps": flow.steps.len(), "valid": true})
         }
-        Command::Status { run } => status(&run_dir(&paths, &run)?)?,
-        Command::Approve { run, step, option } => {
-            let answer = match option.as_deref() {
-                Some(option) => GateAnswer::Choose(option),
-                None => GateAnswer::Approve,
-            };
-            control::answer_gate(&run_dir(&paths, &run)?, &step, answer)?;
-            match option {
-                Some(option) => json!({"step": step, "answer": APPROVE, "option": option}),
-                None => json!({"step": step, "answer": APPROVE}),
-            }
+        Command::Status { run } => wait::status(&run_dir(&paths, &run)?)?,
+        Command::Wait {
+            run,
+            until,
+            timeout,
+        } => wait::wait_run(
+            &run_dir(&paths, &run)?,
+            &until,
+            std::time::Duration::from_secs(timeout),
+        )?,
+        Command::ExportReport { run } => {
+            let path = terminator_core::flow::report::write_run_report(&run_dir(&paths, &run)?)?;
+            json!({"run": run, "report": path})
         }
+        Command::Approve {
+            run,
+            step,
+            option,
+            pick,
+        } => wait::execute_approve(&run_dir(&paths, &run)?, &step, (option, pick))?,
         Command::Reject { run, step } => {
             control::answer_gate(&run_dir(&paths, &run)?, &step, GateAnswer::Reject)?;
             json!({"step": step, "answer": REJECT})
@@ -220,16 +289,36 @@ fn execute(cli: Cli) -> Result<Value> {
             control::answer_question(&run_dir(&paths, &run)?, &step, &text)?;
             json!({"step": step, "answered": true})
         }
-        Command::Context { session } => agent::context(&agent::own_step(&paths.data, session)?),
+        Command::Send { run, step, text } => {
+            let msg = control::send_message(&run_dir(&paths, &run)?, &step, &text)?;
+            json!({"step": step, "sent": true, "seq": msg.seq})
+        }
+        cmd @ (Command::Inbox { .. }
+        | Command::Context { .. }
+        | Command::Report { .. }
+        | Command::Ask { .. }
+        | Command::Propose { .. }) => execute_agent(&paths, cmd)?,
+        Command::Run { .. } | Command::Skill | Command::Events { .. } => {
+            bail!("This command prints its own output")
+        }
+    })
+}
+
+fn execute_agent(paths: &Paths, cmd: Command) -> Result<Value> {
+    match cmd {
+        Command::Inbox { session } => Ok(agent::inbox(&agent::own_step(&paths.data, session)?)),
+        Command::Context { session } => Ok(agent::context(&agent::own_step(&paths.data, session)?)),
         Command::Report {
             result,
             note,
+            outputs,
             session,
         } => agent::report(
             &agent::own_step(&paths.data, session)?,
             result == "done",
             note.as_deref(),
-        )?,
+            &outputs,
+        ),
         Command::Ask {
             question,
             timeout,
@@ -238,9 +327,28 @@ fn execute(cli: Cli) -> Result<Value> {
             &agent::own_step(&paths.data, session)?,
             &question,
             std::time::Duration::from_secs(timeout),
-        )?,
-        Command::Run { .. } | Command::Skill => bail!("This command prints its own output"),
-    })
+        ),
+        Command::Propose {
+            id,
+            command,
+            prompt,
+            cwd,
+            worktree,
+            needs,
+            session,
+        } => agent::propose(
+            &agent::own_step(&paths.data, session)?,
+            agent::ProposeInput {
+                id,
+                command,
+                prompt,
+                cwd,
+                worktree,
+                needs,
+            },
+        ),
+        _ => bail!("Not an agent flow command"),
+    }
 }
 
 /// A local project of the running daemon.
@@ -251,31 +359,6 @@ fn project_of(paths: &Paths, name: &str) -> Result<Project> {
         "Flows need a local project"
     );
     Ok(project)
-}
-
-/// Each flow file with its name, or the reason it is refused.
-fn list(project: &Project) -> Value {
-    let names = files::names(&project.path);
-    let rows = names
-        .into_iter()
-        .map(|file| match files::load(&project.path, &file) {
-            Ok(flow) => json!({"file": file, "flow": flow.name, "steps": flow.steps.len()}),
-            Err(error) => json!({"file": file, "error": format!("{error:#}")}),
-        });
-    Value::Array(rows.collect())
-}
-
-/// The state of a run with its status: a run whose runner is gone shows
-/// as "stopped (runner gone)", with its open steps cancelled.
-fn status(dir: &Path) -> Result<Value> {
-    let view = control::read_run(dir)?;
-    let mut value = serde_json::to_value(&view.state)?;
-    if let Some(fields) = value.as_object_mut() {
-        fields.insert("status".to_owned(), view.status.label().into());
-        let held = view.status == control::RunStatus::Running && view.state.held();
-        fields.insert("waits_for_retry".to_owned(), held.into());
-    }
-    Ok(value)
 }
 
 /// What `flow run` starts.
@@ -317,11 +400,16 @@ fn run_flow(paths: Paths, start: Start) -> Result<()> {
         ),
     }
     let (flow, values) = flow_with_inputs(&project, name, &start.set)?;
-    let run = start.run.unwrap_or_else(|| format!("{name}-{}", now()));
     // Before the folder exists: a signal from now on ends the run with a
     // state file, never an empty folder.
     let interrupted = runner::interrupt_flag()?;
-    let dir = new_run_dir(&paths.data, &run)?;
+    let (run, dir) = match start.run {
+        Some(run) => {
+            let dir = new_run_dir(&paths.data, &run)?;
+            (run, dir)
+        }
+        None => new_auto_run_dir(&paths.data, name, now())?,
+    };
     Output::line_or_drop(format_args!("Run {run}: {}", flow.name));
     let outcome = runner::Runner::new(paths, project, (flow, name), (dir, interrupted))
         .with_inputs(values, start.hold)
@@ -336,6 +424,31 @@ fn run_flow(paths: Paths, start: Start) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Makes the folder of an automatic run name (`NAME-SECONDS`, adding a
+/// numeric suffix when two runs start in the same second).
+fn new_auto_run_dir(data: &Path, name: &str, second: u64) -> Result<(String, PathBuf)> {
+    let base = format!("{name}-{second}");
+    let runs = data.join(RUN_DIR);
+    std::fs::create_dir_all(&runs)?;
+    for suffix in 0..100u32 {
+        let candidate = if suffix == 0 {
+            base.clone()
+        } else {
+            format!("{base}-{suffix}")
+        };
+        if !plain_name(&candidate) {
+            bail!("A run name must be letters, digits, '-' or '_'");
+        }
+        let dir = runs.join(&candidate);
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok((candidate, dir)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    bail!("Run {base} exists; try again")
 }
 
 /// Makes the folder of the new run `run` in the data folder. A run with

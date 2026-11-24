@@ -26,6 +26,19 @@ impl App {
         }
     }
 
+    /// True when `path` is open in any floating window.
+    fn is_floated_flow(&self, path: &Path) -> bool {
+        self.floating_tabs().any(|(_, tab)| {
+            matches!(
+                tab,
+                Tab::Document {
+                    path: at,
+                    kind: DocumentKind::Flow,
+                } if at == path
+            )
+        })
+    }
+
     /// The flow file of the focused pane, when it is an open flow editor.
     pub(crate) fn active_flow_editor(&self) -> Option<PathBuf> {
         let path = self.focused_flow_pane()?;
@@ -67,25 +80,82 @@ impl App {
         true
     }
 
-    /// The other delete key (Backspace or Delete) also removes the
-    /// selected cards, while the canvas has the keyboard.
-    pub(super) fn flow_delete_alias(
+    /// Runs undo/redo, delete alias, and (in floating windows) all flow
+    /// editor shortcuts directly on `ctx`.
+    pub(super) fn flow_pane_keys(
         &self,
         ctx: &egui::Context,
         (path, editor): (&Path, &mut super::FlowEditor),
     ) {
+        let in_main = self.focused_flow_pane() == Some(path);
+        let floated = !in_main && self.is_floated_flow(path);
+        if !in_main && !floated {
+            return;
+        }
+        if floated {
+            let save =
+                shortcuts::binding(&self.state.settings.keybindings, Action::EditorSave.id());
+            if !save.is_empty() && shortcuts::consume(ctx, &save) && editor.dirty() {
+                editor.save();
+            }
+        }
+        if !self.canvas_keyboard(ctx) {
+            return;
+        }
+        if floated {
+            for &action in FLOW_ACTIONS {
+                let key = shortcuts::binding(&self.state.settings.keybindings, action.id());
+                if !key.is_empty() && shortcuts::consume(ctx, &key) {
+                    apply_editor_key(editor, action);
+                }
+            }
+        }
+        self.flow_undo_redo_keys(ctx, editor);
+        self.flow_delete_alias(ctx, editor);
+    }
+
+    fn flow_undo_redo_keys(&self, ctx: &egui::Context, editor: &mut super::FlowEditor) {
+        let redo_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+        let redo = ctx.input_mut(|input| {
+            input.consume_key(redo_shift, egui::Key::Z)
+                || (!cfg!(target_os = "macos")
+                    && input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y))
+        });
+        if redo {
+            editor.redo();
+            return;
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+            editor.undo();
+        }
+    }
+
+    /// The other delete key (Backspace or Delete) also removes the
+    /// selected cards, while the canvas has the keyboard.
+    fn flow_delete_alias(&self, ctx: &egui::Context, editor: &mut super::FlowEditor) {
         let bound = shortcuts::binding(&self.state.settings.keybindings, Action::FlowRemove.id());
         let other = match shortcuts::parse(&bound).map(|chord| (chord.key, chord.modifiers)) {
             Some((egui::Key::Backspace, egui::Modifiers::NONE)) => egui::Key::Delete,
             Some((egui::Key::Delete, egui::Modifiers::NONE)) => egui::Key::Backspace,
             _ => return,
         };
-        if self.focused_flow_pane() == Some(path)
-            && self.canvas_keyboard(ctx)
-            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, other))
-        {
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, other)) {
             editor.remove_selected();
         }
+    }
+}
+
+fn apply_editor_key(editor: &mut super::FlowEditor, action: Action) {
+    match action {
+        Action::EditorSave if editor.dirty() => editor.save(),
+        Action::FlowRemove => editor.remove_selected(),
+        Action::FlowDuplicate => {
+            if let Some(node) = editor.selected {
+                editor.selected = canvas::duplicate(&mut editor.snarl, node).or(Some(node));
+            }
+        }
+        Action::FlowFit => editor.fit = true,
+        _ => {}
     }
 }
 

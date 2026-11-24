@@ -22,9 +22,10 @@ fn retry_request_resets_the_failed_step_once_and_drops_its_old_report() {
     let own = agent::Own {
         dir: dir.clone(),
         step: "build".into(),
+        racer: None,
         state: runner.state().clone(),
     };
-    agent::report(&own, false, Some("broke")).unwrap();
+    agent::report(&own, false, Some("broke"), &[]).unwrap();
     runner.poll_running();
     assert_eq!(runner.state().status("build"), StepStatus::Failed);
     // A request for another attempt, or for a step that did not fail, is

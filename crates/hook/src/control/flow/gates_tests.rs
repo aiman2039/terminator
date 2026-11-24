@@ -45,9 +45,10 @@ fn report_done(runner: &mut runner::Runner, dir: &Path, id: &str, note: &str) {
     let own = agent::Own {
         dir: dir.to_path_buf(),
         step: id.into(),
+        racer: None,
         state: runner.state().clone(),
     };
-    agent::report(&own, true, Some(note)).unwrap();
+    agent::report(&own, true, Some(note), &[]).unwrap();
     runner.poll_running();
 }
 
@@ -151,4 +152,133 @@ fn loop_runs_a_second_round_and_then_goes_on() {
     assert_eq!(fix.round_label().as_deref(), Some("round 2 of 2"));
     let flow = flow::parse(REVIEW).unwrap();
     assert_eq!(flow.outcome(runner.state()), Outcome::Done);
+}
+
+#[test]
+fn gate_option_with_no_downstream_step_ends_run_as_done() {
+    let text = r#"
+version = 1
+name = "Gate only"
+[[step]]
+id = "review"
+gate = "Ship or rework?"
+options = ["ship", "rework"]
+[[step]]
+id = "fix"
+command = "echo fix"
+needs = ["review"]
+when = "review.rework"
+loop_to = "review"
+max_rounds = 2
+"#;
+    let (_data, dir, runner, _interrupted) = runner_of(text);
+    let answer_dir = dir.clone();
+    let responder = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if let Ok(state) = control::read_state(&answer_dir)
+                && state.status("review") == StepStatus::Running
+            {
+                control::answer_gate(&answer_dir, "review", GateAnswer::Choose("ship")).unwrap();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("gate never reached Running");
+    });
+    let outcome = runner.run().unwrap();
+    responder.join().unwrap();
+    assert_eq!(outcome, Outcome::Done);
+    let state = control::read_state(&dir).unwrap();
+    assert_eq!(state.status("review"), StepStatus::Done);
+    assert_eq!(state.status("fix"), StepStatus::Skipped);
+}
+
+#[test]
+fn context_includes_rules_round_attempt_loop_note_and_gate_choice() {
+    let text = format!("rules = \"Keep edits minimal.\"\n{REVIEW}");
+    let (data, dir, mut runner, _interrupted) = runner_of(&text);
+    let _lock = control::hold_runner(&dir).unwrap();
+    report_done(&mut runner, &dir, "build", "built");
+    answer(&mut runner, &dir, GateAnswer::Choose("rework"));
+    runner.skips();
+    runner.running_command("fix", "s-fix");
+    let mut state = runner.state().clone();
+    state.steps.get_mut("fix").unwrap().round = 2;
+    state.steps.get_mut("fix").unwrap().attempt = 2;
+    state.steps.get_mut("fix").unwrap().loop_note = Some("previous note".into());
+    std::fs::write(dir.join(STATE_FILE), serde_json::to_vec(&state).unwrap()).unwrap();
+    let own = agent::own_step(data.path(), Some("s-fix".into())).unwrap();
+    let ctx = agent::context(&own);
+    assert_eq!(ctx["rules"], "Keep edits minimal.");
+    assert_eq!(ctx["round"], 2);
+    assert_eq!(ctx["max_rounds"], 2);
+    assert_eq!(ctx["attempt"], 2);
+    assert_eq!(ctx["loop_note"], "previous note");
+    assert_eq!(ctx["needs"][0]["choice"], "rework");
+}
+
+#[test]
+fn auto_run_dir_adds_suffix_on_same_second_collision() {
+    let data = tempfile::tempdir().unwrap();
+    let (first, d1) = new_auto_run_dir(data.path(), "build", 1_700_000_000).unwrap();
+    let (second, d2) = new_auto_run_dir(data.path(), "build", 1_700_000_000).unwrap();
+    assert_eq!(first, "build-1700000000");
+    assert_eq!(second, "build-1700000000-1");
+    assert!(d1.is_dir() && d2.is_dir() && d1 != d2);
+}
+
+#[test]
+fn pick_gate_validates_bounds_and_propagates_picked_worktree() {
+    let text = r#"
+version = 1
+name = "Race"
+[[step]]
+id = "solve"
+command = "claude"
+count = 2
+worktree = "try"
+[[step]]
+id = "choose"
+gate = "Pick winner"
+needs = ["solve"]
+pick = "solve"
+[[step]]
+id = "verify"
+command = "echo ok"
+needs = ["choose"]
+"#;
+    let (_data, dir, mut runner, _interrupted) = runner_of(text);
+    let _lock = control::hold_runner(&dir).unwrap();
+    let wt1 = dir.join("wt-1");
+    let wt2 = dir.join("wt-2");
+    runner.state.steps.get_mut("solve").unwrap().racers = vec![
+        flow::RacerRun {
+            index: 1,
+            worktree: "try-1".into(),
+            worktree_path: Some(wt1),
+            status: StepStatus::Done,
+            ..Default::default()
+        },
+        flow::RacerRun {
+            index: 2,
+            worktree: "try-2".into(),
+            worktree_path: Some(wt2.clone()),
+            status: StepStatus::Done,
+            ..Default::default()
+        },
+    ];
+    runner.state.set("solve", StepStatus::Done);
+    runner.state.set("choose", StepStatus::Running);
+    runner.save().unwrap();
+    // Plain Approve or out-of-range --pick is refused.
+    assert!(control::answer_gate(&dir, "choose", GateAnswer::Approve).is_err());
+    assert!(control::answer_gate(&dir, "choose", GateAnswer::Pick(3)).is_err());
+    control::answer_gate(&dir, "choose", GateAnswer::Pick(2)).unwrap();
+    let end = runner.gate_answer("choose");
+    assert!(matches!(end, Some(Ok(()))));
+    assert_eq!(runner.state.steps["choose"].picked, Some(2));
+    let verify = runner.flow.step("verify").unwrap();
+    let picked = runner.picked_worktree_for(verify).unwrap();
+    assert_eq!(picked.path, wt2);
 }

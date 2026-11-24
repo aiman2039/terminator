@@ -46,6 +46,7 @@ fn valid_file_keeps_steps_in_file_order() {
         StepKind::Gate {
             message: "Is the plan correct?".into(),
             options: Vec::new(),
+            pick: None,
         }
     );
     assert_eq!(
@@ -55,6 +56,7 @@ fn valid_file_keeps_steps_in_file_order() {
             prompt: None,
             cwd: Some("crates/app".into()),
             worktree: None,
+            race: None,
         }
     );
 }

@@ -9,6 +9,7 @@
 //! reject, answer, cancel) with the same code as the CLI. New flow and
 //! Edit open the native flow editor (`editor`). Files are read and written
 //! on worker threads.
+mod checks;
 mod editor;
 mod gates;
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod panel;
 mod picker;
 #[cfg(test)]
 mod retry_tests;
+mod review;
 mod runs_view;
 mod status;
 #[cfg(test)]
@@ -90,6 +92,10 @@ impl Run {
     }
 }
 
+/// Error plus optional draft to restore if sending a question answer fails.
+type ActFailure = (String, Option<((PathBuf, String), String)>);
+type ActResult = Result<(), ActFailure>;
+
 /// The Run flow window and the Flows tool window.
 #[derive(Default)]
 pub(crate) struct FlowsState {
@@ -114,14 +120,17 @@ pub(crate) struct FlowsState {
     banner_hidden: std::collections::HashSet<PathBuf>,
     /// The runs of the last read, newest first.
     runs: Vec<Run>,
-    reading: Option<Receiver<Vec<Run>>>,
+    reading: Option<(u64, Receiver<Vec<Run>>)>,
+    read_gen: u64,
     read_at: Option<Instant>,
     /// Older ended run folders that the reads skip (one read at a time).
     ended_runs: std::sync::Arc<std::sync::Mutex<control::EndedRuns>>,
     /// Answers that a worker thread writes now.
-    acting: Vec<Receiver<Result<(), String>>>,
+    acting: Vec<Receiver<ActResult>>,
     /// Typed answers to open questions, by run folder and step.
     drafts: HashMap<(PathBuf, String), String>,
+    /// Typed mailbox messages (`flow send`), by run folder and step.
+    mail_drafts: HashMap<(PathBuf, String), String>,
     /// The run whose Cancel waits for confirmation.
     confirm_cancel: Option<PathBuf>,
     /// Clear ended runs waits for confirmation.
@@ -137,6 +146,12 @@ pub(crate) struct FlowsState {
     picker_top: Option<egui::Pos2>,
     /// The Run inputs form of a flow with inputs, after a Run click.
     inputs_form: Option<inputs_form::InputsForm>,
+    /// Exported Markdown run report written on a worker thread.
+    report_export: Option<Receiver<Result<PathBuf, String>>>,
+    /// Read-only CI/PR/TODO checks for flow worktrees (#347).
+    checks: checks::ChecksState,
+    /// Steps checked off in the guided review checklist of ended runs (GUI memory only).
+    review_checked: std::collections::HashSet<(PathBuf, String)>,
 }
 
 impl FlowsState {

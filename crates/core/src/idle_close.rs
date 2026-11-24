@@ -22,7 +22,7 @@ pub struct Outcome {
 
 /// One full process scan. Take it before any lock and share it between the
 /// targets of one batch; `verify_shell` refreshes the shell itself.
-pub fn process_inventory() -> sysinfo::System {
+pub fn process_inventory() -> std::io::Result<sysinfo::System> {
     use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
     // Linux task entries include a shell's own worker threads. Only child
     // processes represent jobs; fish keeps worker threads alive while idle.
@@ -33,6 +33,7 @@ pub fn process_inventory() -> sysinfo::System {
                 .with_exe(UpdateKind::Always),
         ),
     )
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 /// Checks against a fresh process inventory (`process_inventory`), never a
@@ -157,7 +158,7 @@ mod tests {
         });
         let tid = tid_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let child = Child(Command::new("sleep").arg("30").spawn().unwrap());
-        let inventory = process_inventory();
+        let inventory = process_inventory().unwrap();
         let child_process = inventory.process(sysinfo::Pid::from_u32(child.0.id()));
         // Release before assertions so a failed assertion cannot leave a worker blocked.
         drop(release_tx);

@@ -73,6 +73,7 @@ impl Ctl {
                     session: child.id.clone(),
                     anchor: None,
                     split: None,
+                    background: false,
                 },
             )
             .with_context(|| format!("Session {} is running, but not shown", child.id))?;

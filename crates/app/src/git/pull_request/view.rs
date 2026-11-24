@@ -15,6 +15,8 @@ pub(super) enum Pick {
     Copy(String),
     /// A review thread's file, at its 1-based line.
     File(String, Option<u32>),
+    /// Open Ask agent with a fixed PR quick-task prompt (explicit Paste and send).
+    QuickTask(&'static str),
 }
 
 /// The Refresh icon row; true when Refresh was clicked.
@@ -88,6 +90,36 @@ fn ready(ui: &mut egui::Ui, info: &PrInfo, theme: &AppearanceConfig) -> Option<P
         }
     });
     checks(ui, &info.checks, theme);
+    if !matches!(
+        info.state.to_ascii_lowercase().as_str(),
+        "merged" | "closed"
+    ) {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            let tasks = [
+                ("Fix CI", crate::git::draft_message::PR_FIX_CI_PROMPT),
+                (
+                    "Fix review comments",
+                    crate::git::draft_message::PR_FIX_COMMENTS_PROMPT,
+                ),
+                (
+                    "Resolve conflicts",
+                    crate::git::draft_message::PR_RESOLVE_CONFLICTS_PROMPT,
+                ),
+            ];
+            for (label, prompt) in tasks {
+                if ui
+                    .small_button(label)
+                    .on_hover_text(
+                        "Open Ask agent with this prompt (Paste and send stays explicit)",
+                    )
+                    .clicked()
+                {
+                    pick = Some(Pick::QuickTask(prompt));
+                }
+            }
+        });
+    }
     ui.separator();
     if let Some(thread) = threads(ui, info) {
         pick = Some(thread);

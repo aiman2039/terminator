@@ -29,6 +29,7 @@ fn removal_list_ui(ui: &mut egui::Ui, listed: &[(String, String)]) {
         .max_height(REMOVAL_LIST_HEIGHT)
         .auto_shrink([false, true])
         .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
             for (branch, path) in listed {
                 ui.horizontal(|ui| {
                     ui.label(branch);
@@ -223,8 +224,10 @@ impl App {
                 self.close_center_page(&CenterPage::Worktrees);
             }
             if row.merged {
+                ui.add_space(4.0);
                 ui.colored_label(appearance::color(&self.theme.status_running), "Merged")
                     .on_hover_text(format!("Its commits are on {}", row.source_branch));
+                ui.add_space(12.0);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {

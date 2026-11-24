@@ -148,14 +148,54 @@ impl App {
     /// The existing inbox: pending notifications plus terminal notices.
     pub(super) fn agents_needs_attention(&mut self, ui: &mut egui::Ui) {
         let index = self.sidebar_index();
-        let notices = self.pinned_first(&index.pending_groups, |group| {
+        let all_notices = self.pinned_first(&index.pending_groups, |group| {
             group.notices.first().map(|n| n.session_id.as_str())
         });
-        let terminal_notices = &index.terminal_pending;
+        let all_terminal = &index.terminal_pending;
         self.triage_undo_bar(ui);
+        if !all_notices.is_empty()
+            || !all_terminal.is_empty()
+            || self.triage.filter != super::attention::InboxFilter::All
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for filter in super::attention::InboxFilter::ALL {
+                    let selected = self.triage.filter == filter;
+                    if ui.selectable_label(selected, filter.label()).clicked() {
+                        self.triage.filter = filter;
+                    }
+                }
+            });
+            ui.add_space(2.0);
+        }
+        let filter = self.triage.filter;
+        let notices: Vec<_> = all_notices
+            .into_iter()
+            .filter(|group| {
+                group
+                    .notices
+                    .first()
+                    .is_some_and(|n| filter.matches_event(n.state))
+            })
+            .collect();
+        let show_terminal = matches!(
+            filter,
+            super::attention::InboxFilter::All
+                | super::attention::InboxFilter::Problems
+                | super::attention::InboxFilter::Updates
+        );
+        let terminal_notices = if show_terminal {
+            all_terminal.as_slice()
+        } else {
+            &[]
+        };
         appearance::sidebar_scroll("agents").show(ui, |ui| {
             if notices.is_empty() && terminal_notices.is_empty() {
-                self.agents_empty(ui);
+                if filter == super::attention::InboxFilter::All {
+                    self.agents_empty(ui);
+                } else {
+                    ui.weak(format!("No {} items", filter.label().to_lowercase()));
+                }
             }
             for group in notices {
                 let Some(notice) = group.notices.first() else {

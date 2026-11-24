@@ -18,6 +18,8 @@ const INPUTS_WIDTH: f32 = 180.0;
 pub(super) enum StripClick {
     /// Hide the strip of an ended run.
     Hide,
+    /// Export Markdown summary of an ended run (`report.md`).
+    ExportReport,
     /// Answer the gate of this step.
     Gate(String, crate::flows::gates::GateChoice),
     /// Send the typed answer of this step's question.
@@ -138,7 +140,7 @@ pub(super) fn run_strip(
         .state
         .steps
         .values()
-        .filter(|step| step.status == StepStatus::Done)
+        .filter(|step| step.status.passed())
         .count();
     let mut click = None;
     strip_frame(colors, colors.border).show(ui, |ui| {
@@ -184,12 +186,22 @@ fn strip_action(
     drafts: &mut std::collections::HashMap<(PathBuf, String), String>,
 ) -> Option<StripClick> {
     if run.ended() {
-        let hide = appearance::sidebar_action(ui, "X", "Hide this run strip").clicked();
-        return hide.then_some(StripClick::Hide);
+        if appearance::sidebar_action(ui, "X", "Hide this run strip").clicked() {
+            return Some(StripClick::Hide);
+        }
+        if appearance::sidebar_action(ui, "FileText", "Export Markdown run report").clicked() {
+            return Some(StripClick::ExportReport);
+        }
+        return None;
     }
     if let Some((id, step)) = waits_for_user(run) {
         if step.question.is_none() {
-            let choice = crate::flows::gates::gate_buttons_right_to_left(ui, &step.options);
+            let choice = if let Some(target) = &step.pick {
+                let count = run.state.steps.get(target).map_or(0, |s| s.racers.len());
+                crate::flows::gates::pick_buttons_right_to_left(ui, count)
+            } else {
+                crate::flows::gates::gate_buttons_right_to_left(ui, &step.options)
+            };
             return choice.map(|choice| StripClick::Gate(id.clone(), choice));
         }
         let draft = drafts.entry((run.dir.clone(), id.clone())).or_default();

@@ -822,3 +822,102 @@ fn narrow_project_header_puts_hide_in_the_menu() {
     assert!(rect("Player").is_none(), "Player is not in the left menu");
     assert!(rect("Agents").is_none(), "Agents is not in the left menu");
 }
+
+#[test]
+#[cfg(feature = "test-support")]
+fn projects_sidebar_shows_flow_excalidraw_and_other_non_editor_tabs_but_hides_editors() {
+    let (mut app, ctx, _dir) = fixture();
+    let flow = Tab::Document {
+        path: crate::test_path("/a/.terminator/flows/deploy.toml"),
+        kind: crate::document_view::DocumentKind::Flow,
+    };
+    let drawing = Tab::browser_file(crate::test_path("/a/arch.excalidraw"));
+    let table = Tab::Document {
+        path: crate::test_path("/a/data.csv"),
+        kind: crate::document_view::DocumentKind::Table,
+    };
+    let editor = Tab::NativeEditor {
+        path: crate::test_path("/a/main.rs"),
+    };
+    let mut workspace = Workspace::empty();
+    workspace.add("t-flow".into(), flow.clone());
+    workspace.add("t-draw".into(), drawing);
+    let drawing = workspace.tabs[1].primary.clone().expect("drawing tab");
+    workspace.add("t-table".into(), table.clone());
+    workspace.add("t-edit".into(), editor.clone());
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+    app.preferences.expanded.insert("a".into(), true);
+
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 600.0),
+            )),
+            ..Default::default()
+        },
+        |ui| app.projects(ui),
+    );
+    output.textures_delta.clear();
+    let rect = header_target(&ctx);
+    assert!(rect(&format!("sidebar-open-tab:{}", flow.key())).is_some());
+    assert!(rect(&format!("sidebar-open-tab:{}", drawing.key())).is_some());
+    assert!(rect(&format!("sidebar-open-tab:{}", table.key())).is_some());
+    assert!(rect(&format!("sidebar-open-tab:{}", editor.key())).is_none());
+}
+
+#[test]
+fn unnamed_tab_group_uses_primary_tab_title_instead_of_tab_n() {
+    let (mut app, ctx, _dir) = fixture();
+    let mut s1 = session_fixture("s1", SessionKind::Shell);
+    s1.label = "backend-shell".into();
+    let s2 = session_fixture("s2", SessionKind::Shell);
+    let s3 = session_fixture("s3", SessionKind::Shell);
+    app.state.sessions = vec![s1, s2, s3];
+    let mut workspace = Workspace::empty();
+    workspace.tabs = vec![
+        crate::workspace::WorkspaceTab {
+            id: "g1".into(),
+            name: None,
+            pinned: false,
+            primary: Some(Tab::Terminal("s1".into())),
+            layout: egui_dock::DockState::new(vec![
+                Tab::Terminal("s1".into()),
+                Tab::Terminal("s3".into()),
+            ]),
+        },
+        crate::workspace::WorkspaceTab {
+            id: "g2".into(),
+            name: None,
+            pinned: false,
+            primary: Some(Tab::Terminal("s2".into())),
+            layout: egui_dock::DockState::new(vec![Tab::Terminal("s2".into())]),
+        },
+    ];
+    workspace.active = "g1".into();
+    app.layouts.insert("a".into(), workspace);
+    app.selected = Some("a".into());
+    app.preferences.expanded.insert("a".into(), true);
+
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 600.0),
+            )),
+            ..Default::default()
+        },
+        |ui| app.projects(ui),
+    );
+    let text = painted_strings(&output.shapes);
+    output.textures_delta.clear();
+    assert!(
+        text.iter().any(|line| line.contains("backend-shell")),
+        "{text:?}"
+    );
+    assert!(
+        text.iter().all(|line| line != "Tab 1"),
+        "should not fall back to Tab 1: {text:?}"
+    );
+}

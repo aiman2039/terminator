@@ -281,3 +281,86 @@ fn gate_answer_text_round_trips() {
     }
     assert_eq!(GateAnswer::parse("maybe"), None);
 }
+
+#[test]
+fn loop_back_resets_round_of_downstream_loop_step() {
+    let text = r#"
+version = 1
+name = "Two loops"
+[[step]]
+id = "a"
+command = "echo a"
+[[step]]
+id = "b"
+command = "echo b"
+needs = ["a"]
+loop_to = "a"
+max_rounds = 2
+[[step]]
+id = "c"
+command = "echo c"
+needs = ["b"]
+[[step]]
+id = "d"
+command = "echo d"
+needs = ["c"]
+loop_to = "c"
+max_rounds = 3
+"#;
+    let flow = parse(text).unwrap();
+    let mut state = RunState::new(&flow, "two", "p");
+    state.set("a", StepStatus::Done);
+    state.set("b", StepStatus::Done);
+    state.set("c", StepStatus::Done);
+    state.set("d", StepStatus::Done);
+    state.steps.get_mut("c").unwrap().round = 3;
+    state.steps.get_mut("d").unwrap().round = 3;
+    let again = flow.loop_back(&mut state, "b");
+    assert!(again.contains(&"c".to_owned()) && again.contains(&"d".to_owned()));
+    assert_eq!(state.steps["a"].round(), 2);
+    assert_eq!(state.steps["b"].round(), 2);
+    assert_eq!(state.steps["c"].round(), 1);
+    assert_eq!(state.steps["d"].round(), 1);
+}
+
+#[test]
+fn race_and_pick_gate_validate_and_round_trip() {
+    let text = r#"
+version = 1
+name = "Race"
+[[step]]
+id = "solve"
+command = "{{agent}} --port {{worktree.port}}"
+agents = ["claude", "codex"]
+worktree = "try"
+[[step]]
+id = "choose"
+gate = "Pick winner"
+needs = ["solve"]
+pick = "solve"
+[[step]]
+id = "finish"
+command = "echo done"
+needs = ["choose"]
+"#;
+    let flow = parse(text).unwrap();
+    let draft = Draft::from(&flow);
+    assert_eq!(draft.steps[0].agents, ["claude", "codex"]);
+    assert_eq!(draft.steps[1].pick.as_deref(), Some("solve"));
+    let toml = draft.to_toml().unwrap();
+    assert_eq!(parse(&toml).unwrap(), flow);
+    // Missing worktree or bad count or pick of non-race step is refused.
+    assert!(
+        parse("version = 1\nname = \"x\"\n[[step]]\nid = \"a\"\ncommand = \"x\"\ncount = 2\n")
+            .is_err()
+    );
+    assert!(parse("version = 1\nname = \"x\"\n[[step]]\nid = \"a\"\ncommand = \"x\"\ncount = 6\nworktree = \"w\"\n").is_err());
+    assert_eq!(
+        GateAnswer::parse(&GateAnswer::Pick(2).text()),
+        Some(GateAnswer::Pick(2))
+    );
+    let p1 = worktree_port(std::path::Path::new("/repo"), "try-1");
+    let p2 = worktree_port(std::path::Path::new("/repo"), "try-2");
+    assert!((40_000..50_000).contains(&p1));
+    assert_ne!(p1, p2);
+}

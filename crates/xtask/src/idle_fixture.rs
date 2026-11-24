@@ -15,7 +15,7 @@ fn wait_prompt(h: &Harness, shell: &Value) -> Result<()> {
     let end = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or_else(|| anyhow!("prompt deadline overflow"))?;
-    let mut system = System::new();
+    let mut system = System::new().map_err(|err| anyhow!("sysinfo: {err}"))?;
     loop {
         let record = session(&h.state()?, id(shell)).clone();
         if record.get("cwd_confirmed") == Some(&Value::Bool(true))

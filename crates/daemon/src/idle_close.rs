@@ -6,7 +6,9 @@ use terminator_core::idle_close::{Outcome, Status};
 #[cfg(not(unix))]
 fn shell_has_live_children(pid: u32) -> bool {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut system = System::new();
+    let Ok(mut system) = System::new() else {
+        return true;
+    };
     system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     system.processes().values().any(|process| {
         process
@@ -203,7 +205,7 @@ impl Shared {
         sessions.dedup();
         let mut outcomes = Vec::new();
         // One full process scan per pass, taken before any lock.
-        let mut inventory = terminator_core::idle_close::process_inventory();
+        let mut inventory = terminator_core::idle_close::process_inventory()?;
         {
             let _operation = relock(&self.terminal_operations);
             if relock(&self.state).generation != generation {
@@ -221,7 +223,7 @@ impl Shared {
                 ));
             }
             // Re-check right before the signals, with input still held.
-            let mut inventory = terminator_core::idle_close::process_inventory();
+            let mut inventory = terminator_core::idle_close::process_inventory()?;
             let mut partial_failure = false;
             for session in sessions {
                 if partial_failure {

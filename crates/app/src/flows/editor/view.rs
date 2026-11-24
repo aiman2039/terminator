@@ -2,7 +2,6 @@
 //! the inspector at the right of the graph. The preview of the plan is a
 //! dialog.
 use super::banner::{StripClick, run_strip, starting_strip, still_starting};
-use super::dialogs::preview_dialog;
 use super::inspector::{self, CheckError, check_error};
 use super::style::Colors;
 use super::toolbar::{Click, Keys, toolbar};
@@ -17,7 +16,6 @@ use egui_snarl::ui::SnarlWidget;
 use std::collections::HashMap;
 use std::path::Path;
 
-const DIALOG_WIDTH: f32 = 620.0;
 /// Narrower panes show the inspector only for a selected card or the
 /// rules.
 const SPLIT_WIDTH: f32 = 1000.0;
@@ -86,6 +84,19 @@ impl App {
             .collect()
     }
 
+    /// The typed mailbox messages of `run`'s running steps, by step ID.
+    fn run_mail_drafts(&self, run: Option<&Run>) -> HashMap<String, String> {
+        let Some(run) = run else {
+            return HashMap::new();
+        };
+        self.flows
+            .mail_drafts
+            .iter()
+            .filter(|((dir, _), _)| *dir == run.dir)
+            .map(|((_, step), text)| (step.clone(), text.clone()))
+            .collect()
+    }
+
     /// The graph, with the state of `run` on its cards. Does the clicks
     /// on the cards. `inspector` is the width of the inspector at the
     /// right of the canvas (0 when it is hidden).
@@ -109,6 +120,7 @@ impl App {
         // The first fit uses estimated sizes: fit again once all are known.
         editor.fit &= !canvas::measured(&editor.snarl, &editor.sizes);
         let mut drafts = self.run_drafts(run);
+        let mut mail_drafts = self.run_mail_drafts(run);
         let (now, minutes) = (terminator_core::now(), self.preferences.flow_stall_minutes);
         let stalls = run
             .map(|run| &run.state.steps)
@@ -119,12 +131,24 @@ impl App {
                 Some((id.clone(), stall))
             })
             .collect();
+        let updates = run
+            .map(|run| &run.state.steps)
+            .into_iter()
+            .flatten()
+            .filter_map(|(id, step)| {
+                let sid = step.session.as_deref()?;
+                let preview = self.present_session(sid).notice_preview.clone()?;
+                Some((id.clone(), preview))
+            })
+            .collect();
         let mut viewer = Viewer {
             colors,
             run: run.map(|run| &run.state.steps),
             live: run.is_some_and(|run| !run.ended()),
             stalls,
+            updates,
             drafts: &mut drafts,
+            mail_drafts: &mut mail_drafts,
             selected: editor.selected,
             error,
             sizes: &mut editor.sizes,
@@ -142,6 +166,9 @@ impl App {
         if let Some(run) = run {
             for (step, text) in drafts {
                 self.flows.drafts.insert((run.dir.clone(), step), text);
+            }
+            for (step, text) in mail_drafts {
+                self.flows.mail_drafts.insert((run.dir.clone(), step), text);
             }
         }
         self.flow_canvas_out(ui, (editor, run, canvas), out);
@@ -172,6 +199,12 @@ impl App {
         if let Some(session) = out.go {
             self.go_session(&session);
         }
+        if let Some(session) = out.peek {
+            self.open_session_peek(&session);
+        }
+        if let Some(path) = out.open_diff {
+            self.apply_flow_act(Act::OpenDiff(path));
+        }
         let Some(run) = run else {
             return;
         };
@@ -180,6 +213,9 @@ impl App {
         }
         if let Some(step) = out.send {
             self.apply_flow_act(Act::Answer(run.dir.clone(), step));
+        }
+        if let Some(step) = out.send_mail {
+            self.apply_flow_act(Act::SendMail(run.dir.clone(), step));
         }
         if let Some(step) = out.retry {
             self.apply_flow_act(Act::Retry(run.dir.clone(), step));
@@ -234,6 +270,9 @@ impl App {
             Some(StripClick::Hide) => {
                 self.flows.banner_hidden.insert(run.dir.clone());
             }
+            Some(StripClick::ExportReport) => {
+                self.apply_flow_act(Act::ExportReport(run.dir.clone()));
+            }
             Some(StripClick::Gate(step, choice)) => {
                 self.apply_flow_act(Act::Gate(run.dir.clone(), step, choice));
             }
@@ -254,6 +293,7 @@ impl App {
     /// The editor of a read flow. False when the user discarded it: the
     /// next frame reads the file again.
     fn flow_ready_view(&mut self, ui: &mut egui::Ui, path: &Path, editor: &mut FlowEditor) -> bool {
+        editor.warned = false;
         if let Some(note) = editor.poll() {
             self.info = Some(note);
         }
@@ -272,7 +312,7 @@ impl App {
         if editor.saving.is_some() || editor.exporting.is_some() {
             ui.ctx().request_repaint();
         }
-        self.flow_delete_alias(ui.ctx(), (path, editor));
+        self.flow_pane_keys(ui.ctx(), (path, editor));
         let mut run = self.flow_run_of(ui.ctx(), editor);
         // After a Run click, an older run of this flow is not the news.
         let starting = still_starting(&mut self.flows.starting, path, run.as_ref());
@@ -287,10 +327,18 @@ impl App {
         };
         let running = run.as_ref().is_some_and(|run| !run.ended());
         let mut click = toolbar(ui, editor, (colors, &keys, running));
-        if let Some(error) = &editor.error {
+        if let Some(error) = editor.error.clone() {
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                ui.colored_label(ui.visuals().error_fg_color, error);
+                ui.colored_label(ui.visuals().error_fg_color, &error);
+                if editor.disk_conflict {
+                    if ui.small_button("Reload").clicked() {
+                        click = Some(Click::Reload);
+                    }
+                    if ui.small_button("Overwrite anyway").clicked() {
+                        click = Some(Click::OverwriteSave);
+                    }
+                }
             });
         }
         if starting {
@@ -301,39 +349,11 @@ impl App {
         self.flow_body(ui, path, (editor, run.as_ref(), error.as_ref()));
         click = click.or(self.flow_editor_dialog(ui.ctx(), editor));
         self.flow_cancel_confirm(ui.ctx(), editor, run.as_ref());
-        self.flow_editor_click((ui.ctx(), path), editor, click)
-    }
-
-    /// The confirmation of Cancel run, at the pointer of the click.
-    fn flow_cancel_confirm(
-        &mut self,
-        ctx: &egui::Context,
-        editor: &mut FlowEditor,
-        run: Option<&Run>,
-    ) {
-        let Some(at) = editor.confirm_cancel else {
-            return;
-        };
-        let Some(run) = run.filter(|run| !run.ended()) else {
-            editor.confirm_cancel = None;
-            return;
-        };
-        let dialog = appearance::Confirm::new(
-            format!("Cancel the run of {}?", run.state.flow),
-            "No new step starts. Running terminals continue.",
-        )
-        .cancel(appearance::ConfirmButton::new("Keep running"))
-        .destructive(appearance::ConfirmButton::new("Cancel run"));
-        let window = egui::Window::new("Cancel run")
-            .id(egui::Id::unique(("flow-cancel", &run.dir)))
-            .default_pos(at);
-        let Some(answer) = appearance::confirm(ctx, window, dialog, |_| {}) else {
-            return;
-        };
-        editor.confirm_cancel = None;
-        if answer == appearance::ConfirmAnswer::Destructive {
-            self.apply_flow_act(Act::Cancel(run.dir.clone()));
+        let keep = self.flow_editor_click((ui.ctx(), path), editor, click);
+        if keep && !ui.ctx().input(|input| input.pointer.any_down()) {
+            editor.sync_history();
         }
+        keep
     }
 
     /// Does one click. False for Discard.
@@ -345,6 +365,13 @@ impl App {
     ) -> bool {
         match click {
             Some(Click::Save) => editor.save(),
+            Some(Click::OverwriteSave) => editor.save_with_force(true),
+            Some(Click::Undo) => {
+                editor.undo();
+            }
+            Some(Click::Redo) => {
+                editor.redo();
+            }
             Some(Click::Run) => self.flow_editor_run(path, editor),
             Some(Click::AddStep | Click::AddGate) => {
                 let place = next_place(editor);
@@ -378,7 +405,7 @@ impl App {
                 },
                 source: None,
             }),
-            Some(Click::Discard) => return false,
+            Some(Click::Discard | Click::Reload) => return false,
             None => {}
         }
         true
@@ -398,42 +425,6 @@ impl App {
         let inputs: Vec<_> = editor.saved.inputs.clone().into_iter().collect();
         let origin = crate::flows::inputs_form::Origin::Editor(path.into());
         self.request_flow_run(&loaded, &editor.file, (&inputs, origin));
-    }
-
-    /// The open dialog of the editor: a modal in the center of the window.
-    /// It takes the input; a click outside it, Esc or Done closes it.
-    fn flow_editor_dialog(
-        &mut self,
-        ctx: &egui::Context,
-        editor: &mut FlowEditor,
-    ) -> Option<Click> {
-        let Dialog::Preview = editor.dialog?;
-        let width = DIALOG_WIDTH.min(ctx.content_rect().width() - 80.0);
-        let surface = appearance::color(&self.theme.surface);
-        let mut click = None;
-        let mut done = false;
-        let modal = egui::Modal::new(egui::Id::unique("flow-editor-dialog"))
-            .frame(
-                egui::Frame::popup(&ctx.global_style())
-                    .fill(surface)
-                    .corner_radius(appearance::RADIUS_LARGE)
-                    .inner_margin(egui::Margin::same(20)),
-            )
-            .show(ctx, |ui| {
-                ui.set_width(width);
-                ui.heading("Flow plan");
-                ui.weak("The flow as Markdown text.");
-                ui.add_space(12.0);
-                click = preview_dialog(ui, editor);
-                ui.add_space(12.0);
-                appearance::footer_row(ui, |ui| {
-                    done |= appearance::primary_button(ui, "Done").clicked();
-                });
-            });
-        if modal.should_close() || done {
-            editor.dialog = None;
-        }
-        click
     }
 }
 

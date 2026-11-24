@@ -39,14 +39,20 @@ pub(crate) enum Node {
         prompt: String,
         cwd: String,
         worktree: String,
+        /// Optional best-of-N count (2-5, as typed).
+        race_count: String,
+        /// Optional comma-separated racer agents (2-5, requires `{{agent}}`).
+        race_agents: String,
         branch: Branch,
     },
     /// A gate: the run waits for the user's approval of `message`, with
-    /// one of `options` (comma-separated, as typed) when it has some.
+    /// one of `options` (comma-separated, as typed) when it has some, or
+    /// `pick` naming a needed race step.
     Gate {
         id: String,
         message: String,
         options: String,
+        pick: String,
         branch: Branch,
     },
 }
@@ -59,6 +65,8 @@ impl Node {
             prompt: prompt.to_owned(),
             cwd: String::new(),
             worktree: String::new(),
+            race_count: String::new(),
+            race_agents: String::new(),
             branch: Branch::default(),
         }
     }
@@ -68,6 +76,7 @@ impl Node {
             id: id.to_owned(),
             message: message.to_owned(),
             options: String::new(),
+            pick: String::new(),
             branch: Branch::default(),
         }
     }
@@ -324,18 +333,35 @@ pub(crate) fn graph_of(flow: &Flow) -> Snarl<Node> {
                 prompt,
                 cwd,
                 worktree,
-            } => Node::Step {
-                id: step.id.clone(),
-                command: command.clone(),
-                prompt: prompt.clone().unwrap_or_default(),
-                cwd: cwd.clone().unwrap_or_default(),
-                worktree: worktree.clone().unwrap_or_default(),
-                branch,
-            },
-            StepKind::Gate { message, options } => Node::Gate {
+                race,
+            } => {
+                let (race_count, race_agents) = match race {
+                    Some(terminator_core::flow::Race::Count(n)) => (n.to_string(), String::new()),
+                    Some(terminator_core::flow::Race::Agents(agents)) => {
+                        (String::new(), agents.join(", "))
+                    }
+                    None => (String::new(), String::new()),
+                };
+                Node::Step {
+                    id: step.id.clone(),
+                    command: command.clone(),
+                    prompt: prompt.clone().unwrap_or_default(),
+                    cwd: cwd.clone().unwrap_or_default(),
+                    worktree: worktree.clone().unwrap_or_default(),
+                    race_count,
+                    race_agents,
+                    branch,
+                }
+            }
+            StepKind::Gate {
+                message,
+                options,
+                pick,
+            } => Node::Gate {
                 id: step.id.clone(),
                 message: message.clone(),
                 options: options.join(", "),
+                pick: pick.clone().unwrap_or_default(),
                 branch,
             },
         };
@@ -394,14 +420,23 @@ pub(crate) fn draft_of(name: &str, snarl: &Snarl<Node>) -> Draft {
                 prompt,
                 cwd,
                 worktree,
+                race_count,
+                race_agents,
                 ..
             } => {
                 step.command = Some(command.trim().to_owned());
                 step.prompt = optional(prompt);
                 step.cwd = optional(cwd);
                 step.worktree = optional(worktree);
+                if let Some(raw) = optional(race_count) {
+                    step.count = Some(raw.parse::<u32>().unwrap_or(0));
+                }
+                step.agents = split_options(race_agents);
             }
-            Node::Gate { message, .. } => step.gate = Some(message.trim().to_owned()),
+            Node::Gate { message, pick, .. } => {
+                step.gate = Some(message.trim().to_owned());
+                step.pick = optional(pick);
+            }
         }
         step
     });

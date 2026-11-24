@@ -57,6 +57,8 @@ pub enum Request {
         session: String,
         anchor: Option<String>,
         split: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        background: bool,
     },
     Focus {
         session: String,
@@ -92,6 +94,7 @@ impl Request {
                 session,
                 anchor,
                 split,
+                ..
             } => validate_show(session, anchor.as_deref(), split.as_deref())?,
             Self::Focus { session } if session.len() > 128 => {
                 return Err(UiControlError::InvalidSession {
@@ -190,7 +193,8 @@ mod tests {
             Request::ShowSession {
                 session: "s".into(),
                 anchor: None,
-                split: Some("right".into())
+                split: Some("right".into()),
+                background: false,
             }
             .validate()
             .is_err()
@@ -199,7 +203,8 @@ mod tests {
             Request::ShowSession {
                 session: "s".into(),
                 anchor: Some("a".into()),
-                split: Some("right".into())
+                split: Some("right".into()),
+                background: false,
             }
             .validate()
             .is_ok()

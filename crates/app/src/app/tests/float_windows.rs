@@ -759,6 +759,7 @@ fn gui_show_session_focuses_floated_terminal_without_main_duplicate() {
             session: "float-shown".into(),
             anchor: None,
             split: None,
+            background: false,
         },
     )
     .unwrap();

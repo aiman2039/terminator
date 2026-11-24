@@ -160,6 +160,16 @@ impl App {
         if pinned {
             subtitle.push_str(" · pinned");
         }
+        if matches!(
+            presented.lifecycle,
+            Some(
+                terminator_core::AgentState::WaitingInput
+                    | terminator_core::AgentState::WaitingPermission
+            )
+        ) && let Some(preview) = &presented.notice_preview
+        {
+            subtitle.push_str(&format!(" · Waiting on: {preview}"));
+        }
         let unread = if presented.unread > 0 {
             format!("{} unread", presented.unread)
         } else {

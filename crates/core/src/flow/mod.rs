@@ -48,13 +48,23 @@ use std::{
 
 mod branch;
 pub mod control;
+mod error;
 pub mod files;
 mod graph;
 pub mod inputs;
+mod mailbox;
+pub mod propose;
+pub mod race;
+pub mod report;
 mod run;
 pub use branch::{LoopBack, MAX_OPTIONS, MAX_ROUNDS, MIN_OPTIONS, MIN_ROUNDS, When};
+pub use error::FlowError;
 pub use graph::Ordered;
 pub use inputs::{Input, InputError};
+pub use propose::ProposedStep;
+pub use race::{
+    AGENT_PLACEHOLDER, MAX_RACERS, MIN_RACERS, PORT_PLACEHOLDER, Race, RacerRun, worktree_port,
+};
 pub use run::{Outcome, RUN_DIR, RunState, STATE_FILE, StepRun, StepStatus};
 
 /// Flow files of a project, relative to the project folder.
@@ -67,77 +77,6 @@ pub const MAX_STEPS: usize = 64;
 const MAX_ID: usize = 64;
 /// Longest command, prompt, gate message or flow name, in bytes.
 const MAX_TEXT: usize = 16 * 1024;
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum FlowError {
-    #[error("{0}")]
-    Syntax(String),
-    #[error("Flow version {0} is not supported (this build reads version {VERSION})")]
-    Version(u32),
-    #[error("Flow name is empty or too long")]
-    Name,
-    #[error("rules is too long or has a control character")]
-    Rules,
-    #[error("A flow needs at least one step")]
-    Empty,
-    #[error("A flow has at most {MAX_STEPS} steps")]
-    TooManySteps,
-    #[error("Step ID \"{0}\" must be 1 to {MAX_ID} characters of a-z, 0-9, - or _")]
-    BadId(String),
-    #[error("Step ID \"{0}\" is used twice")]
-    DuplicateId(String),
-    #[error("Step \"{0}\" must have exactly one of command or gate")]
-    Kind(String),
-    #[error("Step \"{0}\": prompt, cwd and worktree apply only to a command step")]
-    GateField(String),
-    #[error(
-        "Step \"{0}\": options must be {MIN_OPTIONS} to {MAX_OPTIONS} different names of a-z, 0-9, - or _, on a gate step"
-    )]
-    Options(String),
-    #[error("Step \"{step}\": when {problem}")]
-    When { step: String, problem: String },
-    #[error("Step \"{step}\": loop_to {problem}")]
-    Loop { step: String, problem: String },
-    #[error("Step \"{0}\": {1} is empty, too long or has a control character")]
-    Text(String, &'static str),
-    #[error("Step \"{0}\": cwd must stay inside the project")]
-    Cwd(String),
-    #[error("Step \"{0}\": worktree must be letters, digits, '-', '_' or '.'")]
-    Worktree(String),
-    #[error(
-        "Step \"{step}\": worktree \"{name}\" is also the worktree of step \"{first}\"; give each step its own worktree name"
-    )]
-    DuplicateWorktree {
-        step: String,
-        first: String,
-        name: String,
-    },
-    #[error("Step \"{step}\" needs unknown step \"{needs}\"")]
-    UnknownNeed { step: String, needs: String },
-    #[error("Step \"{0}\" is part of a cycle")]
-    Cycle(String),
-    #[error("Input name \"{0}\" must be 1 to {MAX_ID} characters of a-z, 0-9, - or _")]
-    BadInput(String),
-    #[error("Input \"{0}\": {1} is too long or has a control character")]
-    InputText(String, &'static str),
-    #[error("A flow has at most {} inputs", inputs::MAX_INPUTS)]
-    TooManyInputs,
-    /// A `{{…}}` in a text that is not a declared input at a good place.
-    #[error("{}: {problem}", place_name(.step.as_deref(), .field))]
-    Placeholder {
-        step: Option<String>,
-        field: &'static str,
-        problem: String,
-    },
-}
-
-/// "Step \"build\": command", or "rules" for the flow's rules.
-fn place_name(step: Option<&str>, field: &str) -> String {
-    match step {
-        Some(step) => format!("Step \"{step}\": {field}"),
-        None => field.to_owned(),
-    }
-}
 
 /// What a step does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,12 +92,15 @@ pub enum StepKind {
         /// the first run, and that same checkout on later runs. Unique in
         /// a flow.
         worktree: Option<String>,
+        /// Optional best-of-N race configuration (`count` or `agents`).
+        race: Option<Race>,
     },
     /// Stop until the user approves `message`, with one of `options` when
-    /// it has options (empty: a plain Approve).
+    /// it has options (empty: a plain Approve), or picks one racer of `pick`.
     Gate {
         message: String,
         options: Vec<String>,
+        pick: Option<String>,
     },
 }
 
@@ -232,6 +174,12 @@ pub struct DraftStep {
     pub loop_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rounds: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick: Option<String>,
 }
 
 /// Read and validate one flow file's text.
@@ -295,6 +243,7 @@ impl Draft {
         };
         flow.check_graph()?;
         flow.check_branches()?;
+        flow.check_picks()?;
         flow.check_worktrees()?;
         flow.check_placeholders()?;
         Ok(flow)
@@ -326,15 +275,26 @@ impl From<&Flow> for Draft {
                     prompt,
                     cwd,
                     worktree,
+                    race,
                 } => {
                     draft.command = Some(command.clone());
                     draft.prompt.clone_from(prompt);
                     draft.cwd.clone_from(cwd);
                     draft.worktree.clone_from(worktree);
+                    match race {
+                        Some(Race::Count(n)) => draft.count = Some(*n),
+                        Some(Race::Agents(agents)) => draft.agents.clone_from(agents),
+                        None => {}
+                    }
                 }
-                StepKind::Gate { message, options } => {
+                StepKind::Gate {
+                    message,
+                    options,
+                    pick,
+                } => {
                     draft.gate = Some(message.clone());
                     draft.options.clone_from(options);
+                    draft.pick.clone_from(pick);
                 }
             }
             draft
@@ -356,31 +316,51 @@ fn step(raw: &DraftStep) -> Result<Step, FlowError> {
         (Some(_), None) if !raw.options.is_empty() => {
             return Err(FlowError::Options(id.to_owned()));
         }
-        (Some(command), None) => StepKind::Command {
-            command: checked(id, "command", command, false)?,
-            prompt: raw
+        (Some(_), None) if raw.pick.is_some() => {
+            return Err(FlowError::Pick {
+                step: id.to_owned(),
+                problem: "pick applies only to a gate step".into(),
+            });
+        }
+        (Some(command), None) => {
+            let command = checked(id, "command", command, false)?;
+            let prompt = raw
                 .prompt
                 .as_deref()
                 .map(|prompt| checked(id, "prompt", prompt, true))
-                .transpose()?,
-            cwd: raw
+                .transpose()?;
+            let cwd = raw
                 .cwd
                 .as_deref()
                 .map(|cwd| checked_cwd(id, cwd))
-                .transpose()?,
-            worktree: raw
+                .transpose()?;
+            let worktree = raw
                 .worktree
                 .as_deref()
                 .map(|name| checked_worktree(id, name))
-                .transpose()?,
-        },
+                .transpose()?;
+            let race = race::checked_race(raw, worktree.as_deref(), (&command, prompt.as_deref()))?;
+            StepKind::Command {
+                command,
+                prompt,
+                cwd,
+                worktree,
+                race,
+            }
+        }
         (None, Some(message)) => {
-            if raw.prompt.is_some() || raw.cwd.is_some() || raw.worktree.is_some() {
+            if raw.prompt.is_some()
+                || raw.cwd.is_some()
+                || raw.worktree.is_some()
+                || raw.count.is_some()
+                || !raw.agents.is_empty()
+            {
                 return Err(FlowError::GateField(id.to_owned()));
             }
             StepKind::Gate {
                 message: checked(id, "gate", message, true)?,
                 options: branch::options(id, &raw.options)?,
+                pick: race::checked_pick(id, raw.pick.as_deref(), &raw.options)?,
             }
         }
         _ => return Err(FlowError::Kind(id.to_owned())),
@@ -466,29 +446,6 @@ impl Flow {
             Some(rules) => format!("{rules}\n\n{prompt}"),
             None => prompt.to_owned(),
         }
-    }
-
-    /// One step per worktree name. Names that differ only in case are the
-    /// same folder on a file system that ignores case.
-    fn check_worktrees(&self) -> Result<(), FlowError> {
-        let mut seen = BTreeMap::new();
-        for step in &self.steps {
-            let StepKind::Command {
-                worktree: Some(name),
-                ..
-            } = &step.kind
-            else {
-                continue;
-            };
-            if let Some(first) = seen.insert(name.to_ascii_lowercase(), step.id.as_str()) {
-                return Err(FlowError::DuplicateWorktree {
-                    step: step.id.clone(),
-                    first: first.to_owned(),
-                    name: name.clone(),
-                });
-            }
-        }
-        Ok(())
     }
 }
 

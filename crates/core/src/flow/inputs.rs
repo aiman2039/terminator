@@ -173,12 +173,14 @@ fn shell_value(value: &str, quote: Quote) -> Option<String> {
     }
 }
 
-/// `text` with each `{{inputs.NAME}}` replaced by the value of NAME. In a
-/// command (`shell`) each value is shell-quoted for its place. The error
-/// is the problem, for [`FlowError::Placeholder`].
+/// `text` with each `{{inputs.NAME}}` replaced by the value of NAME.
+/// `allowed` lists extra runtime placeholders (such as `"agent"` or
+/// `"worktree.port"`): `Some(val)` substitutes it, `None` validates its
+/// shell quote context and preserves `{{KEY}}` for launch time.
 pub(super) fn fill(
     text: &str,
     values: &BTreeMap<String, String>,
+    allowed: &[(&str, Option<&str>)],
     shell: bool,
 ) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
@@ -188,6 +190,31 @@ pub(super) fn fill(
         let (inner, next) = after
             .split_once(CLOSE)
             .ok_or_else(|| "a {{ has no }}".to_owned())?;
+        if let Some((_, replacement)) = allowed.iter().find(|(key, _)| *key == inner) {
+            if shell && shell_value("x", quote_at(&out)).is_none() {
+                return Err(format!(
+                    "placeholder \"{{{{{inner}}}}}\" cannot be inside $'…', ${{…}} or backticks"
+                ));
+            }
+            match replacement {
+                Some(val) if shell => {
+                    let quoted = shell_value(val, quote_at(&out)).ok_or_else(|| {
+                        format!(
+                            "placeholder \"{{{{{inner}}}}}\" cannot be inside $'…', ${{…}} or backticks"
+                        )
+                    })?;
+                    out.push_str(&quoted);
+                }
+                Some(val) => out.push_str(val),
+                None => {
+                    out.push_str(OPEN);
+                    out.push_str(inner);
+                    out.push_str(CLOSE);
+                }
+            }
+            rest = next;
+            continue;
+        }
         let Some(name) = inner.strip_prefix(PREFIX) else {
             return Err(format!(
                 "unknown placeholder {{{{{inner}}}}}; use {{{{inputs.NAME}}}}"
@@ -203,6 +230,43 @@ pub(super) fn fill(
             out.push_str(&quoted);
         } else {
             out.push_str(value);
+        }
+        rest = next;
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// Replace runtime placeholders (`{{agent}}`, `{{worktree.port}}`) at step launch.
+pub(super) fn fill_runtime(
+    text: &str,
+    extras: &[(&str, Option<&str>)],
+    shell: bool,
+) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some((before, after)) = rest.split_once(OPEN) {
+        out.push_str(before);
+        let Some((inner, next)) = after.split_once(CLOSE) else {
+            out.push_str(OPEN);
+            out.push_str(after);
+            return Ok(out);
+        };
+        if let Some((_, Some(val))) = extras.iter().find(|(key, _)| *key == inner) {
+            if shell {
+                let quoted = shell_value(val, quote_at(&out)).ok_or_else(|| {
+                    format!(
+                        "placeholder \"{{{{{inner}}}}}\" cannot be inside $'…', ${{…}} or backticks"
+                    )
+                })?;
+                out.push_str(&quoted);
+            } else {
+                out.push_str(val);
+            }
+        } else {
+            out.push_str(OPEN);
+            out.push_str(inner);
+            out.push_str(CLOSE);
         }
         rest = next;
     }
@@ -235,21 +299,34 @@ impl Flow {
         }
         let mut flow = self.clone();
         if let Some(rules) = &mut flow.rules {
-            *rules = fill(rules, values, false).map_err(place(None, "rules"))?;
+            *rules = fill(rules, values, &[], false).map_err(place(None, "rules"))?;
         }
         for step in &mut flow.steps {
             let id = Some(step.id.as_str());
             match &mut step.kind {
                 StepKind::Command {
-                    command, prompt, ..
+                    command,
+                    prompt,
+                    worktree,
+                    race,
+                    ..
                 } => {
-                    *command = fill(command, values, true).map_err(place(id, "command"))?;
+                    let mut allowed: Vec<(&str, Option<&str>)> = Vec::new();
+                    if matches!(race, Some(super::Race::Agents(_))) {
+                        allowed.push(("agent", None));
+                    }
+                    if worktree.is_some() {
+                        allowed.push(("worktree.port", None));
+                    }
+                    *command =
+                        fill(command, values, &allowed, true).map_err(place(id, "command"))?;
                     if let Some(prompt) = prompt {
-                        *prompt = fill(prompt, values, false).map_err(place(id, "prompt"))?;
+                        *prompt =
+                            fill(prompt, values, &allowed, false).map_err(place(id, "prompt"))?;
                     }
                 }
                 StepKind::Gate { message, .. } => {
-                    *message = fill(message, values, false).map_err(place(id, "gate"))?;
+                    *message = fill(message, values, &[], false).map_err(place(id, "gate"))?;
                 }
             }
         }

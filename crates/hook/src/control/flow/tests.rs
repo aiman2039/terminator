@@ -33,7 +33,7 @@ fn approve_is_written_only_for_a_gate_that_waits() {
     control::answer_gate(dir.path(), "ok", GateAnswer::Approve).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join(ANSWERS).join("ok")).unwrap(),
-        APPROVE
+        control::APPROVE
     );
     control::answer_gate(dir.path(), "ok", GateAnswer::Reject).unwrap();
     assert_eq!(
@@ -85,17 +85,17 @@ fn flow_run_takes_an_optional_run_name() {
 #[test]
 fn status_shows_a_run_whose_runner_is_gone_as_stopped() {
     let (_data, dir, runner) = data_with_run(false);
-    let value = status(&dir).unwrap();
+    let value = wait::status(&dir).unwrap();
     assert_eq!(value["status"], "running");
     assert_eq!(value["steps"]["build"]["status"], "running");
     drop(runner);
     // A process that another test forks holds an inherited lock until its
     // exec: wait a moment for it.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut value = status(&dir).unwrap();
+    let mut value = wait::status(&dir).unwrap();
     while value["status"] == "running" && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(20));
-        value = status(&dir).unwrap();
+        value = wait::status(&dir).unwrap();
     }
     assert_eq!(value["status"], "stopped (runner gone)");
     assert_eq!(value["steps"]["build"]["status"], "cancelled");
@@ -179,12 +179,14 @@ fn report_is_recorded_for_the_runner_and_starts_nothing() {
     let (data, dir, _runner) = data_with_run(false);
     let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
     assert!(agent::read_report(&dir, "build").is_none());
-    agent::report(&own, false, Some(" tests fail ")).unwrap();
+    agent::report(&own, false, Some(" tests fail "), &[]).unwrap();
     let report = agent::read_report(&dir, "build").unwrap();
     assert!(!report.done);
     assert_eq!(report.note.as_deref(), Some("tests fail"));
-    agent::report(&own, true, None).unwrap();
-    assert!(agent::read_report(&dir, "build").unwrap().done);
+    agent::report(&own, true, None, &["docs/plan.md".into()]).unwrap();
+    let report = agent::read_report(&dir, "build").unwrap();
+    assert!(report.done);
+    assert_eq!(report.outputs, ["docs/plan.md"]);
     // The state file is the runner's: a report does not change it.
     assert_eq!(
         control::read_state(&dir).unwrap().status("build"),
@@ -274,9 +276,10 @@ fn a_report_ends_its_step_while_the_daemon_does_not_answer() {
     let own = agent::Own {
         dir: dir.clone(),
         step: "build".into(),
+        racer: None,
         state: runner.state().clone(),
     };
-    agent::report(&own, true, Some("All tests pass")).unwrap();
+    agent::report(&own, true, Some("All tests pass"), &[]).unwrap();
     runner.poll_running();
     let build = &runner.state().steps["build"];
     assert_eq!(build.status, StepStatus::Done);
@@ -333,4 +336,98 @@ fn mcp_has_no_flow_tool_for_the_users_side() {
     .unwrap()
     .unwrap();
     assert_eq!(argv, ["flow", "report", "--note=--session=x", "--", "done"]);
+}
+
+#[test]
+fn mailbox_stores_messages_and_outputs_flow_into_context() {
+    let (data, dir, _runner) = data_with_run(false);
+    let sent = control::send_message(&dir, "build", "Please add unit tests").unwrap();
+    assert_eq!(sent.seq, 1);
+    let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
+    let inbox = agent::inbox(&own);
+    assert_eq!(inbox["messages"][0]["text"], "Please add unit tests");
+    // Path traversal in --output is refused.
+    assert!(agent::report(&own, true, Some("ok"), &["../secret".into()]).is_err());
+    agent::report(&own, true, Some("ok"), &["plan.md".into()]).unwrap();
+    assert_eq!(
+        agent::read_report(&dir, "build").unwrap().outputs,
+        ["plan.md"]
+    );
+    // flow send is user-side only, not exposed via MCP.
+    assert!(crate::mcp::tool_argv("flow_send", &serde_json::Map::new()).is_none());
+    assert!(crate::mcp::tool_argv("flow_inbox", &serde_json::Map::new()).is_some());
+}
+
+#[test]
+fn run_report_and_wait_and_events_work_on_ended_runs() {
+    let (_data, dir, _runner) = data_with_run(true);
+    let mut state = control::read_state(&dir).unwrap();
+    state.set("build", StepStatus::Done);
+    state.set("ok", StepStatus::Done);
+    state.steps.get_mut("build").unwrap().note = Some("compiled cleanly".into());
+    state.steps.get_mut("build").unwrap().started = Some(100);
+    state.steps.get_mut("build").unwrap().finished = Some(142);
+    std::fs::write(dir.join(STATE_FILE), serde_json::to_vec(&state).unwrap()).unwrap();
+
+    flow::report::append_event(&dir, "run_started", None, Some("n"));
+    flow::report::append_event(&dir, "step_done", Some("build"), None);
+    let events = flow::report::read_events(&dir);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].kind, "step_done");
+
+    let waited = wait::wait_run(&dir, "done", std::time::Duration::from_secs(1)).unwrap();
+    assert_eq!(waited["status"], "done");
+    let report = flow::report::write_run_report(&dir).unwrap();
+    let md = std::fs::read_to_string(&report).unwrap();
+    assert!(md.contains("compiled cleanly"), "{md}");
+    assert!(md.contains("duration: 42s"), "{md}");
+}
+
+#[test]
+fn propose_adds_dynamic_step_and_mcp_exposes_flow_propose() {
+    let (data, dir, mut runner, _interrupted) = runner_without_daemon();
+    let _lock = control::hold_runner(&dir).unwrap();
+    runner.running_command("build", "s1");
+    runner.save().unwrap();
+    let own = agent::own_step(data.path(), Some("s1".into())).unwrap();
+    agent::propose(
+        &own,
+        agent::ProposeInput {
+            id: "extra".into(),
+            command: "echo extra".into(),
+            prompt: Some("Follow up".into()),
+            cwd: None,
+            worktree: Some("extra-wt".into()),
+            needs: Vec::new(),
+        },
+    )
+    .unwrap();
+    runner.ingest_proposals();
+    assert!(runner.flow.step("extra").is_some());
+    let extra = &runner.state().steps["extra"];
+    assert_eq!(extra.proposed_by.as_deref(), Some("build"));
+    assert_eq!(extra.needs, ["build"]);
+    let argv = crate::mcp::tool_argv(
+        "flow_propose",
+        serde_json::json!({
+            "id": "lint",
+            "command": "cargo clippy",
+            "needs": ["build"]
+        })
+        .as_object()
+        .unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        argv,
+        [
+            "flow",
+            "propose",
+            "--needs=build",
+            "--",
+            "lint",
+            "cargo clippy"
+        ]
+    );
 }

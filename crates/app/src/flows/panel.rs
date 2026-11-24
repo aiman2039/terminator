@@ -36,8 +36,14 @@ pub(super) enum Act {
     /// The trust answer for the tool window's project.
     Trust(bool),
     Go(String),
+    /// Read-only screen peek of a step's session (`screen-v1`).
+    Peek(String),
+    /// Open working changes diff of a racer worktree.
+    OpenDiff(PathBuf),
     Gate(PathBuf, String, super::gates::GateChoice),
     Answer(PathBuf, String),
+    /// Store a mailbox message for a running step (`flow send`).
+    SendMail(PathBuf, String),
     /// Start this failed step of this run again (explicit click).
     Retry(PathBuf, String),
     AskCancel(PathBuf),
@@ -47,6 +53,10 @@ pub(super) enum Act {
     Toggle(PathBuf, bool),
     /// Delete the folder of one ended run.
     Remove(PathBuf),
+    /// Export Markdown summary of an ended run (`report.md`).
+    ExportReport(PathBuf),
+    /// Load read-only CI/PR/TODO checks for a flow worktree.
+    LoadChecks(PathBuf),
     AskClear,
     KeepRuns,
     /// Delete the folders of these ended runs.
@@ -86,23 +96,56 @@ fn remove_all(data: &std::path::Path, dirs: &[PathBuf]) -> Result<(), RunError> 
 impl App {
     /// Takes finished reads and answers, and starts the next read.
     pub(super) fn poll_flow_runs(&mut self, ctx: &egui::Context) {
-        if let Some(receiver) = &self.flows.reading
+        self.flows.checks.poll();
+        if let Some(rx) = &self.flows.report_export {
+            match rx.try_recv() {
+                Ok(Ok(path)) => {
+                    self.flows.report_export = None;
+                    self.info = Some(format!(
+                        "Exported run report to {}.",
+                        services::compact_path(&path)
+                    ));
+                    self.open_file(crate::app::OpenFileInput {
+                        path,
+                        line: None,
+                        split: None,
+                        external: false,
+                    });
+                }
+                Ok(Err(err)) => {
+                    self.flows.report_export = None;
+                    self.error.set(format!("Flow report: {err}"));
+                }
+                Err(TryRecvError::Disconnected) => self.flows.report_export = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        if let Some((read_id, receiver)) = &self.flows.reading
             && let Ok(runs) = receiver.try_recv()
         {
-            self.flows.runs = runs;
+            if *read_id == self.flows.read_gen {
+                self.flows.runs = runs;
+            }
             self.flows.reading = None;
         }
         let mut failed = None;
+        let mut restore = Vec::new();
         self.flows
             .acting
             .retain(|receiver| match receiver.try_recv() {
                 Ok(Ok(())) | Err(TryRecvError::Disconnected) => false,
-                Ok(Err(error)) => {
+                Ok(Err((error, draft))) => {
                     failed = Some(error);
+                    if let Some(entry) = draft {
+                        restore.push(entry);
+                    }
                     false
                 }
                 Err(TryRecvError::Empty) => true,
             });
+        for (key, text) in restore {
+            self.flows.drafts.entry(key).or_insert(text);
+        }
         if let Some(error) = failed {
             self.error.set(format!("Flow: {error}"));
         }
@@ -113,6 +156,7 @@ impl App {
         if self.flows.reading.is_none() && due {
             let data = self.paths.data.clone();
             let ended = std::sync::Arc::clone(&self.flows.ended_runs);
+            let read_id = self.flows.read_gen;
             let (sender, receiver) = channel();
             let spawned = std::thread::Builder::new()
                 .name("flow-runs".into())
@@ -125,7 +169,7 @@ impl App {
                     let _ = sender.send(runs);
                 });
             if spawned.is_ok() {
-                self.flows.reading = Some(receiver);
+                self.flows.reading = Some((read_id, receiver));
             }
             self.flows.read_at = Some(Instant::now());
         }
@@ -174,11 +218,21 @@ impl App {
         &mut self,
         work: impl FnOnce() -> Result<(), RunError> + Send + 'static,
     ) {
+        self.flow_act_with_draft(None, work);
+    }
+
+    fn flow_act_with_draft(
+        &mut self,
+        draft: Option<((PathBuf, String), String)>,
+        work: impl FnOnce() -> Result<(), RunError> + Send + 'static,
+    ) {
+        self.flows.read_gen = self.flows.read_gen.wrapping_add(1);
+        self.flows.reading = None;
         let (sender, receiver) = channel();
         let spawned = std::thread::Builder::new()
             .name("flow-answer".into())
             .spawn(move || {
-                let _ = sender.send(work().map_err(|error| error.to_string()));
+                let _ = sender.send(work().map_err(|error| (error.to_string(), draft)));
             });
         if spawned.is_ok() {
             self.flows.acting.push(receiver);
@@ -307,16 +361,26 @@ impl App {
                 }
             }
             Act::Go(session) => self.go_session(&session),
+            Act::Peek(session) => self.open_session_peek(&session),
+            Act::OpenDiff(path) => self.open_git_tab(Tab::ChangesDiff {
+                cwd: path,
+                staged: false,
+            }),
             Act::Gate(dir, step, choice) => {
                 self.flow_act(move || control::answer_gate(&dir, &step, choice.answer()));
             }
             Act::Answer(dir, step) => {
-                let text = self
-                    .flows
-                    .drafts
-                    .remove(&(dir.clone(), step.clone()))
-                    .unwrap_or_default();
-                self.flow_act(move || control::answer_question(&dir, &step, &text));
+                let key = (dir.clone(), step.clone());
+                let text = self.flows.drafts.remove(&key).unwrap_or_default();
+                let restore = text.clone();
+                self.flow_act_with_draft(Some((key, restore)), move || {
+                    control::answer_question(&dir, &step, &text)
+                });
+            }
+            Act::SendMail(dir, step) => {
+                let key = (dir.clone(), step.clone());
+                let text = self.flows.mail_drafts.remove(&key).unwrap_or_default();
+                self.flow_act(move || control::send_message(&dir, &step, &text).map(|_| ()));
             }
             Act::Retry(dir, step) => {
                 self.flow_act(move || control::retry(&dir, &step));
@@ -331,12 +395,30 @@ impl App {
                 self.flows.expanded.insert(dir, open);
             }
             Act::Remove(dir) => self.remove_flow_runs(vec![dir]),
+            Act::ExportReport(dir) => self.export_flow_run_report(dir),
+            Act::LoadChecks(wt) => self.request_flow_checks(wt),
             Act::AskClear => self.flows.confirm_clear = true,
             Act::KeepRuns => self.flows.confirm_clear = false,
             Act::Clear(dirs) => {
                 self.flows.confirm_clear = false;
-                self.remove_flow_runs(dirs);
+                self.clear_ended_flow_runs(dirs);
             }
+        }
+    }
+
+    /// Export an ended run's Markdown report off the GUI thread.
+    fn export_flow_run_report(&mut self, dir: PathBuf) {
+        let (tx, rx) = channel();
+        if std::thread::Builder::new()
+            .name("flow-report".into())
+            .spawn(move || {
+                let res = terminator_core::flow::report::write_run_report(&dir)
+                    .map_err(|err| err.to_string());
+                let _ = tx.send(res);
+            })
+            .is_ok()
+        {
+            self.flows.report_export = Some(rx);
         }
     }
 
@@ -346,86 +428,33 @@ impl App {
         for dir in &dirs {
             self.flows.expanded.remove(dir);
             self.flows.drafts.retain(|(run, _), _| run != dir);
+            self.flows.mail_drafts.retain(|(run, _), _| run != dir);
         }
         let data = self.paths.data.clone();
         self.flow_act(move || remove_all(&data, &dirs));
     }
-}
 
-/// The title, Run flow… and the menu with New flow and Clear ended runs.
-fn flows_header(ui: &mut egui::Ui, ended: usize, act: &mut Option<Act>) {
-    ui.horizontal(|ui| {
-        ui.strong("Flows");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let more = appearance::icon_menu_button(ui, "EllipsisVertical", |ui| {
-                if appearance::menu_action(ui, true, "New flow…", "Plus").clicked() {
-                    *act = Some(Act::NewFlow);
+    /// Delete every ended run of the selected project on disk (including
+    /// older ended runs past the panel's read cap).
+    fn clear_ended_flow_runs(&mut self, mut dirs: Vec<PathBuf>) {
+        for dir in &dirs {
+            self.flows.expanded.remove(dir);
+            self.flows.drafts.retain(|(run, _), _| run != dir);
+            self.flows.mail_drafts.retain(|(run, _), _| run != dir);
+        }
+        let data = self.paths.data.clone();
+        let project = self.selected.clone();
+        self.flow_act(move || {
+            if let Some(project) = project {
+                for dir in control::all_ended_runs(&data, &project) {
+                    if !dirs.contains(&dir) {
+                        dirs.push(dir);
+                    }
                 }
-                if appearance::menu_danger_action(ui, ended > 0, "Clear ended runs…", "Trash")
-                    .on_hover_text("Remove every ended run of this project from the list")
-                    .clicked()
-                {
-                    *act = Some(Act::AskClear);
-                }
-            });
-            more.response.on_hover_text("More flow actions");
-            if appearance::sidebar_action(ui, "Play", "Run flow…").clicked() {
-                *act = Some(Act::RunFlow);
             }
+            remove_all(&data, &dirs)
         });
-    });
+    }
 }
 
-/// A section title: small secondary capitals, with a count at the right.
-pub(super) fn section_title(ui: &mut egui::Ui, title: &str, count: usize) {
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let text = |text: String| {
-            egui::RichText::new(text)
-                .size(appearance::FONT_CAPTION)
-                .weak()
-        };
-        ui.label(text(title.to_uppercase()));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(text(count.to_string()));
-        });
-    });
-    ui.add_space(2.0);
-}
-
-/// No flow and no run in this project: what a flow is, New flow, and
-/// where the files are.
-pub(super) fn empty_state(ui: &mut egui::Ui, act: &mut Option<Act>) {
-    ui.add_space(8.0);
-    egui::Frame::new()
-        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(appearance::RADIUS_LARGE)
-        .inner_margin(egui::Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.vertical_centered(|ui| {
-                ui.strong("No flows in this project");
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(
-                        "A flow runs agent steps in order, with gates where you approve.",
-                    )
-                    .size(appearance::FONT_SMALL)
-                    .weak(),
-                );
-                ui.add_space(8.0);
-                if appearance::primary_button(ui, "New flow")
-                    .on_hover_text("Name a new flow, then make it in the flow editor")
-                    .clicked()
-                {
-                    *act = Some(Act::NewFlow);
-                }
-            });
-        });
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new("Flows are stored in .terminator/flows/.")
-            .size(appearance::FONT_CAPTION)
-            .weak(),
-    );
-}
+pub(super) use super::review::{empty_state, flows_header, section_title};

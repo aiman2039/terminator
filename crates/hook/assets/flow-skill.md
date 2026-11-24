@@ -13,11 +13,13 @@ Run these in your terminal. The same commands are MCP tools of `terminator-hook 
 
 | Command | Use |
 |---|---|
-| `terminator-hook flow context` | Your run, your step, and the steps you need (with their session IDs and result notes). |
+| `terminator-hook flow context` | Your run, your step, `rules`, `round`/`max_rounds`/`attempt`, `loop_note`, `inputs`, and the steps you need (with session IDs, notes, and gate choices). |
 | `terminator-hook ctl read SESSION` | The terminal text of a needed step. |
-| `terminator-hook flow report done --note "result"` | End your step as done. The steps after you start, and they get the note. |
+| `terminator-hook flow inbox` | Read messages sent to this step's mailbox (`flow send`). |
+| `terminator-hook flow report done --note "result" --output PATH` | End your step as done with optional output paths for later steps. |
 | `terminator-hook flow report failed --note "why"` | End your step as failed. The steps after you do not start. |
 | `terminator-hook flow ask "question"` | Ask the user. The command waits and prints the answer. |
+| `terminator-hook flow propose ID COMMAND` | Propose a new step to run inside this flow (`--prompt`, `--worktree`, `--needs`). |
 | `terminator-hook flow status RUN` | The state of all steps of the run. |
 
 ## Procedure

@@ -164,7 +164,9 @@ pub(crate) fn remove_stale_files(runtime_dir: &Path) {
 }
 
 fn process_alive(pid: u32) -> bool {
-    let mut system = sysinfo::System::new();
+    let Ok(mut system) = sysinfo::System::new() else {
+        return true;
+    };
     let pid = sysinfo::Pid::from_u32(pid);
     system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), false);
     system.process(pid).is_some()

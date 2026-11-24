@@ -34,7 +34,8 @@ impl App {
                 session,
                 anchor,
                 split,
-            } => self.ui_show_session(session, anchor, split)?,
+                background,
+            } => self.ui_show_session(session, (anchor, split), background)?,
             Ui::OpenFile {
                 project,
                 path,
@@ -88,8 +89,8 @@ impl App {
     fn ui_show_session(
         &mut self,
         session: String,
-        anchor: Option<String>,
-        split: Option<String>,
+        (anchor, split): (Option<String>, Option<String>),
+        background: bool,
     ) -> Result<Reply> {
         let record = self
             .state
@@ -106,12 +107,21 @@ impl App {
         // Focus an existing view (dock, floating window or IDE strip)
         // instead of adding a second pane, like `go_session`.
         if self.session_view_exists(&record.project_id, &session) {
-            self.go_session(&session);
+            if !background {
+                self.go_session(&session);
+            }
             return Ok(Some(serde_json::json!({"accepted":true,"existing":true})));
         }
         if let Some(anchor) = anchor {
             self.focus_anchor_pane(&record.project_id, anchor)?;
             self.insert(&record.project_id, tab, split.as_deref());
+        } else if background {
+            self.layouts
+                .entry(record.project_id.clone())
+                .or_insert_with(Workspace::empty)
+                .add_background(id(), tab);
+            self.pane_index = None;
+            return Ok(None);
         } else {
             self.layouts
                 .entry(record.project_id.clone())

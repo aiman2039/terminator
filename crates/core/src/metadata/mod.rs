@@ -51,6 +51,8 @@ pub enum MetadataError {
     ProcessGone { pid: u32 },
     #[error("Could not signal process {pid}")]
     SignalFailed { pid: u32 },
+    #[error("Could not inspect system processes: {reason}")]
+    ProcessTable { reason: String },
     #[error(transparent)]
     Process(#[from] crate::ProcessError),
     #[cfg(feature = "async-client")]
@@ -207,12 +209,15 @@ pub fn listening_ports(identity: (u32, u64)) -> Result<Vec<ListeningPort>> {
     Ok(parse_ports(&String::from_utf8_lossy(&out.stdout), &owned))
 }
 fn owned_processes(identity: (u32, u64)) -> Result<HashSet<u32>> {
-    ProcessTree::new(process_table()).owned(identity)
+    ProcessTree::new(process_table()?).owned(identity)
 }
 
-fn process_table() -> sysinfo::System {
+fn process_table() -> Result<sysinfo::System> {
     use sysinfo::{ProcessRefreshKind, RefreshKind, System};
     System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()))
+        .map_err(|err| MetadataError::ProcessTable {
+            reason: err.to_string(),
+        })
 }
 
 /// A process table with each process's children, built once and then

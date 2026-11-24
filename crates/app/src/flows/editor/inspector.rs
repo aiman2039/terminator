@@ -33,6 +33,8 @@ pub(crate) enum Field {
     Options,
     When,
     Loop,
+    Race,
+    Pick,
     /// The flow's run inputs.
     Inputs,
     /// The whole step or the whole flow.
@@ -76,6 +78,8 @@ pub(crate) fn error_place(error: &FlowError) -> (Option<String>, Field) {
         FlowError::Options(step) => at(step, Field::Options),
         FlowError::When { step, .. } => at(step, Field::When),
         FlowError::Loop { step, .. } => at(step, Field::Loop),
+        FlowError::Race { step, .. } => at(step, Field::Race),
+        FlowError::Pick { step, .. } => at(step, Field::Pick),
         FlowError::Kind(step) | FlowError::GateField(step) | FlowError::Text(step, _) => {
             at(step, Field::Other)
         }
@@ -200,11 +204,33 @@ fn node_fields(
 ) -> Option<String> {
     let id = editor.snarl.get_node(node)?.id().trim().to_owned();
     let gate = editor.snarl.get_node(node)?.is_gate();
+    node_fields_header(ui, editor, gate, show.colors);
+    let error = |field| error_of(show, Some(&id), field);
+    let value = editor.snarl.get_node_mut(node)?;
+    field(
+        ui,
+        ("ID", "a-z, 0-9, - or _", 1),
+        value.id_mut(),
+        error(Field::Id),
+    );
+    let new_id = value.id().trim().to_owned();
+    node_kind_fields(ui, value, error);
+    if !id.is_empty() && !new_id.is_empty() && new_id != id {
+        rename_references(&mut editor.snarl, &id, &new_id);
+    }
+    runs_after(ui, editor, node);
+    error_line(ui, error(Field::RunsAfter).or(error(Field::Other)));
+    super::branching::fields(ui, editor, node, error);
+    let step = show.run.and_then(|run| run.get(&id))?;
+    this_run(ui, step, show.colors)
+}
+
+fn node_fields_header(ui: &mut egui::Ui, editor: &mut FlowEditor, gate: bool, colors: Colors) {
     ui.horizontal(|ui| {
         let (icon, title, color) = if gate {
-            ("ShieldQuestion", "Gate", show.colors.gate)
+            ("ShieldQuestion", "Gate", colors.gate)
         } else {
-            ("Terminal", "Step", show.colors.step)
+            ("Terminal", "Step", colors.step)
         };
         let size = egui::Vec2::splat(appearance::TOOLBAR_ICON);
         ui.add(
@@ -229,16 +255,21 @@ fn node_fields(
         "One new terminal with this command."
     });
     ui.add_space(8.0);
-    let error = |field| error_of(show, Some(&id), field);
-    let value = editor.snarl.get_node_mut(node)?;
-    let id_error = error(Field::Id);
-    field(ui, ("ID", "a-z, 0-9, - or _", 1), value.id_mut(), id_error);
+}
+
+fn node_kind_fields<'a>(
+    ui: &mut egui::Ui,
+    value: &mut Node,
+    error: impl Fn(Field) -> Option<&'a str>,
+) {
     match value {
         Node::Step {
             command,
             prompt,
             cwd,
             worktree,
+            race_count,
+            race_agents,
             ..
         } => {
             field(
@@ -258,17 +289,50 @@ fn node_fields(
             field(ui, ("Worktree", hint, 1), worktree, error(Field::Worktree));
             let hint = "In the project (optional)";
             field(ui, ("Folder", hint, 1), cwd, error(Field::Folder));
+            field(
+                ui,
+                ("Racers (count)", "2 to 5 (requires worktree)", 1),
+                race_count,
+                error(Field::Race),
+            );
+            field(
+                ui,
+                ("Racer agents", "claude, codex (uses {{agent}})", 1),
+                race_agents,
+                None,
+            );
         }
-        Node::Gate { message, .. } => {
+        Node::Gate { message, pick, .. } => {
             let hint = "The question of this gate";
             field(ui, ("You approve", hint, 4), message, error(Field::Message));
+            field(
+                ui,
+                ("Pick winner of", "Race step ID (optional)", 1),
+                pick,
+                error(Field::Pick),
+            );
         }
     }
-    runs_after(ui, editor, node);
-    error_line(ui, error(Field::RunsAfter).or(error(Field::Other)));
-    super::branching::fields(ui, editor, node, error);
-    let step = show.run.and_then(|run| run.get(&id))?;
-    this_run(ui, step, show.colors)
+}
+
+/// Updates `when` ("OLD.opt"), `loop_to` ("OLD"), and `pick` ("OLD")
+/// references across all cards when a step's ID is renamed.
+fn rename_references(snarl: &mut egui_snarl::Snarl<Node>, old: &str, new: &str) {
+    let prefix = format!("{old}.");
+    for (_, value) in snarl.nodes_ids_data_mut() {
+        let branch = value.value.branch_mut();
+        if branch.loop_to.trim() == old {
+            new.clone_into(&mut branch.loop_to);
+        }
+        if let Some(option) = branch.when.trim().strip_prefix(&prefix) {
+            branch.when = format!("{new}.{option}");
+        }
+        if let Node::Gate { pick, .. } = &mut value.value
+            && pick.trim() == old
+        {
+            new.clone_into(pick);
+        }
+    }
 }
 
 /// "Runs after": one checkbox per other card. A choice that would close a

@@ -152,6 +152,33 @@ impl Workspace {
         self.add_at(self.tabs.len(), id, pane);
     }
 
+    /// Adds a top-level tab without switching focus away from the current tab.
+    pub fn add_background(&mut self, id: String, mut pane: Tab) {
+        let has_tabs = self
+            .tabs
+            .iter()
+            .any(|tab| tab.layout.iter_all_tabs().next().is_some());
+        if !has_tabs {
+            self.add(id, pane);
+            return;
+        }
+        if let Tab::Browser { id, .. } | Tab::Vnc { id, .. } = &mut pane
+            && id.is_empty()
+        {
+            *id = terminator_core::id();
+        }
+        self.version = self.version.max(pane.layout_version());
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.tabs.push(WorkspaceTab {
+            id,
+            name: None,
+            pinned: false,
+            primary: Some(pane.clone()),
+            layout: DockState::new(vec![pane]),
+        });
+    }
+
     pub fn add_from(&mut self, id: String, pane: Tab, anchors: &[Tab]) {
         self.add_at_from(crate::workspace::AddAtFromInput {
             index: self.tabs.len(),

@@ -34,7 +34,12 @@ impl App {
                     continue;
                 }
                 let children = index.children.get(&p.id).map(Vec::as_slice);
-                let count = index.live_counts.get(&p.id).copied().unwrap_or(0);
+                let count = index
+                    .live_counts
+                    .get(&p.id)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(self.sidebar_non_session_tab_count(&p.id));
                 self.project_entry(ui, p, (count, children));
             }
             if projects.is_empty() {

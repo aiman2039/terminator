@@ -65,11 +65,18 @@ fn mermaid(steps: &[&DraftStep]) -> String {
 }
 
 /// The labeled lines of one step in the plan.
-fn step_lines(step: &DraftStep) -> [(&'static str, Option<String>); 7] {
+fn step_lines(step: &DraftStep) -> [(&'static str, Option<String>); 9] {
     let loop_back = step.loop_to.as_ref().map(|to| {
         let rounds = step.max_rounds.unwrap_or_default();
         format!("back to {to} when done, {rounds} rounds at most")
     });
+    let racers = if let Some(count) = step.count {
+        Some(format!("{count} racers"))
+    } else if !step.agents.is_empty() {
+        Some(step.agents.join(", "))
+    } else {
+        None
+    };
     [
         (
             "Command",
@@ -77,11 +84,13 @@ fn step_lines(step: &DraftStep) -> [(&'static str, Option<String>); 7] {
         ),
         ("Folder", step.cwd.clone()),
         ("Worktree", step.worktree.clone()),
+        ("Racers", racers),
         ("You approve", step.gate.clone()),
         (
             "Options",
             (!step.options.is_empty()).then(|| step.options.join(", ")),
         ),
+        ("Pick winner of", step.pick.clone()),
         ("Runs when", step.when.clone()),
         ("Loop", loop_back),
     ]

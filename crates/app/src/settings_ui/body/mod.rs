@@ -115,17 +115,29 @@ impl App {
                 self.vnc_detach_setting(ui);
             }
             SettingsSection::Updates => {
-                self.installation_settings(ui);
-                ui.add_space(12.0);
-                ui.separator();
-                #[cfg(any(not(target_os = "macos"), test))]
-                self.windows_updates.settings(
-                    ui,
-                    &mut self.settings_draft.automatic_update_checks,
-                    &mut self.preferences.skipped_update_version,
+                let show_install = self.field_visible(
+                    "Installation",
+                    "install installation repair session service daemon helper",
                 );
-                #[cfg(target_os = "macos")]
-                self.updater.settings(ui);
+                let show_updates = self
+                    .field_visible("Updates", "updates check automatic sparkle release version");
+                if show_install {
+                    self.installation_settings(ui);
+                }
+                if show_install && show_updates {
+                    ui.add_space(12.0);
+                    ui.separator();
+                }
+                if show_updates {
+                    #[cfg(any(not(target_os = "macos"), test))]
+                    self.windows_updates.settings(
+                        ui,
+                        &mut self.settings_draft.automatic_update_checks,
+                        &mut self.preferences.skipped_update_version,
+                    );
+                    #[cfg(target_os = "macos")]
+                    self.updater.settings(ui);
+                }
             }
         });
     }

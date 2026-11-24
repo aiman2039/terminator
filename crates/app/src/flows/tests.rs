@@ -650,6 +650,8 @@ fn remove_and_clear_delete_only_ended_runs_after_a_click() {
 
     // Clear ended runs: nothing goes before the confirmation.
     app.flows.runs = vec![running, stopped, other];
+    app.flows.reading = None;
+    app.flows.read_at = Some(Instant::now());
     let ctx = egui::Context::default();
     app.apply_flow_act(panel::Act::AskClear);
     let text = painted_frames(&ctx, |ui| app.flows_panel(ui));

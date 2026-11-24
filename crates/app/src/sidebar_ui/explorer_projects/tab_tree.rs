@@ -1,11 +1,13 @@
-//! Live sessions under a project, grouped per workspace tab.
+//! Live sessions and open non-editor tabs under a project, grouped per
+//! workspace tab.
+use super::tab_row::TreeItem;
 use super::*;
 
 /// One workspace tab's node in the project's session tree.
 struct TabGroupInput<'a> {
     project_id: &'a str,
     tab_id: &'a String,
-    sids: &'a [String],
+    items: &'a [TreeItem],
     by_id: &'a std::collections::HashMap<&'a str, &'a Arc<Session>>,
     workspace_active: Option<&'a str>,
 }
@@ -58,52 +60,51 @@ impl App {
         });
     }
 
-    /// Live terminal sessions under one project, grouped as a tree per
-    /// top-level workspace tab in layout order. Single-tab projects keep the
-    /// historic flat list. Multi-tab projects render one expandable tab node
-    /// per tab that owns live sessions, then any background sessions that are
-    /// in no tab. A tab that holds exactly one live terminal and has no custom
-    /// name draws that terminal in the tab's place, because the node would
-    /// only repeat it.
+    /// Live terminal sessions and open non-editor tabs under one project,
+    /// grouped as a tree per top-level workspace tab in layout order.
     pub(super) fn project_sessions_tree(&mut self, ui: &mut egui::Ui, project_id: &str) {
         let mut live = self.live_project_sessions(project_id);
-        if live.is_empty() {
-            return;
-        }
-        // Children of a parent in this project draw under that parent.
         let nested = super::child_rows::nested_ids(&self.state, &live);
         live.retain(|s| !nested.contains(&s.id));
-        let tabs = self.project_tab_terminals(project_id);
-        if tabs.len() < 2 {
-            for session in &live {
-                self.session_row(ui, session);
-                self.session_children(ui, project_id, &session.id);
-            }
+        let live_ids: std::collections::HashSet<&str> =
+            live.iter().map(|s| s.id.as_str()).collect();
+        let (tab_groups, placed_sids) = self.project_tab_items(project_id, &live_ids);
+        let floated = self.floated_non_session_tabs(project_id);
+        let has_tab_items = tab_groups.iter().any(|(_, items)| !items.is_empty());
+        if live.is_empty() && !has_tab_items && floated.is_empty() {
             return;
         }
-        let live_ids: Vec<String> = live.iter().map(|s| s.id.clone()).collect();
-        let (groups, overflow) = group_session_ids_by_tab(&tabs, &live_ids);
         let by_id: std::collections::HashMap<&str, &Arc<Session>> =
             live.iter().map(|s| (s.id.as_str(), s)).collect();
+        let overflow: Vec<String> = live
+            .iter()
+            .filter(|s| !placed_sids.contains(s.id.as_str()))
+            .map(|s| s.id.clone())
+            .collect();
+        if tab_groups.len() < 2 {
+            for (_, items) in &tab_groups {
+                self.paint_flat_tree_items(ui, (project_id, items), &by_id);
+            }
+            self.paint_overflow_items(ui, (project_id, &overflow, &floated), &by_id);
+            return;
+        }
         let workspace_active = self.layouts.get(project_id).map(|w| w.active.clone());
-        for (tab_id, sids) in &groups {
+        for (tab_id, items) in &tab_groups {
+            if items.is_empty() {
+                continue;
+            }
             self.session_tab_group(
                 ui,
                 TabGroupInput {
                     project_id,
                     tab_id,
-                    sids,
+                    items,
                     by_id: &by_id,
                     workspace_active: workspace_active.as_deref(),
                 },
             );
         }
-        for sid in &overflow {
-            if let Some(session) = by_id.get(sid.as_str()) {
-                self.session_row(ui, session);
-                self.session_children(ui, project_id, sid);
-            }
-        }
+        self.paint_overflow_items(ui, (project_id, &overflow, &floated), &by_id);
     }
 
     /// Live, non-editor sessions of the project whose owner is reachable.
@@ -126,35 +127,7 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Terminal session ids per workspace tab, in layout order.
-    fn project_tab_terminals(&self, project_id: &str) -> Vec<(String, Vec<String>)> {
-        self.layouts
-            .get(project_id)
-            .map(|workspace| {
-                workspace
-                    .tabs
-                    .iter()
-                    .map(|group| {
-                        (
-                            group.id.clone(),
-                            group
-                                .layout
-                                .iter_all_tabs()
-                                .filter_map(|(_, tab)| match tab {
-                                    Tab::Terminal(sid) => Some(sid.clone()),
-                                    _ => None,
-                                })
-                                .collect(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Position and custom name of a workspace tab. The group is
-    /// abstract: its own name, or `Tab N` by position. It never borrows a
-    /// member terminal's label.
+    /// Position and custom name of a workspace tab.
     fn tab_group_name(&self, project_id: &str, tab_id: &str) -> (usize, Option<String>) {
         self.layouts
             .get(project_id)
@@ -179,7 +152,7 @@ impl App {
         let TabGroupInput {
             project_id,
             tab_id,
-            sids,
+            items,
             by_id,
             workspace_active,
         } = input;
@@ -188,36 +161,29 @@ impl App {
             .rename_group
             .as_ref()
             .is_some_and(|rename| rename.project == *project_id && rename.tab == *tab_id);
-        // One live terminal and no custom name: the node would only repeat
-        // the terminal it holds, so the terminal itself takes its place.
-        // A tab that is being named keeps its node to host the field.
-        if sids.len() == 1 && group_name.is_none() && !renaming_group {
-            if let Some(session) = sids
-                .first()
-                .and_then(|sid| by_id.get(sid.as_str()))
-                .map(|session| session.as_ref())
-            {
-                let response = self.session_row_in_tab(SessionRowInTabInput {
-                    ui,
-                    session,
-                    project_id,
-                    tab_id,
-                });
-                if let Some(response) = response {
-                    Self::tree_session_row_dnd(&response, (project_id, &session.id));
-                    self.tree_drop_target(ui, &response, (project_id, tab_id));
-                }
-                self.session_children(ui, project_id, &session.id);
-            }
+        // One visible item and no custom name: render it directly so the
+        // group header does not repeat the single item it holds.
+        if items.len() == 1
+            && group_name.is_none()
+            && !renaming_group
+            && let Some(first) = items.first()
+        {
+            self.paint_single_group_item(ui, (project_id, tab_id, first), by_id);
             return;
         }
-        let group_label = crate::workspace::group_display_name(group_name.as_deref(), group_index);
+        let group_label = match group_name.as_deref() {
+            Some(name) => name.to_owned(),
+            None => self.unnamed_tab_group_label(project_id, tab_id, group_index),
+        };
         let key = tab_expanded_key(project_id, tab_id);
         let mut tab_expanded = self.preferences.expanded.get(&key).copied().unwrap_or(true);
         let active_tab = workspace_active == Some(tab_id.as_str());
-        let states: Vec<Option<AgentState>> = sids
+        let states: Vec<Option<AgentState>> = items
             .iter()
-            .map(|sid| self.present_session(sid).lifecycle)
+            .filter_map(|item| match item {
+                TreeItem::Session(sid) => Some(self.present_session(sid).lifecycle),
+                TreeItem::Tab(_) => None,
+            })
             .collect();
         let header = TabGroupHeader {
             project_id,
@@ -227,7 +193,7 @@ impl App {
             named: group_name.is_some(),
             renaming: renaming_group,
             selected: self.selected.as_deref() == Some(project_id) && active_tab,
-            trailing: super::tree_dnd::group_activity(&states, sids.len()),
+            trailing: super::tree_dnd::group_activity(&states, items.len()),
             counts: crate::agent_presence::StateCounts::of(states.iter().flatten().copied()),
         };
         let (tab_left, rename_action) = ui
@@ -235,20 +201,66 @@ impl App {
             .inner;
         self.apply_group_rename((project_id, tab_id), group_name, rename_action);
         if tab_expanded {
-            ui.scope(|ui| {
-                ui.spacing_mut().indent += tab_left - ui.next_widget_position().x;
-                ui.indent(format!("sidebar-tab-body:{tab_id}"), |ui| {
-                    for sid in sids {
-                        if let Some(session) = by_id.get(sid.as_str())
-                            && let Some(response) = self.session_row(ui, session)
-                        {
-                            Self::tree_session_row_dnd(&response, (project_id, sid));
-                        }
-                        self.session_children(ui, project_id, sid);
-                    }
-                });
-            });
+            self.paint_group_children(ui, (project_id, tab_id, tab_left, items), by_id);
         }
+    }
+
+    fn paint_single_group_item(
+        &mut self,
+        ui: &mut egui::Ui,
+        (project_id, tab_id, item): (&str, &str, &TreeItem),
+        by_id: &std::collections::HashMap<&str, &Arc<Session>>,
+    ) {
+        match item {
+            TreeItem::Session(sid) => {
+                if let Some(session) = by_id.get(sid.as_str()).map(|s| s.as_ref()) {
+                    let response = self.session_row_in_tab(SessionRowInTabInput {
+                        ui,
+                        session,
+                        project_id,
+                        tab_id,
+                    });
+                    if let Some(response) = response {
+                        Self::tree_session_row_dnd(&response, (project_id, &session.id));
+                        self.tree_drop_target(ui, &response, (project_id, tab_id));
+                    }
+                    self.session_children(ui, project_id, &session.id);
+                }
+            }
+            TreeItem::Tab(tab) => {
+                if let Some(response) = self.sidebar_tab_row(ui, (project_id, Some(tab_id)), tab) {
+                    self.tree_drop_target(ui, &response, (project_id, tab_id));
+                }
+            }
+        }
+    }
+
+    fn paint_group_children(
+        &mut self,
+        ui: &mut egui::Ui,
+        (project_id, tab_id, tab_left, items): (&str, &str, f32, &[TreeItem]),
+        by_id: &std::collections::HashMap<&str, &Arc<Session>>,
+    ) {
+        ui.scope(|ui| {
+            ui.spacing_mut().indent += tab_left - ui.next_widget_position().x;
+            ui.indent(format!("sidebar-tab-body:{tab_id}"), |ui| {
+                for item in items {
+                    match item {
+                        TreeItem::Session(sid) => {
+                            if let Some(session) = by_id.get(sid.as_str())
+                                && let Some(response) = self.session_row(ui, session)
+                            {
+                                Self::tree_session_row_dnd(&response, (project_id, sid));
+                            }
+                            self.session_children(ui, project_id, sid);
+                        }
+                        TreeItem::Tab(tab) => {
+                            self.sidebar_tab_row(ui, (project_id, None), tab);
+                        }
+                    }
+                }
+            });
+        });
     }
 
     /// Chevron plus the tab row (or its rename field). Returns the row's

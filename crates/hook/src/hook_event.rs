@@ -243,7 +243,9 @@ impl HookCommand {
     }
     fn agent_parent() -> Ancestry {
         use sysinfo::System;
-        let mut system = System::new();
+        let Ok(mut system) = System::new() else {
+            return Ancestry::empty(Vec::new());
+        };
         let (ancestors, selected) = Self::walk_ancestors(&mut system, Self::parent_pid());
         if let Some(candidate) = selected
             && let Some((identity, process)) = Self::verify(&mut system, &candidate)
@@ -265,7 +267,9 @@ impl HookCommand {
     #[cfg(not(unix))]
     fn parent_pid() -> sysinfo::Pid {
         use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-        let mut system = System::new();
+        let Ok(mut system) = System::new() else {
+            return Pid::from_u32(0);
+        };
         let current = Pid::from_u32(std::process::id());
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[current]),

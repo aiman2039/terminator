@@ -96,7 +96,7 @@ pub async fn session_ports(
 ) -> Result<Vec<SessionPort>> {
     let owners = files
         .run(&crate::async_service::CancellationToken::new(), move || {
-            Ok::<_, MetadataError>(owners(&ProcessTree::new(process_table()), &sessions))
+            Ok::<_, MetadataError>(owners(&ProcessTree::new(process_table()?), &sessions))
         })
         .await?;
     if owners.is_empty() {
@@ -117,7 +117,9 @@ pub async fn session_ports(
 /// it is still the process that was listed: same PID and start time.
 pub fn stop_port_process(pid: u32, started: u64) -> Result<()> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut system = System::new();
+    let mut system = System::new().map_err(|err| MetadataError::ProcessTable {
+        reason: err.to_string(),
+    })?;
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
         true,
@@ -165,7 +167,7 @@ mod tests {
 
     #[test]
     fn the_current_process_tree_is_found_and_a_wrong_start_time_is_skipped() {
-        let tree = ProcessTree::new(process_table());
+        let tree = ProcessTree::new(process_table().unwrap());
         let me = std::process::id();
         let started = tree
             .system

@@ -8,6 +8,8 @@ use terminator_core::*;
 pub(super) enum Phase {
     /// A command step: waits for its agent (see [`progress`]).
     Command(Wait),
+    /// A best-of-N race step: waits for each active racer.
+    Race(Vec<super::race::RacerPhase>),
     /// A gate: waits for the user's answer in the run folder.
     Gate,
 }

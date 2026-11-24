@@ -16,6 +16,7 @@ mod cards;
 mod dialogs;
 mod export;
 mod failed;
+mod history;
 mod inputs;
 mod inspector;
 mod keys;
@@ -65,9 +66,15 @@ pub(crate) struct FlowEditor {
     snarl: Snarl<Node>,
     /// The draft at open or at the last save.
     saved: Draft,
+    /// Last modification time observed on disk, for external-edit detection.
+    disk_mtime: Option<std::time::SystemTime>,
+    /// True when save detected the file changed on disk since open/save.
+    disk_conflict: bool,
+    /// Undo/redo snapshot history of editor edits.
+    history: history::History,
     error: Option<String>,
     /// The draft that a worker thread writes now, and its result.
-    saving: Option<(Draft, Receiver<Result<PathBuf, String>>)>,
+    saving: Option<(Draft, Receiver<history::SaveResult>)>,
     /// The plan file that a worker thread writes now, and its result.
     exporting: Option<Receiver<Result<PathBuf, String>>>,
     /// The next frame moves the view so that all nodes show.
@@ -102,7 +109,7 @@ enum Dialog {
 
 /// A worker thread's read of a flow file.
 pub(crate) enum Read {
-    Flow(Flow),
+    Flow(Flow, Option<std::time::SystemTime>),
     /// No file: a new flow.
     Missing,
     Failed(Failure),
@@ -128,8 +135,12 @@ fn place_of(path: &Path) -> Option<(PathBuf, String)> {
 
 impl FlowEditor {
     fn with(root: PathBuf, file: &str, snarl: Snarl<Node>) -> Self {
+        let initial = history::Snapshot::capture(file, "", &[], &snarl);
         Self {
             saved: model::draft_of(file, &snarl),
+            disk_mtime: None,
+            disk_conflict: false,
+            history: history::History::new(initial),
             root,
             file: file.to_owned(),
             title: file.to_owned(),
@@ -158,13 +169,20 @@ impl FlowEditor {
         Self::with(root, file, model::starter())
     }
 
-    fn of_flow(root: PathBuf, file: &str, flow: &Flow) -> Self {
+    fn of_flow(
+        root: PathBuf,
+        file: &str,
+        flow: &Flow,
+        mtime: Option<std::time::SystemTime>,
+    ) -> Self {
         let mut editor = Self::with(root, file, model::graph_of(flow));
         editor.title.clone_from(&flow.name);
         editor.rules = flow.rules.clone().unwrap_or_default();
         editor.inputs = inputs::rows_of(&flow.inputs);
         editor.on_disk = true;
+        editor.disk_mtime = mtime;
         editor.saved = editor.draft();
+        editor.history = history::History::new(editor.snapshot());
         editor
     }
 
@@ -193,63 +211,6 @@ impl FlowEditor {
     pub(crate) fn changed(&self) -> bool {
         !self.on_disk || model::content_of(self.draft()) != model::content_of(self.saved.clone())
     }
-
-    /// Save: the graph must be a correct flow, then a worker thread writes
-    /// the file. A new flow never replaces a file.
-    fn save(&mut self) {
-        if self.saving.is_some() {
-            return;
-        }
-        let draft = self.draft();
-        if let Some(error) = inputs::duplicate(&self.inputs) {
-            self.error = Some(error);
-            return;
-        }
-        if let Err(error) = draft.check() {
-            self.error = Some(error.to_string());
-            return;
-        }
-        let (root, file, replace) = (self.root.clone(), self.file.clone(), self.on_disk);
-        let (sender, receiver) = channel();
-        let write = draft.clone();
-        let spawned = std::thread::Builder::new()
-            .name("flow-save".into())
-            .spawn(move || {
-                let saved = files::save(&root, &file, &write, replace);
-                let _ = sender.send(saved.map_err(|error| error.to_string()));
-            });
-        if spawned.is_ok() {
-            self.error = None;
-            self.saving = Some((draft, receiver));
-        } else {
-            self.error = Some("Could not start the save.".into());
-        }
-    }
-
-    /// Takes the result of a save. Gives a note for the status bar.
-    fn poll(&mut self) -> Option<String> {
-        let (draft, result) = self.saving.as_ref()?;
-        match result.try_recv() {
-            Ok(Ok(_)) => {
-                self.saved = draft.clone();
-                self.on_disk = true;
-                self.error = None;
-                self.saving = None;
-                Some(format!("Saved the flow {}.", self.file))
-            }
-            Ok(Err(error)) => {
-                self.error = Some(error);
-                self.saving = None;
-                None
-            }
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.error = Some("The save did not finish.".into());
-                self.saving = None;
-                None
-            }
-        }
-    }
 }
 
 impl Slot {
@@ -264,7 +225,7 @@ impl Slot {
             .name("flow-open".into())
             .spawn(move || {
                 let read = match files::load(&root, &file) {
-                    Ok(flow) => Read::Flow(flow),
+                    Ok(flow) => Read::Flow(flow, history::file_mtime(&path)),
                     Err(files::LoadError::Missing(_)) => Read::Missing,
                     Err(error) => Read::Failed(failed::failure_of(&path, &error)),
                 };
@@ -282,7 +243,9 @@ impl Slot {
             return Self::Failed(Failure::plain(OUTSIDE));
         };
         match read {
-            Read::Flow(flow) => Self::Ready(Box::new(FlowEditor::of_flow(root, &file, &flow))),
+            Read::Flow(flow, mtime) => {
+                Self::Ready(Box::new(FlowEditor::of_flow(root, &file, &flow, mtime)))
+            }
             Read::Missing => Self::Ready(Box::new(FlowEditor::new(root, &file))),
             Read::Failed(failure) => Self::Failed(failure),
         }

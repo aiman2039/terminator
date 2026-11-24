@@ -263,6 +263,7 @@ fn repeated_gui_show_focuses_the_existing_session_without_duplicate_tabs() {
                 session: "shell".into(),
                 anchor: None,
                 split: None,
+                background: false,
             },
         )
         .unwrap();

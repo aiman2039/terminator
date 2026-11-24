@@ -84,6 +84,8 @@ pub(super) fn summary(ui: &mut egui::Ui, value: &Node, colors: Colors) {
             prompt,
             cwd,
             worktree,
+            race_count,
+            race_agents,
             ..
         } => {
             command_chip(ui, command, colors);
@@ -92,13 +94,21 @@ pub(super) fn summary(ui: &mut egui::Ui, value: &Node, colors: Colors) {
             } else {
                 clipped(ui, prompt, ROWS, text);
             }
+            let race_label = if !race_count.trim().is_empty() {
+                format!("{} racers", race_count.trim())
+            } else if !race_agents.trim().is_empty() {
+                format!("race: {}", race_agents.trim())
+            } else {
+                String::new()
+            };
             let chips = [
                 ("GitBranch", worktree.trim(), "The worktree of this step"),
                 ("Folder", cwd.trim(), "The folder of this step"),
+                ("Split", race_label.as_str(), "Best-of-N race step"),
             ];
             chip_row(ui, &chips, colors);
         }
-        Node::Gate { message, .. } => {
+        Node::Gate { message, pick, .. } => {
             if message.trim().is_empty() {
                 clipped(ui, "No question", 1, colors.weak);
             } else {
@@ -106,10 +116,14 @@ pub(super) fn summary(ui: &mut egui::Ui, value: &Node, colors: Colors) {
             }
             let options = value.options();
             let tip = "An option of this gate: one Approve button each";
-            let chips: Vec<_> = options
+            let mut chips: Vec<_> = options
                 .iter()
                 .map(|option| ("", option.as_str(), tip))
                 .collect();
+            let pick_label = format!("pick {}", pick.trim());
+            if !pick.trim().is_empty() {
+                chips.push(("GitBranch", pick_label.as_str(), "Pick winning racer"));
+            }
             chip_row(ui, &chips, colors);
         }
     }
@@ -155,7 +169,18 @@ impl Viewer<'_> {
         ui.add_space(2.0);
         ui.separator();
         if gate_waits(step) {
-            if let Some(choice) = crate::flows::gates::gate_buttons(ui, &step.options) {
+            if let Some(target) = &step.pick {
+                let racers = self
+                    .run
+                    .and_then(|steps| steps.get(target))
+                    .map(|s| s.racers.as_slice())
+                    .unwrap_or(&[]);
+                if let Some(choice) =
+                    crate::flows::gates::pick_buttons(ui, racers, &mut self.out.open_diff)
+                {
+                    self.out.answer = Some((id.to_owned(), choice));
+                }
+            } else if let Some(choice) = crate::flows::gates::gate_buttons(ui, &step.options) {
                 self.out.answer = Some((id.to_owned(), choice));
             }
             return;
@@ -173,6 +198,11 @@ impl Viewer<'_> {
         if let Some(text) = text {
             clipped(ui, text, ROWS, color);
         }
+        if step.status == StepStatus::Running
+            && let Some(update) = self.updates.get(id)
+        {
+            clipped(ui, update, 1, self.colors.weak);
+        }
         // The choice, round, attempt and stall: display only. The card's
         // chip shows the condition already.
         let badges: Vec<String> = crate::flows::gates::branch_labels(step)
@@ -183,6 +213,69 @@ impl Viewer<'_> {
             .collect();
         if !badges.is_empty() {
             clipped(ui, &badges.join(" · "), 1, self.colors.weak);
+        }
+        if !step.outputs.is_empty() {
+            let chips: Vec<_> = step
+                .outputs
+                .iter()
+                .map(|path| ("File", path.as_str(), "Output reported by this step"))
+                .collect();
+            chip_row(ui, &chips, self.colors);
+        }
+        self.footer_racers(ui, step);
+        self.footer_actions(ui, id, step);
+    }
+
+    fn footer_racers(&mut self, ui: &mut egui::Ui, step: &StepRun) {
+        for racer in &step.racers {
+            let name = match &racer.agent {
+                Some(agent) => format!("#{} ({agent})", racer.index),
+                None => format!("#{}", racer.index),
+            };
+            let diffstat = match (racer.added, racer.deleted) {
+                (Some(a), Some(d)) => format!(" +{a} −{d}"),
+                _ => String::new(),
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(CARD_WIDTH);
+                ui.label(
+                    egui::RichText::new(format!("{name}: {:?}{diffstat}", racer.status))
+                        .size(appearance::FONT_CAPTION)
+                        .color(self.colors.weak),
+                );
+                if let Some(session) = &racer.session
+                    && appearance::link(
+                        ui,
+                        egui::RichText::new("Terminal").size(appearance::FONT_CAPTION),
+                    )
+                    .clicked()
+                {
+                    self.out.go = Some(session.clone());
+                }
+                if let Some(path) = &racer.worktree_path
+                    && appearance::link(
+                        ui,
+                        egui::RichText::new("Diff").size(appearance::FONT_CAPTION),
+                    )
+                    .clicked()
+                {
+                    self.out.open_diff = Some(path.clone());
+                }
+            });
+        }
+    }
+
+    fn footer_actions(&mut self, ui: &mut egui::Ui, id: &str, step: &StepRun) {
+        if self.live && step.status == StepStatus::Running && step.gate.is_none() {
+            if step.inbox > 0 {
+                clipped(
+                    ui,
+                    &appearance::count_noun(step.inbox as usize, "queued note"),
+                    1,
+                    self.colors.weak,
+                );
+            }
+            self.mail_row(ui, id);
         }
         if self.live && step.retryable() {
             appearance::footer_row(ui, |ui| {
@@ -195,15 +288,22 @@ impl Viewer<'_> {
             });
         }
         if let Some(session) = &step.session {
-            let label = egui::RichText::new("Open terminal").size(appearance::FONT_CAPTION);
-            if appearance::link(ui, label)
-                .on_hover_text("Go to the terminal of this step")
-                .clicked()
-            {
-                self.out.go = Some(session.clone());
-            }
-            // Room for the underline and the descenders: the card body
-            // clips at its last row.
+            ui.horizontal(|ui| {
+                let label = egui::RichText::new("Open terminal").size(appearance::FONT_CAPTION);
+                if appearance::link(ui, label)
+                    .on_hover_text("Go to the terminal of this step")
+                    .clicked()
+                {
+                    self.out.go = Some(session.clone());
+                }
+                let peek_label = egui::RichText::new("Peek").size(appearance::FONT_CAPTION);
+                if appearance::link(ui, peek_label)
+                    .on_hover_text("Peek this step's screen (read-only)")
+                    .clicked()
+                {
+                    self.out.peek = Some(session.clone());
+                }
+            });
             ui.add_space(4.0);
         }
     }
@@ -227,6 +327,29 @@ impl Viewer<'_> {
         });
         if send {
             self.out.send = Some(id.to_owned());
+        }
+    }
+
+    /// Mailbox input for a running command step (`flow send`); never writes to a terminal.
+    fn mail_row(&mut self, ui: &mut egui::Ui, id: &str) {
+        let draft = self.mail_drafts.entry(id.to_owned()).or_default();
+        let mut send = false;
+        appearance::footer_row(ui, |ui| {
+            let filled = !draft.trim().is_empty();
+            send = ui
+                .add_enabled(filled, egui::Button::new("Send"))
+                .on_hover_text("Store a note in this step's mailbox (read via flow inbox)")
+                .clicked();
+            let field = ui.add(
+                appearance::singleline(draft)
+                    .hint_text("Send note to inbox…")
+                    .desired_width(ui.available_width()),
+            );
+            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            send = (send || entered) && filled;
+        });
+        if send {
+            self.out.send_mail = Some(id.to_owned());
         }
     }
 }

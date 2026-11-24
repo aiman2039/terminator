@@ -134,7 +134,7 @@ fn graph_and_file_give_the_same_flow_both_ways() {
     assert_eq!(back.step("plan").unwrap().at, Some([0, 0]));
     assert_eq!(back.step("approve").unwrap().at, Some([320, 0]));
     // The editor keeps the rules text of the file.
-    let editor = FlowEditor::of_flow("/p".into(), "f", &flow);
+    let editor = FlowEditor::of_flow("/p".into(), "f", &flow, None);
     assert!(!editor.dirty());
     assert_eq!(editor.draft().check().unwrap(), {
         let mut same = flow.clone();
@@ -814,7 +814,7 @@ fn quit_does_not_ask_about_a_moved_card() {
 fn editor_keeps_inputs_and_save_refuses_a_name_used_two_times() {
     let text = "version = 1\nname = \"Fix\"\n[inputs.issue]\ndescription = \"Issue\"\n[inputs.branch]\ndefault = \"\"\n[[step]]\nid = \"s\"\ncommand = \"echo {{inputs.issue}} {{inputs.branch}}\"\n";
     let flow = flow::parse(text).unwrap();
-    let mut editor = FlowEditor::of_flow("/p".into(), "fix", &flow);
+    let mut editor = FlowEditor::of_flow("/p".into(), "fix", &flow, None);
     assert!(!editor.dirty(), "the inputs round trip");
     assert_eq!(editor.draft().inputs, flow.inputs);
     let branch = editor

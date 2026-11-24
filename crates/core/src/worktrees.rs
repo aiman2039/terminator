@@ -363,7 +363,8 @@ pub fn ensure_unused(path: &Path, project: &str, sessions: &[crate::Session]) ->
     let system = System::new_with_specifics(
         RefreshKind::nothing()
             .with_processes(ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always)),
-    );
+    )
+    .map_err(|err| std::io::Error::other(err.to_string()))?;
     let mut owned = std::collections::HashSet::new();
     for session in live {
         let pid = Pid::from_u32(session.pid.ok_or_else(|| WorktreeError::NoSessionPid {

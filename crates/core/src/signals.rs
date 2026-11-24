@@ -173,7 +173,9 @@ pub fn process_alive(pid: u32) -> bool {
     if pid <= 1 {
         return true;
     }
-    let mut system = System::new();
+    let Ok(mut system) = System::new() else {
+        return true;
+    };
     let target = Pid::from_u32(pid);
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[target]),

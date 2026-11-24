@@ -90,6 +90,33 @@ pub struct StepRun {
     /// first step of the loop gets with its prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_note: Option<String>,
+    /// Structured output file paths reported by `flow report --output PATH`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+    /// Number of messages stored in this step's mailbox. Display only.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub inbox: u32,
+    /// For a pick gate: the race step ID whose racers the user chooses from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick: Option<String>,
+    /// 1-based winner index chosen at a pick gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picked: Option<u32>,
+    /// Per-racer state for a best-of-N race step (`count` or `agents`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub racers: Vec<super::RacerRun>,
+    /// Deterministic local port assigned to this step's managed worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// When this step ended, in seconds since 1970. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished: Option<u64>,
+    /// Managed worktree path used by this step, if any. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<std::path::PathBuf>,
+    /// Step ID of the agent that proposed this step during the run. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_by: Option<String>,
 }
 
 #[expect(
@@ -131,6 +158,7 @@ impl StepRun {
             needs: std::mem::take(&mut self.needs),
             gate: self.gate.take(),
             options: std::mem::take(&mut self.options),
+            pick: self.pick.take(),
             when: self.when.take(),
             loop_to: self.loop_to.take(),
             round: self.round,
@@ -175,6 +203,9 @@ pub struct RunState {
     /// The run's input values by name (`flow run --set`, and defaults).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, String>,
+    /// The flow's global rules text, so no-prompt agents can read it via `flow context`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<String>,
     /// Step IDs in file order.
     pub order: Vec<String>,
     pub steps: BTreeMap<String, StepRun>,
@@ -186,14 +217,19 @@ impl RunState {
     pub fn new(flow: &Flow, file: &str, project: &str) -> Self {
         let rounds = flow.loop_rounds();
         let step_run = |step: &Step| {
-            let (gate, options) = match &step.kind {
-                StepKind::Gate { message, options } => (Some(message.clone()), options.clone()),
-                StepKind::Command { .. } => (None, Vec::new()),
+            let (gate, options, pick) = match &step.kind {
+                StepKind::Gate {
+                    message,
+                    options,
+                    pick,
+                } => (Some(message.clone()), options.clone(), pick.clone()),
+                StepKind::Command { .. } => (None, Vec::new(), None),
             };
             StepRun {
                 needs: step.needs.clone(),
                 gate,
                 options,
+                pick,
                 when: step.when.as_ref().map(ToString::to_string),
                 loop_to: step.loop_back.as_ref().map(|back| back.to.clone()),
                 max_rounds: rounds.get(&step.id).copied().unwrap_or(0),
@@ -207,6 +243,7 @@ impl RunState {
             project: project.to_owned(),
             ended: false,
             inputs: BTreeMap::new(),
+            rules: flow.rules.clone(),
             order: flow.steps.iter().map(|step| step.id.clone()).collect(),
             steps: flow
                 .steps

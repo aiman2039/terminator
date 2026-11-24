@@ -12,10 +12,20 @@ use terminator_core::flow::{Step, StepRun, control::GateAnswer};
 impl Runner {
     /// Prints the gate's answer commands and raises a notice on the
     /// terminal of a step it needs.
-    pub(super) fn announce_gate(&self, step: &Step, message: &str, options: &[String]) {
+    pub(super) fn announce_gate(
+        &self,
+        step: &Step,
+        (message, options, pick): (&str, &[String], Option<&str>),
+    ) {
         let run = terminator_core::flow::control::run_name(&self.dir);
         let id = &step.id;
-        let approve = if options.is_empty() {
+        let approve = if let Some(target) = pick {
+            let count = self.state.steps.get(target).map_or(0, |s| s.racers.len());
+            (1..=count)
+                .map(|i| format!("  terminator-hook flow approve {run} {id} --pick {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else if options.is_empty() {
             format!("  terminator-hook flow approve {run} {id}")
         } else {
             let lines = options.iter().map(|option| {
@@ -36,18 +46,33 @@ impl Runner {
     }
 
     /// The answer that `flow approve` or `flow reject` wrote. A gate with
-    /// options takes only one of its options; one without, only Approve.
+    /// options takes only one of its options; a pick gate takes `--pick N`;
+    /// one without takes only Approve.
     pub(super) fn gate_answer(&mut self, id: &str) -> End {
         let text = std::fs::read_to_string(self.dir.join(ANSWERS).join(id)).ok()?;
+        let pick_count = self
+            .state
+            .steps
+            .get(id)
+            .and_then(|run| run.pick.as_deref())
+            .and_then(|target| self.state.steps.get(target))
+            .map(|race| race.racers.len());
         let run = self.state.steps.get_mut(id)?;
         match GateAnswer::parse(&text)? {
-            GateAnswer::Approve if run.options.is_empty() => Some(Ok(())),
+            GateAnswer::Pick(index)
+                if pick_count.is_some_and(|count| index >= 1 && (index as usize) <= count) =>
+            {
+                run.picked = Some(index);
+                run.choice = Some(format!("#{index}"));
+                Some(Ok(()))
+            }
+            GateAnswer::Approve if run.options.is_empty() && run.pick.is_none() => Some(Ok(())),
             GateAnswer::Choose(option) if run.options.iter().any(|name| name == option) => {
                 run.choice = Some(option.to_owned());
                 Some(Ok(()))
             }
             GateAnswer::Reject => Some(Err("Rejected".to_owned())),
-            GateAnswer::Approve | GateAnswer::Choose(_) => None,
+            GateAnswer::Approve | GateAnswer::Choose(_) | GateAnswer::Pick(_) => None,
         }
     }
 

@@ -38,7 +38,7 @@ pub(super) const NODE_SIZE: egui::Vec2 = egui::vec2(230.0, 190.0);
 const FIT_MARGIN: f32 = 40.0;
 /// Fit to view never zooms out past this: below it the card text is too
 /// small to read. A larger flow then shows its first cards and pans.
-pub(super) const FIT_MIN_ZOOM: f32 = 0.85;
+pub(super) const FIT_MIN_ZOOM: f32 = 0.60;
 
 /// The measured card sizes of an editor, from the last frame.
 pub(super) type Sizes = HashMap<NodeId, egui::Vec2>;
@@ -117,6 +117,13 @@ pub(super) fn duplicate(snarl: &mut Snarl<Node>, node: NodeId) -> Option<NodeId>
     let mut copy = info.value.clone();
     let id = free_id(snarl, copy.id());
     *copy.id_mut() = id;
+    match &mut copy {
+        Node::Step { worktree, .. } => worktree.clear(),
+        Node::Gate { pick, .. } => pick.clear(),
+    }
+    let branch = copy.branch_mut();
+    branch.when.clear();
+    branch.loop_to.clear();
     let pos = egui::pos2(info.pos.x + 40.0, info.pos.y + 40.0);
     Some(snarl.insert_node(pos, copy))
 }

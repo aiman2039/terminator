@@ -63,6 +63,7 @@ fn declared_inputs_fill_prompt_command_gate_and_rules() {
         StepKind::Gate {
             message: "Is issue 42 fixed?".into(),
             options: Vec::new(),
+            pick: None,
         }
     );
 }

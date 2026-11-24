@@ -1144,4 +1144,36 @@ mod tests {
         let ids = workspace.editor_group_ids(|sid| sid == "nvim-session");
         assert_eq!(ids, vec![only_native, "nvim".to_string()]);
     }
+
+    #[test]
+    fn flow_document_tab_round_trips_at_layout_v14() {
+        let flow = Tab::Document {
+            path: "/tmp/project/.terminator/flows/build.toml".into(),
+            kind: crate::document_view::DocumentKind::Flow,
+        };
+        assert_eq!(flow.layout_version(), 14);
+        let mut workspace = Workspace::empty();
+        workspace.add("flow-tab".into(), flow.clone());
+        assert_eq!(workspace.version, 14);
+        let json = serde_json::to_value(&workspace).unwrap();
+        let loaded = Workspace::load(json).unwrap();
+        assert_eq!(loaded.version, 14);
+        assert_eq!(loaded.active_pane(), Some(&flow));
+    }
+
+    #[test]
+    fn add_background_keeps_active_tab_unchanged() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("main".into())]));
+        let first = workspace.active.clone();
+        workspace.add_background("bg".into(), Tab::Terminal("step-1".into()));
+        assert_eq!(workspace.active, first);
+        assert_eq!(workspace.tabs.len(), 2);
+        assert!(
+            workspace.tabs[1]
+                .layout
+                .find_tab(&Tab::Terminal("step-1".into()))
+                .is_some()
+        );
+    }
 }

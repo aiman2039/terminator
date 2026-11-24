@@ -63,7 +63,11 @@ impl InputsForm {
             if field.required && field.value.trim().is_empty() {
                 Some(format!("{} is required", field.name))
             } else if !value_ok(&field.value) {
-                Some(format!("{} has a control character", field.name))
+                if field.value.chars().any(char::is_control) {
+                    Some(format!("{} has a control character", field.name))
+                } else {
+                    Some(format!("{} is too long", field.name))
+                }
             } else {
                 None
             }

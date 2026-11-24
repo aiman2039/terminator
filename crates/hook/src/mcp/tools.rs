@@ -21,6 +21,8 @@ enum Kind {
     Positional,
     /// `--flag=VALUE`.
     Option(&'static str),
+    /// `--flag=VALUE` repeated for each string in an array.
+    OptionList(&'static str),
     /// `--flag` when true.
     Flag(&'static str),
     /// `--flag=N` for a non-negative integer.
@@ -229,12 +231,27 @@ const TOOLS: &[Tool] = &[
         args: &[FLOW_SESSION],
     },
     Tool {
+        name: "flow_inbox",
+        command: &["flow", "inbox"],
+        about: "For a flow step's agent: read messages stored in its mailbox.",
+        args: &[FLOW_SESSION],
+    },
+    Tool {
         name: "flow_report",
         command: &["flow", "report"],
         about: "For a flow step's agent: end its own step as done or failed.",
         args: &[
             req("result", Choice(&["done", "failed"]), "The step's result"),
-            opt("note", Kind::Option("--note"), "Why the step failed"),
+            opt(
+                "note",
+                Kind::Option("--note"),
+                "Result note or failure reason",
+            ),
+            opt(
+                "outputs",
+                Kind::OptionList("--output"),
+                "Output file paths produced by this step",
+            ),
             FLOW_SESSION,
         ],
     },
@@ -248,6 +265,40 @@ const TOOLS: &[Tool] = &[
                 "timeout",
                 Integer("--timeout"),
                 "Seconds to wait (default 1800)",
+            ),
+            FLOW_SESSION,
+        ],
+    },
+    Tool {
+        name: "flow_propose",
+        command: &["flow", "propose"],
+        about: "For a flow step's agent: propose a new step to run inside this flow.",
+        args: &[
+            req("id", Positional, "New step ID (a-z, 0-9, - or _)"),
+            req(
+                "command",
+                Positional,
+                "Command to run in the new step's terminal",
+            ),
+            opt(
+                "prompt",
+                Kind::Option("--prompt"),
+                "Optional prompt for the agent",
+            ),
+            opt(
+                "cwd",
+                Kind::Option("--cwd"),
+                "Optional relative folder inside project",
+            ),
+            opt(
+                "worktree",
+                Kind::Option("--worktree"),
+                "Optional managed worktree name",
+            ),
+            opt(
+                "needs",
+                Kind::OptionList("--needs"),
+                "Step IDs this step waits for (defaults to proposing step)",
             ),
             FLOW_SESSION,
         ],
@@ -269,6 +320,7 @@ const FLOW_SESSION: Arg = opt(
 fn arg_schema(arg: &Arg) -> Value {
     let mut schema = match arg.kind {
         Kind::Positional | Kind::Option(_) => json!({"type": "string"}),
+        Kind::OptionList(_) => json!({"type": "array", "items": {"type": "string"}}),
         Kind::Flag(_) => json!({"type": "boolean"}),
         Kind::Integer(_) => json!({"type": "integer", "minimum": 0}),
         Kind::Choice(values) | Kind::OptionChoice(_, values) => {
@@ -320,6 +372,14 @@ fn one(arg: &Arg, value: &Value, flags: &mut Vec<String>, values: &mut Vec<Strin
     match arg.kind {
         Kind::Positional => values.push(text(arg.name, value)?),
         Kind::Option(flag) => flags.push(format!("{flag}={}", text(arg.name, value)?)),
+        Kind::OptionList(flag) => {
+            let items = value
+                .as_array()
+                .with_context(|| format!("`{}` must be an array of strings", arg.name))?;
+            for item in items {
+                flags.push(format!("{flag}={}", text(arg.name, item)?));
+            }
+        }
         Kind::Flag(flag) => {
             if value
                 .as_bool()

@@ -163,6 +163,7 @@ impl App {
                 split: None,
                 external: false,
             }),
+            view::Pick::QuickTask(prompt) => self.ask_agent_with_prompt(prompt),
         }
     }
 }

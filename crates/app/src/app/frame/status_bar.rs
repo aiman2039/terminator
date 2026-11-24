@@ -43,20 +43,13 @@ impl App {
     }
 
     fn connection_status(&self, ui: &mut egui::Ui) {
-        ui.colored_label(
-            appearance::color(if self.connected {
-                &self.theme.status_running
-            } else {
-                &self.theme.status_waiting
-            }),
+        let hover = format!(
+            "{}\nGUI {}\nDaemon {}\nDaemon executable: {}\nAttachment helper: {}",
             if self.connected {
-                "● Connected"
+                "Connected"
             } else {
-                "○ Connecting"
+                "Connecting"
             },
-        )
-        .on_hover_text(format!(
-            "GUI {}\nDaemon {}\nDaemon executable: {}\nAttachment helper: {}",
             env!("CARGO_PKG_VERSION"),
             self.state
                 .daemon_version
@@ -72,7 +65,20 @@ impl App {
                 Some(false) => "unavailable",
                 None => "not reported by this daemon",
             }
-        ));
+        );
+        ui.colored_label(
+            appearance::color(if self.connected {
+                &self.theme.status_running
+            } else {
+                &self.theme.status_waiting
+            }),
+            if self.connected {
+                "●"
+            } else {
+                "○ Connecting"
+            },
+        )
+        .on_hover_text(hover);
     }
 
     /// The single most urgent status message, falling back to the count
@@ -395,21 +401,18 @@ impl App {
     }
 
     fn status_lsp(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
+        let Some(note) = self.lsp.server_note(path) else {
+            return;
+        };
         ui.separator();
-        if let Some(note) = self.lsp.server_note(path) {
-            let retry = ui
-                .weak("LSP unavailable")
-                .on_hover_text(format!("{note}\nClick to retry"))
-                .interact(egui::Sense::click());
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "status-lsp", retry.rect);
-            if retry.clicked() {
-                self.lsp.restart(path);
-            }
-        } else {
-            let _lsp = ui.weak("LSP ready");
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "status-lsp", _lsp.rect);
+        let retry = ui
+            .weak("LSP unavailable")
+            .on_hover_text(format!("{note}\nClick to retry"))
+            .interact(egui::Sense::click());
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "status-lsp", retry.rect);
+        if retry.clicked() {
+            self.lsp.restart(path);
         }
     }
 }

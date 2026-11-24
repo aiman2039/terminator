@@ -191,7 +191,9 @@ pub fn spawn(
 }
 
 fn sample_loop(rx: Receiver<Option<Request>>, updates: Sender<Update>, repaint: impl Fn()) {
-    let mut system = System::new();
+    let Ok(mut system) = System::new() else {
+        return;
+    };
     let _ = std::panic::catch_unwind(AssertUnwindSafe(|| warmup(&mut system)));
     let mut current: Option<Request> = None;
     loop {
@@ -232,7 +234,9 @@ fn take_sample(system: &mut System, request: &Request) -> Option<Sample> {
     if let Ok(sample) = sampled {
         Some(sample)
     } else {
-        *system = System::new();
+        if let Ok(fresh) = System::new() {
+            *system = fresh;
+        }
         None
     }
 }
@@ -273,7 +277,11 @@ fn sample(system: &mut System, request: &Request) -> Sample {
     let session = request
         .pid
         .and_then(|pid| tree_usage(&nodes, pid, request.started));
-    let load = System::load_average();
+    let load = System::load_average().unwrap_or(sysinfo::LoadAvg {
+        one: 0.0,
+        five: 0.0,
+        fifteen: 0.0,
+    });
     let cpu = system.global_cpu_usage();
     let counted = system.cpus().len();
     let cpus = if counted == 0 {

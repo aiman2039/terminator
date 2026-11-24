@@ -104,3 +104,57 @@ fn cards_show_options_conditions_loops_and_option_buttons_in_a_run() {
     assert_eq!(count(&text, "Approve"), 0, "{text:?}");
     assert_eq!(count(&text, "Reject"), 2, "{text:?}");
 }
+
+#[test]
+fn run_strip_counts_skipped_steps_as_done_and_duplicate_clears_branch_and_worktree() {
+    let project = project_with_flows();
+    let flows = project.path().join(FLOW_DIR);
+    std::fs::write(flows.join("review.toml"), REVIEW).unwrap();
+    let (mut app, _received, _data) = app_with_project(project.path());
+    let ctx = egui::Context::default();
+    let path = flow_path(project.path(), "review");
+    settle(&mut app, &ctx, &path);
+
+    let flow = flow::files::load(project.path(), "review").unwrap();
+    let mut state = RunState::new(&flow, "review", "p");
+    state.set("build", StepStatus::Done);
+    state.set("review", StepStatus::Done);
+    state.set("release", StepStatus::Done);
+    state.set("fix", StepStatus::Skipped);
+    state.ended = true;
+    app.flows.runs = vec![crate::flows::Run {
+        dir: project.path().join("review-1"),
+        state,
+        gone: false,
+    }];
+    app.flows.read_at = Some(Instant::now());
+    let text = settle(&mut app, &ctx, &path);
+    assert!(count(&text, "4 of 4 done") >= 1, "{text:?}");
+
+    // Duplicate clears worktree, when, and loop_to so it stays valid.
+    let Slot::Ready(editor) = app.flows.editors.get_mut(&path).unwrap() else {
+        panic!("editor not ready");
+    };
+    let fix_node = editor
+        .snarl
+        .node_ids()
+        .find(|(_, n)| n.id() == "fix")
+        .map(|(id, _)| id)
+        .unwrap();
+    if let super::model::Node::Step { worktree, .. } = editor.snarl.get_node_mut(fix_node).unwrap()
+    {
+        *worktree = "wt-fix".into();
+    }
+    let dup = super::canvas::duplicate(&mut editor.snarl, fix_node).unwrap();
+    let copied = editor.snarl.get_node(dup).unwrap();
+    assert!(copied.branch().when.is_empty());
+    assert!(copied.branch().loop_to.is_empty());
+    if let super::model::Node::Step { worktree, .. } = copied {
+        assert!(worktree.is_empty());
+    }
+    // Undo restores the pre-duplicate state cleanly.
+    editor.sync_history();
+    assert!(editor.undo());
+    assert!(editor.snarl.get_node(dup).is_none());
+    assert!(editor.redo());
+}

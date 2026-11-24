@@ -281,6 +281,9 @@ impl Flow {
             if members.contains(id.as_str()) {
                 run.round = round.saturating_add(1);
                 run.loop_note = None;
+            } else {
+                run.round = 1;
+                run.loop_note = None;
             }
             run.again(1);
         }

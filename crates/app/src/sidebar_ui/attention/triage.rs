@@ -3,6 +3,39 @@
 use crate::App;
 use terminator_core::{Request, agent_workflow, now};
 
+/// Category filter for the Agents inbox (#350). GUI memory only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InboxFilter {
+    #[default]
+    All,
+    NeedsYou,
+    Problems,
+    Updates,
+}
+
+impl InboxFilter {
+    pub(crate) const ALL: [Self; 4] = [Self::All, Self::NeedsYou, Self::Problems, Self::Updates];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::NeedsYou => "Needs you",
+            Self::Problems => "Problems",
+            Self::Updates => "Updates",
+        }
+    }
+
+    pub(crate) fn matches_event(self, event: terminator_core::AgentState) -> bool {
+        use terminator_core::AgentState as S;
+        match self {
+            Self::All => true,
+            Self::NeedsYou => matches!(event, S::WaitingInput | S::WaitingPermission),
+            Self::Problems => matches!(event, S::Failed),
+            Self::Updates => matches!(event, S::Completed | S::Stopped | S::Running | S::Unknown),
+        }
+    }
+}
+
 /// GUI-only triage state. Nothing here is sent to a PTY.
 #[derive(Default)]
 pub(crate) struct Triage {
@@ -12,6 +45,8 @@ pub(crate) struct Triage {
     pub undo: Option<TriageUndo>,
     /// Interrupted shells waiting for their saved output before a restore.
     pub restores: Vec<super::restore::PendingRestore>,
+    /// Active inbox category filter.
+    pub filter: InboxFilter,
 }
 
 /// One undoable inbox action and the notices it changed.

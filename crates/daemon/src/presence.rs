@@ -126,7 +126,9 @@ fn presence_changed(
 /// pass per interval with no overlapping scans.
 pub(super) fn start(shared: std::sync::Weak<Shared>) {
     thread::spawn(move || {
-        let mut system = sysinfo::System::new();
+        let Ok(mut system) = sysinfo::System::new() else {
+            return;
+        };
         loop {
             thread::sleep(Duration::from_secs(agents::INSPECTION_INTERVAL_SECS));
             let Some(shared) = shared.upgrade() else {
@@ -288,6 +290,7 @@ mod tests {
         sysinfo::System::new_with_specifics(
             sysinfo::RefreshKind::nothing().with_processes(fixture_refresh_kind()),
         )
+        .expect("sysinfo::System")
     }
 
     /// Fake agent executables: renamed test-binary copies running the sleeper.

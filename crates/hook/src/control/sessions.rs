@@ -35,6 +35,7 @@ impl Ctl {
                     session: s.id.clone(),
                     anchor: None,
                     split: None,
+                    background: false,
                 },
             )
             .with_context(|| {
@@ -62,6 +63,7 @@ impl Ctl {
                 session: s.id.clone(),
                 anchor: Some(sid),
                 split: Some(direction),
+                background: false,
             },
         )
         .with_context(|| {

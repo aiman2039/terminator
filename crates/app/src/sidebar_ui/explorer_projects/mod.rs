@@ -3,6 +3,7 @@ mod init_command;
 mod list;
 mod project_dnd;
 mod style;
+mod tab_row;
 mod tab_tree;
 mod tree_dnd;
 pub(crate) use tree_dnd::TreeDrag;
@@ -260,6 +261,7 @@ impl App {
 /// Each tab keeps its layout order and only ids present in `live` are kept;
 /// tabs with no live sessions are skipped. Ids in no tab are returned as
 /// overflow in `live` order (background sessions).
+#[cfg(test)]
 pub(crate) fn group_session_ids_by_tab(
     tabs: &[(String, Vec<String>)],
     live: &[String],

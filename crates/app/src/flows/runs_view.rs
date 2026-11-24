@@ -14,19 +14,26 @@ use terminator_core::flow::{StepRun, StepStatus};
 /// Most text rows of a note under a step; the full text is on hover.
 const NOTE_ROWS: usize = 2;
 
+/// First managed worktree path used by any step or racer of `run`.
+fn run_worktree(run: &Run) -> Option<std::path::PathBuf> {
+    run.state.order.iter().find_map(|id| {
+        let step = run.state.steps.get(id)?;
+        step.worktree_path
+            .clone()
+            .or_else(|| step.racers.iter().find_map(|r| r.worktree_path.clone()))
+    })
+}
+
 /// "stopped · 1 of 4 steps done": the hover text of a run.
 pub(super) fn run_summary(run: &Run) -> String {
     let (done, total) = done_of(run);
     format!("{} · {done} of {total} steps done", run_status(run))
 }
 
-/// Steps done, and all steps.
+/// Steps finished (done or skipped), and all steps.
 fn done_of(run: &Run) -> (usize, usize) {
     let steps = run.state.steps.values();
-    let done = steps
-        .clone()
-        .filter(|step| step.status == StepStatus::Done)
-        .count();
+    let done = steps.clone().filter(|step| step.status.passed()).count();
     (done, steps.count())
 }
 
@@ -40,10 +47,17 @@ pub(super) fn run_trailing(run: &Run, now: u64) -> String {
     started_at(run).map_or_else(String::new, |at| agent_presence::ago(at, now))
 }
 
-/// The second in a run's folder name (`NAME-SECONDS`), when it has one.
+/// The second in a run's folder name (`NAME-SECONDS` or `NAME-SECONDS-N`),
+/// when it has one.
 fn started_at(run: &Run) -> Option<u64> {
     let name = run.dir.file_name()?.to_str()?;
-    let (_, second) = name.rsplit_once('-')?;
+    let (prefix, last) = name.rsplit_once('-')?;
+    if let Ok(second) = last.parse::<u64>()
+        && second > 1_000_000_000
+    {
+        return Some(second);
+    }
+    let (_, second) = prefix.rsplit_once('-')?;
     second.parse().ok().filter(|second| *second > 1_000_000_000)
 }
 
@@ -175,7 +189,22 @@ impl App {
             });
         } else if let Some(message) = &need.state.gate {
             ui.label(message);
-            if let Some(choice) = super::gates::gate_buttons(ui, &need.state.options) {
+            if let Some(target) = &need.state.pick {
+                let racers = need
+                    .run
+                    .state
+                    .steps
+                    .get(target)
+                    .map(|s| s.racers.as_slice())
+                    .unwrap_or(&[]);
+                let mut diff = None;
+                if let Some(choice) = super::gates::pick_buttons(ui, racers, &mut diff) {
+                    *act = Some(Act::Gate(dir, step, choice));
+                }
+                if let Some(path) = diff {
+                    *act = Some(Act::OpenDiff(path));
+                }
+            } else if let Some(choice) = super::gates::gate_buttons(ui, &need.state.options) {
                 *act = Some(Act::Gate(dir, step, choice));
             }
         }
@@ -197,12 +226,16 @@ impl App {
                 clipped_note(ui, &line);
             }
             status::progress_bar(ui, run, &self.theme);
+            if let Some(wt) = run_worktree(run) {
+                self.flow_checks_ui(ui, &wt);
+            }
             if open {
                 for id in &run.state.order {
                     if let Some(step) = run.state.steps.get(id) {
                         self.flow_step_row(ui, (run, id, step), act);
                     }
                 }
+                self.flow_review_checklist(ui, run, act);
             }
             ui.add_space(4.0);
         }
@@ -239,8 +272,18 @@ impl App {
                     if appearance::sidebar_action(ui, "Trash", tip).clicked() {
                         *act = Some(Act::Remove(run.dir.clone()));
                     }
+                    let report_tip = "Export Markdown summary of this ended run";
+                    if appearance::sidebar_action(ui, "FileText", report_tip).clicked() {
+                        *act = Some(Act::ExportReport(run.dir.clone()));
+                    }
                 } else if appearance::sidebar_action(ui, "Square", "Cancel run…").clicked() {
                     *act = Some(Act::AskCancel(run.dir.clone()));
+                }
+                if let Some(wt) = run_worktree(run)
+                    && appearance::sidebar_action(ui, "ShieldCheck", "Load CI/PR checks & TODOs")
+                        .clicked()
+                {
+                    *act = Some(Act::LoadChecks(wt));
                 }
                 status::chip(ui, word, tone.color(&self.theme)).on_hover_text(run_summary(run));
                 let row = appearance::row(appearance::RowInput {
@@ -282,12 +325,20 @@ impl App {
         }
         let minutes = self.preferences.flow_stall_minutes;
         let stall = status::stall(step, &self.state, terminator_core::now(), minutes);
-        if status::can_retry(run, step) {
+        if status::can_retry(run, step) || step.session.is_some() {
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let tip = "Retry: start this step again in a new terminal";
-                    if appearance::sidebar_action(ui, "RotateCw", tip).clicked() {
-                        *act = Some(Act::Retry(run.dir.clone(), id.clone()));
+                    if status::can_retry(run, step) {
+                        let tip = "Retry: start this step again in a new terminal";
+                        if appearance::sidebar_action(ui, "RotateCw", tip).clicked() {
+                            *act = Some(Act::Retry(run.dir.clone(), id.clone()));
+                        }
+                    }
+                    if let Some(session) = &step.session {
+                        let tip = "Peek screen (read-only)";
+                        if appearance::sidebar_action(ui, "Eye", tip).clicked() {
+                            *act = Some(Act::Peek(session.clone()));
+                        }
                     }
                     self.flow_step_line(ui, (id, step, &state), act);
                 });
@@ -309,6 +360,98 @@ impl App {
             for text in [&step.waits_for, &step.note].into_iter().flatten() {
                 clipped_note(ui, text);
             }
+        }
+        if let Some(by) = &step.proposed_by {
+            clipped_note(ui, &format!("Proposed by {by}"));
+        }
+        if let Some(port) = step.port {
+            clipped_note(ui, &format!("Port: {port}"));
+        }
+        if !step.outputs.is_empty() {
+            clipped_note(ui, &format!("Outputs: {}", step.outputs.join(", ")));
+        }
+        Self::flow_step_racers(ui, step, act);
+        self.flow_step_mailbox(ui, (run, id, step), act);
+    }
+
+    fn flow_step_racers(ui: &mut egui::Ui, step: &StepRun, act: &mut Option<Act>) {
+        for racer in &step.racers {
+            let label = match &racer.agent {
+                Some(agent) => format!("#{} ({agent})", racer.index),
+                None => format!("#{}", racer.index),
+            };
+            let diffstat = match (racer.added, racer.deleted) {
+                (Some(a), Some(d)) => format!(" +{a} −{d}"),
+                _ => String::new(),
+            };
+            ui.horizontal(|ui| {
+                ui.add_space(20.0);
+                ui.weak(format!("{label}: {:?}{diffstat}", racer.status));
+                if let Some(session) = &racer.session
+                    && appearance::link(
+                        ui,
+                        egui::RichText::new("Terminal").size(appearance::FONT_CAPTION),
+                    )
+                    .clicked()
+                {
+                    *act = Some(Act::Go(session.clone()));
+                }
+                if let Some(path) = &racer.worktree_path
+                    && appearance::link(
+                        ui,
+                        egui::RichText::new("Diff").size(appearance::FONT_CAPTION),
+                    )
+                    .clicked()
+                {
+                    *act = Some(Act::OpenDiff(path.clone()));
+                }
+            });
+        }
+    }
+
+    fn flow_step_mailbox(
+        &mut self,
+        ui: &mut egui::Ui,
+        (run, id, step): (&Run, &String, &StepRun),
+        act: &mut Option<Act>,
+    ) {
+        if run.ended()
+            || step.status != StepStatus::Running
+            || step.gate.is_some()
+            || step.question.is_some()
+        {
+            return;
+        }
+        if step.inbox > 0 {
+            clipped_note(
+                ui,
+                &format!(
+                    "Mailbox: {}",
+                    appearance::count_noun(step.inbox as usize, "note")
+                ),
+            );
+        }
+        let key = (run.dir.clone(), id.clone());
+        let draft = self.flows.mail_drafts.entry(key).or_default();
+        let mut send = false;
+        ui.horizontal(|ui| {
+            ui.add_space(20.0);
+            let filled = !draft.trim().is_empty();
+            let width = (ui.available_width() - 56.0).max(60.0);
+            let field = ui.add(
+                appearance::singleline(draft)
+                    .hint_text("Send note to inbox…")
+                    .desired_width(width),
+            );
+            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let clicked = ui
+                .add_enabled(filled, egui::Button::new("Send"))
+                .on_hover_text("Store a note in this step's mailbox")
+                .clicked();
+            send = (clicked || entered) && filled;
+        });
+        if send {
+            *act = Some(Act::SendMail(run.dir.clone(), id.clone()));
         }
     }
 
